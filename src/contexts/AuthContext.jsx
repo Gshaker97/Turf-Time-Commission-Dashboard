@@ -61,11 +61,11 @@ export function AuthProvider({ children }) {
     return () => subscription.unsubscribe()
   }, [])
 
-  async function fetchProfile(id) {
+  async function fetchProfile(authId) {
     const { data } = await supabase
       .from('profiles')
       .select('*')
-      .eq('id', id)
+      .eq('auth_id', authId)
       .single()
     setProfile(data ?? null)
   }
