@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import {
   format, subMonths, subYears, startOfMonth, endOfMonth,
   startOfYear, startOfWeek, endOfWeek, addDays,
@@ -7,9 +7,10 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   AreaChart, Area,
 } from 'recharts'
-import { Pencil, Check, X, TrendingUp, TrendingDown, Minus } from 'lucide-react'
+import { Check, X, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchDeals, fetchUsers } from '../lib/db'
+import { supabase } from '../lib/supabase'
 import { fmt } from '../utils/commission'
 
 const MEDAL = {
@@ -75,7 +76,7 @@ function StatCard({ label, value, sub, trend }) {
 
 export default function Dashboard() {
   const { profile } = useAuth()
-  const isAdmin = ['admin', 'vp'].includes(profile?.role)
+  const canEditGoal = ['admin', 'vp', 'director'].includes(profile?.role)
 
   const [deals,        setDeals]        = useState([])
   const [users,        setUsers]        = useState([])
@@ -86,17 +87,28 @@ export default function Dashboard() {
   const [teamFilter,   setTeamFilter]   = useState('')
   const [editingGoal,  setEditingGoal]  = useState(false)
   const [goalInput,    setGoalInput]    = useState('')
-  const [goalVersion,  setGoalVersion]  = useState(0)
-
-  const goalKey = `solarcrm_goal_${format(new Date(), 'yyyy-MM')}`
+  const [savedGoal,    setSavedGoal]    = useState(null)
+  const [saveStatus,   setSaveStatus]   = useState('idle')
+  const [saveError,    setSaveError]    = useState(null)
+  const skipBlurSaveRef = useRef(false)
 
   useEffect(() => {
-    Promise.all([fetchDeals(), fetchUsers()])
-      .then(([{ data: d }, { data: u }]) => {
-        setDeals(d ?? [])
-        setUsers(u ?? [])
-        setLoading(false)
-      })
+    const now   = new Date()
+    const year  = now.getFullYear()
+    const month = now.getMonth() + 1
+    Promise.all([
+      fetchDeals(),
+      fetchUsers(),
+      supabase.from('monthly_goals')
+        .select('baseline_target')
+        .eq('year', year).eq('month', month)
+        .maybeSingle(),
+    ]).then(([{ data: d }, { data: u }, { data: g }]) => {
+      setDeals(d ?? [])
+      setUsers(u ?? [])
+      setSavedGoal(g?.baseline_target != null ? parseFloat(g.baseline_target) : null)
+      setLoading(false)
+    })
   }, [])
 
   function applyPreset(p) {
@@ -194,20 +206,69 @@ export default function Dashboard() {
     const curRevenue = monthTotal(curKey)
     const trailing   = [1, 2, 3].map(i => monthTotal(format(subMonths(now, i), 'yyyy-MM')))
     const autoGoal   = Math.max((trailing.reduce((s, v) => s + v, 0) / 3) * 1.1, 10000)
-    const saved      = typeof localStorage !== 'undefined' ? localStorage.getItem(goalKey) : null
-    const goal       = saved ? parseFloat(saved) : autoGoal
+    const goal       = savedGoal != null ? savedGoal : autoGoal
     const pct        = Math.min((curRevenue / goal) * 100, 100)
-    return { curRevenue, goal, pct, isCustom: !!saved, month: format(now, 'MMMM yyyy') }
-  }, [deals, users, teamFilter, goalKey, goalVersion])
+    return { curRevenue, goal, pct, isCustom: savedGoal != null, month: format(now, 'MMMM yyyy') }
+  }, [deals, users, teamFilter, savedGoal])
 
-  function startEditGoal() { setGoalInput(monthlyGoal.goal.toFixed(0)); setEditingGoal(true) }
-  function saveGoal() {
-    const v = parseFloat(goalInput)
-    if (v > 0) { localStorage.setItem(goalKey, v.toString()); setGoalVersion(n => n + 1) }
+  function startEditGoal() {
+    setGoalInput(monthlyGoal.goal.toFixed(0))
+    setSaveStatus('idle')
+    setSaveError(null)
+    setEditingGoal(true)
+  }
+  function cancelGoalEdit() {
+    skipBlurSaveRef.current = true
     setEditingGoal(false)
   }
-  function resetGoal() {
-    localStorage.removeItem(goalKey); setGoalVersion(n => n + 1); setEditingGoal(false)
+  function handleGoalBlur() {
+    if (skipBlurSaveRef.current) {
+      skipBlurSaveRef.current = false
+      return
+    }
+    saveGoal()
+  }
+  async function saveGoal() {
+    const v = parseFloat(goalInput)
+    if (!(v > 0)) {
+      setEditingGoal(false)
+      return
+    }
+    const now   = new Date()
+    const year  = now.getFullYear()
+    const month = now.getMonth() + 1
+    setEditingGoal(false)
+    const { error } = await supabase.from('monthly_goals').upsert(
+      { year, month, baseline_target: v },
+      { onConflict: 'year,month' },
+    )
+    if (error) {
+      setSaveError(error.message)
+      setSaveStatus('error')
+      return
+    }
+    setSavedGoal(v)
+    setSaveError(null)
+    setSaveStatus('saved')
+    setTimeout(() => setSaveStatus('idle'), 2000)
+  }
+  async function resetGoal() {
+    skipBlurSaveRef.current = true
+    const now   = new Date()
+    const year  = now.getFullYear()
+    const month = now.getMonth() + 1
+    setEditingGoal(false)
+    const { error } = await supabase.from('monthly_goals')
+      .delete().eq('year', year).eq('month', month)
+    if (error) {
+      setSaveError(error.message)
+      setSaveStatus('error')
+      return
+    }
+    setSavedGoal(null)
+    setSaveError(null)
+    setSaveStatus('saved')
+    setTimeout(() => setSaveStatus('idle'), 2000)
   }
 
   // Team breakdown — setter gets revenue credit
@@ -411,31 +472,49 @@ export default function Dashboard() {
                 <input
                   autoFocus type="number" value={goalInput}
                   onChange={e => setGoalInput(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') saveGoal(); if (e.key === 'Escape') setEditingGoal(false) }}
+                  onBlur={handleGoalBlur}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter')  saveGoal()
+                    if (e.key === 'Escape') cancelGoalEdit()
+                  }}
                   style={{ background: '#2a2a2a', border: '1px solid rgba(0,184,148,0.4)' }}
                   className="w-32 rounded-lg px-2 py-1 text-[18px] font-bold text-teal focus:outline-none"
                 />
-                <button onClick={saveGoal} className="p-1.5 rounded-lg text-emerald-400 hover:bg-emerald-400/10 transition-colors">
+                <button onMouseDown={e => e.preventDefault()} onClick={saveGoal}
+                  className="p-1.5 rounded-lg text-emerald-400 hover:bg-emerald-400/10 transition-colors">
                   <Check size={15} />
                 </button>
-                <button onClick={() => setEditingGoal(false)} className="p-1.5 rounded-lg text-white/30 hover:bg-white/5 transition-colors">
+                <button onMouseDown={e => e.preventDefault()} onClick={cancelGoalEdit}
+                  className="p-1.5 rounded-lg text-white/30 hover:bg-white/5 transition-colors">
                   <X size={15} />
                 </button>
                 {monthlyGoal.isCustom && (
-                  <button onClick={resetGoal} className="text-[11px] text-white/30 hover:text-white/60 underline ml-1">
+                  <button onMouseDown={e => e.preventDefault()} onClick={resetGoal}
+                    className="text-[11px] text-white/30 hover:text-white/60 underline ml-1">
                     reset
                   </button>
                 )}
               </div>
             ) : (
               <div className="flex items-center gap-2">
-                <p className="text-[20px] font-bold text-teal">{fmt(monthlyGoal.goal)}</p>
-                {isAdmin && (
-                  <button onClick={startEditGoal}
-                    className="p-1.5 rounded-lg text-white/20 hover:text-teal hover:bg-teal/10 transition-colors"
-                    title="Edit goal">
-                    <Pencil size={13} />
+                {canEditGoal ? (
+                  <button
+                    onClick={startEditGoal}
+                    className="text-[20px] font-bold text-teal hover:bg-teal/5 rounded px-2 -mx-2 py-0.5 transition-colors cursor-pointer"
+                    title="Edit goal"
+                  >
+                    {fmt(monthlyGoal.goal)}
                   </button>
+                ) : (
+                  <p className="text-[20px] font-bold text-teal">{fmt(monthlyGoal.goal)}</p>
+                )}
+                {saveStatus === 'saved' && (
+                  <span className="text-[11px] font-semibold text-teal">Saved</span>
+                )}
+                {saveStatus === 'error' && (
+                  <span className="text-[11px] font-semibold text-red-400" title={saveError ?? 'Save error'}>
+                    Save failed
+                  </span>
                 )}
               </div>
             )}

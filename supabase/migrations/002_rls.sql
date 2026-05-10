@@ -122,5 +122,5 @@ CREATE POLICY goals_read ON monthly_goals
 
 CREATE POLICY goals_write ON monthly_goals
   FOR ALL TO authenticated
-  USING (my_role() IN ('admin','vp'))
-  WITH CHECK (my_role() IN ('admin','vp'));
+  USING (my_role() IN ('admin','vp','director'))
+  WITH CHECK (my_role() IN ('admin','vp','director'));
