@@ -163,9 +163,9 @@ export default function Dashboard() {
     const count      = rows.length
     return {
       totalPrice, baseline, commission,
-      avgCommPct: totalPrice > 0 ? (commission / totalPrice) * 100 : 0,
+      avgCommPct: baseline > 0 ? (commission / baseline) * 100 : 0,
       deals:      count,
-      avgDeal:    count ? totalPrice / count : 0,
+      avgDeal:    count ? baseline / count : 0,
     }
   }
   const totals     = useMemo(() => computeTotals(filtered),     [filtered])
@@ -176,7 +176,7 @@ export default function Dashboard() {
     let r = deals
     if (dateFrom) r = r.filter(d => d.sale_date >= dateFrom)
     if (dateTo)   r = r.filter(d => d.sale_date <= dateTo)
-    return r.reduce((s, d) => s + (parseFloat(d.job_price) || 0), 0) || 1
+    return r.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0) || 1
   }, [deals, dateFrom, dateTo])
 
   // Monthly goal — always current calendar month, respects team filter
@@ -189,7 +189,7 @@ export default function Dashboard() {
         const repIds = new Set(users.filter(u => u.manager_id === teamFilter).map(u => u.id))
         rows = rows.filter(d => repIds.has(d.setter_id))
       }
-      return rows.reduce((s, d) => s + (parseFloat(d.job_price) || 0), 0)
+      return rows.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
     }
     const curRevenue = monthTotal(curKey)
     const trailing   = [1, 2, 3].map(i => monthTotal(format(subMonths(now, i), 'yyyy-MM')))
@@ -219,9 +219,9 @@ export default function Dashboard() {
     return mgrs.map(mgr => {
       const repIds     = new Set(users.filter(u => u.manager_id === mgr.id).map(u => u.id))
       const mDeals     = filtered.filter(d => repIds.has(d.setter_id))
-      const revenue    = mDeals.reduce((s, d) => s + (parseFloat(d.job_price) || 0), 0)
+      const revenue    = mDeals.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
       const prevRev    = prevFiltered.filter(d => repIds.has(d.setter_id))
-        .reduce((s, d) => s + (parseFloat(d.job_price) || 0), 0)
+        .reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
       return {
         id: mgr.id, name: mgr.name, repCount: repIds.size, deals: mDeals.length,
         revenue, prevRev, pct: (revenue / totalRev) * 100,
@@ -242,13 +242,13 @@ export default function Dashboard() {
       }
       const price    = parseFloat(deal.job_price)        || 0
       const baseline = parseFloat(deal.baseline_revenue) || 0
-      map[sid].revenue    += price
+      map[sid].revenue    += baseline
       map[sid].commission += (price - baseline)
       map[sid].deals      += 1
     }
     for (const deal of prevFiltered) {
       const sid = deal.setter_id
-      if (sid && map[sid]) map[sid].prevRev += parseFloat(deal.job_price) || 0
+      if (sid && map[sid]) map[sid].prevRev += parseFloat(deal.baseline_revenue) || 0
     }
     return Object.values(map)
       .sort((a, b) => b.revenue - a.revenue)
@@ -274,7 +274,7 @@ export default function Dashboard() {
       weeks.push({
         label:   format(new Date(wFrom + 'T12:00:00'), 'MMM d'),
         deals:   wDls.length,
-        revenue: wDls.reduce((s, d) => s + (parseFloat(d.job_price) || 0), 0),
+        revenue: wDls.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0),
       })
       ptr = addDays(ptr, 7)
     }
@@ -299,7 +299,7 @@ export default function Dashboard() {
       if (!deal.sale_date) continue
       const slot = months.find(m => m.key === deal.sale_date.slice(0, 7))
       if (slot) {
-        slot.revenue += parseFloat(deal.job_price) || 0
+        slot.revenue += parseFloat(deal.baseline_revenue) || 0
         slot.deals   += 1
       }
     }
