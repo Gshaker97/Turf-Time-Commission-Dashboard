@@ -21,13 +21,20 @@ export function calcDealCommissions(deal) {
     ? parseFloat(deal.manager_amount)
     : baseline * (parseFloat(deal.manager_override_pct)  || 0)
 
+  // For director/VP: if the stored amount is null but someone is assigned,
+  // fall back to baseline × pct, defaulting pct to 0.05 (5%). Covers the
+  // sheet-formula gap where director % is skipped when director = closer.
   const directorAmt = deal.director_amount != null
     ? parseFloat(deal.director_amount)
-    : baseline * (parseFloat(deal.director_override_pct) || 0)
+    : deal.director_id != null
+      ? baseline * (parseFloat(deal.director_override_pct) || 0.05)
+      : 0
 
   const vpAmt       = deal.vp_amount       != null
     ? parseFloat(deal.vp_amount)
-    : baseline * (parseFloat(deal.vp_override_pct)       || 0)
+    : deal.vp_id       != null
+      ? baseline * (parseFloat(deal.vp_override_pct)       || 0.05)
+      : 0
 
   // ── Setter / Closer amounts ──
   // If both stored values are present, use them directly.
