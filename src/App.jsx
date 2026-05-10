@@ -1,0 +1,63 @@
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { AuthProvider, useAuth } from './contexts/AuthContext'
+import Layout from './components/Layout'
+import Login from './pages/Login'
+import Deals from './pages/Deals'
+import Dashboard from './pages/Dashboard'
+import Commissions from './pages/Commissions'
+import Team from './pages/Team'
+import Admin from './pages/Admin'
+
+function Spinner() {
+  return (
+    <div className="min-h-screen flex items-center justify-center" style={{ background: '#1a1a1a' }}>
+      <div className="flex flex-col items-center gap-3">
+        <div className="w-8 h-8 border-2 border-teal/30 border-t-teal rounded-full animate-spin" />
+        <p className="text-[12px] text-white/30">Loading…</p>
+      </div>
+    </div>
+  )
+}
+
+function Guard({ children, roles }) {
+  const { user, profile, loading } = useAuth()
+  if (loading) return <Spinner />
+  if (!user)   return <Navigate to="/login" replace />
+  if (!profile) return <Spinner />
+  if (roles && !roles.includes(profile.role)) return <Navigate to="/dashboard" replace />
+  return children
+}
+
+function AppRoutes() {
+  const { user, loading } = useAuth()
+  if (loading) return <Spinner />
+
+  return (
+    <Routes>
+      <Route path="/login" element={user ? <Navigate to="/dashboard" replace /> : <Login />} />
+      <Route path="/" element={<Guard><Layout /></Guard>}>
+        <Route index element={<Navigate to="/dashboard" replace />} />
+        <Route path="deals"       element={<Deals />} />
+        <Route path="dashboard"   element={<Dashboard />} />
+        <Route path="commissions" element={<Commissions />} />
+        <Route path="team"  element={
+          <Guard roles={['rep','manager','director','vp','admin']}><Team /></Guard>
+        } />
+        <Route path="admin" element={
+          <Guard roles={['admin']}><Admin /></Guard>
+        } />
+      </Route>
+      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+    </Routes>
+  )
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AuthProvider>
+        <AppRoutes />
+      </AuthProvider>
+    </BrowserRouter>
+  )
+}

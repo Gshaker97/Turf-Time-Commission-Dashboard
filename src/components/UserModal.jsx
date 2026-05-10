@@ -1,0 +1,159 @@
+import { useState, useEffect } from 'react'
+import { X } from 'lucide-react'
+
+const ROLES = ['rep', 'manager', 'director', 'vp', 'admin']
+
+const inputCls =
+  'w-full px-3 py-2 rounded-lg text-[13px] text-white placeholder-white/20 ' +
+  'focus:outline-none focus:border-teal/40 transition-colors'
+const inputStyle = { background: '#1a1a1a', border: '1px solid #3a3a3a' }
+const Inp = (p) => <input {...p} style={inputStyle} className={inputCls} />
+const Sel = ({ children, ...p }) => (
+  <select {...p} style={inputStyle} className={inputCls}>{children}</select>
+)
+const Field = ({ label, children }) => (
+  <div>
+    <label className="block text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1.5">
+      {label}
+    </label>
+    {children}
+  </div>
+)
+
+const BLANK = {
+  name: '', email: '', role: 'rep', company_name: 'Solar Company',
+  manager_id: '', director_id: '', vp_id: '',
+  password: '',
+}
+
+export default function UserModal({ user, allUsers = [], onSave, onClose }) {
+  const [form, setForm] = useState(BLANK)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (user) {
+      setForm({
+        ...BLANK,
+        ...user,
+        manager_id:  user.manager_id  ?? '',
+        director_id: user.director_id ?? '',
+        vp_id:       user.vp_id       ?? '',
+        password: '',
+      })
+    } else {
+      setForm(BLANK)
+    }
+  }, [user])
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setSaving(true)
+    await onSave({
+      ...form,
+      manager_id:  form.manager_id  || null,
+      director_id: form.director_id || null,
+      vp_id:       form.vp_id       || null,
+    })
+    setSaving(false)
+  }
+
+  const managers  = allUsers.filter(u => u.role === 'manager')
+  const directors = allUsers.filter(u => u.role === 'director')
+  const vps       = allUsers.filter(u => u.role === 'vp')
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+      <div
+        className="relative w-full max-w-lg rounded-2xl shadow-2xl overflow-y-auto"
+        style={{ background: '#242424', border: '1px solid #333', maxHeight: '90vh' }}
+      >
+        <div
+          className="flex items-center justify-between px-6 py-4 sticky top-0 z-10"
+          style={{ background: '#242424', borderBottom: '1px solid #2e2e2e' }}
+        >
+          <h2 className="text-[15px] font-semibold text-white">
+            {user ? 'Edit User' : 'Add User'}
+          </h2>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-white/30 hover:text-white hover:bg-white/10"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Full Name *">
+              <Inp required value={form.name} onChange={e => set('name', e.target.value)} placeholder="Jane Smith" />
+            </Field>
+            <Field label="Email *">
+              <Inp required type="email" value={form.email} onChange={e => set('email', e.target.value)} placeholder="jane@company.com" />
+            </Field>
+            {!user && (
+              <Field label="Password *">
+                <Inp required type="password" value={form.password} onChange={e => set('password', e.target.value)} placeholder="••••••••" minLength={8} />
+              </Field>
+            )}
+            <Field label="Role *">
+              <Sel value={form.role} onChange={e => set('role', e.target.value)}>
+                {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+              </Sel>
+            </Field>
+            <Field label="Company">
+              <Inp value={form.company_name} onChange={e => set('company_name', e.target.value)} placeholder="Solar Company" />
+            </Field>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4">
+            <Field label="Assigned Manager">
+              <Sel value={form.manager_id} onChange={e => set('manager_id', e.target.value)}>
+                <option value="">None</option>
+                {managers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+              </Sel>
+            </Field>
+            <Field label="Assigned Director">
+              <Sel value={form.director_id} onChange={e => set('director_id', e.target.value)}>
+                <option value="">None</option>
+                {directors.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+              </Sel>
+            </Field>
+            <Field label="Assigned VP">
+              <Sel value={form.vp_id} onChange={e => set('vp_id', e.target.value)}>
+                <option value="">None</option>
+                {vps.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+              </Sel>
+            </Field>
+          </div>
+
+          {user && (
+            <p className="text-[11px] text-white/30 bg-white/5 rounded-lg p-3">
+              To change this user's password, use the Supabase Dashboard → Authentication → Users.
+            </p>
+          )}
+
+          <div className="flex gap-3 pt-1">
+            <button
+              type="submit"
+              disabled={saving}
+              className="flex-1 py-2.5 rounded-xl text-[13px] font-bold text-dark bg-teal hover:bg-teal-dark disabled:opacity-50 transition-colors"
+            >
+              {saving ? 'Saving…' : user ? 'Save Changes' : 'Create User'}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-5 py-2.5 rounded-xl text-[13px] text-white/50 hover:text-white transition-colors"
+              style={{ border: '1px solid #3a3a3a' }}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
