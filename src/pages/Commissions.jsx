@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
-import { subDays, isFriday, nextFriday, format, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from 'date-fns'
-import { fetchDeals } from '../lib/db'
+import { subDays, isFriday, nextFriday, format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, addDays } from 'date-fns'
+import { fetchDeals, fetchUsers } from '../lib/db'
 import { useAuth } from '../contexts/AuthContext'
 import { calcDealCommissions, getUserCommission, fmt } from '../utils/commission'
 import KpiCard from '../components/KpiCard'
@@ -118,21 +118,31 @@ function PayTable({ rows }) {
 
 export default function Commissions() {
   const { profile } = useAuth()
-  const [deals,   setDeals]   = useState([])
-  const [loading, setLoading] = useState(true)
+  const [deals,         setDeals]         = useState([])
+  const [users,         setUsers]         = useState([])
+  const [loading,       setLoading]       = useState(true)
+  const [weekOffset,    setWeekOffset]    = useState(0)
+  const [selectedRepId, setSelectedRepId] = useState('')
 
   useEffect(() => {
-    fetchDeals().then(({ data }) => {
-      setDeals(data ?? [])
-      setLoading(false)
-    })
+    Promise.all([fetchDeals(), fetchUsers()])
+      .then(([{ data: d }, { data: u }]) => {
+        setDeals(d ?? [])
+        setUsers(u ?? [])
+        setLoading(false)
+      })
   }, [])
 
-  const payFriday   = useMemo(() => getPayFriday(), [])
-  const installWeek = useMemo(() => installWeekForFriday(payFriday), [payFriday])
+  const isElevated   = ['director', 'vp', 'admin'].includes(profile?.role)
+  const viewedUserId = selectedRepId || profile?.id
+  const viewedUser   = users.find(u => u.id === viewedUserId)
 
-  const role   = profile?.role
-  const userId = profile?.id
+  const basePayFriday = useMemo(() => getPayFriday(), [])
+  const payFriday     = useMemo(() => addDays(basePayFriday, weekOffset * 7), [basePayFriday, weekOffset])
+  const installWeek   = useMemo(() => installWeekForFriday(payFriday), [payFriday])
+
+  const role   = viewedUser?.role ?? profile?.role
+  const userId = viewedUserId
 
   // All commission stats — split rep vs override, with weekly/monthly by sale date
   const stats = useMemo(() => {
@@ -216,7 +226,7 @@ export default function Commissions() {
 
   const myDeals = useMemo(() =>
     deals.map(buildRow).filter(Boolean),
-  [deals, profile])
+  [deals, userId])
 
   const fridayRows = useMemo(() =>
     myDeals.filter(r =>
@@ -241,8 +251,46 @@ export default function Commissions() {
   const weekLabel     = `Installs ${installWeek.start} – ${installWeek.end}`
   const showOverrides = ['manager', 'director', 'vp'].includes(role)
 
+  function hasDealsForOffset(offset) {
+    const friday = addDays(basePayFriday, offset * 7)
+    const wk     = installWeekForFriday(friday)
+    return myDeals.some(r => r.install_date >= wk.start && r.install_date <= wk.end)
+  }
+  const canGoPrev = weekOffset > -4 && hasDealsForOffset(weekOffset - 1)
+  const canGoNext = weekOffset <  4 && hasDealsForOffset(weekOffset + 1)
+
+  const sortedUsers = [...users].sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''))
+
   return (
     <div className="space-y-8 pb-8">
+
+      {/* Rep selector — elevated roles only */}
+      {isElevated && (
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-semibold text-white/40 uppercase tracking-widest">Viewing:</span>
+            <select
+              value={selectedRepId}
+              onChange={e => setSelectedRepId(e.target.value)}
+              style={{ background: '#242424', border: '1px solid #333' }}
+              className="h-8 px-2.5 rounded-lg text-[12px] text-white focus:outline-none"
+            >
+              <option value="">My commissions</option>
+              {sortedUsers.map(u => (
+                <option key={u.id} value={u.id}>{u.name}</option>
+              ))}
+            </select>
+          </div>
+          {selectedRepId && viewedUser && (
+            <span
+              className="text-[11px] font-semibold text-teal px-2.5 py-1 rounded-md"
+              style={{ background: 'rgba(0,184,148,0.1)', border: '1px solid rgba(0,184,148,0.25)' }}
+            >
+              Viewing {viewedUser.name}'s commissions
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Stats header */}
       <div className="space-y-3">
@@ -263,10 +311,29 @@ export default function Commissions() {
         )}
       </div>
 
-      {/* This Friday */}
+      {/* Pay Friday — with week toggle */}
       <div>
+        <div className="flex items-center gap-3 mb-3">
+          <button
+            onClick={() => setWeekOffset(w => w - 1)}
+            disabled={!canGoPrev}
+            className="px-2.5 py-1 rounded-md text-[12px] text-white/60 hover:text-white hover:bg-white/5 disabled:text-white/15 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors"
+          >
+            ← Previous Friday
+          </button>
+          <span className="text-[12px] font-semibold text-white/70 min-w-[140px] text-center">
+            {fridayLabel}
+          </span>
+          <button
+            onClick={() => setWeekOffset(w => w + 1)}
+            disabled={!canGoNext}
+            className="px-2.5 py-1 rounded-md text-[12px] text-white/60 hover:text-white hover:bg-white/5 disabled:text-white/15 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors"
+          >
+            Next Friday →
+          </button>
+        </div>
         <SectionHeader
-          title={`Expected Pay · This Friday (${fridayLabel})`}
+          title={`Pay · ${fridayLabel}`}
           sub={weekLabel}
           total={fridayRows.reduce((s, r) => s + r.myPay, 0)}
         />
