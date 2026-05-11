@@ -182,12 +182,27 @@ export default function Commissions() {
       if (sd >= monthStart && sd <= monthEnd) monthlyComm += total
     }
 
+    // Historical pre-March-2026 commissions are NOT deal-level tracked.
+    // Instead they live as pre-aggregated baselines on the profile:
+    //   - lifetime_rep_baseline      = Nov 2025–Feb 2026 setter + closer earnings
+    //   - lifetime_override_baseline = Nov 2025–Feb 2026 manager/director/VP overrides
+    // Both were paid out at the time, so we treat them as both "lifetime" AND
+    // "paid" — that way "Pending" stays current-period only.
+    // Do NOT seed deals with sale_date < 2026-03-01 without zeroing these
+    // baselines first, or commissions will double-count.
+    const repBaseline      = parseFloat(viewedUser?.lifetime_rep_baseline)      || 0
+    const overrideBaseline = parseFloat(viewedUser?.lifetime_override_baseline) || 0
+
     return {
-      lifetimeComm, paidComm, pendingComm: lifetimeComm - paidComm,
-      lifetimeOverride, paidOverride, pendingOverride: lifetimeOverride - paidOverride,
+      lifetimeComm:     lifetimeComm     + repBaseline,
+      paidComm:         paidComm         + repBaseline,
+      pendingComm:      lifetimeComm - paidComm,
+      lifetimeOverride: lifetimeOverride + overrideBaseline,
+      paidOverride:     paidOverride     + overrideBaseline,
+      pendingOverride:  lifetimeOverride - paidOverride,
       weeklyComm, monthlyComm,
     }
-  }, [deals, userId])
+  }, [deals, userId, viewedUser])
 
   // Build enriched row — separates rep vs override amounts
   function buildRow(deal) {
