@@ -12,7 +12,9 @@ export function calcDealCommissions(deal) {
   const jobPrice = parseFloat(deal.job_price) || 0
   const gross    = jobPrice - baseline
 
-  const sameRep   = deal.setter_id === deal.closer_id
+  // Solo deal: no closer assigned, OR setter and closer are the same person.
+  // In both cases, the setter gets 100% of the commission.
+  const sameRep   = !deal.closer_id || deal.setter_id === deal.closer_id
   const setterPct = sameRep ? 1 : (parseFloat(deal.setter_split_pct) || 0.5)
 
   // ── Manager / Director / VP amounts ──
@@ -51,7 +53,6 @@ export function calcDealCommissions(deal) {
     const dirToRep = baseline * (parseFloat(deal.director_to_rep_pct) || 0)
     const vpToRep  = baseline * (parseFloat(deal.vp_to_rep_pct)       || 0)
     const repPool  = gross + mgrToRep + dirToRep + vpToRep
-
     setterAmt = repPool * setterPct
     closerAmt = sameRep ? 0 : repPool * (1 - setterPct)
   }
@@ -80,10 +81,9 @@ export function getUserCommission(deal, userId) {
   if (!userId) return 0
   const { setterAmt, closerAmt, managerAmt, directorAmt, vpAmt } =
     calcDealCommissions(deal)
-
   let total = 0
   if (deal.setter_id === userId) total += setterAmt
-  if (deal.closer_id === userId && deal.closer_id !== deal.setter_id)
+  if (deal.closer_id && deal.closer_id === userId && deal.closer_id !== deal.setter_id)
     total += closerAmt
   if (deal.manager_id  === userId) total += managerAmt
   if (deal.director_id === userId) total += directorAmt
