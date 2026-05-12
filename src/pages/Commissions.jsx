@@ -20,6 +20,10 @@ function installWeekForFriday(friday) {
   }
 }
 
+function isCanceled(deal) {
+  return deal.status === 'Canceled' || deal.status === 'Cancelled'
+}
+
 // ─── sub-components ──────────────────────────────────────────────────────────
 
 function SectionHeader({ title, sub, total }) {
@@ -157,6 +161,7 @@ export default function Commissions() {
 
     for (const deal of deals) {
       if (!userId) continue
+      if (isCanceled(deal)) continue
       const { setterAmt, closerAmt, managerAmt, directorAmt, vpAmt } = calcDealCommissions(deal)
 
       let rep = 0
@@ -240,7 +245,10 @@ export default function Commissions() {
   }
 
   const myDeals = useMemo(() =>
-    deals.map(buildRow).filter(Boolean),
+    deals
+      .filter(d => !isCanceled(d))
+      .map(buildRow)
+      .filter(Boolean),
   [deals, userId])
 
   const fridayRows = useMemo(() =>
