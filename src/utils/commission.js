@@ -99,7 +99,7 @@ export function getPaidForUser(payments = [], dealId, userId) {
 }
 
 export const fmt = (n) =>
-  '$' + Math.round(n).toLocaleString('en-US')
+  '$' + (n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 export const fmtPct = (n) =>
   n.toFixed(1) + '%'
