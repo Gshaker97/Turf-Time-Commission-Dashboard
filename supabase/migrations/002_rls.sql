@@ -37,10 +37,36 @@ $$;
 CREATE POLICY profiles_read ON profiles
   FOR SELECT TO authenticated USING (TRUE);
 
--- Anyone can update their own profile (limited fields)
+-- Anyone can update their own profile, BUT a column-guard trigger (below)
+-- prevents non-admins from changing privileged fields (role, hierarchy, etc.)
 CREATE POLICY profiles_update_self ON profiles
   FOR UPDATE TO authenticated
-  USING (auth_id = auth.uid());
+  USING (auth_id = auth.uid())
+  WITH CHECK (auth_id = auth.uid());
+
+-- Column guard: non-admins may only change "cosmetic" fields on their own row.
+-- Privileged columns are forced back to their previous values.
+CREATE OR REPLACE FUNCTION guard_profile_columns()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  IF my_role() = 'admin' THEN
+    RETURN NEW;
+  END IF;
+  NEW.role             := OLD.role;
+  NEW.email            := OLD.email;
+  NEW.auth_id          := OLD.auth_id;
+  NEW.manager_id       := OLD.manager_id;
+  NEW.director_id      := OLD.director_id;
+  NEW.vp_id            := OLD.vp_id;
+  NEW.active           := OLD.active;
+  NEW.hire_date        := OLD.hire_date;
+  NEW.termination_date := OLD.termination_date;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER profiles_guard_columns BEFORE UPDATE ON profiles
+  FOR EACH ROW EXECUTE FUNCTION guard_profile_columns();
 
 -- Admins can do anything
 CREATE POLICY profiles_admin_all ON profiles
@@ -89,6 +115,11 @@ CREATE POLICY deals_insert ON deals
 CREATE POLICY deals_update ON deals
   FOR UPDATE TO authenticated
   USING (
+    my_role() IN ('manager','director','vp','admin')
+    OR setter_id = my_profile_id()
+    OR closer_id = my_profile_id()
+  )
+  WITH CHECK (
     my_role() IN ('manager','director','vp','admin')
     OR setter_id = my_profile_id()
     OR closer_id = my_profile_id()

@@ -261,14 +261,14 @@ export default function Team() {
         if (dateTo   && (d.sale_date ?? '') > dateTo)   return false
         return true
       })
-      const revenue    = periodDeals.reduce((s, d) => s + (parseFloat(d.job_price) || 0), 0)
+      const revenue    = periodDeals.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
       const commission = periodDeals.reduce((s, d) => s + getUserCommission(d, rep.id), 0)
       const trailing   = [1,2,3].map(i => {
         const mk = format(subMonths(now, i), 'yyyy-MM')
-        return allRepDeals.filter(d => d.sale_date?.startsWith(mk)).reduce((s, d) => s + (parseFloat(d.job_price) || 0), 0)
+        return allRepDeals.filter(d => d.sale_date?.startsWith(mk)).reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
       })
       const goal           = (trailing.reduce((s,v) => s+v, 0)/3)*1.1 || 10000
-      const mtdRev         = allRepDeals.filter(d => d.sale_date?.startsWith(curKey)).reduce((s,d) => s+(parseFloat(d.job_price)||0),0)
+      const mtdRev         = allRepDeals.filter(d => d.sale_date?.startsWith(curKey)).reduce((s,d) => s+(parseFloat(d.baseline_revenue)||0),0)
       const activePipeline = allRepDeals.filter(d => d.status !== 'Paid')
       const sortedDates    = allRepDeals.map(d => d.sale_date).filter(Boolean).sort((a,b) => b.localeCompare(a))
       const lastDate       = sortedDates[0] ?? null
@@ -297,7 +297,7 @@ export default function Team() {
         const inPeriod = (!dateFrom||(d.sale_date??'')>=dateFrom)&&(!dateTo||(d.sale_date??'')<=dateTo)
         return inPeriod && (repIds.has(d.setter_id)||repIds.has(d.closer_id))
       })
-      const revenue    = teamDeals.reduce((s,d) => s+(parseFloat(d.job_price)||0), 0)
+      const revenue    = teamDeals.reduce((s,d) => s+(parseFloat(d.baseline_revenue)||0), 0)
       const commission = teamDeals.reduce((s,d) => {
         const a = calcDealCommissions(d)
         return s + a.setterAmt + a.closerAmt + a.managerAmt + a.directorAmt + a.vpAmt
@@ -316,7 +316,7 @@ export default function Team() {
     if (!allReps.length) return null
     const ranked = allReps.map(rep => ({
       id: rep.id,
-      mtdRev: deals.filter(d=>(d.setter_id===rep.id||d.closer_id===rep.id)&&d.sale_date?.startsWith(curKey)).reduce((s,d)=>s+(parseFloat(d.job_price)||0),0)
+      mtdRev: deals.filter(d=>(d.setter_id===rep.id||d.closer_id===rep.id)&&d.sale_date?.startsWith(curKey)).reduce((s,d)=>s+(parseFloat(d.baseline_revenue)||0),0)
     })).sort((a,b)=>b.mtdRev-a.mtdRev)
     const n = ranked.length
     const tierMap = {}
@@ -348,7 +348,7 @@ export default function Team() {
     const repIds       = new Set(visibleReps.map(r=>r.id))
     function monthTotal(mk) {
       const uniq = [...new Map(deals.filter(d=>d.sale_date?.startsWith(mk)&&(repIds.has(d.setter_id)||repIds.has(d.closer_id))).map(d=>[d.id,d])).values()]
-      return uniq.reduce((s,d)=>s+(parseFloat(d.job_price)||0),0)
+      return uniq.reduce((s,d)=>s+(parseFloat(d.baseline_revenue)||0),0)
     }
     const mtdRevenue       = monthTotal(curKey)
     const trailing         = [1,2,3].map(i=>monthTotal(format(subMonths(now,i),'yyyy-MM')))

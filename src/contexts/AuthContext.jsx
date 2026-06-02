@@ -6,7 +6,7 @@ import {
 } from '../lib/demoData'
 
 const AuthContext = createContext({})
-const SESSION_KEY = 'solarcrm_demo_uid'
+const SESSION_KEY = 'turftime_demo_uid'
 
 // ── Demo auth helpers ────────────────────────────────────────
 function demoSignIn(email, password) {

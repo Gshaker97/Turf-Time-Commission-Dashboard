@@ -21,7 +21,7 @@ const Field = ({ label, children }) => (
 )
 
 const BLANK = {
-  name: '', email: '', role: 'rep', company_name: 'Solar Company',
+  name: '', email: '', role: 'rep', company_name: 'Turf Time',
   manager_id: '', director_id: '', vp_id: '',
   password: '',
 }
@@ -104,7 +104,7 @@ export default function UserModal({ user, allUsers = [], onSave, onClose }) {
               </Sel>
             </Field>
             <Field label="Company">
-              <Inp value={form.company_name} onChange={e => set('company_name', e.target.value)} placeholder="Solar Company" />
+              <Inp value={form.company_name} onChange={e => set('company_name', e.target.value)} placeholder="Turf Time" />
             </Field>
           </div>
 

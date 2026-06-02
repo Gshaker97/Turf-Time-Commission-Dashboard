@@ -56,6 +56,14 @@ Inside your Railway project:
 
 ✅ This creates the Turf Time roster (Keaton, Garrison, 5 managers, reps under each) plus the May 2026 baseline goal.
 
+> **Fresh install:** run 001 → 002 → 003 as above. Migrations 001 and 002 already include the
+> deduction columns and the hardened security policies — you do **not** need `004_patch.sql`.
+>
+> **Already running an older version?** Don't re-run 001–003 (your data is already there). Instead run
+> **only** `supabase/migrations/004_patch.sql` once. It safely adds the missing `deduction_amount` /
+> `deduction_note` columns and tightens the row-level-security policies, and can be run more than once
+> without harm.
+
 ---
 
 ## Step 4 — Create login accounts

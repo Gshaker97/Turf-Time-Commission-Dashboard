@@ -6,9 +6,8 @@ import {
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { Check, X, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
-import { fetchDeals, fetchUsers } from '../lib/db'
-import { supabase } from '../lib/supabase'
-import { fmt } from '../utils/commission'
+import { fetchDeals, fetchUsers, fetchGoal, saveGoal as saveGoalDb, deleteGoal as deleteGoalDb } from '../lib/db'
+import { fmt, dealAmounts, getUserCommission } from '../utils/commission'
 
 const MEDAL = {
   1: { bg: '#fbbf2420', color: '#fbbf24' },
@@ -93,9 +92,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     setSavedGoal(null)
-    supabase.from('monthly_goals').select('baseline_target')
-      .eq('year', goalYear).eq('month', goalMonth).maybeSingle()
-      .then(({ data: g }) => setSavedGoal(g?.baseline_target != null ? parseFloat(g.baseline_target) : null))
+    fetchGoal(goalYear, goalMonth).then(({ data }) => setSavedGoal(data))
   }, [goalYear, goalMonth])
 
   function applyPreset(p) { setDateFrom(p.from); setDateTo(p.to); setActivePreset(p.label) }
@@ -144,9 +141,13 @@ export default function Dashboard() {
   }, [deals, teamFilter, users, prevPeriod])
 
   function computeTotals(rows) {
-    const totalPrice = rows.reduce((s, d) => s + (parseFloat(d.job_price)        || 0), 0)
-    const baseline   = rows.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
-    const commission = totalPrice - baseline
+    let baseline = 0, commission = 0
+    for (const d of rows) {
+      const a = dealAmounts(d)
+      baseline   += a.baseline
+      commission += a.totalCommission
+    }
+    const totalPrice = rows.reduce((s, d) => s + (parseFloat(d.job_price) || 0), 0)
     const count      = rows.length
     return { totalPrice, baseline, commission, avgCommPct: baseline > 0 ? (commission / baseline) * 100 : 0, deals: count, avgDeal: count ? baseline / count : 0 }
   }
@@ -185,13 +186,13 @@ export default function Dashboard() {
     const v = parseFloat(goalInput)
     if (!(v > 0)) { setEditingGoal(false); return }
     setEditingGoal(false)
-    const { error } = await supabase.from('monthly_goals').upsert({ year: goalYear, month: goalMonth, baseline_target: v }, { onConflict: 'year,month' })
+    const { error } = await saveGoalDb(goalYear, goalMonth, v)
     if (error) { setSaveError(error.message); setSaveStatus('error'); return }
     setSavedGoal(v); setSaveStatus('saved'); setTimeout(() => setSaveStatus('idle'), 2000)
   }
   async function resetGoal() {
     skipBlurSaveRef.current = true; setEditingGoal(false)
-    const { error } = await supabase.from('monthly_goals').delete().eq('year', goalYear).eq('month', goalMonth)
+    const { error } = await deleteGoalDb(goalYear, goalMonth)
     if (error) { setSaveError(error.message); setSaveStatus('error'); return }
     setSavedGoal(null); setSaveStatus('saved'); setTimeout(() => setSaveStatus('idle'), 2000)
   }
@@ -217,7 +218,7 @@ export default function Dashboard() {
         map[sid]  = { id: sid, name: u?.name ?? '—', team: mgr?.name ?? '—', deals: 0, revenue: 0, commission: 0, prevRev: 0 }
       }
       map[sid].revenue    += parseFloat(deal.baseline_revenue) || 0
-      map[sid].commission += (parseFloat(deal.job_price) || 0) - (parseFloat(deal.baseline_revenue) || 0)
+      map[sid].commission += getUserCommission(deal, sid)
       map[sid].deals      += 1
     }
     for (const deal of prevFiltered) {

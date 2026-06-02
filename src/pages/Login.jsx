@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import { Sun, Eye, EyeOff } from 'lucide-react'
+import { Eye, EyeOff } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
 export default function Login() {
-  const { signIn } = useAuth()
+  const { signIn, demoMode } = useAuth()
   const [email, setEmail]       = useState('')
   const [password, setPassword] = useState('')
   const [showPwd, setShowPwd]   = useState(false)
@@ -30,10 +30,14 @@ export default function Login() {
       >
         {/* Logo */}
         <div className="flex flex-col items-center mb-8">
-          <div className="w-12 h-12 rounded-2xl bg-teal flex items-center justify-center mb-4 shadow-lg shadow-teal/30">
-            <Sun size={22} className="text-dark" />
+          <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-4 shadow-lg shadow-teal/30"
+            style={{ background: '#0f1a0f', border: '1px solid #2a4a2a' }}>
+            <svg viewBox="0 0 20 20" fill="none" width="26" height="26">
+              <path d="M10 18 C10 14 7 9 8 3 C8.5 1.5 10 2 10.5 3.5 C10 8 10 13 10 18Z" fill="#4ade80"/>
+              <path d="M10 18 C10 14 13 9 12.5 4 C12 2 10.5 2 10.5 3.5 C11 8 10.5 13 10 18Z" fill="#22c55e"/>
+            </svg>
           </div>
-          <h1 className="text-xl font-bold text-white">SolarCRM</h1>
+          <h1 className="text-xl font-bold text-white">Turf Time Dashboard</h1>
           <p className="text-[12px] text-white/30 mt-1 text-center">
             Sales Pipeline &amp; Commission Tracker
           </p>
@@ -103,16 +107,18 @@ export default function Login() {
           Contact your admin to create an account.
         </p>
 
-        <div
-          className="mt-4 rounded-lg p-3 text-[11px] text-white/30"
-          style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}
-        >
-          <p className="font-semibold text-white/40 mb-1">Demo credentials</p>
-          <p>admin@solarcrm.dev</p>
-          <p>vp@solarcrm.dev · mgr1@solarcrm.dev</p>
-          <p>alex@solarcrm.dev (rep)</p>
-          <p className="mt-1 text-teal/60">Password: Password123!</p>
-        </div>
+        {demoMode && (
+          <div
+            className="mt-4 rounded-lg p-3 text-[11px] text-white/30"
+            style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}
+          >
+            <p className="font-semibold text-white/40 mb-1">Demo credentials</p>
+            <p>keaton@turftime.com (VP) · garrison@turftime.com (Director)</p>
+            <p>jared@turftime.com (Manager) · stephen@turftime.com (Rep)</p>
+            <p>admin@turftime.com (Admin)</p>
+            <p className="mt-1 text-teal/60">Password: TurfTime2026!</p>
+          </div>
+        )}
       </div>
     </div>
   )

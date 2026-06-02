@@ -4,10 +4,11 @@ import { useAuth } from '../contexts/AuthContext'
 import {
   fetchDeals, fetchUsers, fetchPayments,
   insertDeal, updateDeal, deleteDeal,
-  updateUser, deleteUser, deletePayment,
+  insertUser, updateUser, deleteUser, deletePayment,
 } from '../lib/db'
 import UserModal from '../components/UserModal'
 import DealModal from '../components/DealModal'
+import { DEMO_MODE } from '../lib/supabase'
 
 const TABS = ['Users', 'Deals', 'Payments']
 
@@ -41,13 +42,14 @@ export default function Admin() {
     if (editUser) {
       await updateUser(editUser.id, data)
     } else {
-      const { DEMO_MODE } = await import('../lib/supabase')
+      const { error } = await insertUser(data)
+      if (error) { alert('Could not create profile: ' + error.message); return }
       if (!DEMO_MODE) {
-        alert('User creation in live mode requires a server-side admin action.\nCreate the user in Supabase Dashboard → Auth → Users, then edit their profile here.')
-        setUserModal(false); return
+        alert(
+          'Profile created.\n\nTo enable their login, go to Supabase Studio → Authentication → Users → Add user, ' +
+          'using the SAME email. The auto-link trigger connects the new auth user to this profile.'
+        )
       }
-      const { DEMO_USERS } = await import('../lib/demoData')
-      DEMO_USERS.push({ ...data, id: 'u-new-' + Math.random().toString(36).slice(2, 7) })
     }
     setUserModal(false); setEditUser(null); loadAll()
   }

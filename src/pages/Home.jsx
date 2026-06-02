@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { supabase } from "../lib/supabase";
+import { fetchDeals, fetchGoal, saveGoal } from "../lib/db";
 import { rollup } from "../utils/commission";
 
 const money = (n) => "$" + Math.round(Number(n) || 0).toLocaleString("en-US");
@@ -9,10 +9,11 @@ function getMonths(n = 12) {
   const now = new Date();
   for (let i = 0; i < n; i++) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const pad = (x) => String(x).padStart(2, "0");
+    const startKey = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
     months.push({
       y: d.getFullYear(), m: d.getMonth() + 1,
-      start: d.toISOString().slice(0, 10),
-      nextStart: new Date(d.getFullYear(), d.getMonth() + 1, 1).toISOString().slice(0, 10),
+      key: startKey,
       label: d.toLocaleString("en-US", { month: "long", year: "numeric" }),
     });
   }
@@ -22,7 +23,7 @@ function getMonths(n = 12) {
 export default function Home() {
   const months = useMemo(() => getMonths(12), []);
   const [selected, setSelected] = useState(0);
-  const [deals, setDeals] = useState([]);
+  const [allDeals, setAllDeals] = useState([]);
   const [target, setTarget] = useState(0);
   const [goalInput, setGoalInput] = useState("");
   const [loading, setLoading] = useState(true);
@@ -30,28 +31,34 @@ export default function Home() {
 
   const mr = months[selected];
 
+  // Load all deals once
+  useEffect(() => {
+    fetchDeals().then(({ data }) => { setAllDeals(data ?? []); });
+  }, []);
+
+  // Load the goal whenever the selected month changes
   useEffect(() => {
     setLoading(true);
-    (async () => {
-      const [{ data: d }, { data: g }] = await Promise.all([
-        supabase.from("deals").select("*").gte("sale_date", mr.start).lt("sale_date", mr.nextStart).order("sale_date", { ascending: false }),
-        supabase.from("monthly_goals").select("baseline_target").eq("year", mr.y).eq("month", mr.m).maybeSingle(),
-      ]);
-      setDeals(d || []);
-      setTarget(g?.baseline_target || 0);
-      setGoalInput(g?.baseline_target ? String(g.baseline_target) : "");
+    fetchGoal(mr.y, mr.m).then(({ data }) => {
+      setTarget(data || 0);
+      setGoalInput(data ? String(data) : "");
       setLoading(false);
-    })();
-  }, [mr]);
+    });
+  }, [mr.y, mr.m]);
+
+  const deals = useMemo(
+    () => allDeals.filter(d => d.sale_date?.startsWith(mr.key)),
+    [allDeals, mr.key]
+  );
 
   const totals = useMemo(() => rollup(deals), [deals]);
   const pct = target > 0 ? (totals.baselineRevenue / target) * 100 : 0;
   const remaining = Math.max(target - totals.baselineRevenue, 0);
 
-  async function saveGoal() {
+  async function handleSaveGoal() {
     const t = Number(goalInput) || 0;
     setSavingGoal(true);
-    await supabase.from("monthly_goals").upsert({ year: mr.y, month: mr.m, baseline_target: t }, { onConflict: "year,month" });
+    await saveGoal(mr.y, mr.m, t);
     setSavingGoal(false);
     setTarget(t);
   }
@@ -98,10 +105,10 @@ export default function Home() {
                   Monthly goal (baseline) — {mr.label}
                 </p>
                 <input type="number" value={goalInput} onChange={e => setGoalInput(e.target.value)}
-                  placeholder="e.g. 250000"
+                  placeholder="e.g. 600000"
                   className="h-9 px-3 rounded-lg text-[13px] text-white border border-white/10 bg-white/5 focus:outline-none focus:border-teal/40 w-40" />
               </div>
-              <button onClick={saveGoal} disabled={savingGoal}
+              <button onClick={handleSaveGoal} disabled={savingGoal}
                 className="h-9 px-4 rounded-lg text-[13px] font-bold disabled:opacity-50 transition-colors bg-teal text-dark">
                 {savingGoal ? 'Saving…' : 'Save goal'}
               </button>

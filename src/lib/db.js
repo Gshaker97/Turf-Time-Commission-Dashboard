@@ -1,19 +1,23 @@
 /**
- * Thin data-access layer.
- * In demo mode, returns in-memory data.
- * In live mode, queries Supabase.
+ * Thin data-access layer — the SINGLE gateway to data.
+ * Every page goes through here. In demo mode it returns in-memory data;
+ * in live mode it queries Supabase. No page should import `supabase` directly.
  */
 import { supabase, DEMO_MODE } from './supabase'
 import {
   DEMO_USERS,
   DEMO_DEALS_JOINED,
   DEMO_PAYMENTS,
+  DEMO_GOALS,
 } from './demoData'
 
 // Local mutable copies for demo CRUD
 let _deals    = DEMO_DEALS_JOINED.map(d => ({ ...d }))
 let _users    = DEMO_USERS.map(u => ({ ...u }))
 let _payments = DEMO_PAYMENTS.map(p => ({ ...p }))
+let _goals    = { ...DEMO_GOALS } // keyed "YYYY-M" -> baseline_target
+
+const goalKey = (y, m) => `${y}-${m}`
 
 const DEAL_SELECT = `
   *,
@@ -56,11 +60,11 @@ export async function updateDeal(id, data) {
       d.id === id
         ? {
             ...d, ...data,
-            setter:   _users.find(u => u.id === data.setter_id)  ?? d.setter,
-            closer:   _users.find(u => u.id === data.closer_id)  ?? d.closer,
-            manager:  _users.find(u => u.id === data.manager_id) ?? d.manager,
-            director: _users.find(u => u.id === data.director_id)?? d.director,
-            vp:       _users.find(u => u.id === data.vp_id)      ?? d.vp,
+            setter:   _users.find(u => u.id === (data.setter_id   ?? d.setter_id))   ?? d.setter,
+            closer:   _users.find(u => u.id === (data.closer_id   ?? d.closer_id))   ?? d.closer,
+            manager:  _users.find(u => u.id === (data.manager_id  ?? d.manager_id))  ?? d.manager,
+            director: _users.find(u => u.id === (data.director_id ?? d.director_id)) ?? d.director,
+            vp:       _users.find(u => u.id === (data.vp_id       ?? d.vp_id))       ?? d.vp,
           }
         : d
     )
@@ -81,6 +85,19 @@ export async function deleteDeal(id) {
 export async function fetchUsers() {
   if (DEMO_MODE) return { data: _users, error: null }
   return supabase.from('profiles').select('*').order('name')
+}
+
+export async function insertUser(data) {
+  if (DEMO_MODE) {
+    const id = 'u-new-' + Math.random().toString(36).slice(2, 7)
+    const { password, ...rest } = data
+    const newUser = { ...rest, id, active: true }
+    _users = [..._users, newUser]
+    return { data: newUser, error: null }
+  }
+  // Live: profile row only. The matching auth user must be created in Studio.
+  const { password, ...rest } = data
+  return supabase.from('profiles').insert([rest])
 }
 
 export async function updateUser(id, data) {
@@ -114,4 +131,35 @@ export async function deletePayment(id) {
     return { error: null }
   }
   return supabase.from('payments').delete().eq('id', id)
+}
+
+// ── Monthly goals ─────────────────────────────────────────────
+export async function fetchGoal(year, month) {
+  if (DEMO_MODE) {
+    const t = _goals[goalKey(year, month)]
+    return { data: t != null ? t : null, error: null }
+  }
+  const { data, error } = await supabase
+    .from('monthly_goals').select('baseline_target')
+    .eq('year', year).eq('month', month).maybeSingle()
+  return { data: data?.baseline_target != null ? parseFloat(data.baseline_target) : null, error }
+}
+
+export async function saveGoal(year, month, target) {
+  if (DEMO_MODE) {
+    _goals = { ..._goals, [goalKey(year, month)]: target }
+    return { error: null }
+  }
+  return supabase.from('monthly_goals')
+    .upsert({ year, month, baseline_target: target }, { onConflict: 'year,month' })
+}
+
+export async function deleteGoal(year, month) {
+  if (DEMO_MODE) {
+    const next = { ..._goals }
+    delete next[goalKey(year, month)]
+    _goals = next
+    return { error: null }
+  }
+  return supabase.from('monthly_goals').delete().eq('year', year).eq('month', month)
 }

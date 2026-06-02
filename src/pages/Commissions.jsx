@@ -1,17 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
-import { supabase } from '../lib/supabase'
+import { fetchDeals, fetchPayments } from '../lib/db'
 import { useAuth } from '../contexts/AuthContext'
 import { calcDealCommissions, fmt } from '../utils/commission'
 
 function getMonths(n = 12) {
   const months = []
   const now = new Date()
+  const pad = (x) => String(x).padStart(2, '0')
   for (let i = 0; i < n; i++) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
     months.push({
       label: d.toLocaleString('en-US', { month: 'long', year: 'numeric' }),
-      start: d.toISOString().slice(0, 10),
-      end: new Date(d.getFullYear(), d.getMonth() + 1, 1).toISOString().slice(0, 10),
+      key: `${d.getFullYear()}-${pad(d.getMonth() + 1)}`,
     })
   }
   return months
@@ -21,29 +21,30 @@ export default function Commissions() {
   const { profile } = useAuth()
   const months = useMemo(() => getMonths(12), [])
   const [selected, setSelected] = useState(0)
-  const [deals, setDeals] = useState([])
-  const [payments, setPayments] = useState([])
+  const [allDeals, setAllDeals] = useState([])
+  const [allPayments, setAllPayments] = useState([])
   const [loading, setLoading] = useState(true)
 
   const mo = months[selected]
 
   useEffect(() => {
-    if (!profile?.id || !mo) return
     setLoading(true)
-    ;(async () => {
-      const [{ data: d }, { data: p }] = await Promise.all([
-        supabase.from('deals').select('*')
-          .gte('sale_date', mo.start).lt('sale_date', mo.end)
-          .order('sale_date', { ascending: false }),
-        supabase.from('payments').select('*')
-          .eq('user_id', profile.id)
-          .gte('pay_date', mo.start).lt('pay_date', mo.end),
-      ])
-      setDeals(d || [])
-      setPayments(p || [])
+    Promise.all([fetchDeals(), fetchPayments()]).then(([{ data: d }, { data: p }]) => {
+      setAllDeals(d || [])
+      setAllPayments(p || [])
       setLoading(false)
-    })()
-  }, [profile?.id, mo])
+    })
+  }, [])
+
+  const deals = useMemo(
+    () => allDeals.filter(d => d.sale_date?.startsWith(mo.key)),
+    [allDeals, mo.key]
+  )
+
+  const payments = useMemo(
+    () => allPayments.filter(p => p.user_id === profile?.id && p.pay_date?.startsWith(mo.key)),
+    [allPayments, profile?.id, mo.key]
+  )
 
   const myDeals = useMemo(() =>
     (deals || []).filter(d =>
@@ -56,7 +57,7 @@ export default function Commissions() {
     myDeals.reduce((sum, d) => {
       const a = calcDealCommissions(d)
       if (d.setter_id   === profile?.id) sum += a.setter
-      if (d.closer_id   === profile?.id) sum += a.closer
+      if (d.closer_id   === profile?.id && d.closer_id !== d.setter_id) sum += a.closer
       if (d.manager_id  === profile?.id) sum += a.manager
       if (d.director_id === profile?.id) sum += a.director
       if (d.vp_id       === profile?.id) sum += a.vp
@@ -127,7 +128,7 @@ export default function Commissions() {
                   const roles = []
                   let myAmt = 0
                   if (d.setter_id   === profile?.id) { roles.push('Setter');   myAmt += a.setter }
-                  if (d.closer_id   === profile?.id) { roles.push('Closer');   myAmt += a.closer }
+                  if (d.closer_id   === profile?.id && d.closer_id !== d.setter_id) { roles.push('Closer'); myAmt += a.closer }
                   if (d.manager_id  === profile?.id) { roles.push('Manager');  myAmt += a.manager }
                   if (d.director_id === profile?.id) { roles.push('Director'); myAmt += a.director }
                   if (d.vp_id       === profile?.id) { roles.push('VP');       myAmt += a.vp }
@@ -155,7 +156,7 @@ export default function Commissions() {
                 const roles = []
                 let myAmt = 0
                 if (d.setter_id   === profile?.id) { roles.push('Setter');   myAmt += a.setter }
-                if (d.closer_id   === profile?.id) { roles.push('Closer');   myAmt += a.closer }
+                if (d.closer_id   === profile?.id && d.closer_id !== d.setter_id) { roles.push('Closer'); myAmt += a.closer }
                 if (d.manager_id  === profile?.id) { roles.push('Manager');  myAmt += a.manager }
                 if (d.director_id === profile?.id) { roles.push('Director'); myAmt += a.director }
                 if (d.vp_id       === profile?.id) { roles.push('VP');       myAmt += a.vp }

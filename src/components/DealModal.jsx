@@ -23,9 +23,9 @@ const BLANK = {
   setter_id: '', closer_id: '', setter_split_pct: '50',
   baseline_revenue: '', job_price: '',
   status: 'Deal Review',
-  manager_id: '', manager_override_pct: '', manager_to_rep_pct: '',
-  director_id: '', director_override_pct: '', director_to_rep_pct: '',
-  vp_id: '', vp_override_pct: '', vp_to_rep_pct: '',
+  manager_id: '', manager_override_pct: '',
+  director_id: '', director_override_pct: '',
+  vp_id: '', vp_override_pct: '',
 }
 const OVERRIDE_DEFAULTS = {
   manager_override_pct: '3',
@@ -45,9 +45,6 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
         manager_override_pct:  deal.manager_override_pct  != null ? (deal.manager_override_pct  * 100).toString() : '',
         director_override_pct: deal.director_override_pct != null ? (deal.director_override_pct * 100).toString() : '',
         vp_override_pct:       deal.vp_override_pct       != null ? (deal.vp_override_pct       * 100).toString() : '',
-        manager_to_rep_pct:    deal.manager_to_rep_pct    != null ? (deal.manager_to_rep_pct    * 100).toString() : '',
-        director_to_rep_pct:   deal.director_to_rep_pct   != null ? (deal.director_to_rep_pct   * 100).toString() : '',
-        vp_to_rep_pct:         deal.vp_to_rep_pct         != null ? (deal.vp_to_rep_pct         * 100).toString() : '',
         manager_id:  deal.manager_id  ?? '',
         director_id: deal.director_id ?? '',
         vp_id:       deal.vp_id       ?? '',
@@ -73,9 +70,6 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
     manager_override_pct:  parseFloat(form.manager_override_pct)  / 100 || 0,
     director_override_pct: parseFloat(form.director_override_pct) / 100 || 0,
     vp_override_pct:       parseFloat(form.vp_override_pct)       / 100 || 0,
-    manager_to_rep_pct:    form.manager_to_rep_pct  ? Math.min(1, parseFloat(form.manager_to_rep_pct)  / 100) : 0,
-    director_to_rep_pct:   form.director_to_rep_pct ? Math.min(1, parseFloat(form.director_to_rep_pct) / 100) : 0,
-    vp_to_rep_pct:         form.vp_to_rep_pct       ? Math.min(1, parseFloat(form.vp_to_rep_pct)       / 100) : 0,
   })
 
   async function handleSubmit(e) {
@@ -89,9 +83,6 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
       manager_override_pct:  form.manager_override_pct  ? parseFloat(form.manager_override_pct)  / 100 : null,
       director_override_pct: form.director_override_pct ? parseFloat(form.director_override_pct) / 100 : null,
       vp_override_pct:       form.vp_override_pct       ? parseFloat(form.vp_override_pct)       / 100 : null,
-      manager_to_rep_pct:    form.manager_to_rep_pct    ? Math.min(1, parseFloat(form.manager_to_rep_pct)  / 100) : 0,
-      director_to_rep_pct:   form.director_to_rep_pct   ? Math.min(1, parseFloat(form.director_to_rep_pct) / 100) : 0,
-      vp_to_rep_pct:         form.vp_to_rep_pct         ? Math.min(1, parseFloat(form.vp_to_rep_pct)       / 100) : 0,
       manager_id:  form.manager_id  || null,
       director_id: form.director_id || null,
       vp_id:       form.vp_id       || null,
@@ -105,9 +96,9 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
   const showPreview = form.job_price && form.baseline_revenue
 
   const overrideRows = [
-    { label: 'Manager',  idKey: 'manager_id',  pctKey: 'manager_override_pct',  toRepKey: 'manager_to_rep_pct',  list: managers },
-    { label: 'Director', idKey: 'director_id', pctKey: 'director_override_pct', toRepKey: 'director_to_rep_pct', list: directors },
-    { label: 'VP',       idKey: 'vp_id',       pctKey: 'vp_override_pct',       toRepKey: 'vp_to_rep_pct',       list: vps },
+    { label: 'Manager',  idKey: 'manager_id',  pctKey: 'manager_override_pct',  list: managers },
+    { label: 'Director', idKey: 'director_id', pctKey: 'director_override_pct', list: directors },
+    { label: 'VP',       idKey: 'vp_id',       pctKey: 'vp_override_pct',       list: vps },
   ]
 
   return (
@@ -246,7 +237,7 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
           <div>
             <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-3">Override Chain</p>
             <div className="space-y-3">
-              {overrideRows.map(({ label, idKey, pctKey, toRepKey, list }) => (
+              {overrideRows.map(({ label, idKey, pctKey, list }) => (
                 <div key={label} className="flex flex-col sm:flex-row gap-2 sm:gap-3 sm:items-end">
                   <div className="flex-1 min-w-0">
                     <Field label={label}>
@@ -256,23 +247,12 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
                       </Sel>
                     </Field>
                   </div>
-                  <div className="grid grid-cols-2 sm:block gap-2 sm:gap-0 sm:space-x-0" style={{}}>
-                    <div className="sm:w-20">
-                      <Field label="Override %">
-                        <Inp type="number" min="0" max="100" step="0.1"
-                          value={form[pctKey]} onChange={e => set(pctKey, e.target.value)}
-                          placeholder="0" disabled={!form[idKey]} />
-                      </Field>
-                    </div>
-                    {form[idKey] && (
-                      <div className="sm:w-20 sm:ml-2">
-                        <Field label="% to Rep">
-                          <Inp type="number" min="0" max="100" step="0.1"
-                            value={form[toRepKey]} onChange={e => set(toRepKey, e.target.value)}
-                            placeholder="0" />
-                        </Field>
-                      </div>
-                    )}
+                  <div className="sm:w-28">
+                    <Field label="Override %">
+                      <Inp type="number" min="0" max="100" step="0.1"
+                        value={form[pctKey]} onChange={e => set(pctKey, e.target.value)}
+                        placeholder="0" disabled={!form[idKey]} />
+                    </Field>
                   </div>
                 </div>
               ))}

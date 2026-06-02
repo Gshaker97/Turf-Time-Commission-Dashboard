@@ -87,6 +87,12 @@ CREATE TABLE deals (
   director_amount        NUMERIC(12,2) CHECK (director_amount IS NULL OR director_amount >= 0),
   vp_amount              NUMERIC(12,2) CHECK (vp_amount       IS NULL OR vp_amount       >= 0),
 
+  -- Deduction (chargeback / clawback recorded against the rep take).
+  -- The stored *_amount fields above are already net of this; these two
+  -- columns keep the amount + reason for the record.
+  deduction_amount       NUMERIC(12,2) CHECK (deduction_amount IS NULL OR deduction_amount >= 0),
+  deduction_note         TEXT,
+
   -- Audit
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   updated_at             TIMESTAMPTZ DEFAULT NOW(),

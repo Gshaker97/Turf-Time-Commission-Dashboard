@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { supabase } from "../lib/supabase";
+import { useAuth } from "../contexts/AuthContext";
+import { fetchUsers, insertDeal } from "../lib/db";
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const money = (n) => "$" + (Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -41,6 +42,7 @@ function ModeToggle({ mode, setMode }) {
 }
 
 export default function NewDeal() {
+  const { profile } = useAuth();
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -68,11 +70,10 @@ export default function NewDeal() {
   const [vp, setVp] = useState({ mode: "pct", value: "5" });
 
   useEffect(() => {
-    (async () => {
-      const { data } = await supabase.from("profiles").select("id,name,role,active").eq("active", true).order("name");
-      setProfiles(data || []);
+    fetchUsers().then(({ data }) => {
+      setProfiles((data || []).filter(u => u.active !== false));
       setLoading(false);
-    })();
+    });
   }, []);
 
   const director  = useMemo(() => profiles.find(p => p.role === "director"), [profiles]);
@@ -113,7 +114,7 @@ export default function NewDeal() {
     if (deduction > 0 && !deductionNote.trim()) return setMsg({ type: "err", text: "Add a note explaining the deduction." });
 
     setSaving(true);
-    const { error } = await supabase.from("deals").insert({
+    const { error } = await insertDeal({
       deal_name: dealName.trim(), status, sale_date: saleDate,
       baseline_revenue: base, job_price: Number(jobPrice),
       setter_id: primarySetter, closer_id: selfGen ? null : closerId,
@@ -127,7 +128,7 @@ export default function NewDeal() {
       vp_id: vpProfile?.id || null, vp_amount: vpAmt || null,
       vp_override_pct: vp.mode === "pct" ? (Number(vp.value) || 0) / 100 : 0,
       deduction_amount: deduction || null, deduction_note: deductionNote.trim() || null,
-    });
+    }, profile?.id);
     setSaving(false);
     if (error) return setMsg({ type: "err", text: error.message });
     setMsg({ type: "ok", text: `Saved "${dealName.trim()}".` });

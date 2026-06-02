@@ -42,7 +42,7 @@ function AppRoutes() {
         <Route path="dashboard"   element={<Dashboard />} />
         <Route path="commissions" element={<Commissions />} />
         <Route path="home"        element={<Home />} />
-        <Route path="new-deal"    element={<Guard roles={['vp']}><NewDeal /></Guard>} />
+        <Route path="new-deal"    element={<Guard roles={['vp','admin']}><NewDeal /></Guard>} />
         <Route path="team"  element={
           <Guard roles={['rep','manager','director','vp','admin']}><Team /></Guard>
         } />

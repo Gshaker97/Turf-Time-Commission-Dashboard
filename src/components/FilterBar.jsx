@@ -3,7 +3,7 @@ import { Search, ChevronDown, SlidersHorizontal, X } from 'lucide-react'
 
 const inputStyle = { background: '#2a2a2a', border: '1px solid #333' }
 const inputCls = 'h-9 rounded-lg text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-teal/40 transition-colors px-3'
-const STATUSES = ['', 'Sold', 'Scheduled', 'Installed', 'Paid']
+const STATUSES = ['Deal Review', 'Pending Install', 'Pay Finalized', 'Paid', 'Sales Issue']
 
 export default function FilterBar({
   users = [],
@@ -71,7 +71,7 @@ export default function FilterBar({
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
             style={inputStyle} className={`${inputCls} pr-8 min-w-[130px] md:min-w-[145px]`}>
             <option value="">All Statuses</option>
-            {STATUSES.filter(Boolean).map(s => <option key={s} value={s}>{s}</option>)}
+            {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
           <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 pointer-events-none" />
         </div>
