@@ -1,8 +1,11 @@
 import { useState, useEffect, useMemo } from 'react'
-import { format, subMonths, startOfMonth, endOfMonth, startOfYear, startOfWeek, endOfWeek, addDays } from 'date-fns'
+import { format, subMonths, startOfWeek, endOfWeek, addDays } from 'date-fns'
 import { fetchDeals, fetchUsers } from '../lib/db'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserCommission, calcDealCommissions, fmt } from '../utils/commission'
+import { getPresetRange, presetLabel } from '../utils/dateRanges'
+import DateRangeFilter from '../components/DateRangeFilter'
+import WeeklyStats from '../components/WeeklyStats'
 import { MessageSquare, Flame, Snowflake, TrendingUp, TrendingDown, Trophy, Pencil, Check, X } from 'lucide-react'
 
 const STATUS_COLORS = {
@@ -11,17 +14,6 @@ const STATUS_COLORS = {
   'Pay Finalized':   '#22d3ee',
   'Paid':            '#4ade80',
   'Sales Issue':     '#f87171',
-}
-
-function buildPresets() {
-  const now = new Date()
-  const lm  = subMonths(now, 1)
-  return [
-    { label: 'MTD',        from: format(startOfMonth(now), 'yyyy-MM-dd'), to: '' },
-    { label: 'Last Month', from: format(startOfMonth(lm),  'yyyy-MM-dd'), to: format(endOfMonth(lm), 'yyyy-MM-dd') },
-    { label: 'YTD',        from: format(startOfYear(now),  'yyyy-MM-dd'), to: '' },
-    { label: 'All Time',   from: '', to: '' },
-  ]
 }
 
 function getNoteKey(repId)   { return `turf_note_${repId}` }
@@ -206,9 +198,10 @@ export default function Team() {
   const [deals,           setDeals]           = useState([])
   const [users,           setUsers]           = useState([])
   const [loading,         setLoading]         = useState(true)
-  const [dateFrom,        setDateFrom]        = useState(format(startOfMonth(new Date()), 'yyyy-MM-dd'))
-  const [dateTo,          setDateTo]          = useState('')
-  const [activePreset,    setActivePreset]    = useState('MTD')
+  const [tab,             setTab]             = useState('overview')
+  const [dateFrom,        setDateFrom]        = useState(getPresetRange('mtd').from)
+  const [dateTo,          setDateTo]          = useState(getPresetRange('mtd').to)
+  const [activePreset,    setActivePreset]    = useState('mtd')
   const [teamGoalVersion, setTeamGoalVersion] = useState(0)
   const [editingTeamGoal, setEditingTeamGoal] = useState(false)
   const [teamGoalInput,   setTeamGoalInput]   = useState('')
@@ -231,7 +224,9 @@ export default function Team() {
     })
   }, [])
 
-  function applyPreset(p) { setDateFrom(p.from); setDateTo(p.to); setActivePreset(p.label) }
+  function handleRangeChange({ from, to, preset }) {
+    setDateFrom(from); setDateTo(to); setActivePreset(preset)
+  }
 
   const role = profile?.role
 
@@ -378,22 +373,31 @@ export default function Team() {
 
   if (loading) return <div className="flex items-center justify-center py-24 text-white/30 text-[13px]">Loading…</div>
 
-  const presets = buildPresets()
+  const TABS = [
+    { key: 'overview', label: 'Overview' },
+    { key: 'weekly',   label: 'Weekly Stats' },
+  ]
 
   return (
     <div className="space-y-4 pb-8">
 
-      {/* Filter */}
-      <div className="flex items-center gap-1.5 flex-wrap">
-        {presets.map(p => (
-          <button key={p.label} onClick={() => applyPreset(p)}
-            className={`px-2.5 py-1.5 rounded-lg text-[11px] md:text-[12px] font-medium transition-colors ${
-              activePreset===p.label
-                ? 'bg-teal/15 text-teal border border-teal/25'
-                : 'text-white/40 hover:text-white hover:bg-white/5 border border-transparent'
-            }`}>{p.label}</button>
+      {/* Tabs */}
+      <div className="inline-flex gap-1 p-1 rounded-xl"
+        style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+        {TABS.map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className={`px-3.5 py-1.5 rounded-lg text-[12px] md:text-[13px] font-semibold transition-all ${
+              tab === t.key ? 'bg-teal text-dark shadow-sm' : 'text-white/45 hover:text-white hover:bg-white/[0.06]'
+            }`}>{t.label}</button>
         ))}
       </div>
+
+      {tab === 'weekly' ? (
+        <WeeklyStats deals={deals} reps={visibleReps} canEdit={canEditNotes} profileId={profile?.id} />
+      ) : (
+      <>
+      {/* Filter */}
+      <DateRangeFilter from={dateFrom} to={dateTo} preset={activePreset} onChange={handleRangeChange} />
 
       {/* KPI strip — 2-col on mobile */}
       <div className="grid grid-cols-2 gap-2 md:flex md:gap-3">
@@ -475,7 +479,7 @@ export default function Team() {
               <Trophy size={20} style={{color:'#fbbf24'}}/>
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-[9px] font-bold uppercase tracking-widest" style={{color:'#fbbf24'}}>MVP · {activePreset}</p>
+              <p className="text-[9px] font-bold uppercase tracking-widest" style={{color:'#fbbf24'}}>MVP · {presetLabel(activePreset)}</p>
               <p className="text-[14px] font-bold text-white truncate">{topPerformer.name}</p>
               <p className="text-[11px] text-white/50">{topPerformer.deals} deals · {fmt(topPerformer.revenue)}</p>
             </div>
@@ -488,10 +492,10 @@ export default function Team() {
         <div className="rounded-xl overflow-hidden" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
           <div className="px-4 md:px-5 py-3.5 border-b border-white/5">
             <h3 className="text-[13px] font-bold text-white">Team Comparison</h3>
-            <p className="text-[11px] text-white/30 mt-0.5">Ranked by revenue · {activePreset}</p>
+            <p className="text-[11px] text-white/30 mt-0.5">Ranked by revenue · {presetLabel(activePreset)}</p>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full" style={{ minWidth: 480 }}>
+            <table className="w-full">
               <thead>
                 <tr style={{ background: '#1e1e1e' }}>
                   <th className="px-4 py-2.5 text-left text-[10px] font-bold text-white/30 uppercase tracking-wider">Team</th>
@@ -520,7 +524,7 @@ export default function Team() {
                         </div>
                       </td>
                       <td className="px-4 py-3 text-center"><span className="text-[13px] font-bold text-white">{team.deals}</span></td>
-                      <td className="px-4 py-3" style={{minWidth:150}}>
+                      <td className="px-4 py-3" style={{minWidth:110}}>
                         <span className="text-[12px] font-bold text-teal">{fmt(team.revenue)}</span>
                         <div className="h-1.5 rounded-full overflow-hidden mt-1" style={{background:'#1a1a1a'}}>
                           <div className="h-full rounded-full" style={{width:`${revPct}%`,background:team.isMyTeam?'#00b894':'#00b89460'}}/>
@@ -580,6 +584,8 @@ export default function Team() {
             ))}
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   )

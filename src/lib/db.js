@@ -9,13 +9,15 @@ import {
   DEMO_DEALS_JOINED,
   DEMO_PAYMENTS,
   DEMO_GOALS,
+  DEMO_WEEKLY_STATS,
 } from './demoData'
 
 // Local mutable copies for demo CRUD
-let _deals    = DEMO_DEALS_JOINED.map(d => ({ ...d }))
-let _users    = DEMO_USERS.map(u => ({ ...u }))
-let _payments = DEMO_PAYMENTS.map(p => ({ ...p }))
-let _goals    = { ...DEMO_GOALS } // keyed "YYYY-M" -> baseline_target
+let _deals       = DEMO_DEALS_JOINED.map(d => ({ ...d }))
+let _users       = DEMO_USERS.map(u => ({ ...u }))
+let _payments    = DEMO_PAYMENTS.map(p => ({ ...p }))
+let _goals       = { ...DEMO_GOALS } // keyed "YYYY-M" -> baseline_target
+let _weeklyStats = DEMO_WEEKLY_STATS.map(s => ({ ...s }))
 
 const goalKey = (y, m) => `${y}-${m}`
 
@@ -162,4 +164,22 @@ export async function deleteGoal(year, month) {
     return { error: null }
   }
   return supabase.from('monthly_goals').delete().eq('year', year).eq('month', month)
+}
+
+// ── Weekly stats (rep estimates → close rate) ─────────────────
+export async function fetchWeeklyStats() {
+  if (DEMO_MODE) return { data: _weeklyStats, error: null }
+  return supabase.from('weekly_stats').select('*').order('week_start', { ascending: false })
+}
+
+export async function upsertWeeklyStat({ rep_id, week_start, estimates }, profileId) {
+  if (DEMO_MODE) {
+    _weeklyStats = [
+      ..._weeklyStats.filter(s => !(s.rep_id === rep_id && s.week_start === week_start)),
+      { rep_id, week_start, estimates },
+    ]
+    return { error: null }
+  }
+  return supabase.from('weekly_stats')
+    .upsert({ rep_id, week_start, estimates, created_by: profileId }, { onConflict: 'rep_id,week_start' })
 }

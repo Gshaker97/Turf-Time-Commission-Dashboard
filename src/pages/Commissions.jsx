@@ -2,30 +2,22 @@ import { useEffect, useMemo, useState } from 'react'
 import { fetchDeals, fetchPayments } from '../lib/db'
 import { useAuth } from '../contexts/AuthContext'
 import { calcDealCommissions, fmt } from '../utils/commission'
+import DateRangeFilter from '../components/DateRangeFilter'
+import { getPresetRange, matchPreset, rangeMatches, presetLabel } from '../utils/dateRanges'
 
-function getMonths(n = 12) {
-  const months = []
-  const now = new Date()
-  const pad = (x) => String(x).padStart(2, '0')
-  for (let i = 0; i < n; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-    months.push({
-      label: d.toLocaleString('en-US', { month: 'long', year: 'numeric' }),
-      key: `${d.getFullYear()}-${pad(d.getMonth() + 1)}`,
-    })
-  }
-  return months
-}
+const inRange = (date, from, to) =>
+  !!date && (!from || date >= from) && (!to || date <= to)
 
 export default function Commissions() {
   const { profile } = useAuth()
-  const months = useMemo(() => getMonths(12), [])
-  const [selected, setSelected] = useState(0)
+  const [from,   setFrom]   = useState(getPresetRange('mtd').from)
+  const [to,     setTo]     = useState(getPresetRange('mtd').to)
+  const [preset, setPreset] = useState('mtd')
   const [allDeals, setAllDeals] = useState([])
   const [allPayments, setAllPayments] = useState([])
   const [loading, setLoading] = useState(true)
 
-  const mo = months[selected]
+  const periodLabel = presetLabel(rangeMatches(preset, from, to) ? preset : matchPreset(from, to))
 
   useEffect(() => {
     setLoading(true)
@@ -37,13 +29,13 @@ export default function Commissions() {
   }, [])
 
   const deals = useMemo(
-    () => allDeals.filter(d => d.sale_date?.startsWith(mo.key)),
-    [allDeals, mo.key]
+    () => allDeals.filter(d => inRange(d.sale_date, from, to)),
+    [allDeals, from, to]
   )
 
   const payments = useMemo(
-    () => allPayments.filter(p => p.user_id === profile?.id && p.pay_date?.startsWith(mo.key)),
-    [allPayments, profile?.id, mo.key]
+    () => allPayments.filter(p => p.user_id === profile?.id && inRange(p.pay_date, from, to)),
+    [allPayments, profile?.id, from, to]
   )
 
   const myDeals = useMemo(() =>
@@ -71,20 +63,13 @@ export default function Commissions() {
     <div style={{ background: '#1a1a1a', color: '#fff', minHeight: '100%' }}>
 
       {/* Header */}
-      <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+      <div className="mb-4 space-y-3">
         <div>
           <h1 className="text-lg md:text-xl font-bold text-white">Commissions</h1>
           <p className="text-[12px] text-white/40 mt-0.5">{profile?.name}</p>
         </div>
-        <select
-          value={selected}
-          onChange={e => setSelected(Number(e.target.value))}
-          className="text-[12px] px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white flex-shrink-0"
-        >
-          {months.map((m, i) => (
-            <option key={i} value={i} style={{ background: '#2a2a2a' }}>{m.label}</option>
-          ))}
-        </select>
+        <DateRangeFilter from={from} to={to} preset={preset}
+          onChange={({ from, to, preset }) => { setFrom(from); setTo(to); setPreset(preset) }} />
       </div>
 
       {/* Summary cards */}
@@ -104,13 +89,13 @@ export default function Commissions() {
       {/* Deals list */}
       <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12, overflow: 'hidden' }}>
         <div className="px-4 py-3 border-b border-white/5">
-          <span className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">{mo?.label}</span>
+          <span className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">{periodLabel}</span>
         </div>
 
         {loading ? (
           <div className="px-4 py-6 text-white/30 text-sm">Loading…</div>
         ) : myDeals.length === 0 ? (
-          <div className="px-4 py-6 text-white/30 text-sm">No deals this month.</div>
+          <div className="px-4 py-6 text-white/30 text-sm">No deals in this period.</div>
         ) : (
           <>
             {/* Desktop table */}

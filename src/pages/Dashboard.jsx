@@ -1,13 +1,14 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import {
-  format, subMonths, subYears, startOfMonth, endOfMonth,
-  startOfYear, startOfWeek, endOfWeek, addDays,
+  format, subMonths, startOfMonth, startOfWeek, endOfWeek, addDays,
 } from 'date-fns'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { Check, X, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchDeals, fetchUsers, fetchGoal, saveGoal as saveGoalDb, deleteGoal as deleteGoalDb } from '../lib/db'
-import { fmt, dealAmounts, getUserCommission } from '../utils/commission'
+import { fmt, dealAmounts, getSetterCommission } from '../utils/commission'
+import { getPresetRange, getPreviousRange } from '../utils/dateRanges'
+import DateRangeFilter from '../components/DateRangeFilter'
 
 const MEDAL = {
   1: { bg: '#fbbf2420', color: '#fbbf24' },
@@ -20,17 +21,6 @@ function RankBadge({ n }) {
     <span className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0"
       style={{ background: s.bg, color: s.color }}>{n}</span>
   )
-}
-
-function buildPresets() {
-  const now = new Date()
-  const lm  = subMonths(now, 1)
-  return [
-    { label: 'MTD',        from: format(startOfMonth(now), 'yyyy-MM-dd'), to: '' },
-    { label: 'Last Month', from: format(startOfMonth(lm),  'yyyy-MM-dd'), to: format(endOfMonth(lm), 'yyyy-MM-dd') },
-    { label: 'YTD',        from: format(startOfYear(now),  'yyyy-MM-dd'), to: '' },
-    { label: 'All Time',   from: '', to: '' },
-  ]
 }
 
 function Trend({ cur, prev, suffix = 'vs prev' }) {
@@ -67,9 +57,9 @@ export default function Dashboard() {
   const [deals,        setDeals]        = useState([])
   const [users,        setUsers]        = useState([])
   const [loading,      setLoading]      = useState(true)
-  const [dateFrom,     setDateFrom]     = useState(format(startOfMonth(new Date()), 'yyyy-MM-dd'))
-  const [dateTo,       setDateTo]       = useState('')
-  const [activePreset, setActivePreset] = useState('MTD')
+  const [dateFrom,     setDateFrom]     = useState(getPresetRange('mtd').from)
+  const [dateTo,       setDateTo]       = useState(getPresetRange('mtd').to)
+  const [activePreset, setActivePreset] = useState('mtd')
   const [teamFilter,   setTeamFilter]   = useState('')
   const [editingGoal,  setEditingGoal]  = useState(false)
   const [goalInput,    setGoalInput]    = useState('')
@@ -95,32 +85,14 @@ export default function Dashboard() {
     fetchGoal(goalYear, goalMonth).then(({ data }) => setSavedGoal(data))
   }, [goalYear, goalMonth])
 
-  function applyPreset(p) { setDateFrom(p.from); setDateTo(p.to); setActivePreset(p.label) }
+  function handleRangeChange({ from, to, preset }) {
+    setDateFrom(from); setDateTo(to); setActivePreset(preset)
+  }
 
-  const prevPeriod = useMemo(() => {
-    if (!dateFrom) return null
-    const now = new Date()
-    const toDate   = dateTo   ? new Date(dateTo   + 'T12:00:00') : now
-    const fromDate = new Date(dateFrom + 'T12:00:00')
-    if (activePreset === 'MTD') {
-      const prevMonth = subMonths(toDate, 1)
-      const dayN = toDate.getDate()
-      const maxDay = new Date(prevMonth.getFullYear(), prevMonth.getMonth() + 1, 0).getDate()
-      const prevTo = new Date(prevMonth.getFullYear(), prevMonth.getMonth(), Math.min(dayN, maxDay))
-      return { from: format(startOfMonth(prevMonth), 'yyyy-MM-dd'), to: format(prevTo, 'yyyy-MM-dd') }
-    }
-    if (activePreset === 'Last Month') {
-      const twoBack = subMonths(fromDate, 1)
-      return { from: format(startOfMonth(twoBack), 'yyyy-MM-dd'), to: format(endOfMonth(twoBack), 'yyyy-MM-dd') }
-    }
-    if (activePreset === 'YTD') {
-      const ly = subYears(toDate, 1)
-      return { from: format(startOfYear(ly), 'yyyy-MM-dd'), to: format(ly, 'yyyy-MM-dd') }
-    }
-    const durMs  = toDate.getTime() - fromDate.getTime()
-    const prevTo = new Date(fromDate.getTime() - 86400000)
-    return { from: format(new Date(prevTo.getTime() - durMs), 'yyyy-MM-dd'), to: format(prevTo, 'yyyy-MM-dd') }
-  }, [dateFrom, dateTo, activePreset])
+  const prevPeriod = useMemo(
+    () => getPreviousRange(activePreset, dateFrom, dateTo),
+    [dateFrom, dateTo, activePreset]
+  )
 
   function applyScopeFilters(rows) {
     if (!teamFilter) return rows
@@ -218,7 +190,7 @@ export default function Dashboard() {
         map[sid]  = { id: sid, name: u?.name ?? '—', team: mgr?.name ?? '—', deals: 0, revenue: 0, commission: 0, prevRev: 0 }
       }
       map[sid].revenue    += parseFloat(deal.baseline_revenue) || 0
-      map[sid].commission += getUserCommission(deal, sid)
+      map[sid].commission += getSetterCommission(deal)
       map[sid].deals      += 1
     }
     for (const deal of prevFiltered) {
@@ -266,7 +238,6 @@ export default function Dashboard() {
 
   if (loading) return <div className="flex items-center justify-center py-24 text-white/30 text-[13px]">Loading…</div>
 
-  const presets          = buildPresets()
   const managers         = users.filter(u => u.role === 'manager')
   const maxWeekRevLocal  = maxWeekRev
   const selectedTeamName = teamFilter ? managers.find(m => m.id === teamFilter)?.name : null
@@ -275,37 +246,21 @@ export default function Dashboard() {
     <div className="space-y-4 pb-6">
 
       {/* ── Filter row ── */}
-      <div className="space-y-2">
-        {/* Preset buttons */}
-        <div className="flex gap-1.5 flex-wrap">
-          {presets.map(p => (
-            <button key={p.label} onClick={() => applyPreset(p)}
-              className={`px-2.5 py-1.5 rounded-lg text-[11px] md:text-[12px] font-medium transition-colors ${
-                activePreset === p.label
-                  ? 'bg-teal/15 text-teal border border-teal/25'
-                  : 'text-white/40 hover:text-white hover:bg-white/5 border border-transparent'
-              }`}>{p.label}</button>
-          ))}
-          <span className="text-[12px] text-white/30 flex items-center ml-1">{filtered.length} deals</span>
-        </div>
-        {/* Date inputs + team filter */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <input type="date" value={dateFrom}
-            onChange={e => { setDateFrom(e.target.value); setActivePreset('') }}
-            style={{ background: '#242424', border: '1px solid #333' }}
-            className="h-8 px-2 rounded-lg text-[11px] md:text-[12px] text-white focus:outline-none w-[120px] md:w-[130px]" />
-          <span className="text-white/30 text-xs">→</span>
-          <input type="date" value={dateTo}
-            onChange={e => { setDateTo(e.target.value); setActivePreset('') }}
-            style={{ background: '#242424', border: '1px solid #333' }}
-            className="h-8 px-2 rounded-lg text-[11px] md:text-[12px] text-white focus:outline-none w-[120px] md:w-[130px]" />
-          <select value={teamFilter} onChange={e => setTeamFilter(e.target.value)}
-            style={{ background: '#242424', border: '1px solid #333' }}
-            className="h-8 px-2 rounded-lg text-[11px] md:text-[12px] text-white focus:outline-none">
-            <option value="">All Teams</option>
-            {managers.map(m => <option key={m.id} value={m.id}>{m.name}'s Team</option>)}
-          </select>
-        </div>
+      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-2">
+        <DateRangeFilter
+          from={dateFrom}
+          to={dateTo}
+          preset={activePreset}
+          onChange={handleRangeChange}
+          count={filtered.length}
+          countLabel="deals"
+        />
+        <select value={teamFilter} onChange={e => setTeamFilter(e.target.value)}
+          style={{ background: '#242424', border: '1px solid #333' }}
+          className="h-8 px-2 rounded-lg text-[11px] md:text-[12px] text-white focus:outline-none self-start">
+          <option value="">All Teams</option>
+          {managers.map(m => <option key={m.id} value={m.id}>{m.name}'s Team</option>)}
+        </select>
       </div>
 
       {/* ── KPI cards — 2-col on mobile, row on md+ ── */}
@@ -403,7 +358,7 @@ export default function Dashboard() {
         <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
           <div className="flex items-baseline gap-3 mb-4">
             <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Rep Leaderboard</h3>
-            <p className="text-[11px] text-white/30 hidden sm:block">Setter gets revenue credit</p>
+            <p className="text-[11px] text-white/30 hidden sm:block">Setter revenue · setter-share commission</p>
           </div>
           <table className="w-full">
             <thead>

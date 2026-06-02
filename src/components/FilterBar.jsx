@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Search, ChevronDown, SlidersHorizontal, X } from 'lucide-react'
+import DateRangeFilter from './DateRangeFilter'
 
 const inputStyle = { background: '#2a2a2a', border: '1px solid #333' }
 const inputCls = 'h-9 rounded-lg text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-teal/40 transition-colors px-3'
@@ -12,6 +13,7 @@ export default function FilterBar({
   statusFilter, setStatusFilter,
   dateFrom, setDateFrom,
   dateTo, setDateTo,
+  datePreset, setDatePreset,
   recordCount,
 }) {
   const [open, setOpen] = useState(false)
@@ -76,15 +78,6 @@ export default function FilterBar({
           <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 pointer-events-none" />
         </div>
 
-        {/* Date range */}
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-            style={inputStyle} className={`${inputCls} w-[128px] md:w-[138px]`} />
-          <span className="text-white/30 text-xs">→</span>
-          <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-            style={inputStyle} className={`${inputCls} w-[128px] md:w-[138px]`} />
-        </div>
-
         {/* Clear filters — mobile only */}
         {hasFilters && (
           <button onClick={() => { setRepFilter(''); setStatusFilter(''); setDateFrom(''); setDateTo('') }}
@@ -92,6 +85,16 @@ export default function FilterBar({
             Clear
           </button>
         )}
+      </div>
+
+      {/* Date range — presets + custom (sale date) */}
+      <div className={`${open ? 'block' : 'hidden md:block'}`}>
+        <DateRangeFilter
+          from={dateFrom}
+          to={dateTo}
+          preset={datePreset}
+          onChange={({ from, to, preset }) => { setDateFrom(from); setDateTo(to); setDatePreset?.(preset) }}
+        />
       </div>
     </div>
   )

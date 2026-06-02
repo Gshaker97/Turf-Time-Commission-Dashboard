@@ -7,6 +7,7 @@ import KpiCard from '../components/KpiCard'
 import DealTable from '../components/DealTable'
 import DealModal from '../components/DealModal'
 import { calcDealCommissions, fmt } from '../utils/commission'
+import { getPresetRange } from '../utils/dateRanges'
 
 function sortValue(d, key) {
   if (key === 'setter')         return d.setter?.name ?? ''
@@ -29,8 +30,9 @@ export default function Deals() {
   const [repFilter,    setRepFilter]    = useState('')
   const [search,       setSearch]       = useState('')
   const [statusFilter, setStatusFilter] = useState('')
-  const [dateFrom,     setDateFrom]     = useState('')
-  const [dateTo,       setDateTo]       = useState('')
+  const [dateFrom,     setDateFrom]     = useState(getPresetRange('mtd').from)
+  const [dateTo,       setDateTo]       = useState(getPresetRange('mtd').to)
+  const [datePreset,   setDatePreset]   = useState('mtd')
   const [sortKey,      setSortKey]      = useState('sale_date')
   const [sortDir,      setSortDir]      = useState('desc')
 
@@ -105,6 +107,7 @@ export default function Deals() {
         statusFilter={statusFilter} setStatusFilter={setStatusFilter}
         dateFrom={dateFrom}         setDateFrom={setDateFrom}
         dateTo={dateTo}             setDateTo={setDateTo}
+        datePreset={datePreset}     setDatePreset={setDatePreset}
         recordCount={filtered.length}
       />
 

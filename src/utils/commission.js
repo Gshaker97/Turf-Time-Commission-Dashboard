@@ -54,6 +54,14 @@ export const calcDealCommissions = (deal) => {
   }
 }
 
+// The setter's OWN share of a deal — never the closer's portion and never
+// any override the same person might also earn on that deal. Use this for the
+// rep leaderboard, which credits the setter with full revenue but should show
+// only the setter's commission, not the combined rep pool. On a solo deal the
+// setter share is the whole rep pool; on a split deal it is the setter's split
+// (or the stored setter_amount when the sheet provides it).
+export const getSetterCommission = (deal) => dealAmounts(deal).setter
+
 // What a single user personally earns on one deal or an array of deals,
 // summed across whichever roles they hold (setter/closer/manager/dir/vp).
 export const getUserCommission = (dealsOrDeal, userId) => {

@@ -1,5 +1,7 @@
 // Demo data — mirrors the Turf Time roster in supabase/migrations/003_seed.sql.
 // Used only when no Supabase env vars are set (local/offline preview).
+import { startOfWeek, subWeeks, format } from 'date-fns'
+
 const CO = 'Turf Time'
 
 export const DEMO_USERS = [
@@ -90,6 +92,9 @@ function makeDeal(o) {
 
 // A spread of deals across recent months so every page has something to show.
 export const DEMO_DEALS_JOINED = [
+  // Current-week deals so MTD / This Week landing views aren't empty.
+  makeDeal({ deal_name: 'Whitaker — 9 Birchwood Ct',  project_id: 'TT-1023', sale_date: daysAgo(0),   setter_id: 'u-stephen',  closer_id: 'u-stephen',  baseline_revenue: 5400, job_price: 10200, status: 'Deal Review' }),
+  makeDeal({ deal_name: 'Yamamoto — 71 Clover Way',   project_id: 'TT-1024', sale_date: daysAgo(1),   setter_id: 'u-charlieh', closer_id: 'u-stephen',  baseline_revenue: 5000, job_price: 9400,  status: 'Deal Review' }),
   makeDeal({ deal_name: 'Anderson — 142 Oak St',     project_id: 'TT-1001', sale_date: daysAgo(2),   setter_id: 'u-stephen',  closer_id: 'u-stephen',  baseline_revenue: 5200, job_price: 9800,  status: 'Deal Review' }),
   makeDeal({ deal_name: 'Bradley — 88 Pine Ave',     project_id: 'TT-1002', sale_date: daysAgo(4),   setter_id: 'u-charlieh', closer_id: 'u-stephen',  baseline_revenue: 4800, job_price: 8500,  status: 'Deal Review' }),
   makeDeal({ deal_name: 'Carter — 210 Elm Dr',       project_id: 'TT-1003', sale_date: daysAgo(6),   setter_id: 'u-marc',     closer_id: 'u-marc',     baseline_revenue: 6100, job_price: 11200, status: 'Pending Install', install_date: daysAgo(1) }),
@@ -133,4 +138,26 @@ export const DEMO_GOALS = (() => {
   const g = {}
   for (let m = 1; m <= 12; m++) g[`2026-${m}`] = 600000
   return g
+})()
+
+// Weekly estimate counts per rep, for the Weekly Stats tracker. Closed deals
+// are derived from DEMO_DEALS_JOINED, so we only seed the manually-entered
+// estimate counts here, for the current week + the last few weeks.
+export const DEMO_WEEKLY_STATS = (() => {
+  // Same week-start logic as the Weekly Stats component (Monday, local time)
+  // so seeded estimates line up with the derived weekly buckets.
+  const monday = (weeksAgo) =>
+    format(startOfWeek(subWeeks(new Date(), weeksAgo), { weekStartsOn: 1 }), 'yyyy-MM-dd')
+  const repIds = DEMO_USERS.filter(u => u.role === 'rep').map(u => u.id)
+  // Kept small so close rates (closed ÷ estimates) read realistically against
+  // the sparse demo deal set.
+  const baseByRep = [4, 4, 5, 3, 5, 4, 4, 3, 4, 3, 3, 4, 3, 3, 3]
+  const rows = []
+  repIds.forEach((id, idx) => {
+    const base = baseByRep[idx % baseByRep.length]
+    for (let w = 0; w <= 3; w++) {
+      rows.push({ rep_id: id, week_start: monday(w), estimates: Math.max(2, base - w) })
+    }
+  })
+  return rows
 })()
