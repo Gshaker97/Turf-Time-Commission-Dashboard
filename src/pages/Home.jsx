@@ -4,26 +4,35 @@ import { rollup } from "../utils/commission";
 
 const money = (n) => "$" + Math.round(Number(n) || 0).toLocaleString("en-US");
 
-function monthRange(d = new Date()) {
-  const y = d.getFullYear(), m = d.getMonth();
-  const iso = (x) => x.toISOString().slice(0, 10);
-  return {
-    y, m: m + 1,
-    start: iso(new Date(y, m, 1)),
-    nextStart: iso(new Date(y, m + 1, 1)),
-    label: new Date(y, m, 1).toLocaleString("en-US", { month: "long", year: "numeric" }),
-  };
+function getMonths(n = 12) {
+  const months = [];
+  const now = new Date();
+  for (let i = 0; i < n; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push({
+      y: d.getFullYear(),
+      m: d.getMonth() + 1,
+      start: d.toISOString().slice(0, 10),
+      nextStart: new Date(d.getFullYear(), d.getMonth() + 1, 1).toISOString().slice(0, 10),
+      label: d.toLocaleString("en-US", { month: "long", year: "numeric" }),
+    });
+  }
+  return months;
 }
 
 export default function Home() {
-  const mr = useMemo(() => monthRange(), []);
+  const months = useMemo(() => getMonths(12), []);
+  const [selected, setSelected] = useState(0);
   const [deals, setDeals] = useState([]);
   const [target, setTarget] = useState(0);
   const [goalInput, setGoalInput] = useState("");
   const [loading, setLoading] = useState(true);
   const [savingGoal, setSavingGoal] = useState(false);
 
+  const mr = months[selected];
+
   useEffect(() => {
+    setLoading(true);
     (async () => {
       const [{ data: d }, { data: g }] = await Promise.all([
         supabase.from("deals").select("*").gte("sale_date", mr.start).lt("sale_date", mr.nextStart).order("sale_date", { ascending: false }),
@@ -61,6 +70,10 @@ export default function Home() {
         .ttd-home *{ box-sizing:border-box; }
         .ttd-home h1{ font-size:22px; font-weight:700; margin:0 0 2px; }
         .ttd-home .lead{ color:var(--muted); font-size:13px; margin:0 0 22px; }
+        .hhead{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:22px; }
+        .hhead h1{ margin:0; }
+        .monthsel{ padding:8px 12px; border:1px solid var(--line); border-radius:9px; font:inherit;
+          font-size:13px; background:#fff; color:var(--text); }
         .grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; max-width:920px; }
         @media(max-width:620px){ .grid{ grid-template-columns:1fr; } }
         .card{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; }
@@ -80,8 +93,12 @@ export default function Home() {
         .barmeta b{ color:var(--text); }
       `}</style>
 
-      <h1>{mr.label}</h1>
-      <p className="lead">Progress is measured on baseline revenue.</p>
+      <div className="hhead">
+        <h1>{mr.label}</h1>
+        <select className="monthsel" value={selected} onChange={(e) => setSelected(Number(e.target.value))}>
+          {months.map((m, i) => <option key={i} value={i}>{m.label}</option>)}
+        </select>
+      </div>
 
       {loading ? (
         <p className="lead">Loading…</p>
@@ -96,12 +113,11 @@ export default function Home() {
           <div className="card goal">
             <div className="goalrow">
               <div>
-                <label>Monthly goal (baseline)</label>
+                <label>Monthly goal (baseline) — {mr.label}</label>
                 <input type="number" value={goalInput} onChange={(e) => setGoalInput(e.target.value)} placeholder="e.g. 250000" />
               </div>
               <button className="btn" disabled={savingGoal} onClick={saveGoal}>{savingGoal ? "Saving…" : "Save goal"}</button>
             </div>
-
             {target > 0 && (
               <>
                 <div className="bar"><div className="fill" style={{ width: `${Math.min(pct, 100)}%` }} /></div>
