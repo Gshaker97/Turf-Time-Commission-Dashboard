@@ -10,7 +10,6 @@ function getMonths(n = 12) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
     months.push({
       label: d.toLocaleString('en-US', { month: 'long', year: 'numeric' }),
-      short: d.toLocaleString('en-US', { month: 'short', year: '2-digit' }),
       start: d.toISOString().slice(0, 10),
       end: new Date(d.getFullYear(), d.getMonth() + 1, 1).toISOString().slice(0, 10),
     })
@@ -82,10 +81,7 @@ export default function Commissions() {
           className="text-[12px] px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white flex-shrink-0"
         >
           {months.map((m, i) => (
-            <option key={i} value={i} style={{ background: '#2a2a2a' }}>
-              <span className="md:hidden">{m.short}</span>
-              <span>{m.label}</span>
-            </option>
+            <option key={i} value={i} style={{ background: '#2a2a2a' }}>{m.label}</option>
           ))}
         </select>
       </div>
@@ -107,9 +103,7 @@ export default function Commissions() {
       {/* Deals list */}
       <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12, overflow: 'hidden' }}>
         <div className="px-4 py-3 border-b border-white/5">
-          <span className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">
-            {mo?.label}
-          </span>
+          <span className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">{mo?.label}</span>
         </div>
 
         {loading ? (
