@@ -21,12 +21,8 @@ const MEDAL = {
 function RankBadge({ n }) {
   const s = MEDAL[n] ?? { bg: 'transparent', color: '#ffffff30' }
   return (
-    <span
-      className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0"
-      style={{ background: s.bg, color: s.color }}
-    >
-      {n}
-    </span>
+    <span className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0"
+      style={{ background: s.bg, color: s.color }}>{n}</span>
   )
 }
 
@@ -46,11 +42,7 @@ function Trend({ cur, prev, suffix = 'vs prev' }) {
   if (prev === 0 && cur === 0) return null
   const pct = prev > 0 ? ((cur - prev) / prev) * 100 : (cur > 0 ? 100 : 0)
   if (Math.abs(pct) < 0.1 && prev > 0) {
-    return (
-      <div className="flex items-center gap-1 text-[10px] text-white/25">
-        <Minus size={10} /> unchanged
-      </div>
-    )
+    return <div className="flex items-center gap-1 text-[10px] text-white/25"><Minus size={10} /> unchanged</div>
   }
   const up = pct >= 0
   const Icon = up ? TrendingUp : TrendingDown
@@ -92,36 +84,42 @@ export default function Dashboard() {
   const [saveError,    setSaveError]    = useState(null)
   const skipBlurSaveRef = useRef(false)
 
+  // Derive goal month from the active date filter
+  const goalDate  = useMemo(() => dateFrom ? new Date(dateFrom + 'T12:00:00') : new Date(), [dateFrom])
+  const goalYear  = goalDate.getFullYear()
+  const goalMonth = goalDate.getMonth() + 1
+
+  // Load deals + users once
   useEffect(() => {
-    const now   = new Date()
-    const year  = now.getFullYear()
-    const month = now.getMonth() + 1
-    Promise.all([
-      fetchDeals(),
-      fetchUsers(),
-      supabase.from('monthly_goals')
-        .select('baseline_target')
-        .eq('year', year).eq('month', month)
-        .maybeSingle(),
-    ]).then(([{ data: d }, { data: u }, { data: g }]) => {
+    Promise.all([fetchDeals(), fetchUsers()]).then(([{ data: d }, { data: u }]) => {
       setDeals(d ?? [])
       setUsers(u ?? [])
-      setSavedGoal(g?.baseline_target != null ? parseFloat(g.baseline_target) : null)
       setLoading(false)
     })
   }, [])
+
+  // Reload goal whenever the selected month changes
+  useEffect(() => {
+    setSavedGoal(null)
+    supabase.from('monthly_goals')
+      .select('baseline_target')
+      .eq('year', goalYear)
+      .eq('month', goalMonth)
+      .maybeSingle()
+      .then(({ data: g }) => {
+        setSavedGoal(g?.baseline_target != null ? parseFloat(g.baseline_target) : null)
+      })
+  }, [goalYear, goalMonth])
 
   function applyPreset(p) {
     setDateFrom(p.from); setDateTo(p.to); setActivePreset(p.label)
   }
 
-  // Previous period (preset-aware): MTD → same days last month, etc.
   const prevPeriod = useMemo(() => {
     if (!dateFrom) return null
     const now      = new Date()
     const toDate   = dateTo   ? new Date(dateTo   + 'T12:00:00') : now
     const fromDate = new Date(dateFrom + 'T12:00:00')
-
     if (activePreset === 'MTD') {
       const prevMonth = subMonths(toDate, 1)
       const dayN      = toDate.getDate()
@@ -139,13 +137,9 @@ export default function Dashboard() {
     }
     const durMs  = toDate.getTime() - fromDate.getTime()
     const prevTo = new Date(fromDate.getTime() - 86400000)
-    return {
-      from: format(new Date(prevTo.getTime() - durMs), 'yyyy-MM-dd'),
-      to:   format(prevTo, 'yyyy-MM-dd'),
-    }
+    return { from: format(new Date(prevTo.getTime() - durMs), 'yyyy-MM-dd'), to: format(prevTo, 'yyyy-MM-dd') }
   }, [dateFrom, dateTo, activePreset])
 
-  // Filter helpers
   function applyScopeFilters(rows) {
     let r = rows
     if (teamFilter) {
@@ -183,7 +177,6 @@ export default function Dashboard() {
   const totals     = useMemo(() => computeTotals(filtered),     [filtered])
   const prevTotals = useMemo(() => computeTotals(prevFiltered), [prevFiltered])
 
-  // Company-wide revenue for selected dates (ignores team filter) — used as % denominator
   const companyTotalRev = useMemo(() => {
     let r = deals
     if (dateFrom) r = r.filter(d => d.sale_date >= dateFrom)
@@ -191,10 +184,9 @@ export default function Dashboard() {
     return r.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0) || 1
   }, [deals, dateFrom, dateTo])
 
-  // Monthly goal — always current calendar month, respects team filter
+  // Monthly goal — tied to the selected date range's month
   const monthlyGoal = useMemo(() => {
-    const now = new Date()
-    const curKey = format(now, 'yyyy-MM')
+    const curKey = `${String(goalYear).padStart(4,'0')}-${String(goalMonth).padStart(2,'0')}`
     function monthTotal(mk) {
       let rows = deals.filter(d => d.sale_date?.startsWith(mk))
       if (teamFilter) {
@@ -204,93 +196,58 @@ export default function Dashboard() {
       return rows.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
     }
     const curRevenue = monthTotal(curKey)
-    const trailing   = [1, 2, 3].map(i => monthTotal(format(subMonths(now, i), 'yyyy-MM')))
+    const trailing   = [1, 2, 3].map(i => monthTotal(format(subMonths(goalDate, i), 'yyyy-MM')))
     const autoGoal   = Math.max((trailing.reduce((s, v) => s + v, 0) / 3) * 1.1, 10000)
     const goal       = savedGoal != null ? savedGoal : autoGoal
     const pct        = Math.min((curRevenue / goal) * 100, 100)
-    return { curRevenue, goal, pct, isCustom: savedGoal != null, month: format(now, 'MMMM yyyy') }
-  }, [deals, users, teamFilter, savedGoal])
+    return { curRevenue, goal, pct, isCustom: savedGoal != null, month: format(goalDate, 'MMMM yyyy') }
+  }, [deals, users, teamFilter, savedGoal, goalYear, goalMonth, goalDate])
 
   function startEditGoal() {
     setGoalInput(monthlyGoal.goal.toFixed(0))
-    setSaveStatus('idle')
-    setSaveError(null)
-    setEditingGoal(true)
+    setSaveStatus('idle'); setSaveError(null); setEditingGoal(true)
   }
   function cancelGoalEdit() {
-    skipBlurSaveRef.current = true
-    setEditingGoal(false)
+    skipBlurSaveRef.current = true; setEditingGoal(false)
   }
   function handleGoalBlur() {
-    if (skipBlurSaveRef.current) {
-      skipBlurSaveRef.current = false
-      return
-    }
+    if (skipBlurSaveRef.current) { skipBlurSaveRef.current = false; return }
     saveGoal()
   }
   async function saveGoal() {
     const v = parseFloat(goalInput)
-    if (!(v > 0)) {
-      setEditingGoal(false)
-      return
-    }
-    const now   = new Date()
-    const year  = now.getFullYear()
-    const month = now.getMonth() + 1
+    if (!(v > 0)) { setEditingGoal(false); return }
     setEditingGoal(false)
     const { error } = await supabase.from('monthly_goals').upsert(
-      { year, month, baseline_target: v },
+      { year: goalYear, month: goalMonth, baseline_target: v },
       { onConflict: 'year,month' },
     )
-    if (error) {
-      setSaveError(error.message)
-      setSaveStatus('error')
-      return
-    }
-    setSavedGoal(v)
-    setSaveError(null)
-    setSaveStatus('saved')
+    if (error) { setSaveError(error.message); setSaveStatus('error'); return }
+    setSavedGoal(v); setSaveError(null); setSaveStatus('saved')
     setTimeout(() => setSaveStatus('idle'), 2000)
   }
   async function resetGoal() {
-    skipBlurSaveRef.current = true
-    const now   = new Date()
-    const year  = now.getFullYear()
-    const month = now.getMonth() + 1
-    setEditingGoal(false)
+    skipBlurSaveRef.current = true; setEditingGoal(false)
     const { error } = await supabase.from('monthly_goals')
-      .delete().eq('year', year).eq('month', month)
-    if (error) {
-      setSaveError(error.message)
-      setSaveStatus('error')
-      return
-    }
-    setSavedGoal(null)
-    setSaveError(null)
-    setSaveStatus('saved')
+      .delete().eq('year', goalYear).eq('month', goalMonth)
+    if (error) { setSaveError(error.message); setSaveStatus('error'); return }
+    setSavedGoal(null); setSaveError(null); setSaveStatus('saved')
     setTimeout(() => setSaveStatus('idle'), 2000)
   }
 
-  // Team breakdown — setter gets revenue credit
   const teamData = useMemo(() => {
     const totalRev = companyTotalRev
-    const mgrs = teamFilter
-      ? users.filter(u => u.id === teamFilter)
-      : users.filter(u => u.role === 'manager')
+    const mgrs = teamFilter ? users.filter(u => u.id === teamFilter) : users.filter(u => u.role === 'manager')
     return mgrs.map(mgr => {
-      const repIds     = new Set(users.filter(u => u.manager_id === mgr.id).map(u => u.id))
-      const mDeals     = filtered.filter(d => repIds.has(d.setter_id))
-      const revenue    = mDeals.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
-      const prevRev    = prevFiltered.filter(d => repIds.has(d.setter_id))
+      const repIds  = new Set(users.filter(u => u.manager_id === mgr.id).map(u => u.id))
+      const mDeals  = filtered.filter(d => repIds.has(d.setter_id))
+      const revenue = mDeals.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
+      const prevRev = prevFiltered.filter(d => repIds.has(d.setter_id))
         .reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
-      return {
-        id: mgr.id, name: mgr.name, repCount: repIds.size, deals: mDeals.length,
-        revenue, prevRev, pct: (revenue / totalRev) * 100,
-      }
+      return { id: mgr.id, name: mgr.name, repCount: repIds.size, deals: mDeals.length, revenue, prevRev, pct: (revenue / totalRev) * 100 }
     }).sort((a, b) => b.revenue - a.revenue)
-  }, [users, filtered, prevFiltered, totals.totalPrice, teamFilter])
+  }, [users, filtered, prevFiltered, companyTotalRev, teamFilter])
 
-  // Rep leaderboard — setter gets revenue credit
   const repData = useMemo(() => {
     const totalRev = companyTotalRev
     const map = {}
@@ -301,30 +258,24 @@ export default function Dashboard() {
         const mgr = u ? users.find(m => m.id === u.manager_id) : null
         map[sid]  = { id: sid, name: u?.name ?? '—', team: mgr?.name ?? '—', deals: 0, revenue: 0, commission: 0, prevRev: 0 }
       }
-      const price    = parseFloat(deal.job_price)        || 0
-      const baseline = parseFloat(deal.baseline_revenue) || 0
-      map[sid].revenue    += baseline
-      map[sid].commission += (price - baseline)
+      map[sid].revenue    += parseFloat(deal.baseline_revenue) || 0
+      map[sid].commission += (parseFloat(deal.job_price) || 0) - (parseFloat(deal.baseline_revenue) || 0)
       map[sid].deals      += 1
     }
     for (const deal of prevFiltered) {
       const sid = deal.setter_id
       if (sid && map[sid]) map[sid].prevRev += parseFloat(deal.baseline_revenue) || 0
     }
-    return Object.values(map)
-      .sort((a, b) => b.revenue - a.revenue)
-      .slice(0, 10)
+    return Object.values(map).sort((a, b) => b.revenue - a.revenue).slice(0, 10)
       .map(r => ({ ...r, pct: (r.revenue / totalRev) * 100 }))
-  }, [filtered, prevFiltered, users, totals.totalPrice])
+  }, [filtered, prevFiltered, users, companyTotalRev])
 
-  // Weekly breakdown — last 8 weeks of the filtered period
   const weeklyData = useMemo(() => {
     const now    = new Date()
     const toDate = dateTo ? new Date(dateTo + 'T23:59:59') : now
     let fromDate = dateFrom ? new Date(dateFrom + 'T00:00:00') : new Date(startOfMonth(now))
     const maxFrom = addDays(toDate, -(8 * 7 - 1))
     if (fromDate < maxFrom) fromDate = maxFrom
-
     const weeks = []
     let ptr = startOfWeek(fromDate, { weekStartsOn: 1 })
     while (ptr <= toDate) {
@@ -332,23 +283,14 @@ export default function Dashboard() {
       const wFrom = format(ptr  < fromDate ? fromDate : ptr,  'yyyy-MM-dd')
       const wTo   = format(wEnd > toDate   ? toDate   : wEnd, 'yyyy-MM-dd')
       const wDls  = filtered.filter(d => d.sale_date >= wFrom && d.sale_date <= wTo)
-      weeks.push({
-        label:   format(new Date(wFrom + 'T12:00:00'), 'MMM d'),
-        deals:   wDls.length,
-        revenue: wDls.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0),
-      })
+      weeks.push({ label: format(new Date(wFrom + 'T12:00:00'), 'MMM d'), deals: wDls.length, revenue: wDls.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0) })
       ptr = addDays(ptr, 7)
     }
     return weeks
   }, [filtered, dateFrom, dateTo])
 
-  // Max weekly revenue for per-row bars
-  const maxWeekRev = useMemo(
-    () => weeklyData.reduce((m, w) => Math.max(m, w.revenue), 0) || 1,
-    [weeklyData],
-  )
+  const maxWeekRev = useMemo(() => weeklyData.reduce((m, w) => Math.max(m, w.revenue), 0) || 1, [weeklyData])
 
-  // Annual monthly data — last 12 months, respects team + rep scope (not date filter)
   const annualData = useMemo(() => {
     const now = new Date()
     const months = Array.from({ length: 12 }, (_, i) => {
@@ -359,27 +301,22 @@ export default function Dashboard() {
     for (const deal of scoped) {
       if (!deal.sale_date) continue
       const slot = months.find(m => m.key === deal.sale_date.slice(0, 7))
-      if (slot) {
-        slot.revenue += parseFloat(deal.baseline_revenue) || 0
-        slot.deals   += 1
-      }
+      if (slot) { slot.revenue += parseFloat(deal.baseline_revenue) || 0; slot.deals += 1 }
     }
     return months
   }, [deals, profile, teamFilter, users])
 
-  if (loading) return (
-    <div className="flex items-center justify-center py-24 text-white/30 text-[13px]">Loading…</div>
-  )
+  if (loading) return <div className="flex items-center justify-center py-24 text-white/30 text-[13px]">Loading…</div>
 
-  const presets   = buildPresets()
-  const managers  = users.filter(u => u.role === 'manager')
-  const maxRepRev = repData[0]?.revenue || 1
+  const presets          = buildPresets()
+  const managers         = users.filter(u => u.role === 'manager')
+  const maxRepRev        = repData[0]?.revenue || 1
   const selectedTeamName = teamFilter ? managers.find(m => m.id === teamFilter)?.name : null
 
   return (
     <div className="space-y-5 pb-6">
 
-      {/* ── Filter row ───────────────────────────────────── */}
+      {/* Filter row */}
       <div className="flex items-center gap-2 flex-wrap">
         {presets.map(p => (
           <button key={p.label} onClick={() => applyPreset(p)}
@@ -387,8 +324,7 @@ export default function Dashboard() {
               activePreset === p.label
                 ? 'bg-teal/15 text-teal border border-teal/25'
                 : 'text-white/40 hover:text-white hover:bg-white/5 border border-transparent'
-            }`}
-          >{p.label}</button>
+            }`}>{p.label}</button>
         ))}
         <div className="w-px h-5 bg-white/10 mx-1" />
         <input type="date" value={dateFrom}
@@ -410,38 +346,21 @@ export default function Dashboard() {
         <span className="text-[12px] text-white/30 ml-1">{filtered.length} deals</span>
       </div>
 
-      {/* ── KPI cards ────────────────────────────────────── */}
+      {/* KPI cards */}
       <div className="flex gap-3">
-        <StatCard
-          label="Baseline Revenue"
-          value={fmt(totals.baseline)}
-          sub="Company's cost basis"
-          trend={<Trend cur={totals.baseline} prev={prevPeriod ? prevTotals.baseline : null} />}
-        />
-        <StatCard
-          label="Commissions Earned"
-          value={fmt(totals.commission)}
-          sub="Total price − baseline"
-          trend={<Trend cur={totals.commission} prev={prevPeriod ? prevTotals.commission : null} />}
-        />
-        <StatCard
-          label="Avg Commission %"
-          value={`${totals.avgCommPct.toFixed(1)}%`}
-          trend={<Trend cur={totals.avgCommPct} prev={prevPeriod ? prevTotals.avgCommPct : null} />}
-        />
-        <StatCard
-          label="Total Deals"
-          value={totals.deals.toString()}
-          trend={<Trend cur={totals.deals} prev={prevPeriod ? prevTotals.deals : null} />}
-        />
-        <StatCard
-          label="Avg Deal Size"
-          value={fmt(totals.avgDeal)}
-          trend={<Trend cur={totals.avgDeal} prev={prevPeriod ? prevTotals.avgDeal : null} />}
-        />
+        <StatCard label="Baseline Revenue" value={fmt(totals.baseline)} sub="Company's cost basis"
+          trend={<Trend cur={totals.baseline} prev={prevPeriod ? prevTotals.baseline : null} />} />
+        <StatCard label="Commissions Earned" value={fmt(totals.commission)} sub="Total price − baseline"
+          trend={<Trend cur={totals.commission} prev={prevPeriod ? prevTotals.commission : null} />} />
+        <StatCard label="Avg Commission %" value={`${totals.avgCommPct.toFixed(1)}%`}
+          trend={<Trend cur={totals.avgCommPct} prev={prevPeriod ? prevTotals.avgCommPct : null} />} />
+        <StatCard label="Total Deals" value={totals.deals.toString()}
+          trend={<Trend cur={totals.deals} prev={prevPeriod ? prevTotals.deals : null} />} />
+        <StatCard label="Avg Deal Size" value={fmt(totals.avgDeal)}
+          trend={<Trend cur={totals.avgDeal} prev={prevPeriod ? prevTotals.avgDeal : null} />} />
       </div>
 
-      {/* ── Monthly Goal ─────────────────────────────────── */}
+      {/* Monthly Goal — now follows the date filter */}
       <div className="rounded-xl p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
         <div className="flex items-start justify-between mb-4">
           <div>
@@ -460,7 +379,7 @@ export default function Dashboard() {
 
         <div className="flex items-end gap-8 mb-4 flex-wrap">
           <div>
-            <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1">Month-to-Date</p>
+            <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1">Month Revenue</p>
             <p className="text-[26px] font-bold text-white">{fmt(monthlyGoal.curRevenue)}</p>
           </div>
           <div className="text-white/20 text-xl mb-1.5">/</div>
@@ -469,53 +388,32 @@ export default function Dashboard() {
             {editingGoal ? (
               <div className="flex items-center gap-2">
                 <span className="text-white/40 text-lg">$</span>
-                <input
-                  autoFocus type="number" value={goalInput}
+                <input autoFocus type="number" value={goalInput}
                   onChange={e => setGoalInput(e.target.value)}
                   onBlur={handleGoalBlur}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter')  saveGoal()
-                    if (e.key === 'Escape') cancelGoalEdit()
-                  }}
+                  onKeyDown={e => { if (e.key === 'Enter') saveGoal(); if (e.key === 'Escape') cancelGoalEdit() }}
                   style={{ background: '#2a2a2a', border: '1px solid rgba(0,184,148,0.4)' }}
-                  className="w-32 rounded-lg px-2 py-1 text-[18px] font-bold text-teal focus:outline-none"
-                />
+                  className="w-32 rounded-lg px-2 py-1 text-[18px] font-bold text-teal focus:outline-none" />
                 <button onMouseDown={e => e.preventDefault()} onClick={saveGoal}
-                  className="p-1.5 rounded-lg text-emerald-400 hover:bg-emerald-400/10 transition-colors">
-                  <Check size={15} />
-                </button>
+                  className="p-1.5 rounded-lg text-emerald-400 hover:bg-emerald-400/10 transition-colors"><Check size={15} /></button>
                 <button onMouseDown={e => e.preventDefault()} onClick={cancelGoalEdit}
-                  className="p-1.5 rounded-lg text-white/30 hover:bg-white/5 transition-colors">
-                  <X size={15} />
-                </button>
+                  className="p-1.5 rounded-lg text-white/30 hover:bg-white/5 transition-colors"><X size={15} /></button>
                 {monthlyGoal.isCustom && (
                   <button onMouseDown={e => e.preventDefault()} onClick={resetGoal}
-                    className="text-[11px] text-white/30 hover:text-white/60 underline ml-1">
-                    reset
-                  </button>
+                    className="text-[11px] text-white/30 hover:text-white/60 underline ml-1">reset</button>
                 )}
               </div>
             ) : (
               <div className="flex items-center gap-2">
                 {canEditGoal ? (
-                  <button
-                    onClick={startEditGoal}
+                  <button onClick={startEditGoal}
                     className="text-[20px] font-bold text-teal hover:bg-teal/5 rounded px-2 -mx-2 py-0.5 transition-colors cursor-pointer"
-                    title="Edit goal"
-                  >
-                    {fmt(monthlyGoal.goal)}
-                  </button>
+                    title="Edit goal">{fmt(monthlyGoal.goal)}</button>
                 ) : (
                   <p className="text-[20px] font-bold text-teal">{fmt(monthlyGoal.goal)}</p>
                 )}
-                {saveStatus === 'saved' && (
-                  <span className="text-[11px] font-semibold text-teal">Saved</span>
-                )}
-                {saveStatus === 'error' && (
-                  <span className="text-[11px] font-semibold text-red-400" title={saveError ?? 'Save error'}>
-                    Save failed
-                  </span>
-                )}
+                {saveStatus === 'saved' && <span className="text-[11px] font-semibold text-teal">Saved</span>}
+                {saveStatus === 'error' && <span className="text-[11px] font-semibold text-red-400" title={saveError ?? 'Save error'}>Save failed</span>}
               </div>
             )}
           </div>
@@ -528,17 +426,13 @@ export default function Dashboard() {
         </div>
 
         <div className="h-3 rounded-full overflow-hidden" style={{ background: '#1a1a1a' }}>
-          <div
-            className={`h-full rounded-full transition-all duration-700 ${monthlyGoal.pct >= 100 ? 'bg-emerald-400' : 'bg-teal'}`}
-            style={{ width: `${monthlyGoal.pct}%` }}
-          />
+          <div className={`h-full rounded-full transition-all duration-700 ${monthlyGoal.pct >= 100 ? 'bg-emerald-400' : 'bg-teal'}`}
+            style={{ width: `${monthlyGoal.pct}%` }} />
         </div>
       </div>
 
-      {/* ── Two-column: Rep Leaderboard + Team Breakdown ── */}
+      {/* Rep Leaderboard + Team Breakdown */}
       <div className="grid grid-cols-2 gap-5">
-
-        {/* Rep Leaderboard (replacing chart) */}
         <div className="rounded-xl p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
           <div className="flex items-baseline gap-3 mb-4">
             <h3 className="text-[14px] font-semibold text-white">Rep Leaderboard</h3>
@@ -575,23 +469,18 @@ export default function Dashboard() {
                           {trendPct >= 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
                           {Math.abs(trendPct).toFixed(0)}%
                         </span>
-                      ) : prevPeriod ? (
-                        <span className="text-[10px] text-white/20">new</span>
-                      ) : null}
+                      ) : prevPeriod ? <span className="text-[10px] text-white/20">new</span> : null}
                     </td>
                   </tr>
                 )
               })}
               {repData.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="py-8 text-center text-white/30 text-[13px]">No data for this period</td>
-                </tr>
+                <tr><td colSpan={6} className="py-8 text-center text-white/30 text-[13px]">No data for this period</td></tr>
               )}
             </tbody>
           </table>
         </div>
 
-        {/* Team Breakdown */}
         <div className="rounded-xl p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
           <div className="flex items-baseline gap-3 mb-4">
             <h3 className="text-[14px] font-semibold text-white">Team Breakdown</h3>
@@ -630,17 +519,13 @@ export default function Dashboard() {
                 </div>
               )
             })}
-            {teamData.length === 0 && (
-              <p className="text-[13px] text-white/30 text-center py-8">No data for this period</p>
-            )}
+            {teamData.length === 0 && <p className="text-[13px] text-white/30 text-center py-8">No data for this period</p>}
           </div>
         </div>
       </div>
 
-      {/* ── Weekly Performance + Annual Chart ────────────── */}
+      {/* Weekly Performance + Annual Chart */}
       <div className="grid grid-cols-2 gap-5">
-
-        {/* Weekly Performance — row list */}
         <div className="rounded-xl p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
           <div className="mb-4">
             <h3 className="text-[14px] font-semibold text-white">Weekly Performance</h3>
@@ -656,8 +541,7 @@ export default function Dashboard() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="h-1.5 rounded-full overflow-hidden" style={{ background: '#2a2a2a' }}>
-                    <div className="h-full rounded-full bg-teal transition-all"
-                      style={{ width: `${(w.revenue / maxWeekRev) * 100}%` }} />
+                    <div className="h-full rounded-full bg-teal transition-all" style={{ width: `${(w.revenue / maxWeekRev) * 100}%` }} />
                   </div>
                 </div>
                 <div className="text-right flex-shrink-0">
@@ -666,13 +550,10 @@ export default function Dashboard() {
                 </div>
               </div>
             ))}
-            {weeklyData.length === 0 && (
-              <p className="text-[13px] text-white/30 text-center py-8">No data for this period</p>
-            )}
+            {weeklyData.length === 0 && <p className="text-[13px] text-white/30 text-center py-8">No data for this period</p>}
           </div>
         </div>
 
-        {/* Annual Monthly Revenue */}
         <div className="rounded-xl p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
           <div className="mb-4">
             <h3 className="text-[14px] font-semibold text-white">Annual Trend</h3>
@@ -710,7 +591,6 @@ export default function Dashboard() {
           </ResponsiveContainer>
         </div>
       </div>
-
     </div>
   )
 }
