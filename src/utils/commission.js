@@ -18,6 +18,17 @@ export function dealAmounts(deal) {
 
 export const calcDealCommissions = dealAmounts;
 
+export const getUserCommission = (deals, userId) => {
+  return (deals || [])
+    .filter((d) => d.setter_id === userId || d.closer_id === userId)
+    .reduce((sum, d) => {
+      const a = dealAmounts(d);
+      if (d.setter_id === userId) sum += a.setter;
+      if (d.closer_id === userId) sum += a.closer;
+      return sum;
+    }, 0);
+};
+
 export function rollup(deals) {
   return (deals || []).reduce(
     (acc, d) => {
