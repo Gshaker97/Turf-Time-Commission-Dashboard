@@ -4,32 +4,30 @@ export function dealAmounts(deal) {
   const baseline = num(deal.baseline_revenue);
   const job = num(deal.job_price);
   const repPool = Math.max(job - baseline, 0);
-
   const solo = !deal.closer_id || deal.setter_id === deal.closer_id;
   const split = deal.setter_split_pct == null ? 0.5 : num(deal.setter_split_pct);
-
-  const setter =
-    deal.setter_amount != null ? num(deal.setter_amount) : repPool * (solo ? 1 : split);
-  const closer =
-    deal.closer_amount != null ? num(deal.closer_amount) : solo ? 0 : repPool * (1 - split);
-  const manager =
-    deal.manager_amount != null ? num(deal.manager_amount) : baseline * num(deal.manager_override_pct);
-  const director =
-    deal.director_amount != null ? num(deal.director_amount) : baseline * num(deal.director_override_pct);
-  const vp =
-    deal.vp_amount != null ? num(deal.vp_amount) : baseline * num(deal.vp_override_pct);
-
+  const setter = deal.setter_amount != null ? num(deal.setter_amount) : repPool * (solo ? 1 : split);
+  const closer = deal.closer_amount != null ? num(deal.closer_amount) : solo ? 0 : repPool * (1 - split);
+  const manager = deal.manager_amount != null ? num(deal.manager_amount) : baseline * num(deal.manager_override_pct);
+  const director = deal.director_amount != null ? num(deal.director_amount) : baseline * num(deal.director_override_pct);
+  const vp = deal.vp_amount != null ? num(deal.vp_amount) : baseline * num(deal.vp_override_pct);
   const repCommission = setter + closer;
   const overrides = manager + director + vp;
-
-  return {
-    baseline, job, setter, closer, manager, director, vp,
-    repCommission, overrides, totalCommission: repCommission + overrides,
-  };
+  return { baseline, job, setter, closer, manager, director, vp, repCommission, overrides, totalCommission: repCommission + overrides };
 }
 
-// Alias for backwards compatibility with DealTable.jsx
 export const calcDealCommissions = dealAmounts;
+
+export const getUserCommission = (deals, userId) => {
+  return (deals || [])
+    .filter((d) => d.setter_id === userId || d.closer_id === userId)
+    .reduce((sum, d) => {
+      const a = dealAmounts(d);
+      if (d.setter_id === userId) sum += a.setter;
+      if (d.closer_id === userId) sum += a.closer;
+      return sum;
+    }, 0);
+};
 
 export function rollup(deals) {
   return (deals || []).reduce(
@@ -45,9 +43,7 @@ export function rollup(deals) {
   );
 }
 
-// Formatting helpers
 export const fmt = (n) =>
   "$" + (Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-export const fmtPct = (n) =>
-  ((Number(n) || 0) * 100).toFixed(1) + "%";
+export const fmtPct = (n) => ((Number(n) || 0) * 100).toFixed(1) + "%";
