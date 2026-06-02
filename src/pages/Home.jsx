@@ -10,8 +10,7 @@ function getMonths(n = 12) {
   for (let i = 0; i < n; i++) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     months.push({
-      y: d.getFullYear(),
-      m: d.getMonth() + 1,
+      y: d.getFullYear(), m: d.getMonth() + 1,
       start: d.toISOString().slice(0, 10),
       nextStart: new Date(d.getFullYear(), d.getMonth() + 1, 1).toISOString().slice(0, 10),
       label: d.toLocaleString("en-US", { month: "long", year: "numeric" }),
@@ -52,78 +51,71 @@ export default function Home() {
   async function saveGoal() {
     const t = Number(goalInput) || 0;
     setSavingGoal(true);
-    const { error } = await supabase
-      .from("monthly_goals")
-      .upsert({ year: mr.y, month: mr.m, baseline_target: t }, { onConflict: "year,month" });
+    await supabase.from("monthly_goals").upsert({ year: mr.y, month: mr.m, baseline_target: t }, { onConflict: "year,month" });
     setSavingGoal(false);
-    if (!error) setTarget(t);
+    setTarget(t);
   }
 
   return (
-    <div className="ttd-home">
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&display=swap');
-        .ttd-home{ --bg:#f6f7f5; --card:#fff; --line:#e3e6e1; --text:#1c2420; --muted:#6b746c;
-          --green:#15803d; --track:#e7ebe5;
-          font-family:'Hanken Grotesk',-apple-system,sans-serif; color:var(--text);
-          background:var(--bg); min-height:100%; padding:28px 22px 60px; box-sizing:border-box; }
-        .ttd-home *{ box-sizing:border-box; }
-        .ttd-home h1{ font-size:22px; font-weight:700; margin:0 0 2px; }
-        .ttd-home .lead{ color:var(--muted); font-size:13px; margin:0 0 22px; }
-        .hhead{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:22px; }
-        .hhead h1{ margin:0; }
-        .monthsel{ padding:8px 12px; border:1px solid var(--line); border-radius:9px; font:inherit;
-          font-size:13px; background:#fff; color:var(--text); }
-        .grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; max-width:920px; }
-        @media(max-width:620px){ .grid{ grid-template-columns:1fr; } }
-        .card{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; }
-        .klabel{ font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); font-weight:600; }
-        .kval{ font-size:30px; font-weight:700; margin-top:8px; }
-        .goal{ max-width:920px; margin-top:14px; }
-        .goalrow{ display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
-        label{ display:block; font-size:12px; font-weight:600; margin:0 0 5px; }
-        input{ padding:9px 10px; border:1px solid var(--line); border-radius:9px; font:inherit; font-size:14px; width:180px; }
-        input:focus{ outline:none; border-color:var(--green); }
-        .btn{ padding:10px 16px; border:0; border-radius:9px; background:var(--green); color:#fff;
-          font:inherit; font-weight:700; font-size:14px; cursor:pointer; }
-        .btn:disabled{ opacity:.5; }
-        .bar{ height:14px; background:var(--track); border-radius:99px; overflow:hidden; margin:16px 0 8px; }
-        .fill{ height:100%; background:var(--green); border-radius:99px; transition:width .4s ease; }
-        .barmeta{ display:flex; justify-content:space-between; font-size:13px; color:var(--muted); }
-        .barmeta b{ color:var(--text); }
-      `}</style>
+    <div style={{ background: '#1a1a1a', color: '#fff', minHeight: '100%' }}>
 
-      <div className="hhead">
-        <h1>{mr.label}</h1>
-        <select className="monthsel" value={selected} onChange={(e) => setSelected(Number(e.target.value))}>
-          {months.map((m, i) => <option key={i} value={i}>{m.label}</option>)}
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <div>
+          <h1 className="text-lg md:text-xl font-bold text-white">{mr.label}</h1>
+          <p className="text-[12px] text-white/40 mt-0.5">Progress measured on baseline revenue</p>
+        </div>
+        <select value={selected} onChange={e => setSelected(Number(e.target.value))}
+          className="text-[12px] px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white flex-shrink-0">
+          {months.map((m, i) => <option key={i} value={i} style={{ background: '#2a2a2a' }}>{m.label}</option>)}
         </select>
       </div>
 
       {loading ? (
-        <p className="lead">Loading…</p>
+        <div className="text-white/30 text-sm py-8 text-center">Loading…</div>
       ) : (
         <>
-          <div className="grid">
-            <div className="card"><div className="klabel">Deals</div><div className="kval">{totals.count}</div></div>
-            <div className="card"><div className="klabel">Baseline revenue</div><div className="kval">{money(totals.baselineRevenue)}</div></div>
-            <div className="card"><div className="klabel">Commission</div><div className="kval">{money(totals.commission)}</div></div>
+          {/* KPI cards */}
+          <div className="grid grid-cols-3 gap-2 md:gap-3 mb-3">
+            {[
+              { label: 'Deals',            value: totals.count.toString() },
+              { label: 'Baseline Revenue', value: money(totals.baselineRevenue) },
+              { label: 'Commission',       value: money(totals.commission) },
+            ].map(c => (
+              <div key={c.label} className="rounded-xl p-3 md:p-4"
+                style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+                <p className="text-[9px] md:text-[11px] uppercase tracking-wider text-white/30 font-semibold mb-1.5 leading-tight">{c.label}</p>
+                <p className="text-[15px] md:text-2xl font-bold truncate text-teal">{c.value}</p>
+              </div>
+            ))}
           </div>
 
-          <div className="card goal">
-            <div className="goalrow">
+          {/* Goal card */}
+          <div className="rounded-xl p-4 md:p-5" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+            <div className="flex flex-wrap gap-3 items-end mb-4">
               <div>
-                <label>Monthly goal (baseline) — {mr.label}</label>
-                <input type="number" value={goalInput} onChange={(e) => setGoalInput(e.target.value)} placeholder="e.g. 250000" />
+                <p className="text-[10px] uppercase tracking-wider text-white/30 font-semibold mb-1.5">
+                  Monthly goal (baseline) — {mr.label}
+                </p>
+                <input type="number" value={goalInput} onChange={e => setGoalInput(e.target.value)}
+                  placeholder="e.g. 250000"
+                  className="h-9 px-3 rounded-lg text-[13px] text-white border border-white/10 bg-white/5 focus:outline-none focus:border-teal/40 w-40" />
               </div>
-              <button className="btn" disabled={savingGoal} onClick={saveGoal}>{savingGoal ? "Saving…" : "Save goal"}</button>
+              <button onClick={saveGoal} disabled={savingGoal}
+                className="h-9 px-4 rounded-lg text-[13px] font-bold disabled:opacity-50 transition-colors bg-teal text-dark">
+                {savingGoal ? 'Saving…' : 'Save goal'}
+              </button>
             </div>
+
             {target > 0 && (
               <>
-                <div className="bar"><div className="fill" style={{ width: `${Math.min(pct, 100)}%` }} /></div>
-                <div className="barmeta">
-                  <span><b>{pct.toFixed(1)}%</b> of goal</span>
-                  <span><b>{money(remaining)}</b> to go</span>
+                <div className="h-3 rounded-full overflow-hidden mb-2" style={{ background: '#2a2a2a' }}>
+                  <div className="h-full rounded-full transition-all duration-700 bg-teal"
+                    style={{ width: `${Math.min(pct, 100)}%` }} />
+                </div>
+                <div className="flex justify-between text-[12px] text-white/40">
+                  <span><span className="font-bold text-white">{pct.toFixed(1)}%</span> of goal</span>
+                  <span><span className="font-bold text-white">{money(remaining)}</span> to go</span>
                 </div>
               </>
             )}
