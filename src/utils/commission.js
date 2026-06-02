@@ -13,10 +13,21 @@ export function dealAmounts(deal) {
   const vp = deal.vp_amount != null ? num(deal.vp_amount) : baseline * num(deal.vp_override_pct);
   const repCommission = setter + closer;
   const overrides = manager + director + vp;
-  return { baseline, job, setter, closer, manager, director, vp, repCommission, overrides, totalCommission: repCommission + overrides };
+  const totalCommission = repCommission + overrides;
+  return { baseline, job, setter, closer, manager, director, vp, repCommission, overrides, totalCommission };
 }
 
-export const calcDealCommissions = dealAmounts;
+// Backward-compatible wrapper — preserves old property names used by DealTable
+export const calcDealCommissions = (deal) => {
+  const r = dealAmounts(deal);
+  return {
+    ...r,
+    gross:     r.totalCommission,
+    setterAmt: r.setter,
+    closerAmt: r.closer,
+    commPct:   r.job > 0 ? r.totalCommission / r.job : 0,
+  };
+};
 
 export const getUserCommission = (deals, userId) => {
   return (deals || [])
