@@ -7,6 +7,8 @@ import Dashboard from './pages/Dashboard'
 import Commissions from './pages/Commissions'
 import Team from './pages/Team'
 import Admin from './pages/Admin'
+import NewDeal from './pages/NewDeal'
+import Home from './pages/Home'
 
 function Spinner() {
   return (
@@ -31,7 +33,6 @@ function Guard({ children, roles }) {
 function AppRoutes() {
   const { user, loading } = useAuth()
   if (loading) return <Spinner />
-
   return (
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/dashboard" replace /> : <Login />} />
@@ -40,6 +41,8 @@ function AppRoutes() {
         <Route path="deals"       element={<Deals />} />
         <Route path="dashboard"   element={<Dashboard />} />
         <Route path="commissions" element={<Commissions />} />
+        <Route path="home"        element={<Home />} />
+        <Route path="new-deal"    element={<Guard roles={['vp']}><NewDeal /></Guard>} />
         <Route path="team"  element={
           <Guard roles={['rep','manager','director','vp','admin']}><Team /></Guard>
         } />
