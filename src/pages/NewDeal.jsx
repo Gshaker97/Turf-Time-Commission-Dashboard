@@ -28,8 +28,11 @@ export default function NewDeal() {
 
   const [managerId, setManagerId] = useState("");
   const [mgr, setMgr] = useState({ mode: "pct", value: "" });
-  const [dir, setDir] = useState({ mode: "pct", value: "5" }); // default 5% off baseline
-  const [vp, setVp] = useState({ mode: "pct", value: "5" });   // default 5% off baseline
+  const [dir, setDir] = useState({ mode: "pct", value: "5" });
+  const [vp, setVp] = useState({ mode: "pct", value: "5" });
+
+  const [deductionAmount, setDeductionAmount] = useState("");
+  const [deductionNote, setDeductionNote] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -55,9 +58,16 @@ export default function NewDeal() {
   const dirAmt = amt(dir);
   const vpAmt = amt(vp);
   const repComm = Number(repCommission) || 0;
-  const setterAmt = selfGen ? repComm : (repComm * (Number(setterSplit) || 0)) / 100;
-  const closerAmt = selfGen ? 0 : repComm - setterAmt;
-  const totalComm = repComm + mgrAmt + dirAmt + vpAmt;
+  const deduction = Math.max(Number(deductionAmount) || 0, 0);
+
+  const rawSetterAmt = selfGen ? repComm : (repComm * (Number(setterSplit) || 0)) / 100;
+  const rawCloserAmt = selfGen ? 0 : repComm - rawSetterAmt;
+
+  // Deduction comes off closer (or self-gen rep), floored at 0
+  const setterAmt = selfGen ? Math.max(rawSetterAmt - deduction, 0) : rawSetterAmt;
+  const closerAmt = selfGen ? 0 : Math.max(rawCloserAmt - deduction, 0);
+
+  const totalComm = repComm - deduction + mgrAmt + dirAmt + vpAmt;
 
   async function save() {
     setMsg(null);
@@ -70,6 +80,8 @@ export default function NewDeal() {
       return setMsg({ type: "err", text: selfGen ? "Select the rep who self-generated." : "Select a setter." });
     if (!selfGen && !closerId)
       return setMsg({ type: "err", text: "Select a closer, or toggle Self-generated." });
+    if (deduction > 0 && !deductionNote.trim())
+      return setMsg({ type: "err", text: "Add a note explaining the deduction." });
 
     setSaving(true);
     const payload = {
@@ -92,6 +104,8 @@ export default function NewDeal() {
       vp_id: vpProfile?.id || null,
       vp_amount: vpAmt || null,
       vp_override_pct: vp.mode === "pct" ? (Number(vp.value) || 0) / 100 : 0,
+      deduction_amount: deduction || null,
+      deduction_note: deductionNote.trim() || null,
     };
 
     const { error } = await supabase.from("deals").insert(payload);
@@ -101,6 +115,7 @@ export default function NewDeal() {
     setMsg({ type: "ok", text: `Saved "${payload.deal_name}".` });
     setDealName(""); setBaseline(""); setJobPrice(""); setRepCommission("");
     setRepId(""); setSetterId(""); setCloserId(""); setManagerId("");
+    setDeductionAmount(""); setDeductionNote("");
     setMgr({ mode: "pct", value: "" });
     setDir({ mode: "pct", value: "5" });
     setVp({ mode: "pct", value: "5" });
@@ -127,9 +142,10 @@ export default function NewDeal() {
         .row3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
         @media(max-width:520px){ .row,.row3{ grid-template-columns:1fr; } }
         label{ display:block; font-size:12px; font-weight:600; margin:0 0 5px; }
-        input,select{ width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:9px;
+        input,select,textarea{ width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:9px;
           font:inherit; font-size:14px; background:#fff; color:var(--text); }
-        input:focus,select:focus{ outline:none; border-color:var(--green); }
+        input:focus,select:focus,textarea:focus{ outline:none; border-color:var(--green); }
+        textarea{ resize:vertical; min-height:72px; }
         .field{ margin-bottom:13px; }
         .toggle{ display:inline-flex; border:1px solid var(--line); border-radius:9px; overflow:hidden; }
         .toggle button{ border:0; background:#fff; padding:8px 16px; font:inherit; font-size:13px;
@@ -143,10 +159,12 @@ export default function NewDeal() {
         .splitline .modetog{ flex:none; }
         .splitline input{ flex:1; }
         .liveamt{ font-size:12px; color:var(--green); font-weight:600; margin-top:5px; }
+        .liveamt.neg{ color:var(--red); }
         .summary{ position:sticky; top:18px; }
         .sumrow{ display:flex; justify-content:space-between; font-size:13px; padding:7px 0;
           border-bottom:1px dashed var(--line); }
         .sumrow span:last-child{ font-weight:600; }
+        .sumrow.deduct span{ color:var(--red); }
         .sumtotal{ display:flex; justify-content:space-between; margin-top:10px; padding-top:10px;
           border-top:2px solid var(--text); font-size:15px; font-weight:700; }
         .save{ width:100%; margin-top:16px; padding:12px; border:0; border-radius:10px;
@@ -208,7 +226,7 @@ export default function NewDeal() {
 
               {selfGen ? (
                 <div className="field">
-                  <label>Rep (gets 100% of rep commission)</label>
+                  <label>Rep (gets 100% minus any deduction)</label>
                   <select value={repId} onChange={(e) => setRepId(e.target.value)}>
                     <option value="">Select rep…</option>
                     {sellers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -236,10 +254,25 @@ export default function NewDeal() {
                   <div className="field">
                     <label>Setter split — {setterSplit}% setter / {100 - setterSplit}% closer</label>
                     <input type="range" min="0" max="100" value={setterSplit} onChange={(e) => setSetterSplit(Number(e.target.value))} />
-                    <div className="liveamt">Setter {money(setterAmt)} · Closer {money(closerAmt)}</div>
+                    <div className="liveamt">Setter {money(rawSetterAmt)} · Closer {money(rawCloserAmt)}</div>
                   </div>
                 </>
               )}
+            </div>
+
+            <div className="card">
+              <p className="sec">Deductions</p>
+              <div className="row">
+                <div className="field">
+                  <label>Deduction amount</label>
+                  <input type="number" value={deductionAmount} onChange={(e) => setDeductionAmount(e.target.value)} placeholder="0.00" />
+                  {deduction > 0 && <div className="liveamt neg">−{money(deduction)} from {selfGen ? "rep" : "closer"}</div>}
+                </div>
+                <div className="field">
+                  <label>Reason</label>
+                  <textarea value={deductionNote} onChange={(e) => setDeductionNote(e.target.value)} placeholder="Explain the deduction…" />
+                </div>
+              </div>
             </div>
 
             <div className="card">
@@ -251,7 +284,6 @@ export default function NewDeal() {
                   {managers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </div>
-
               {managerId && (
                 <div className="field">
                   <label>Manager override</label>
@@ -266,7 +298,6 @@ export default function NewDeal() {
                   <div className="liveamt">{money(mgrAmt)}</div>
                 </div>
               )}
-
               <div className="field">
                 <label>Director — {director ? director.name : "not set"} (default 5%)</label>
                 <div className="splitline">
@@ -279,7 +310,6 @@ export default function NewDeal() {
                 </div>
                 <div className="liveamt">{money(dirAmt)}</div>
               </div>
-
               <div className="field">
                 <label>VP — {vpProfile ? vpProfile.name : "not set"} (default 5%)</label>
                 <div className="splitline">
@@ -299,8 +329,9 @@ export default function NewDeal() {
             <p className="sec">Summary</p>
             <div className="sumrow"><span>Baseline</span><span>{money(base)}</span></div>
             <div className="sumrow"><span>Total deal value</span><span>{money(Number(jobPrice) || 0)}</span></div>
-            <div className="sumrow"><span>Setter</span><span>{money(setterAmt)}</span></div>
-            {!selfGen && <div className="sumrow"><span>Closer</span><span>{money(closerAmt)}</span></div>}
+            <div className="sumrow"><span>Setter</span><span>{money(rawSetterAmt)}</span></div>
+            {!selfGen && <div className="sumrow"><span>Closer</span><span>{money(rawCloserAmt)}</span></div>}
+            {deduction > 0 && <div className="sumrow deduct"><span>Deduction ({selfGen ? "rep" : "closer"})</span><span>−{money(deduction)}</span></div>}
             {managerId && <div className="sumrow"><span>Manager</span><span>{money(mgrAmt)}</span></div>}
             <div className="sumrow"><span>Director</span><span>{money(dirAmt)}</span></div>
             <div className="sumrow"><span>VP</span><span>{money(vpAmt)}</span></div>
