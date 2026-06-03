@@ -135,6 +135,31 @@ export function StatusBadge({ status, color = '#94a3b8' }) {
   )
 }
 
+// Inline-editable text cell backed by a settings list (office, payment method).
+// Reads as plain text with a dotted underline to hint it's clickable; an
+// invisible <select> overlay handles the edit, mirroring StatusCell.
+function InlineSelectCell({ value, options, placeholder = 'Set', field, canEdit, dealId, onUpdate }) {
+  if (!canEdit) return <span className="text-[12px] text-white/70 whitespace-nowrap">{value || '—'}</span>
+  return (
+    <div className="relative inline-block">
+      <span className={`text-[12px] whitespace-nowrap cursor-pointer border-b border-dotted transition-colors ${
+        value ? 'text-white/70 border-white/20 hover:text-white' : 'text-white/30 border-white/15 hover:text-white/60'
+      }`}>
+        {value || placeholder}
+      </span>
+      <select
+        value={value ?? ''}
+        onChange={e => onUpdate(dealId, { [field]: e.target.value || null })}
+        className="absolute inset-0 opacity-0 cursor-pointer w-full"
+        title="Click to edit"
+      >
+        <option value="">—</option>
+        {options.map(o => <option key={o} value={o}>{o}</option>)}
+      </select>
+    </div>
+  )
+}
+
 function StatusCell({ status, color, options, canEdit, dealId, onUpdate }) {
   if (!canEdit) return <StatusBadge status={status} color={color} />
   return (
@@ -214,7 +239,7 @@ export default function DealTable({
   sortKey, sortDir, onSort,
   onEdit, onDelete, onUpdate, loading,
 }) {
-  const { statusColor, statusLabels } = useSettings()
+  const { statusColor, statusLabels, offices, paymentMethods } = useSettings()
   const canEdit = ['admin', 'manager', 'director', 'vp'].includes(profile?.role)
 
   if (loading) return (
@@ -275,10 +300,12 @@ export default function DealTable({
                   {deal.project_id && <p className="text-[11px] text-white/40 truncate max-w-[260px]">{deal.project_id}</p>}
                 </td>
                 <td className="px-3 py-3">
-                  <span className="text-[12px] text-white/70 whitespace-nowrap">{deal.office || '—'}</span>
+                  <InlineSelectCell value={deal.office} options={offices} placeholder="Set office"
+                    field="office" canEdit={canEdit} dealId={deal.id} onUpdate={onUpdate} />
                 </td>
                 <td className="px-3 py-3">
-                  <span className="text-[12px] text-white/70 whitespace-nowrap">{deal.payment_method || '—'}</span>
+                  <InlineSelectCell value={deal.payment_method} options={paymentMethods} placeholder="Set payment"
+                    field="payment_method" canEdit={canEdit} dealId={deal.id} onUpdate={onUpdate} />
                 </td>
                 <td className="px-3 py-3">
                   <StatusCell status={deal.status} color={statusColor(deal.status)} options={statusLabels}

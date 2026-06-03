@@ -56,15 +56,18 @@ setup + deploy steps.
 ## Database migrations — read before touching the DB
 
 - Fresh install: run `001_schema.sql`, `002_rls.sql`, `003_seed.sql`,
-  `005_weekly_stats.sql`, then `006_settings.sql`.
+  `005_weekly_stats.sql`, `006_settings.sql`, then `007_backfill_pay_dates.sql`.
 - **Already-deployed DB (the live one): run `004_patch.sql`, `005_weekly_stats.sql`,
-  then `006_settings.sql`.** All idempotent. `004` adds the
+  `006_settings.sql`, then `007_backfill_pay_dates.sql`.** All idempotent. `004` adds the
   `deduction_amount` / `deduction_note` columns and re-applies the hardened RLS
   policies; `005` adds the `weekly_stats` table (estimates per rep per week)
   behind the Team → Weekly Stats tab; `006` adds the `app_settings` table
   (admin-editable statuses / payment methods / offices), the `payment_method`
   column on `deals`, and **drops the fixed `deals.status` CHECK** so statuses
-  are admin-configurable. Do not re-run `001`/`002` against a populated database.
+  are admin-configurable; `007` is a one-time backfill of `deals.pay_date` from
+  `install_date` (Friday following the install week; only fills rows where
+  `pay_date` is null, so it never clobbers a hand-set value). Do not re-run
+  `001`/`002` against a populated database.
 
 ## Security notes (already fixed — keep them fixed)
 
