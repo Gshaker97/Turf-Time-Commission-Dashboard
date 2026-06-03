@@ -45,8 +45,8 @@ function DateField({ label, value, field, dealId, canEdit, onUpdate }) {
 function PeopleCell({ deal }) {
   return (
     <div className="flex flex-col gap-0.5 text-[12px]">
-      <span className="text-white/80"><span className="text-white/30 text-[10px] uppercase mr-1.5">Set</span>{deal.setter?.name ?? '—'}</span>
-      <span className="text-white/60"><span className="text-white/30 text-[10px] uppercase mr-1.5">Cls</span>{deal.closer?.name ?? '—'}</span>
+      <span className="text-white/80 whitespace-nowrap"><span className="text-white/30 text-[10px] uppercase mr-1.5">Set</span>{deal.setter?.name ?? '—'}</span>
+      <span className="text-white/60 whitespace-nowrap"><span className="text-white/30 text-[10px] uppercase mr-1.5">Cls</span>{deal.closer?.name ?? '—'}</span>
     </div>
   )
 }
@@ -230,20 +230,15 @@ export default function DealTable({
     <div className="rounded-xl overflow-hidden"
       style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
 
-      {/* Desktop table (lg+) — consolidated columns fit without scrolling */}
-      <table className="w-full hidden lg:table table-fixed">
-        <colgroup>
-          <col /><col className="w-[100px]" /><col className="w-[130px]" />
-          <col className="w-[140px]" /><col className="w-[150px]" /><col className="w-[150px]" />
-          <col className="w-[110px]" /><col className="w-[130px]" />
-          {canEdit && <col className="w-[70px]" />}
-        </colgroup>
+      {/* Desktop table (lg+) — auto layout: each column sizes to its content,
+          a trailing spacer column soaks up any leftover width on the right. */}
+      <table className="w-full hidden lg:table">
         <thead>
           <tr style={{ background: '#00b894' }}>
             {COLS.map(col => (
               <th key={col.key}
                 onClick={() => onSort(col.key)}
-                className={`px-3 py-3 text-[11px] font-bold text-dark uppercase tracking-wider cursor-pointer select-none hover:bg-black/10 ${
+                className={`px-3 py-3 text-[11px] font-bold text-dark uppercase tracking-wider cursor-pointer select-none whitespace-nowrap hover:bg-black/10 ${
                   col.align === 'right' ? 'text-right' : 'text-left'
                 }`}>
                 <span className={`flex items-center ${col.align === 'right' ? 'justify-end' : ''}`}>
@@ -253,10 +248,12 @@ export default function DealTable({
               </th>
             ))}
             {canEdit && (
-              <th className="px-3 py-3 text-[11px] font-bold text-dark uppercase tracking-wider text-right">
+              <th className="px-3 py-3 text-[11px] font-bold text-dark uppercase tracking-wider text-right whitespace-nowrap">
                 Actions
               </th>
             )}
+            {/* Spacer column — absorbs leftover width so real columns stay content-sized */}
+            <th aria-hidden className="w-full p-0" />
           </tr>
         </thead>
         <tbody>
@@ -269,14 +266,14 @@ export default function DealTable({
                 style={{ background: isEven ? '#242424' : '#262626' }}
                 className="hover:bg-white/[0.03] transition-colors align-top">
                 <td className="px-3 py-3">
-                  <p className="text-[13px] font-semibold text-white truncate">{deal.deal_name}</p>
-                  {deal.project_id && <p className="text-[11px] text-white/40 truncate">{deal.project_id}</p>}
+                  <p className="text-[13px] font-semibold text-white truncate max-w-[260px]">{deal.deal_name}</p>
+                  {deal.project_id && <p className="text-[11px] text-white/40 truncate max-w-[260px]">{deal.project_id}</p>}
                 </td>
                 <td className="px-3 py-3">
-                  <span className="text-[12px] text-white/70">{deal.office || '—'}</span>
+                  <span className="text-[12px] text-white/70 whitespace-nowrap">{deal.office || '—'}</span>
                 </td>
                 <td className="px-3 py-3">
-                  <span className="text-[12px] text-white/70">{deal.payment_method || '—'}</span>
+                  <span className="text-[12px] text-white/70 whitespace-nowrap">{deal.payment_method || '—'}</span>
                 </td>
                 <td className="px-3 py-3">
                   <StatusCell status={deal.status} color={statusColor(deal.status)} options={statusLabels}
@@ -295,6 +292,7 @@ export default function DealTable({
                 {canEdit && (
                   <td className="px-3 py-3"><ActionButtons deal={deal} onEdit={onEdit} onDelete={onDelete} /></td>
                 )}
+                <td className="p-0" />
               </tr>
             )
           })}
