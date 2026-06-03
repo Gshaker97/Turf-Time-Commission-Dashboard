@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2 } from 'lucide-react'
 import { calcDealCommissions, fmt, fmtPct } from '../utils/commission'
+import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
 
 // Consolidated columns — related fields are stacked inside one cell so the
@@ -23,7 +24,7 @@ function SortIcon({ col, sortKey, sortDir }) {
     : <ChevronDown size={12} className="text-dark ml-1 flex-shrink-0" />
 }
 
-function DateField({ label, value, field, dealId, canEdit, onUpdate }) {
+function DateField({ label, value, field, dealId, canEdit, onUpdate, deriveExtra }) {
   return (
     <div className="flex items-center gap-1.5">
       <span className="text-white/30 text-[10px] uppercase tracking-wide w-8 flex-shrink-0">{label}</span>
@@ -31,7 +32,10 @@ function DateField({ label, value, field, dealId, canEdit, onUpdate }) {
         <input
           type="date"
           defaultValue={value ?? ''}
-          onChange={e => onUpdate(dealId, { [field]: e.target.value || null })}
+          onChange={e => {
+            const v = e.target.value || null
+            onUpdate(dealId, { [field]: v, ...(deriveExtra ? deriveExtra(v) : null) })
+          }}
           className="bg-transparent text-white/55 text-[12px] border-0 outline-none cursor-pointer hover:text-white focus:text-white transition-colors w-[104px]"
           style={{ colorScheme: 'dark' }}
         />
@@ -187,8 +191,9 @@ function DealCard({ deal, canEdit, onEdit, onDelete, onUpdate, statusColor, stat
         </div>
         <div className="flex flex-col gap-0.5">
           <DateField label="Sale" value={deal.sale_date}    field="sale_date"    dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
-          <DateField label="Inst" value={deal.install_date} field="install_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
-          <DateField label="Pay"  value={deal.pay_date}     field="pay_date"     dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
+          <DateField label="Inst" value={deal.install_date} field="install_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate}
+            deriveExtra={v => v ? { pay_date: payDateFromInstall(v) } : null} />
+          <DateField key={`pay-${deal.pay_date ?? ''}`} label="Pay" value={deal.pay_date} field="pay_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
         </div>
         <div className="flex items-end justify-end">
           <CommissionCell deal={deal} />
@@ -283,8 +288,9 @@ export default function DealTable({
                 <td className="px-3 py-3">
                   <div className="flex flex-col gap-0.5">
                     <DateField label="Sale" value={deal.sale_date}    field="sale_date"    dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
-                    <DateField label="Inst" value={deal.install_date} field="install_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
-                    <DateField label="Pay"  value={deal.pay_date}     field="pay_date"     dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
+                    <DateField label="Inst" value={deal.install_date} field="install_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate}
+                      deriveExtra={v => v ? { pay_date: payDateFromInstall(v) } : null} />
+                    <DateField key={`pay-${deal.pay_date ?? ''}`} label="Pay" value={deal.pay_date} field="pay_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
                   </div>
                 </td>
                 <td className="px-3 py-3"><RevenueCell baseline={baseline} jobPrice={jobPrice} /></td>
