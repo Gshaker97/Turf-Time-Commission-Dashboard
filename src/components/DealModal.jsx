@@ -26,11 +26,15 @@ const BLANK = {
   vp_id: '', vp_override_pct: '',
   deduction_amount: '', deduction_note: '',
 }
-const OVERRIDE_DEFAULTS = {
+// Director/VP override % defaults are driven by the office: Phoenix → 5%,
+// Tucson → 3.75% (any other/unknown office falls back to 5%). Manager always
+// defaults to 3% regardless of office.
+const dirVpDefault = (office) => (office === 'Tucson' ? '3.75' : '5')
+const overrideDefaults = (office) => ({
   manager_override_pct: '3',
-  director_override_pct: '5',
-  vp_override_pct: '5',
-}
+  director_override_pct: dirVpDefault(office),
+  vp_override_pct: dirVpDefault(office),
+})
 
 export default function DealModal({ deal, users = [], onSave, onClose }) {
   const { statusLabels, offices, paymentMethods } = useSettings()
@@ -60,7 +64,18 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   function handleOverrideId(idKey, pctKey, value) {
-    setForm(f => ({ ...f, [idKey]: value, [pctKey]: value && !f[pctKey] ? OVERRIDE_DEFAULTS[pctKey] : f[pctKey] }))
+    setForm(f => ({ ...f, [idKey]: value, [pctKey]: value && !f[pctKey] ? overrideDefaults(f.office)[pctKey] : f[pctKey] }))
+  }
+
+  // Changing the office re-applies the office-driven default to any director/VP
+  // override already assigned (manager stays put at its 3% default).
+  function handleOfficeChange(office) {
+    setForm(f => ({
+      ...f,
+      office,
+      director_override_pct: f.director_id ? dirVpDefault(office) : f.director_override_pct,
+      vp_override_pct:       f.vp_id       ? dirVpDefault(office) : f.vp_override_pct,
+    }))
   }
 
   const splitPct = Math.min(100, Math.max(0, parseFloat(form.setter_split_pct) || 50))
@@ -150,7 +165,7 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
               <Inp type="date" value={form.install_date} onChange={e => set('install_date', e.target.value)} />
             </Field>
             <Field label="Office">
-              <Sel value={form.office} onChange={e => set('office', e.target.value)}>
+              <Sel value={form.office} onChange={e => handleOfficeChange(e.target.value)}>
                 <option value="">Select office…</option>
                 {offices.map(o => <option key={o}>{o}</option>)}
               </Sel>
