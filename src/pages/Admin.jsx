@@ -8,9 +8,10 @@ import {
 } from '../lib/db'
 import UserModal from '../components/UserModal'
 import DealModal from '../components/DealModal'
+import SettingsPanel from '../components/SettingsPanel'
 import { DEMO_MODE } from '../lib/supabase'
 
-const TABS = ['Users', 'Deals', 'Payments']
+const TABS = ['Users', 'Deals', 'Payments', 'Settings']
 
 const ROLE_COLOR = {
   vp: 'text-purple-400', director: 'text-indigo-400',
@@ -309,6 +310,9 @@ export default function Admin() {
           </div>
         </div>
       )}
+
+      {/* ── SETTINGS ── */}
+      {tab === 'Settings' && <SettingsPanel />}
 
       {userModal && <UserModal user={editUser} allUsers={users} onSave={saveUser} onClose={() => { setUserModal(false); setEditUser(null) }} />}
       {dealModal && <DealModal deal={editDeal} users={users} onSave={saveDeal} onClose={() => { setDealModal(false); setEditDeal(null) }} />}

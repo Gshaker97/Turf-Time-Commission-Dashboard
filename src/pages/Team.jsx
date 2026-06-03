@@ -6,15 +6,8 @@ import { getUserCommission, calcDealCommissions, fmt } from '../utils/commission
 import { getPresetRange, presetLabel } from '../utils/dateRanges'
 import DateRangeFilter from '../components/DateRangeFilter'
 import WeeklyStats from '../components/WeeklyStats'
+import { useSettings } from '../contexts/SettingsContext'
 import { MessageSquare, Flame, Snowflake, TrendingUp, TrendingDown, Trophy, Pencil, Check, X } from 'lucide-react'
-
-const STATUS_COLORS = {
-  'Deal Review':     '#94a3b8',
-  'Pending Install': '#2dd4bf',
-  'Pay Finalized':   '#22d3ee',
-  'Paid':            '#4ade80',
-  'Sales Issue':     '#f87171',
-}
 
 function getNoteKey(repId)   { return `turf_note_${repId}` }
 function getNote(repId)      { return localStorage.getItem(getNoteKey(repId)) ?? '' }
@@ -25,6 +18,7 @@ function teamGoalKey(mgrId)  { return `turf_teamgoal_${mgrId}_${format(new Date(
 const TIER_COLOR = { green: '#4ade80', yellow: '#fbbf24', orange: '#fb923c' }
 
 function RepCard({ rep, healthTier, canEdit, canEditGoal }) {
+  const { statusColor } = useSettings()
   const [note,        setNote]        = useState(() => getNote(rep.id))
   const [editingNote, setEditingNote] = useState(false)
   const [noteInput,   setNoteInput]   = useState(note)
@@ -153,7 +147,7 @@ function RepCard({ rep, healthTier, canEdit, canEditGoal }) {
           <span className="text-[9px] text-white/25 uppercase tracking-widest mr-1">Pipeline</span>
           {statusGroups.map(([status, count]) => (
             <span key={status} className="flex items-center gap-1 text-[10px] text-white/50">
-              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: STATUS_COLORS[status] ?? '#888' }} />
+              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: statusColor(status) }} />
               {count}
             </span>
           ))}
@@ -195,6 +189,7 @@ function RepCard({ rep, healthTier, canEdit, canEditGoal }) {
 
 export default function Team() {
   const { profile } = useAuth()
+  const { statusColor } = useSettings()
   const [deals,           setDeals]           = useState([])
   const [users,           setUsers]           = useState([])
   const [loading,         setLoading]         = useState(true)
@@ -393,7 +388,7 @@ export default function Team() {
       </div>
 
       {tab === 'weekly' ? (
-        <WeeklyStats deals={deals} reps={visibleReps} canEdit={canEditNotes} profileId={profile?.id} />
+        <WeeklyStats deals={deals} reps={visibleReps} users={users} canEdit={canEditNotes} profileId={profile?.id} />
       ) : (
       <>
       {/* Filter */}
@@ -571,7 +566,7 @@ export default function Team() {
           <div className="divide-y divide-white/[0.04]">
             {recentWins.map(win => (
               <div key={win.id} className="px-4 md:px-5 py-2.5 flex items-center gap-3 hover:bg-white/[0.02]">
-                <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{background:STATUS_COLORS[win.status]??'#888'}}/>
+                <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{background:statusColor(win.status)}}/>
                 <div className="min-w-0 flex-1">
                   <p className="text-[12px] font-semibold text-white truncate">{win.deal_name}</p>
                   <p className="text-[10px] text-white/40 truncate">{win.repName}</p>

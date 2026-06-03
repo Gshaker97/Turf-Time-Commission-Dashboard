@@ -23,8 +23,9 @@ see their teams.
 
 ## Database tables
 
-`profiles`, `deals`, `payments`, `monthly_goals`, `weekly_stats`. Schema lives
-in `supabase/migrations/`. See @SETUP.md for full setup + deploy steps.
+`profiles`, `deals`, `payments`, `monthly_goals`, `weekly_stats`,
+`app_settings`. Schema lives in `supabase/migrations/`. See @SETUP.md for full
+setup + deploy steps.
 
 ## CRITICAL conventions — do not violate these
 
@@ -54,14 +55,16 @@ in `supabase/migrations/`. See @SETUP.md for full setup + deploy steps.
 
 ## Database migrations — read before touching the DB
 
-- Fresh install: run `001_schema.sql`, `002_rls.sql`, `003_seed.sql`, then
-  `005_weekly_stats.sql`.
-- **Already-deployed DB (the live one): run `004_patch.sql`, then
-  `005_weekly_stats.sql`.** Both are idempotent. `004` adds the
+- Fresh install: run `001_schema.sql`, `002_rls.sql`, `003_seed.sql`,
+  `005_weekly_stats.sql`, then `006_settings.sql`.
+- **Already-deployed DB (the live one): run `004_patch.sql`, `005_weekly_stats.sql`,
+  then `006_settings.sql`.** All idempotent. `004` adds the
   `deduction_amount` / `deduction_note` columns and re-applies the hardened RLS
   policies; `005` adds the `weekly_stats` table (estimates per rep per week)
-  behind the Team → Weekly Stats tab. Do not re-run `001`/`002` against a
-  populated database.
+  behind the Team → Weekly Stats tab; `006` adds the `app_settings` table
+  (admin-editable statuses / payment methods / offices), the `payment_method`
+  column on `deals`, and **drops the fixed `deals.status` CHECK** so statuses
+  are admin-configurable. Do not re-run `001`/`002` against a populated database.
 
 ## Security notes (already fixed — keep them fixed)
 
@@ -78,10 +81,16 @@ offline with any seeded account, password `TurfTime2026!`. Demo data is the
 real Turf Time roster (23 people) with stable ids (`u-keaton`, `u-garrison`,
 etc.) mirroring the seed file.
 
-## Deal statuses (the only valid values)
+## Deal statuses & other config lists (admin-editable)
 
-`Deal Review`, `Pending Install`, `Pay Finalized`, `Paid`, `Sales Issue`.
-The `FilterBar` status list must match these exactly.
+Deal statuses, payment methods, and offices are NOT hard-coded anymore — they
+live in `app_settings` and are edited live from **Admin → Settings**. Read them
+through `useSettings()` (`src/contexts/SettingsContext.jsx`):
+`statusLabels`, `statusColor(label)`, `paymentMethods`, `offices`. Never
+re-introduce a hard-coded status/office/payment list in a page or component.
+The default seed is `Deal Review`, `Pending Install`, `Pay Finalized`, `Paid`,
+`Sales Issue` (each with a color). Because statuses are configurable, there is
+no longer a DB CHECK on `deals.status` (see `006_settings.sql`).
 
 ## Known low-severity items (not yet addressed)
 

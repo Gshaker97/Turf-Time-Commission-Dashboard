@@ -1,15 +1,7 @@
+import { useState } from 'react'
 import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2 } from 'lucide-react'
 import { calcDealCommissions, fmt, fmtPct } from '../utils/commission'
-
-const STATUS_STYLES = {
-  'Deal Review':     { color: '#94a3b8', border: 'rgba(148,163,184,0.2)',  dot: '#94a3b8' },
-  'Pending Install': { color: '#2dd4bf', border: 'rgba(45,212,191,0.25)', dot: '#2dd4bf' },
-  'Pay Finalized':   { color: '#22d3ee', border: 'rgba(34,211,238,0.25)',  dot: '#22d3ee' },
-  'Paid':            { color: '#4ade80', border: 'rgba(74,222,128,0.25)',  dot: '#4ade80' },
-  'Sales Issue':     { color: '#f87171', border: 'rgba(248,113,113,0.25)', dot: '#f87171' },
-}
-
-const STATUSES = ['Deal Review', 'Pending Install', 'Pay Finalized', 'Paid', 'Sales Issue']
+import { useSettings } from '../contexts/SettingsContext'
 
 // Consolidated columns — related fields are stacked inside one cell so the
 // whole table fits on screen without horizontal scrolling.
@@ -29,7 +21,6 @@ function SortIcon({ col, sortKey, sortDir }) {
     : <ChevronDown size={12} className="text-dark ml-1 flex-shrink-0" />
 }
 
-// Compact inline date control with a leading label.
 function DateField({ label, value, field, dealId, canEdit, onUpdate }) {
   return (
     <div className="flex items-center gap-1.5">
@@ -67,67 +58,89 @@ function RevenueCell({ baseline, jobPrice }) {
   )
 }
 
-function CommissionCell({ deal }) {
-  const { gross, commPct, setterAmt, closerAmt } = calcDealCommissions(deal)
-  const split = deal.setter_id && deal.closer_id && deal.setter_id !== deal.closer_id
-
-  if (!split) {
-    return (
-      <div className="flex flex-col items-end leading-tight">
-        <span className="text-[13px] font-bold text-teal">{fmt(gross)}</span>
-        <span className="text-[11px] text-white/30">{fmtPct(commPct)}</span>
-      </div>
-    )
-  }
-
-  const setterInitial = deal.setter?.name?.[0]?.toUpperCase() ?? 'S'
-  const closerInitial = deal.closer?.name?.[0]?.toUpperCase() ?? 'C'
-
+// Red deduction amount that reveals its description on click.
+function DeductionTag({ amount, note }) {
+  const [open, setOpen] = useState(false)
   return (
-    <div className="flex flex-col items-end gap-0.5 leading-tight">
-      <div className="flex items-center gap-1.5">
-        <span className="text-[10px] font-bold text-white/30 w-[11px] h-[11px] rounded-full bg-white/10 flex items-center justify-center leading-none"
-          style={{ fontSize: 8 }}>{setterInitial}</span>
-        <span className="text-[12px] font-semibold text-teal/80">{fmt(setterAmt)}</span>
-      </div>
-      <div className="flex items-center gap-1.5">
-        <span className="text-[10px] font-bold text-white/30 w-[11px] h-[11px] rounded-full bg-white/10 flex items-center justify-center leading-none"
-          style={{ fontSize: 8 }}>{closerInitial}</span>
-        <span className="text-[12px] font-semibold text-teal">{fmt(closerAmt)}</span>
-      </div>
-      <span className="text-[10px] text-white/20">{fmtPct(commPct)}</span>
+    <div className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="text-[11px] font-bold text-red-400 hover:text-red-300 hover:underline"
+        title="View deduction reason"
+      >
+        −{fmt(amount)}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-50 mt-1 w-52 rounded-lg p-2.5 text-left shadow-xl"
+            style={{ background: '#2a2a2a', border: '1px solid #3a3a3a' }}>
+            <p className="text-[9px] font-bold uppercase tracking-wider text-red-400/80 mb-1">Deduction · {fmt(amount)}</p>
+            <p className="text-[12px] text-white/80 leading-snug">{note || 'No description provided.'}</p>
+          </div>
+        </>
+      )}
     </div>
   )
 }
 
-export function StatusBadge({ status }) {
-  const s = STATUS_STYLES[status]
-  if (!s) return <span className="text-white/20 text-[11px]">—</span>
+function CommissionCell({ deal }) {
+  const { gross, commPct, setterAmt, closerAmt } = calcDealCommissions(deal)
+  const split = deal.setter_id && deal.closer_id && deal.setter_id !== deal.closer_id
+  const deduction = parseFloat(deal.deduction_amount) || 0
+
+  return (
+    <div className="flex flex-col items-end gap-1 leading-tight">
+      {!split ? (
+        <div className="flex flex-col items-end">
+          <span className="text-[13px] font-bold text-teal">{fmt(gross)}</span>
+          <span className="text-[11px] text-white/30">{fmtPct(commPct)}</span>
+        </div>
+      ) : (
+        <div className="flex flex-col items-end gap-0.5">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] font-bold text-white/30 w-[11px] h-[11px] rounded-full bg-white/10 flex items-center justify-center leading-none"
+              style={{ fontSize: 8 }}>{deal.setter?.name?.[0]?.toUpperCase() ?? 'S'}</span>
+            <span className="text-[12px] font-semibold text-teal/80">{fmt(setterAmt)}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] font-bold text-white/30 w-[11px] h-[11px] rounded-full bg-white/10 flex items-center justify-center leading-none"
+              style={{ fontSize: 8 }}>{deal.closer?.name?.[0]?.toUpperCase() ?? 'C'}</span>
+            <span className="text-[12px] font-semibold text-teal">{fmt(closerAmt)}</span>
+          </div>
+          <span className="text-[10px] text-white/20">{fmtPct(commPct)}</span>
+        </div>
+      )}
+      {deduction > 0 && <DeductionTag amount={deduction} note={deal.deduction_note} />}
+    </div>
+  )
+}
+
+export function StatusBadge({ status, color = '#94a3b8' }) {
+  if (!status) return <span className="text-white/20 text-[11px]">—</span>
   return (
     <span
       className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap"
-      style={{ color: s.color, border: `1px solid ${s.border}`, background: 'transparent' }}
+      style={{ color, border: `1px solid ${color}40`, background: 'transparent' }}
     >
-      <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: s.dot }} />
+      <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: color }} />
       {status}
     </span>
   )
 }
 
-function StatusCell({ status, canEdit, dealId, onUpdate }) {
-  if (!canEdit) return <StatusBadge status={status} />
+function StatusCell({ status, color, options, canEdit, dealId, onUpdate }) {
+  if (!canEdit) return <StatusBadge status={status} color={color} />
   return (
     <div className="relative inline-block">
-      <StatusBadge status={status} />
+      <StatusBadge status={status} color={color} />
       <select
         value={status ?? ''}
         onChange={e => onUpdate(dealId, { status: e.target.value })}
         className="absolute inset-0 opacity-0 cursor-pointer w-full"
         title="Change status"
       >
-        {STATUSES.map(st => (
-          <option key={st} value={st}>{st}</option>
-        ))}
+        {options.map(st => <option key={st} value={st}>{st}</option>)}
       </select>
     </div>
   )
@@ -148,8 +161,10 @@ function ActionButtons({ deal, onEdit, onDelete }) {
   )
 }
 
+const subline = (deal) => [deal.office, deal.payment_method].filter(Boolean).join(' · ') || '—'
+
 // ── Mobile card (below lg) ────────────────────────────────────
-function DealCard({ deal, canEdit, onEdit, onDelete, onUpdate }) {
+function DealCard({ deal, canEdit, onEdit, onDelete, onUpdate, statusColor, statusLabels }) {
   const baseline = parseFloat(deal.baseline_revenue) || 0
   const jobPrice = parseFloat(deal.job_price)        || 0
   return (
@@ -157,9 +172,10 @@ function DealCard({ deal, canEdit, onEdit, onDelete, onUpdate }) {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[14px] font-semibold text-white truncate">{deal.deal_name}</p>
-          <p className="text-[11px] text-white/40">{deal.office ?? '—'}</p>
+          <p className="text-[11px] text-white/40 truncate">{subline(deal)}</p>
         </div>
-        <StatusCell status={deal.status} canEdit={canEdit} onUpdate={onUpdate} dealId={deal.id} />
+        <StatusCell status={deal.status} color={statusColor(deal.status)} options={statusLabels}
+          canEdit={canEdit} onUpdate={onUpdate} dealId={deal.id} />
       </div>
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-2 mt-3">
@@ -168,9 +184,9 @@ function DealCard({ deal, canEdit, onEdit, onDelete, onUpdate }) {
           <RevenueCell baseline={baseline} jobPrice={jobPrice} />
         </div>
         <div className="flex flex-col gap-0.5">
-          <DateField label="Sale"    value={deal.sale_date}    field="sale_date"    dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
-          <DateField label="Inst"    value={deal.install_date} field="install_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
-          <DateField label="Pay"     value={deal.pay_date}     field="pay_date"     dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
+          <DateField label="Sale" value={deal.sale_date}    field="sale_date"    dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
+          <DateField label="Inst" value={deal.install_date} field="install_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
+          <DateField label="Pay"  value={deal.pay_date}     field="pay_date"     dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
         </div>
         <div className="flex items-end justify-end">
           <CommissionCell deal={deal} />
@@ -191,6 +207,7 @@ export default function DealTable({
   sortKey, sortDir, onSort,
   onEdit, onDelete, onUpdate, loading,
 }) {
+  const { statusColor, statusLabels } = useSettings()
   const canEdit = ['admin', 'manager', 'director', 'vp'].includes(profile?.role)
 
   if (loading) return (
@@ -250,10 +267,11 @@ export default function DealTable({
                 className="hover:bg-white/[0.03] transition-colors align-top">
                 <td className="px-3 py-3">
                   <p className="text-[13px] font-semibold text-white truncate">{deal.deal_name}</p>
-                  <p className="text-[11px] text-white/40 truncate">{deal.office ?? '—'}</p>
+                  <p className="text-[11px] text-white/40 truncate">{subline(deal)}</p>
                 </td>
                 <td className="px-3 py-3">
-                  <StatusCell status={deal.status} canEdit={canEdit} onUpdate={onUpdate} dealId={deal.id} />
+                  <StatusCell status={deal.status} color={statusColor(deal.status)} options={statusLabels}
+                    canEdit={canEdit} onUpdate={onUpdate} dealId={deal.id} />
                 </td>
                 <td className="px-3 py-3"><PeopleCell deal={deal} /></td>
                 <td className="px-3 py-3">
@@ -278,7 +296,8 @@ export default function DealTable({
       <div className="lg:hidden divide-y divide-white/5">
         {deals.map(deal => (
           <DealCard key={deal.id} deal={deal} canEdit={canEdit}
-            onEdit={onEdit} onDelete={onDelete} onUpdate={onUpdate} />
+            onEdit={onEdit} onDelete={onDelete} onUpdate={onUpdate}
+            statusColor={statusColor} statusLabels={statusLabels} />
         ))}
       </div>
     </div>

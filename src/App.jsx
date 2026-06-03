@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { SettingsProvider } from './contexts/SettingsContext'
 import Layout from './components/Layout'
 import Login from './pages/Login'
 import Deals from './pages/Deals'
@@ -59,7 +60,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <AppRoutes />
+        <SettingsProvider>
+          <AppRoutes />
+        </SettingsProvider>
       </AuthProvider>
     </BrowserRouter>
   )

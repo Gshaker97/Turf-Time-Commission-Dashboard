@@ -75,6 +75,7 @@ function makeDeal(o) {
     setter_amount: null, closer_amount: null,
     manager_amount: null, director_amount: null, vp_amount: null,
     deduction_amount: null, deduction_note: null,
+    payment_method: o.payment_method ?? null,
     created_by: 'u-admin',
     created_at: new Date().toISOString(),
     ...o,
@@ -93,9 +94,9 @@ function makeDeal(o) {
 // A spread of deals across recent months so every page has something to show.
 export const DEMO_DEALS_JOINED = [
   // Current-week deals so MTD / This Week landing views aren't empty.
-  makeDeal({ deal_name: 'Whitaker — 9 Birchwood Ct',  project_id: 'TT-1023', sale_date: daysAgo(0),   setter_id: 'u-stephen',  closer_id: 'u-stephen',  baseline_revenue: 5400, job_price: 10200, status: 'Deal Review' }),
-  makeDeal({ deal_name: 'Yamamoto — 71 Clover Way',   project_id: 'TT-1024', sale_date: daysAgo(1),   setter_id: 'u-charlieh', closer_id: 'u-stephen',  baseline_revenue: 5000, job_price: 9400,  status: 'Deal Review' }),
-  makeDeal({ deal_name: 'Anderson — 142 Oak St',     project_id: 'TT-1001', sale_date: daysAgo(2),   setter_id: 'u-stephen',  closer_id: 'u-stephen',  baseline_revenue: 5200, job_price: 9800,  status: 'Deal Review' }),
+  makeDeal({ deal_name: 'Whitaker — 9 Birchwood Ct',  project_id: 'TT-1023', sale_date: daysAgo(0),   setter_id: 'u-stephen',  closer_id: 'u-stephen',  baseline_revenue: 5400, job_price: 10200, status: 'Deal Review',     payment_method: 'Goodleap' }),
+  makeDeal({ deal_name: 'Yamamoto — 71 Clover Way',   project_id: 'TT-1024', sale_date: daysAgo(1),   setter_id: 'u-charlieh', closer_id: 'u-stephen',  baseline_revenue: 5000, job_price: 9400,  status: 'Deal Review',     payment_method: 'Self-Pay + Sunlight', deduction_amount: 250, deduction_note: 'Materials reorder — wrong turf color on first drop.' }),
+  makeDeal({ deal_name: 'Anderson — 142 Oak St',     project_id: 'TT-1001', sale_date: daysAgo(2),   setter_id: 'u-stephen',  closer_id: 'u-stephen',  baseline_revenue: 5200, job_price: 9800,  status: 'Deal Review',     payment_method: 'Sunlight' }),
   makeDeal({ deal_name: 'Bradley — 88 Pine Ave',     project_id: 'TT-1002', sale_date: daysAgo(4),   setter_id: 'u-charlieh', closer_id: 'u-stephen',  baseline_revenue: 4800, job_price: 8500,  status: 'Deal Review' }),
   makeDeal({ deal_name: 'Carter — 210 Elm Dr',       project_id: 'TT-1003', sale_date: daysAgo(6),   setter_id: 'u-marc',     closer_id: 'u-marc',     baseline_revenue: 6100, job_price: 11200, status: 'Pending Install', install_date: daysAgo(1) }),
   makeDeal({ deal_name: 'Davis — 55 Cedar Ln',       project_id: 'TT-1004', sale_date: daysAgo(8),   setter_id: 'u-tylerm',   closer_id: 'u-tylerm',   baseline_revenue: 3800, job_price: 7400,  status: 'Pending Install' }),
@@ -139,6 +140,19 @@ export const DEMO_GOALS = (() => {
   for (let m = 1; m <= 12; m++) g[`2026-${m}`] = 600000
   return g
 })()
+
+// Admin-editable site settings (mirrors app_settings seed in 006_settings.sql).
+export const DEMO_SETTINGS = {
+  deal_statuses: [
+    { label: 'Deal Review',     color: '#94a3b8' },
+    { label: 'Pending Install', color: '#2dd4bf' },
+    { label: 'Pay Finalized',   color: '#22d3ee' },
+    { label: 'Paid',            color: '#4ade80' },
+    { label: 'Sales Issue',     color: '#f87171' },
+  ],
+  payment_methods: ['Self-Pay', 'Goodleap', 'Sunlight', 'Self-Pay + Sunlight', 'Self-Pay + Goodleap'],
+  offices: ['Phoenix', 'Tucson'],
+}
 
 // Weekly estimate counts per rep, for the Weekly Stats tracker. Closed deals
 // are derived from DEMO_DEALS_JOINED, so we only seed the manually-entered

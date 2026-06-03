@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react'
 import { X } from 'lucide-react'
 import { calcDealCommissions, fmt, fmtPct } from '../utils/commission'
-
-const STATUSES = ['Deal Review', 'Pending Install', 'Pay Finalized', 'Paid', 'Sales Issue']
+import { useSettings } from '../contexts/SettingsContext'
 
 const Field = ({ label, children }) => (
   <div>
@@ -16,9 +15,8 @@ const inputStyle = { background: '#1a1a1a', border: '1px solid #3a3a3a' }
 const Inp = (props) => <input {...props} style={inputStyle} className={inputCls} />
 const Sel = ({ children, ...props }) => <select {...props} style={inputStyle} className={inputCls}>{children}</select>
 
-const OFFICES = ['Phoenix', 'Tucson']
 const BLANK = {
-  deal_name: '', office: '', project_id: '',
+  deal_name: '', office: '', project_id: '', payment_method: '',
   sale_date: '', install_date: '',
   setter_id: '', closer_id: '', setter_split_pct: '50',
   baseline_revenue: '', job_price: '',
@@ -26,6 +24,7 @@ const BLANK = {
   manager_id: '', manager_override_pct: '',
   director_id: '', director_override_pct: '',
   vp_id: '', vp_override_pct: '',
+  deduction_amount: '', deduction_note: '',
 }
 const OVERRIDE_DEFAULTS = {
   manager_override_pct: '3',
@@ -34,6 +33,7 @@ const OVERRIDE_DEFAULTS = {
 }
 
 export default function DealModal({ deal, users = [], onSave, onClose }) {
+  const { statusLabels, offices, paymentMethods } = useSettings()
   const [form, setForm] = useState(BLANK)
   const [saving, setSaving] = useState(false)
 
@@ -48,6 +48,9 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
         manager_id:  deal.manager_id  ?? '',
         director_id: deal.director_id ?? '',
         vp_id:       deal.vp_id       ?? '',
+        payment_method:  deal.payment_method  ?? '',
+        deduction_amount: deal.deduction_amount != null ? String(deal.deduction_amount) : '',
+        deduction_note:   deal.deduction_note   ?? '',
       })
     } else {
       setForm(BLANK)
@@ -86,6 +89,9 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
       manager_id:  form.manager_id  || null,
       director_id: form.director_id || null,
       vp_id:       form.vp_id       || null,
+      payment_method:   form.payment_method || null,
+      deduction_amount: form.deduction_amount !== '' ? Math.max(0, parseFloat(form.deduction_amount) || 0) : null,
+      deduction_note:   form.deduction_note?.trim() || null,
     })
     setSaving(false)
   }
@@ -134,7 +140,7 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
             </Field>
             <Field label="Status">
               <Sel value={form.status} onChange={e => set('status', e.target.value)}>
-                {STATUSES.map(s => <option key={s}>{s}</option>)}
+                {statusLabels.map(s => <option key={s}>{s}</option>)}
               </Sel>
             </Field>
             <Field label="Sale Date *">
@@ -146,7 +152,13 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
             <Field label="Office">
               <Sel value={form.office} onChange={e => set('office', e.target.value)}>
                 <option value="">Select office…</option>
-                {OFFICES.map(o => <option key={o}>{o}</option>)}
+                {offices.map(o => <option key={o}>{o}</option>)}
+              </Sel>
+            </Field>
+            <Field label="Payment Method">
+              <Sel value={form.payment_method} onChange={e => set('payment_method', e.target.value)}>
+                <option value="">Select method…</option>
+                {paymentMethods.map(m => <option key={m}>{m}</option>)}
               </Sel>
             </Field>
             <Field label="Project ID">
@@ -232,6 +244,26 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
               )}
             </div>
           )}
+
+          {/* Deduction */}
+          <div className="rounded-xl px-4 py-3 space-y-3" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest">Deduction</p>
+              {parseFloat(form.deduction_amount) > 0 && (
+                <span className="text-[12px] font-bold text-red-400">−{fmt(parseFloat(form.deduction_amount) || 0)}</span>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] gap-3">
+              <Field label="Amount ($)">
+                <Inp type="number" min="0" step="0.01" value={form.deduction_amount}
+                  onChange={e => set('deduction_amount', e.target.value)} placeholder="0.00" />
+              </Field>
+              <Field label="Description">
+                <Inp value={form.deduction_note} onChange={e => set('deduction_note', e.target.value)}
+                  placeholder="What is this deduction for?" />
+              </Field>
+            </div>
+          </div>
 
           {/* Override chain */}
           <div>

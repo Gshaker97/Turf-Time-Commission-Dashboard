@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
+import { useSettings } from "../contexts/SettingsContext";
 import { fetchUsers, insertDeal } from "../lib/db";
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const money = (n) => "$" + (Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-const STATUSES = ["Deal Review", "Pending Install", "Pay Finalized", "Paid", "Sales Issue"];
 const inputStyle = { background: '#1a1a1a', border: '1px solid #3a3a3a' };
 const inputCls = 'w-full px-3 py-2 rounded-lg text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-teal/40 transition-colors';
 
@@ -43,6 +43,7 @@ function ModeToggle({ mode, setMode }) {
 
 export default function NewDeal() {
   const { profile } = useAuth();
+  const { statusLabels, offices, paymentMethods } = useSettings();
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -51,6 +52,8 @@ export default function NewDeal() {
   const [dealName, setDealName] = useState("");
   const [saleDate, setSaleDate] = useState(todayISO());
   const [status, setStatus] = useState("Deal Review");
+  const [office, setOffice] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("");
   const [baseline, setBaseline] = useState("");
   const [jobPrice, setJobPrice] = useState("");
   const [repCommission, setRepCommission] = useState("");
@@ -96,6 +99,7 @@ export default function NewDeal() {
 
   function reset() {
     setDealName(""); setBaseline(""); setJobPrice(""); setRepCommission("");
+    setOffice(""); setPaymentMethod("");
     setRepId(""); setSetterId(""); setCloserId(""); setManagerId("");
     setDeductionAmount(""); setDeductionNote("");
     setMgr({ mode: "pct", value: "" });
@@ -116,6 +120,7 @@ export default function NewDeal() {
     setSaving(true);
     const { error } = await insertDeal({
       deal_name: dealName.trim(), status, sale_date: saleDate,
+      office: office || null, payment_method: paymentMethod || null,
       baseline_revenue: base, job_price: Number(jobPrice),
       setter_id: primarySetter, closer_id: selfGen ? null : closerId,
       setter_split_pct: selfGen ? 1 : (Number(setterSplit) || 0) / 100,
@@ -159,7 +164,21 @@ export default function NewDeal() {
                 </Field>
                 <Field label="Status">
                   <Sel value={status} onChange={e => setStatus(e.target.value)}>
-                    {STATUSES.map(s => <option key={s}>{s}</option>)}
+                    {statusLabels.map(s => <option key={s}>{s}</option>)}
+                  </Sel>
+                </Field>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <Field label="Office">
+                  <Sel value={office} onChange={e => setOffice(e.target.value)}>
+                    <option value="">Select office…</option>
+                    {offices.map(o => <option key={o}>{o}</option>)}
+                  </Sel>
+                </Field>
+                <Field label="Payment method">
+                  <Sel value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}>
+                    <option value="">Select method…</option>
+                    {paymentMethods.map(m => <option key={m}>{m}</option>)}
                   </Sel>
                 </Field>
               </div>

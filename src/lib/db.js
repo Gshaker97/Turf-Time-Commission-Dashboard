@@ -10,6 +10,7 @@ import {
   DEMO_PAYMENTS,
   DEMO_GOALS,
   DEMO_WEEKLY_STATS,
+  DEMO_SETTINGS,
 } from './demoData'
 
 // Local mutable copies for demo CRUD
@@ -18,6 +19,7 @@ let _users       = DEMO_USERS.map(u => ({ ...u }))
 let _payments    = DEMO_PAYMENTS.map(p => ({ ...p }))
 let _goals       = { ...DEMO_GOALS } // keyed "YYYY-M" -> baseline_target
 let _weeklyStats = DEMO_WEEKLY_STATS.map(s => ({ ...s }))
+let _settings    = JSON.parse(JSON.stringify(DEMO_SETTINGS))
 
 const goalKey = (y, m) => `${y}-${m}`
 
@@ -31,6 +33,24 @@ const DEAL_SELECT = `
 `
 
 // ── Deals ─────────────────────────────────────────────────────
+
+// Pre-migration safety: if a live write fails because the database doesn't
+// have a column yet (e.g. `payment_method` before 006_settings.sql is run),
+// drop that column from the payload and retry. Lets new fields ship before
+// the matching migration is applied, without breaking deal saves.
+async function writeWithSchemaFallback(run, payload) {
+  let res = await run(payload)
+  let guard = 0
+  while (res?.error && guard++ < 6) {
+    const col = /Could not find the '([^']+)' column/.exec(res.error.message || '')?.[1]
+    if (!col || !(col in payload)) break
+    const { [col]: _omit, ...rest } = payload
+    payload = rest
+    res = await run(payload)
+  }
+  return res
+}
+
 export async function fetchDeals() {
   if (DEMO_MODE) return { data: _deals, error: null }
   return supabase.from('deals').select(DEAL_SELECT).order('sale_date', { ascending: false })
@@ -53,7 +73,10 @@ export async function insertDeal(data, profileId) {
     _deals = [newDeal, ..._deals]
     return { error: null }
   }
-  return supabase.from('deals').insert([{ ...data, created_by: profileId }])
+  return writeWithSchemaFallback(
+    p => supabase.from('deals').insert([p]),
+    { ...data, created_by: profileId }
+  )
 }
 
 export async function updateDeal(id, data) {
@@ -72,7 +95,10 @@ export async function updateDeal(id, data) {
     )
     return { error: null }
   }
-  return supabase.from('deals').update(data).eq('id', id)
+  return writeWithSchemaFallback(
+    p => supabase.from('deals').update(p).eq('id', id),
+    { ...data }
+  )
 }
 
 export async function deleteDeal(id) {
@@ -182,4 +208,23 @@ export async function upsertWeeklyStat({ rep_id, week_start, estimates }, profil
   }
   return supabase.from('weekly_stats')
     .upsert({ rep_id, week_start, estimates, created_by: profileId }, { onConflict: 'rep_id,week_start' })
+}
+
+// ── App settings (admin-editable config lists) ────────────────
+export async function fetchSettings() {
+  if (DEMO_MODE) return { data: JSON.parse(JSON.stringify(_settings)), error: null }
+  const { data, error } = await supabase.from('app_settings').select('key,value')
+  if (error) return { data: null, error }
+  const obj = {}
+  for (const row of data ?? []) obj[row.key] = row.value
+  return { data: obj, error: null }
+}
+
+export async function saveSetting(key, value, profileId) {
+  if (DEMO_MODE) {
+    _settings = { ..._settings, [key]: value }
+    return { error: null }
+  }
+  return supabase.from('app_settings')
+    .upsert({ key, value, updated_by: profileId }, { onConflict: 'key' })
 }
