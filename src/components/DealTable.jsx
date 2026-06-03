@@ -6,12 +6,14 @@ import { useSettings } from '../contexts/SettingsContext'
 // Consolidated columns — related fields are stacked inside one cell so the
 // whole table fits on screen without horizontal scrolling.
 const COLS = [
-  { key: 'deal_name',  label: 'Deal' },
-  { key: 'status',     label: 'Status' },
-  { key: 'setter',     label: 'People',     sortAccessor: d => d.setter?.name ?? '' },
-  { key: 'sale_date',  label: 'Dates' },
-  { key: 'job_price',  label: 'Revenue',    align: 'right' },
-  { key: 'commission', label: 'Commission', align: 'right', sortAccessor: d => calcDealCommissions(d).gross },
+  { key: 'deal_name',      label: 'Deal' },
+  { key: 'office',         label: 'Office' },
+  { key: 'payment_method', label: 'Payment' },
+  { key: 'status',         label: 'Status' },
+  { key: 'setter',         label: 'People',     sortAccessor: d => d.setter?.name ?? '' },
+  { key: 'sale_date',      label: 'Dates' },
+  { key: 'job_price',      label: 'Revenue',    align: 'right' },
+  { key: 'commission',     label: 'Commission', align: 'right', sortAccessor: d => calcDealCommissions(d).gross },
 ]
 
 function SortIcon({ col, sortKey, sortDir }) {
@@ -231,9 +233,10 @@ export default function DealTable({
       {/* Desktop table (lg+) — consolidated columns fit without scrolling */}
       <table className="w-full hidden lg:table table-fixed">
         <colgroup>
-          <col /><col className="w-[150px]" /><col className="w-[150px]" />
-          <col className="w-[160px]" /><col className="w-[120px]" /><col className="w-[130px]" />
-          {canEdit && <col className="w-[80px]" />}
+          <col /><col className="w-[100px]" /><col className="w-[130px]" />
+          <col className="w-[140px]" /><col className="w-[150px]" /><col className="w-[150px]" />
+          <col className="w-[110px]" /><col className="w-[130px]" />
+          {canEdit && <col className="w-[70px]" />}
         </colgroup>
         <thead>
           <tr style={{ background: '#00b894' }}>
@@ -267,7 +270,13 @@ export default function DealTable({
                 className="hover:bg-white/[0.03] transition-colors align-top">
                 <td className="px-3 py-3">
                   <p className="text-[13px] font-semibold text-white truncate">{deal.deal_name}</p>
-                  <p className="text-[11px] text-white/40 truncate">{subline(deal)}</p>
+                  {deal.project_id && <p className="text-[11px] text-white/40 truncate">{deal.project_id}</p>}
+                </td>
+                <td className="px-3 py-3">
+                  <span className="text-[12px] text-white/70">{deal.office || '—'}</span>
+                </td>
+                <td className="px-3 py-3">
+                  <span className="text-[12px] text-white/70">{deal.payment_method || '—'}</span>
                 </td>
                 <td className="px-3 py-3">
                   <StatusCell status={deal.status} color={statusColor(deal.status)} options={statusLabels}
