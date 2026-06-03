@@ -45,45 +45,49 @@ export default function Layout() {
 
       <div className="flex flex-1 overflow-hidden">
 
-        {/* ── Sidebar: hidden on mobile, icon-only on tablet, full on desktop ── */}
-        <aside
-          className="hidden md:flex flex-col py-4 flex-shrink-0 w-16 lg:w-48"
-          style={{ background: '#1e1e1e', borderRight: '1px solid #2a2a2a' }}
-        >
-          <nav className="px-2 lg:px-3 space-y-0.5 flex-1">
-            {items.map(({ to, icon: Icon, label }) => (
-              <NavLink
-                key={to}
-                to={to}
-                title={label}
-                className={({ isActive }) =>
-                  `flex items-center gap-3 px-2 lg:px-3 py-2.5 rounded-lg text-[13px] font-medium transition-colors
-                   justify-center lg:justify-start ${
-                    isActive
-                      ? 'bg-teal/10 text-teal border border-teal/20'
-                      : 'text-white/40 hover:text-white hover:bg-white/[0.04]'
-                  }`
-                }
-              >
-                {({ isActive }) => (
-                  <>
-                    <Icon size={18} strokeWidth={isActive ? 2.5 : 1.5}
-                      className={isActive ? 'text-teal flex-shrink-0' : 'text-white/30 flex-shrink-0'} />
-                    <span className="hidden lg:inline">{label}</span>
-                  </>
-                )}
-              </NavLink>
-            ))}
-          </nav>
+        {/* ── Sidebar: collapsed icon rail that expands to full labels on hover.
+             Reserves only the narrow rail's width so the page content stays
+             wide; the expanded panel overlays the content instead of pushing it. ── */}
+        <aside className="hidden md:block flex-shrink-0 w-16 relative group">
+          <div
+            className="absolute inset-y-0 left-0 w-16 group-hover:w-52 transition-[width] duration-200 ease-out flex flex-col py-4 overflow-hidden z-40 group-hover:shadow-2xl"
+            style={{ background: '#1e1e1e', borderRight: '1px solid #2a2a2a' }}
+          >
+            <nav className="px-2 group-hover:px-3 space-y-0.5 flex-1">
+              {items.map(({ to, icon: Icon, label }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  title={label}
+                  className={({ isActive }) =>
+                    `flex items-center gap-3 px-2 group-hover:px-3 py-2.5 rounded-lg text-[13px] font-medium transition-colors
+                     justify-center group-hover:justify-start ${
+                      isActive
+                        ? 'bg-teal/10 text-teal border border-teal/20'
+                        : 'text-white/40 hover:text-white hover:bg-white/[0.04]'
+                    }`
+                  }
+                >
+                  {({ isActive }) => (
+                    <>
+                      <Icon size={18} strokeWidth={isActive ? 2.5 : 1.5}
+                        className={isActive ? 'text-teal flex-shrink-0' : 'text-white/30 flex-shrink-0'} />
+                      <span className="hidden group-hover:inline whitespace-nowrap">{label}</span>
+                    </>
+                  )}
+                </NavLink>
+              ))}
+            </nav>
 
-          {/* Role badge — full text on desktop, dot on tablet */}
-          <div className="px-2 lg:px-5 pb-1">
-            <div className="hidden lg:block text-[10px] font-semibold uppercase tracking-widest px-2 py-1 rounded text-center"
-              style={{ background: isPreviewMode ? '#f59e0b22' : '#2a2a2a', color: isPreviewMode ? '#f59e0b' : '#00b894' }}>
-              {role}
-            </div>
-            <div className="lg:hidden flex justify-center">
-              <div className="w-2 h-2 rounded-full" style={{ background: isPreviewMode ? '#f59e0b' : '#00b894' }} />
+            {/* Role badge — dot when collapsed, full text on hover */}
+            <div className="px-2 group-hover:px-5 pb-1">
+              <div className="hidden group-hover:block text-[10px] font-semibold uppercase tracking-widest px-2 py-1 rounded text-center whitespace-nowrap"
+                style={{ background: isPreviewMode ? '#f59e0b22' : '#2a2a2a', color: isPreviewMode ? '#f59e0b' : '#00b894' }}>
+                {role}
+              </div>
+              <div className="group-hover:hidden flex justify-center">
+                <div className="w-2 h-2 rounded-full" style={{ background: isPreviewMode ? '#f59e0b' : '#00b894' }} />
+              </div>
             </div>
           </div>
         </aside>
