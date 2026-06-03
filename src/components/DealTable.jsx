@@ -136,19 +136,23 @@ export function StatusBadge({ status, color = '#94a3b8' }) {
 }
 
 // Inline-editable text cell backed by a settings list (office, payment method).
-// Reads as plain text with a dotted underline to hint it's clickable; an
-// invisible <select> overlay handles the edit, mirroring StatusCell.
-function InlineSelectCell({ value, options, placeholder = 'Set', field, canEdit, dealId, onUpdate }) {
+// Reads as plain text to match the other cells; an invisible <select> overlay
+// handles the edit. Uncontrolled (defaultValue + key) so the native control
+// keeps the picked value and the write fires reliably on change — mirroring the
+// DateField pattern. The visible text is driven by the `value` prop, which
+// refreshes after the row reloads.
+function InlineSelectCell({ value, options, field, canEdit, dealId, onUpdate }) {
   if (!canEdit) return <span className="text-[12px] text-white/70 whitespace-nowrap">{value || '—'}</span>
   return (
     <div className="relative inline-block">
-      <span className={`text-[12px] whitespace-nowrap cursor-pointer border-b border-dotted transition-colors ${
-        value ? 'text-white/70 border-white/20 hover:text-white' : 'text-white/30 border-white/15 hover:text-white/60'
+      <span className={`text-[12px] whitespace-nowrap cursor-pointer transition-colors ${
+        value ? 'text-white/70 hover:text-white' : 'text-white/30 hover:text-white/60'
       }`}>
-        {value || placeholder}
+        {value || '—'}
       </span>
       <select
-        value={value ?? ''}
+        key={value ?? ''}
+        defaultValue={value ?? ''}
         onChange={e => onUpdate(dealId, { [field]: e.target.value || null })}
         className="absolute inset-0 opacity-0 cursor-pointer w-full"
         title="Click to edit"
@@ -282,8 +286,6 @@ export default function DealTable({
                 Actions
               </th>
             )}
-            {/* Spacer column — absorbs leftover width so real columns stay content-sized */}
-            <th aria-hidden className="w-full p-0" />
           </tr>
         </thead>
         <tbody>
@@ -300,11 +302,11 @@ export default function DealTable({
                   {deal.project_id && <p className="text-[11px] text-white/40 truncate max-w-[260px]">{deal.project_id}</p>}
                 </td>
                 <td className="px-3 py-3">
-                  <InlineSelectCell value={deal.office} options={offices} placeholder="Set office"
+                  <InlineSelectCell value={deal.office} options={offices}
                     field="office" canEdit={canEdit} dealId={deal.id} onUpdate={onUpdate} />
                 </td>
                 <td className="px-3 py-3">
-                  <InlineSelectCell value={deal.payment_method} options={paymentMethods} placeholder="Set payment"
+                  <InlineSelectCell value={deal.payment_method} options={paymentMethods}
                     field="payment_method" canEdit={canEdit} dealId={deal.id} onUpdate={onUpdate} />
                 </td>
                 <td className="px-3 py-3">
@@ -325,7 +327,6 @@ export default function DealTable({
                 {canEdit && (
                   <td className="px-3 py-3"><ActionButtons deal={deal} onEdit={onEdit} onDelete={onDelete} /></td>
                 )}
-                <td className="p-0" />
               </tr>
             )
           })}
