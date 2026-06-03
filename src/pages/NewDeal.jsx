@@ -6,6 +6,11 @@ import { fetchUsers, insertDeal } from "../lib/db";
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const money = (n) => "$" + (Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// Director/VP override % defaults are driven by the office: Phoenix → 5%,
+// Tucson → 3.75% (any other/unknown office falls back to 5%). Manager always
+// defaults to 3% regardless of office. Mirrors src/components/DealModal.jsx.
+const dirVpDefault = (office) => (office === "Tucson" ? "3.75" : "5");
+
 const inputStyle = { background: '#1a1a1a', border: '1px solid #3a3a3a' };
 const inputCls = 'w-full px-3 py-2 rounded-lg text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-teal/40 transition-colors';
 
@@ -68,9 +73,18 @@ export default function NewDeal() {
   const [deductionNote, setDeductionNote] = useState("");
 
   const [managerId, setManagerId] = useState("");
-  const [mgr, setMgr] = useState({ mode: "pct", value: "" });
+  const [mgr, setMgr] = useState({ mode: "pct", value: "3" });
   const [dir, setDir] = useState({ mode: "pct", value: "5" });
   const [vp, setVp] = useState({ mode: "pct", value: "5" });
+
+  // Changing the office re-applies the office-driven default to the director/VP
+  // override (only while they're in % mode; manager stays at its 3% default).
+  function handleOfficeChange(o) {
+    setOffice(o);
+    const d = dirVpDefault(o);
+    setDir(prev => prev.mode === "pct" ? { ...prev, value: d } : prev);
+    setVp(prev => prev.mode === "pct" ? { ...prev, value: d } : prev);
+  }
 
   useEffect(() => {
     fetchUsers().then(({ data }) => {
@@ -102,7 +116,7 @@ export default function NewDeal() {
     setOffice(""); setPaymentMethod("");
     setRepId(""); setSetterId(""); setCloserId(""); setManagerId("");
     setDeductionAmount(""); setDeductionNote("");
-    setMgr({ mode: "pct", value: "" });
+    setMgr({ mode: "pct", value: "3" });
     setDir({ mode: "pct", value: "5" });
     setVp({ mode: "pct", value: "5" });
   }
@@ -170,7 +184,7 @@ export default function NewDeal() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Field label="Office">
-                  <Sel value={office} onChange={e => setOffice(e.target.value)}>
+                  <Sel value={office} onChange={e => handleOfficeChange(e.target.value)}>
                     <option value="">Select office…</option>
                     {offices.map(o => <option key={o}>{o}</option>)}
                   </Sel>
@@ -283,7 +297,7 @@ export default function NewDeal() {
                 </Field>
               )}
 
-              <Field label={`Director — ${director?.name ?? 'not set'} (default 5%)`}>
+              <Field label={`Director — ${director?.name ?? 'not set'} (default ${dirVpDefault(office)}%)`}>
                 <div className="flex items-center gap-2">
                   <ModeToggle mode={dir.mode} setMode={m => setDir({ ...dir, mode: m })} />
                   <Inp type="number" value={dir.value} onChange={e => setDir({ ...dir, value: e.target.value })}
@@ -292,7 +306,7 @@ export default function NewDeal() {
                 <p className="text-[11px] font-semibold mt-1 text-teal">{money(dirAmt)}</p>
               </Field>
 
-              <Field label={`VP — ${vpProfile?.name ?? 'not set'} (default 5%)`}>
+              <Field label={`VP — ${vpProfile?.name ?? 'not set'} (default ${dirVpDefault(office)}%)`}>
                 <div className="flex items-center gap-2">
                   <ModeToggle mode={vp.mode} setMode={m => setVp({ ...vp, mode: m })} />
                   <Inp type="number" value={vp.value} onChange={e => setVp({ ...vp, value: e.target.value })}
