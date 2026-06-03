@@ -113,6 +113,16 @@ export function weekStartOf(dateStr) {
   return f(startOfWeek(new Date(dateStr + 'T12:00:00'), WEEK))
 }
 
+// Default pay date for a given install date: we pay the Friday FOLLOWING the
+// (Monday-anchored) week the job was installed. e.g. installed any day the week
+// of Mon Jun 1 → paid Fri Jun 12. That's the install week's Monday + 11 days.
+// Returns a YYYY-MM-DD string, or null when there's no install date.
+export function payDateFromInstall(installDate) {
+  if (!installDate) return null
+  const monday = startOfWeek(new Date(installDate + 'T12:00:00'), WEEK)
+  return f(addDays(monday, 11))
+}
+
 // The list of Monday-anchored weeks that overlap a [from, to] range.
 export function weeksInRange(from, to) {
   const start = from ? new Date(from + 'T12:00:00') : startOfWeek(today(), WEEK)

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { X } from 'lucide-react'
 import { calcDealCommissions, fmt, fmtPct } from '../utils/commission'
+import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
 
 const Field = ({ label, children }) => (
@@ -17,7 +18,7 @@ const Sel = ({ children, ...props }) => <select {...props} style={inputStyle} cl
 
 const BLANK = {
   deal_name: '', office: '', project_id: '', payment_method: '',
-  sale_date: '', install_date: '',
+  sale_date: '', install_date: '', pay_date: '',
   setter_id: '', closer_id: '', setter_split_pct: '50',
   baseline_revenue: '', job_price: '',
   status: 'Deal Review',
@@ -53,6 +54,7 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
         director_id: deal.director_id ?? '',
         vp_id:       deal.vp_id       ?? '',
         payment_method:  deal.payment_method  ?? '',
+        pay_date:        deal.pay_date         ?? '',
         deduction_amount: deal.deduction_amount != null ? String(deal.deduction_amount) : '',
         deduction_note:   deal.deduction_note   ?? '',
       })
@@ -62,6 +64,13 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
   }, [deal])
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  // Setting/changing the install date auto-populates the pay date (Friday of
+  // the following week). Clearing the install date leaves pay date untouched,
+  // and the pay date stays manually editable.
+  function setInstallDate(v) {
+    setForm(f => ({ ...f, install_date: v, ...(v ? { pay_date: payDateFromInstall(v) } : {}) }))
+  }
 
   function handleOverrideId(idKey, pctKey, value) {
     setForm(f => ({ ...f, [idKey]: value, [pctKey]: value && !f[pctKey] ? overrideDefaults(f.office)[pctKey] : f[pctKey] }))
@@ -105,6 +114,7 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
       director_id: form.director_id || null,
       vp_id:       form.vp_id       || null,
       payment_method:   form.payment_method || null,
+      pay_date:         form.pay_date || null,
       deduction_amount: form.deduction_amount !== '' ? Math.max(0, parseFloat(form.deduction_amount) || 0) : null,
       deduction_note:   form.deduction_note?.trim() || null,
     })
@@ -162,7 +172,10 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
               <Inp required type="date" value={form.sale_date} onChange={e => set('sale_date', e.target.value)} />
             </Field>
             <Field label="Install Date">
-              <Inp type="date" value={form.install_date} onChange={e => set('install_date', e.target.value)} />
+              <Inp type="date" value={form.install_date} onChange={e => setInstallDate(e.target.value)} />
+            </Field>
+            <Field label="Pay Date">
+              <Inp type="date" value={form.pay_date} onChange={e => set('pay_date', e.target.value)} />
             </Field>
             <Field label="Office">
               <Sel value={form.office} onChange={e => handleOfficeChange(e.target.value)}>
