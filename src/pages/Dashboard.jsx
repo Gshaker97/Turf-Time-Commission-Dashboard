@@ -96,7 +96,8 @@ export default function Dashboard() {
 
   function applyScopeFilters(rows) {
     if (!teamFilter) return rows
-    const repIds = new Set(users.filter(u => u.manager_id === teamFilter).map(u => u.id))
+    // A manager's team = their reps + the manager's own sales.
+    const repIds = new Set([...users.filter(u => u.manager_id === teamFilter).map(u => u.id), teamFilter])
     return rows.filter(d => repIds.has(d.setter_id))
   }
 
@@ -138,7 +139,7 @@ export default function Dashboard() {
     function monthTotal(mk) {
       let rows = deals.filter(d => d.sale_date?.startsWith(mk))
       if (teamFilter) {
-        const repIds = new Set(users.filter(u => u.manager_id === teamFilter).map(u => u.id))
+        const repIds = new Set([...users.filter(u => u.manager_id === teamFilter).map(u => u.id), teamFilter])
         rows = rows.filter(d => repIds.has(d.setter_id))
       }
       return rows.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
@@ -172,11 +173,12 @@ export default function Dashboard() {
   const teamData = useMemo(() => {
     const mgrs = teamFilter ? users.filter(u => u.id === teamFilter) : users.filter(u => u.role === 'manager')
     return mgrs.map(mgr => {
-      const repIds  = new Set(users.filter(u => u.manager_id === mgr.id).map(u => u.id))
+      const teamRepIds = users.filter(u => u.manager_id === mgr.id).map(u => u.id)
+      const repIds  = new Set([...teamRepIds, mgr.id])   // include the manager's own sales
       const mDeals  = filtered.filter(d => repIds.has(d.setter_id))
       const revenue = mDeals.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
       const prevRev = prevFiltered.filter(d => repIds.has(d.setter_id)).reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
-      return { id: mgr.id, name: mgr.name, repCount: repIds.size, deals: mDeals.length, revenue, prevRev, pct: (revenue / companyTotalRev) * 100 }
+      return { id: mgr.id, name: mgr.name, repCount: teamRepIds.length, deals: mDeals.length, revenue, prevRev, pct: (revenue / companyTotalRev) * 100 }
     }).sort((a, b) => b.revenue - a.revenue)
   }, [users, filtered, prevFiltered, companyTotalRev, teamFilter])
 

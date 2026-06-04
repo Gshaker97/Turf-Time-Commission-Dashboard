@@ -9,6 +9,11 @@ import WeeklyStats from '../components/WeeklyStats'
 import { useSettings } from '../contexts/SettingsContext'
 import { MessageSquare, Flame, Snowflake, TrendingUp, TrendingDown, Trophy, Pencil, Check, X } from 'lucide-react'
 
+// Individual sellers = reps AND managers. Managers carry their own sales, so
+// they show up as individuals on the Team page and their production rolls into
+// their own team's totals.
+const isSeller = (u) => u.role === 'rep' || u.role === 'manager'
+
 function getNoteKey(repId)   { return `turf_note_${repId}` }
 function getNote(repId)      { return localStorage.getItem(getNoteKey(repId)) ?? '' }
 function saveNote(repId, t)  { localStorage.setItem(getNoteKey(repId), t) }
@@ -227,15 +232,19 @@ export default function Team() {
 
   const visibleReps = useMemo(() => {
     if (!profile) return []
-    if (role === 'admin' || role === 'vp') return users.filter(u => u.role === 'rep')
+    if (role === 'admin' || role === 'vp') return users.filter(isSeller)
     if (role === 'director') {
       const myMgrIds = new Set(users.filter(u => u.director_id === profile.id).map(u => u.id))
-      return users.filter(u => u.role === 'rep' && myMgrIds.has(u.manager_id))
+      return users.filter(u =>
+        (u.role === 'rep' && myMgrIds.has(u.manager_id)) ||
+        (u.role === 'manager' && myMgrIds.has(u.id)))
     }
-    if (role === 'manager') return users.filter(u => u.role === 'rep' && u.manager_id === profile.id)
+    if (role === 'manager') return users.filter(u =>
+      (u.role === 'rep' && u.manager_id === profile.id) || u.id === profile.id)
     if (role === 'rep') {
       return profile.manager_id
-        ? users.filter(u => u.role === 'rep' && u.manager_id === profile.manager_id)
+        ? users.filter(u =>
+            (u.role === 'rep' && u.manager_id === profile.manager_id) || u.id === profile.manager_id)
         : users.filter(u => u.id === profile.id)
     }
     return []
@@ -282,7 +291,7 @@ export default function Team() {
     if (!profile) return []
     return users.filter(u => u.role === 'manager').map(mgr => {
       const teamReps  = users.filter(u => u.role === 'rep' && u.manager_id === mgr.id)
-      const repIds    = new Set(teamReps.map(r => r.id))
+      const repIds    = new Set([...teamReps.map(r => r.id), mgr.id])  // include the manager's own sales
       const teamDeals = deals.filter(d => {
         const inPeriod = (!dateFrom||(d.sale_date??'')>=dateFrom)&&(!dateTo||(d.sale_date??'')<=dateTo)
         return inPeriod && (repIds.has(d.setter_id)||repIds.has(d.closer_id))
@@ -302,7 +311,7 @@ export default function Team() {
     const dayOfMonth  = new Date().getDate()
     if (Math.ceil(dayOfMonth/7) <= 1) return null
     const curKey  = format(new Date(),'yyyy-MM')
-    const allReps = users.filter(u => u.role==='rep')
+    const allReps = users.filter(isSeller)
     if (!allReps.length) return null
     const ranked = allReps.map(rep => ({
       id: rep.id,
