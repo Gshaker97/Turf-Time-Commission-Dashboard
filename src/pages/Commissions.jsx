@@ -13,24 +13,42 @@ const inRange = (date, from, to) => !!date && (!from || date >= from) && (!to ||
 const PAID = 'Paid'                 // status that means the commission has been paid out
 const ISSUE = 'Sales Issue'         // status that means the deal is in trouble
 const fmtDay = (iso) => iso ? format(new Date(iso + 'T12:00:00'), 'EEE, MMM d') : null
+const num = (v) => Number(v) || 0
 const pct = (n) => { const v = (Number(n) || 0) * 100; return (Number.isInteger(v) ? v : v.toFixed(2)) + '%' }
 
 // The roles the current user holds on a deal, with each role's dollar amount.
+// Only the user's OWN roles are ever returned, so a rep never sees overrides
+// and a manager only ever sees their own override (never the director/VP chain).
+// For setter/closer we also surface the split partner's name and, when the
+// deduction is computed (not pre-stored), the gross + deduction so the take adds up.
 function myParts(deal, id) {
   const a = dealAmounts(deal)
+  const repPool = Math.max(num(deal.job_price) - num(deal.baseline_revenue), 0)
+  const solo = !deal.closer_id || deal.setter_id === deal.closer_id
+  const split = deal.setter_split_pct == null ? 0.5 : num(deal.setter_split_pct)
+  const deduction = num(deal.deduction_amount)
   const parts = []
   if (deal.setter_id === id) {
-    const solo = !deal.closer_id || deal.setter_id === deal.closer_id
-    const split = deal.setter_split_pct == null ? 0.5 : Number(deal.setter_split_pct)
-    parts.push({ role: 'Setter', amount: a.setter, detail: solo ? 'Full rep pool (self-generated)' : `Setter split — ${pct(split)} of rep pool` })
+    const gross = repPool * (solo ? 1 : split)
+    parts.push({
+      role: 'Setter', amount: a.setter, gross,
+      ded: deal.setter_amount != null ? 0 : (solo ? deduction : 0),
+      partner: solo ? null : (deal.closer?.name || null),
+      detail: solo ? 'Full rep pool (self-generated)' : `Setter split · ${pct(split)} of rep pool`,
+    })
   }
   if (deal.closer_id === id && deal.closer_id !== deal.setter_id) {
-    const split = deal.setter_split_pct == null ? 0.5 : Number(deal.setter_split_pct)
-    parts.push({ role: 'Closer', amount: a.closer, detail: `Closer split — ${pct(1 - split)} of rep pool` })
+    const gross = repPool * (1 - split)
+    parts.push({
+      role: 'Closer', amount: a.closer, gross,
+      ded: deal.closer_amount != null ? 0 : deduction,
+      partner: deal.setter?.name || null,
+      detail: `Closer split · ${pct(1 - split)} of rep pool`,
+    })
   }
-  if (deal.manager_id  === id) parts.push({ role: 'Manager',  amount: a.manager,  detail: `${pct(deal.manager_override_pct)} override of baseline` })
-  if (deal.director_id === id) parts.push({ role: 'Director', amount: a.director, detail: `${pct(deal.director_override_pct)} override of baseline` })
-  if (deal.vp_id       === id) parts.push({ role: 'VP',       amount: a.vp,       detail: `${pct(deal.vp_override_pct)} override of baseline` })
+  if (deal.manager_id  === id) parts.push({ role: 'Manager',  amount: a.manager,  gross: a.manager,  ded: 0, partner: null, detail: `${pct(deal.manager_override_pct)} override of baseline` })
+  if (deal.director_id === id) parts.push({ role: 'Director', amount: a.director, gross: a.director, ded: 0, partner: null, detail: `${pct(deal.director_override_pct)} override of baseline` })
+  if (deal.vp_id       === id) parts.push({ role: 'VP',       amount: a.vp,       gross: a.vp,       ded: 0, partner: null, detail: `${pct(deal.vp_override_pct)} override of baseline` })
   return parts
 }
 
@@ -78,15 +96,25 @@ function DealRow({ deal, id, statusColor }) {
               <span>Rep pool <span className="text-white/70">{fmt(repPool)}</span></span>
             </div>
             {parts.map(p => (
-              <div key={p.role} className="flex items-center justify-between py-1 border-t border-white/5">
-                <span className="text-white/55">{p.detail}</span>
-                <span className="font-semibold text-white">{fmt(p.amount)}</span>
+              <div key={p.role} className="py-1 border-t border-white/5">
+                <div className="flex items-center justify-between">
+                  <span className="text-white/55">
+                    {p.detail}{p.partner ? <span className="text-white/40"> · with {p.partner}</span> : null}
+                  </span>
+                  <span className="font-semibold text-white">{fmt(p.ded > 0 ? p.gross : p.amount)}</span>
+                </div>
+                {p.ded > 0 && (
+                  <div className="flex items-center justify-between text-[11px] text-red-400/90 mt-0.5">
+                    <span>− Deduction{deal.deduction_note ? ` (${deal.deduction_note})` : ''}</span>
+                    <span>−{fmt(p.ded)}</span>
+                  </div>
+                )}
               </div>
             ))}
-            {a.deduction > 0 && (
+            {a.deduction > 0 && !parts.some(p => p.ded > 0) && (
               <div className="flex items-start gap-1.5 pt-2 mt-1 border-t border-white/5 text-[11px] text-red-400/90">
                 <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
-                <span>Deal has a {fmt(a.deduction)} deduction{deal.deduction_note ? ` — ${deal.deduction_note}` : ''}.</span>
+                <span>This deal has a {fmt(a.deduction)} deduction{deal.deduction_note ? ` — ${deal.deduction_note}` : ''} (already reflected in your take).</span>
               </div>
             )}
             <div className="flex items-center justify-between pt-2 mt-1 border-t border-white/10">
