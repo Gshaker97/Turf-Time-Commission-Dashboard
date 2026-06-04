@@ -93,10 +93,32 @@ export default function Deals() {
     else { setSortKey(key); setSortDir('asc') }
   }
 
+  // Attach the joined people objects the table renders (setter/closer/…names)
+  // from the *_id fields in a save payload, so an optimistic row looks complete.
+  const withJoins = (data) => ({
+    ...data,
+    setter:   users.find(u => u.id === data.setter_id)   ?? null,
+    closer:   users.find(u => u.id === data.closer_id)   ?? null,
+    manager:  users.find(u => u.id === data.manager_id)  ?? null,
+    director: users.find(u => u.id === data.director_id) ?? null,
+    vp:       users.find(u => u.id === data.vp_id)       ?? null,
+  })
+
   async function handleSave(data) {
-    if (editDeal) await updateDeal(editDeal.id, data)
-    else await insertDeal(data, profile?.id)
-    setModal(false); setEditDeal(null); load(true)
+    if (editDeal) {
+      // Optimistic edit — reflect the change immediately, then reconcile.
+      setDeals(ds => ds.map(d => d.id === editDeal.id ? { ...d, ...withJoins(data) } : d))
+      setModal(false); setEditDeal(null)
+      const res = await updateDeal(editDeal.id, data)
+      load(true)
+      return
+    }
+    // New deal — show it instantly with a temp id, then reload to swap in the
+    // real persisted row (real id, server-side defaults, etc.).
+    setDeals(ds => [{ ...withJoins(data), id: 'temp-' + Date.now() }, ...ds])
+    setModal(false); setEditDeal(null)
+    await insertDeal(data, profile?.id)
+    load(true)
   }
 
   async function handleDelete(id) {
