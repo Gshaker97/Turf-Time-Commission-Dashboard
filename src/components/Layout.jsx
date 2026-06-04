@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import {
   LayoutDashboard, BarChart2, DollarSign,
@@ -94,7 +95,13 @@ export default function Layout() {
 
         {/* ── Main content ── */}
         <main className="flex-1 overflow-y-auto p-3 md:p-5 lg:p-6 pb-24 md:pb-6">
-          <Outlet />
+          <Suspense fallback={
+            <div className="flex items-center justify-center py-24">
+              <div className="w-6 h-6 border-2 border-teal/30 border-t-teal rounded-full animate-spin" />
+            </div>
+          }>
+            <Outlet />
+          </Suspense>
         </main>
       </div>
 
