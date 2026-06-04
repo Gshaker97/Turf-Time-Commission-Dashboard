@@ -38,14 +38,20 @@ export default function Deals() {
 
   useEffect(() => { load() }, [])
 
-  async function load() {
-    setLoading(true)
+  // quiet=true refetches without flipping the loading flag, so the table
+  // updates in place instead of blanking out to a "Loading…" placeholder.
+  async function load(quiet = false) {
+    if (!quiet) setLoading(true)
     const [{ data: d }, { data: p }, { data: u }] = await Promise.all([
       fetchDeals(), fetchPayments(), fetchUsers(),
     ])
     setDeals(d ?? []); setPayments(p ?? []); setUsers(u ?? [])
-    setLoading(false)
+    if (!quiet) setLoading(false)
   }
+
+  // Patch one deal in local state — used for optimistic inline edits so the
+  // change shows instantly without a round-trip + full reload.
+  const patchDeal = (id, data) => setDeals(ds => ds.map(d => d.id === id ? { ...d, ...data } : d))
 
   const role = profile?.role
 
@@ -90,12 +96,14 @@ export default function Deals() {
   async function handleSave(data) {
     if (editDeal) await updateDeal(editDeal.id, data)
     else await insertDeal(data, profile?.id)
-    setModal(false); setEditDeal(null); load()
+    setModal(false); setEditDeal(null); load(true)
   }
 
   async function handleDelete(id) {
     if (!confirm('Delete this deal? This cannot be undone.')) return
-    await deleteDeal(id); load()
+    setDeals(ds => ds.filter(d => d.id !== id))   // optimistic remove
+    const res = await deleteDeal(id)
+    if (res?.error) load(true)                     // resync if it failed
   }
 
   return (
@@ -131,7 +139,11 @@ export default function Deals() {
         onSort={handleSort}
         onEdit={d => { setEditDeal(d); setModal(true) }}
         onDelete={handleDelete}
-        onUpdate={async (id, data) => { await updateDeal(id, data); load() }}
+        onUpdate={async (id, data) => {
+          patchDeal(id, data)                       // optimistic — show instantly
+          const res = await updateDeal(id, data)
+          if (res?.error) load(true)                // resync quietly if it failed
+        }}
         loading={loading}
       />
 
