@@ -1,168 +1,282 @@
 import { useEffect, useMemo, useState } from 'react'
-import { fetchDeals, fetchPayments } from '../lib/db'
+import { ChevronDown, CalendarClock, AlertTriangle } from 'lucide-react'
+import { format } from 'date-fns'
+import { fetchDeals } from '../lib/db'
 import { useAuth } from '../contexts/AuthContext'
-import { calcDealCommissions, fmt } from '../utils/commission'
+import { useSettings } from '../contexts/SettingsContext'
+import { dealAmounts, getUserCommission, fmt } from '../utils/commission'
 import DateRangeFilter from '../components/DateRangeFilter'
 import { getPresetRange, matchPreset, rangeMatches, presetLabel } from '../utils/dateRanges'
 
-const inRange = (date, from, to) =>
-  !!date && (!from || date >= from) && (!to || date <= to)
+const todayISO = () => new Date().toISOString().slice(0, 10)
+const inRange = (date, from, to) => !!date && (!from || date >= from) && (!to || date <= to)
+const PAID = 'Paid'                 // status that means the commission has been paid out
+const ISSUE = 'Sales Issue'         // status that means the deal is in trouble
+const fmtDay = (iso) => iso ? format(new Date(iso + 'T12:00:00'), 'EEE, MMM d') : null
+const pct = (n) => { const v = (Number(n) || 0) * 100; return (Number.isInteger(v) ? v : v.toFixed(2)) + '%' }
+
+// The roles the current user holds on a deal, with each role's dollar amount.
+function myParts(deal, id) {
+  const a = dealAmounts(deal)
+  const parts = []
+  if (deal.setter_id === id) {
+    const solo = !deal.closer_id || deal.setter_id === deal.closer_id
+    const split = deal.setter_split_pct == null ? 0.5 : Number(deal.setter_split_pct)
+    parts.push({ role: 'Setter', amount: a.setter, detail: solo ? 'Full rep pool (self-generated)' : `Setter split — ${pct(split)} of rep pool` })
+  }
+  if (deal.closer_id === id && deal.closer_id !== deal.setter_id) {
+    const split = deal.setter_split_pct == null ? 0.5 : Number(deal.setter_split_pct)
+    parts.push({ role: 'Closer', amount: a.closer, detail: `Closer split — ${pct(1 - split)} of rep pool` })
+  }
+  if (deal.manager_id  === id) parts.push({ role: 'Manager',  amount: a.manager,  detail: `${pct(deal.manager_override_pct)} override of baseline` })
+  if (deal.director_id === id) parts.push({ role: 'Director', amount: a.director, detail: `${pct(deal.director_override_pct)} override of baseline` })
+  if (deal.vp_id       === id) parts.push({ role: 'VP',       amount: a.vp,       detail: `${pct(deal.vp_override_pct)} override of baseline` })
+  return parts
+}
+
+function Card({ label, value, color, sub }) {
+  return (
+    <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12 }} className="p-3 md:p-4">
+      <div className="text-[9px] md:text-[11px] uppercase tracking-wider text-white/30 font-semibold mb-1.5">{label}</div>
+      <div className="text-[16px] md:text-2xl font-bold truncate" style={{ color }}>{value}</div>
+      {sub && <div className="text-[10px] text-white/30 mt-0.5">{sub}</div>}
+    </div>
+  )
+}
+
+function DealRow({ deal, id, statusColor }) {
+  const [open, setOpen] = useState(false)
+  const a = dealAmounts(deal)
+  const parts = myParts(deal, id)
+  const take = parts.reduce((s, p) => s + p.amount, 0)
+  const repPool = Math.max(a.job - a.baseline, 0)
+  const color = statusColor(deal.status)
+  const isPaid = deal.status === PAID
+
+  return (
+    <div className="border-b border-white/5 last:border-0">
+      <button onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-white/[0.02] transition-colors">
+        <div className="min-w-0 flex-1">
+          <p className="text-[13px] font-semibold text-white/90 truncate">{deal.deal_name}</p>
+          <p className="text-[11px] text-white/40 mt-0.5">{parts.map(p => p.role).join(' · ') || '—'}</p>
+        </div>
+        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0"
+          style={{ color, border: `1px solid ${color}40` }}>{deal.status}</span>
+        <div className="text-right flex-shrink-0 w-[88px]">
+          <p className="text-[14px] font-bold" style={{ color: isPaid ? '#74b9ff' : '#fff' }}>{fmt(take)}</p>
+        </div>
+        <ChevronDown size={14} className={`text-white/30 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="px-4 pb-3 -mt-1">
+          <div className="rounded-lg p-3 text-[12px]" style={{ background: '#171717', border: '1px solid #262626' }}>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-white/40 mb-2">
+              <span>Job price <span className="text-white/70">{fmt(a.job)}</span></span>
+              <span>Baseline <span className="text-white/70">{fmt(a.baseline)}</span></span>
+              <span>Rep pool <span className="text-white/70">{fmt(repPool)}</span></span>
+            </div>
+            {parts.map(p => (
+              <div key={p.role} className="flex items-center justify-between py-1 border-t border-white/5">
+                <span className="text-white/55">{p.detail}</span>
+                <span className="font-semibold text-white">{fmt(p.amount)}</span>
+              </div>
+            ))}
+            {a.deduction > 0 && (
+              <div className="flex items-start gap-1.5 pt-2 mt-1 border-t border-white/5 text-[11px] text-red-400/90">
+                <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+                <span>Deal has a {fmt(a.deduction)} deduction{deal.deduction_note ? ` — ${deal.deduction_note}` : ''}.</span>
+              </div>
+            )}
+            <div className="flex items-center justify-between pt-2 mt-1 border-t border-white/10">
+              <span className="text-white/40">{isPaid ? 'Paid' : 'Expected'} {fmtDay(deal.pay_date) ? `· ${fmtDay(deal.pay_date)}` : '· pay date TBD'}</span>
+              <span className="text-[13px] font-bold text-teal">Your take {fmt(take)}</span>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function Commissions() {
   const { profile } = useAuth()
+  const { statusColor, statusLabels } = useSettings()
+  const id = profile?.id
   const [from,   setFrom]   = useState(getPresetRange('mtd').from)
   const [to,     setTo]     = useState(getPresetRange('mtd').to)
   const [preset, setPreset] = useState('mtd')
   const [allDeals, setAllDeals] = useState([])
-  const [allPayments, setAllPayments] = useState([])
   const [loading, setLoading] = useState(true)
 
   const periodLabel = presetLabel(rangeMatches(preset, from, to) ? preset : matchPreset(from, to))
 
   useEffect(() => {
     setLoading(true)
-    Promise.all([fetchDeals(), fetchPayments()]).then(([{ data: d }, { data: p }]) => {
-      setAllDeals(d || [])
-      setAllPayments(p || [])
-      setLoading(false)
-    })
+    fetchDeals().then(({ data }) => { setAllDeals(data || []); setLoading(false) })
   }, [])
 
-  const deals = useMemo(
-    () => allDeals.filter(d => inRange(d.sale_date, from, to)),
-    [allDeals, from, to]
+  // Every deal this user has any stake in (unfiltered — for the forward-looking
+  // "next payday", which shouldn't disappear when you filter a past period).
+  const allMine = useMemo(
+    () => allDeals.filter(d => [d.setter_id, d.closer_id, d.manager_id, d.director_id, d.vp_id].includes(id)),
+    [allDeals, id]
   )
 
-  const payments = useMemo(
-    () => allPayments.filter(p => p.user_id === profile?.id && inRange(p.pay_date, from, to)),
-    [allPayments, profile?.id, from, to]
+  // The period's deals (filtered by sale date) for the cards + grouped list.
+  const periodMine = useMemo(
+    () => allMine.filter(d => inRange(d.sale_date, from, to)),
+    [allMine, from, to]
   )
 
-  const myDeals = useMemo(() =>
-    (deals || []).filter(d =>
-      d.setter_id === profile?.id || d.closer_id === profile?.id ||
-      d.manager_id === profile?.id || d.director_id === profile?.id ||
-      d.vp_id === profile?.id
-    ), [deals, profile?.id])
+  const take = (d) => getUserCommission(d, id)
 
-  const totalEarned = useMemo(() =>
-    myDeals.reduce((sum, d) => {
-      const a = calcDealCommissions(d)
-      if (d.setter_id   === profile?.id) sum += a.setter
-      if (d.closer_id   === profile?.id && d.closer_id !== d.setter_id) sum += a.closer
-      if (d.manager_id  === profile?.id) sum += a.manager
-      if (d.director_id === profile?.id) sum += a.director
-      if (d.vp_id       === profile?.id) sum += a.vp
-      return sum
-    }, 0), [myDeals, profile?.id])
+  // ── Forward-looking next payday (global) ──────────────────────
+  const payday = useMemo(() => {
+    const today = todayISO()
+    const unpaid = allMine.filter(d => d.status !== PAID && d.status !== ISSUE && d.pay_date)
+    const byDate = {}
+    for (const d of unpaid) (byDate[d.pay_date] ||= []).push(d)
+    const dates = Object.keys(byDate).sort()
+    const nextDate = dates.find(dt => dt >= today) || null
+    const sum = (arr) => arr.reduce((s, d) => s + take(d), 0)
+    const overdue = dates.filter(dt => dt < today).reduce((s, dt) => s + sum(byDate[dt]), 0)
+    return {
+      nextDate,
+      nextTotal: nextDate ? sum(byDate[nextDate]) : 0,
+      nextCount: nextDate ? byDate[nextDate].length : 0,
+      overdue,
+    }
+  }, [allMine, id])
 
-  const totalPaid    = useMemo(() => (payments || []).reduce((s, p) => s + Number(p.amount || 0), 0), [payments])
-  const totalPending = Math.max(totalEarned - totalPaid, 0)
+  // ── Period totals ─────────────────────────────────────────────
+  const totals = useMemo(() => {
+    let earned = 0, paid = 0
+    for (const d of periodMine) {
+      const t = take(d)
+      earned += t
+      if (d.status === PAID) paid += t
+    }
+    return { earned, paid, upcoming: Math.max(earned - paid, 0) }
+  }, [periodMine, id])
+
+  // Per-status breakdown for the period (respects configurable statuses).
+  const byStatus = useMemo(() => {
+    const m = {}
+    for (const d of periodMine) {
+      const k = d.status || '—'
+      if (!m[k]) m[k] = { status: k, count: 0, amount: 0 }
+      m[k].count += 1; m[k].amount += take(d)
+    }
+    const order = statusLabels || []
+    return Object.values(m).sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status))
+  }, [periodMine, id, statusLabels])
+
+  // Period deals grouped by pay date (newest first; unscheduled last).
+  const groups = useMemo(() => {
+    const m = {}
+    for (const d of periodMine) {
+      const k = d.pay_date || 'unscheduled'
+      if (!m[k]) m[k] = { key: k, date: d.pay_date || null, deals: [], total: 0 }
+      m[k].deals.push(d); m[k].total += take(d)
+    }
+    return Object.values(m).sort((a, b) => {
+      if (!a.date) return 1
+      if (!b.date) return -1
+      return b.date.localeCompare(a.date)
+    })
+  }, [periodMine, id])
 
   return (
     <div style={{ background: '#1a1a1a', color: '#fff', minHeight: '100%' }}>
-
       {/* Header */}
       <div className="mb-4 space-y-3">
         <div>
-          <h1 className="text-lg md:text-xl font-bold text-white">Commissions</h1>
+          <h1 className="text-lg md:text-xl font-bold text-white">My Commissions</h1>
           <p className="text-[12px] text-white/40 mt-0.5">{profile?.name}</p>
         </div>
         <DateRangeFilter from={from} to={to} preset={preset}
           onChange={({ from, to, preset }) => { setFrom(from); setTo(to); setPreset(preset) }} />
       </div>
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-3 gap-2 md:gap-3 mb-4">
-        {[
-          { label: 'Earned',  value: fmt(totalEarned),  color: '#00b894' },
-          { label: 'Paid',    value: fmt(totalPaid),    color: '#74b9ff' },
-          { label: 'Pending', value: fmt(totalPending), color: '#fdcb6e' },
-        ].map(c => (
-          <div key={c.label} style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12, padding: '12px 10px' }}>
-            <div className="text-[9px] md:text-[11px] uppercase tracking-wider text-white/30 font-semibold mb-1.5">{c.label}</div>
-            <div className="text-[15px] md:text-2xl font-bold truncate" style={{ color: c.color }}>{c.value}</div>
-          </div>
-        ))}
+      {/* Next payday hero */}
+      <div className="rounded-2xl p-4 md:p-5 mb-4 flex items-center gap-4"
+        style={{ background: 'linear-gradient(135deg,#143d34,#1e1e1e)', border: '1px solid #1f5a4d' }}>
+        <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
+          style={{ background: '#00b89422', border: '1px solid #00b89440' }}>
+          <CalendarClock size={20} className="text-teal" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] uppercase tracking-widest text-white/40 font-semibold">Next payday</p>
+          {payday.nextDate ? (
+            <p className="text-[13px] text-white/70">
+              <span className="text-white font-semibold">{fmtDay(payday.nextDate)}</span>
+              {' · '}{payday.nextCount} deal{payday.nextCount === 1 ? '' : 's'}
+            </p>
+          ) : (
+            <p className="text-[13px] text-white/50">No scheduled paydays coming up.</p>
+          )}
+          {payday.overdue > 0 && (
+            <p className="text-[11px] text-amber-400/90 mt-0.5">{fmt(payday.overdue)} pending from past pay dates</p>
+          )}
+        </div>
+        <div className="text-right flex-shrink-0">
+          <p className="text-2xl md:text-3xl font-bold text-teal">{fmt(payday.nextTotal)}</p>
+        </div>
       </div>
 
-      {/* Deals list */}
+      {/* Period summary cards */}
+      <div className="grid grid-cols-3 gap-2 md:gap-3 mb-3">
+        <Card label="Earned"   value={fmt(totals.earned)}   color="#00b894" sub={periodLabel} />
+        <Card label="Paid"     value={fmt(totals.paid)}     color="#74b9ff" sub="status = Paid" />
+        <Card label="Upcoming" value={fmt(totals.upcoming)} color="#fdcb6e" sub="not yet paid" />
+      </div>
+
+      {/* Per-status strip */}
+      {byStatus.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-4">
+          {byStatus.map(s => {
+            const c = statusColor(s.status)
+            return (
+              <div key={s.status} className="flex items-center gap-2 px-3 py-1.5 rounded-lg"
+                style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: c }} />
+                <span className="text-[11px] text-white/60">{s.status}</span>
+                <span className="text-[11px] font-semibold text-white">{fmt(s.amount)}</span>
+                <span className="text-[10px] text-white/30">×{s.count}</span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Deals grouped by payday */}
       <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12, overflow: 'hidden' }}>
-        <div className="px-4 py-3 border-b border-white/5">
-          <span className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">{periodLabel}</span>
+        <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
+          <span className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">Deals · {periodLabel}</span>
+          <span className="text-[11px] text-white/30">tap a deal for the breakdown</span>
         </div>
 
         {loading ? (
-          <div className="px-4 py-6 text-white/30 text-sm">Loading…</div>
-        ) : myDeals.length === 0 ? (
-          <div className="px-4 py-6 text-white/30 text-sm">No deals in this period.</div>
+          <div className="px-4 py-8 text-white/30 text-sm text-center">Loading…</div>
+        ) : groups.length === 0 ? (
+          <div className="px-4 py-8 text-white/30 text-sm text-center">No deals in this period.</div>
         ) : (
-          <>
-            {/* Desktop table */}
-            <table className="w-full text-[13px] hidden md:table">
-              <thead>
-                <tr className="border-b border-white/5">
-                  {['Deal', 'Role', 'Status', 'Amount'].map((h, i) => (
-                    <th key={h} className={`px-4 py-2.5 text-white/30 font-semibold text-[11px] uppercase tracking-wider ${i === 3 ? 'text-right' : 'text-left'}`}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {myDeals.map(d => {
-                  const a = calcDealCommissions(d)
-                  const roles = []
-                  let myAmt = 0
-                  if (d.setter_id   === profile?.id) { roles.push('Setter');   myAmt += a.setter }
-                  if (d.closer_id   === profile?.id && d.closer_id !== d.setter_id) { roles.push('Closer'); myAmt += a.closer }
-                  if (d.manager_id  === profile?.id) { roles.push('Manager');  myAmt += a.manager }
-                  if (d.director_id === profile?.id) { roles.push('Director'); myAmt += a.director }
-                  if (d.vp_id       === profile?.id) { roles.push('VP');       myAmt += a.vp }
-                  return (
-                    <tr key={d.id} className="border-b border-white/5 last:border-0 hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 text-white/80">{d.deal_name}</td>
-                      <td className="px-4 py-3 text-white/40">{roles.join(', ')}</td>
-                      <td className="px-4 py-3">
-                        <span className="text-[11px] font-semibold px-2 py-0.5 rounded" style={{
-                          background: d.status === 'Paid' ? '#00b89422' : '#fdcb6e22',
-                          color:      d.status === 'Paid' ? '#00b894'   : '#fdcb6e',
-                        }}>{d.status}</span>
-                      </td>
-                      <td className="px-4 py-3 text-right font-semibold text-white">{fmt(myAmt)}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-
-            {/* Mobile cards */}
-            <div className="md:hidden divide-y divide-white/5">
-              {myDeals.map(d => {
-                const a = calcDealCommissions(d)
-                const roles = []
-                let myAmt = 0
-                if (d.setter_id   === profile?.id) { roles.push('Setter');   myAmt += a.setter }
-                if (d.closer_id   === profile?.id && d.closer_id !== d.setter_id) { roles.push('Closer'); myAmt += a.closer }
-                if (d.manager_id  === profile?.id) { roles.push('Manager');  myAmt += a.manager }
-                if (d.director_id === profile?.id) { roles.push('Director'); myAmt += a.director }
-                if (d.vp_id       === profile?.id) { roles.push('VP');       myAmt += a.vp }
-                return (
-                  <div key={d.id} className="px-4 py-3 flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-[13px] font-semibold text-white/90 truncate">{d.deal_name}</p>
-                      <p className="text-[11px] text-white/40 mt-0.5">{roles.join(', ')}</p>
-                      <span className="inline-block mt-1 text-[10px] font-semibold px-2 py-0.5 rounded" style={{
-                        background: d.status === 'Paid' ? '#00b89422' : '#fdcb6e22',
-                        color:      d.status === 'Paid' ? '#00b894'   : '#fdcb6e',
-                      }}>{d.status}</span>
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      <p className="text-[15px] font-bold text-white">{fmt(myAmt)}</p>
-                    </div>
-                  </div>
-                )
-              })}
+          groups.map(g => (
+            <div key={g.key}>
+              <div className="flex items-center justify-between px-4 py-2 bg-white/[0.02] border-b border-white/5">
+                <span className="text-[11px] font-semibold text-white/50">
+                  {g.date ? `Pays ${fmtDay(g.date)}` : 'Pay date TBD'}
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-white/30">{g.deals.length} deal{g.deals.length === 1 ? '' : 's'}</span>
+                  <span className="text-[12px] font-bold text-teal">{fmt(g.total)}</span>
+                </div>
+              </div>
+              {g.deals.map(d => <DealRow key={d.id} deal={d} id={id} statusColor={statusColor} />)}
             </div>
-          </>
+          ))
         )}
       </div>
     </div>
