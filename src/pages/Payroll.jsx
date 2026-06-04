@@ -36,32 +36,17 @@ function Card({ label, value, color = '#fff', sub }) {
   )
 }
 
-function PayeeRow({ payee }) {
-  const [open, setOpen] = useState(false)
-  return (
-    <div className="border-b border-white/5 last:border-0">
-      <button onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-white/[0.02] transition-colors">
-        <div className="min-w-0 flex-1">
-          <p className="text-[13px] font-semibold text-white/90 truncate">{payee.name}</p>
-          <p className="text-[11px] text-white/40">{payee.lines.length} line{payee.lines.length === 1 ? '' : 's'}</p>
-        </div>
-        <span className="text-[15px] font-bold text-teal">{fmt(payee.total)}</span>
-        <ChevronDown size={14} className={`text-white/30 transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open && (
-        <div className="px-4 pb-3 space-y-1">
-          {payee.lines.map((l, i) => (
-            <div key={i} className="flex items-center justify-between text-[12px] rounded-lg px-3 py-1.5"
-              style={{ background: '#171717', border: '1px solid #262626' }}>
-              <span className="text-white/60 truncate mr-2">{l.deal} <span className="text-white/30">· {l.role}</span></span>
-              <span className="font-semibold text-white whitespace-nowrap">{fmt(l.amount)}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
+// Per-deal payout breakdown — who earns what on a single deal.
+function dealPayouts(d) {
+  const a = dealAmounts(d)
+  const out = []
+  const push = (person, role, amount) => { if (person && person.id && amount > 0) out.push({ id: person.id, name: person.name, role, amount }) }
+  push(d.setter, 'Setter', a.setter)
+  if (d.closer_id !== d.setter_id) push(d.closer, 'Closer', a.closer)
+  push(d.manager, 'Manager', a.manager)
+  push(d.director, 'Director', a.director)
+  push(d.vp, 'VP', a.vp)
+  return out
 }
 
 export default function Payroll() {
@@ -72,6 +57,7 @@ export default function Payroll() {
   const [view, setView]       = useState(null)        // a pay_date string, or 'overdue'
   const [editDeal, setEditDeal] = useState(null)
   const [modal, setModal]     = useState(false)
+  const [showPayees, setShowPayees] = useState(true)
   const today = todayISO()
 
   useEffect(() => { load() }, [])
@@ -258,21 +244,43 @@ export default function Payroll() {
             </div>
           )}
 
-          {/* Payroll sheet — by person */}
-          <p className="text-[11px] uppercase tracking-wider text-white/30 font-semibold mb-2">Payroll sheet · by person</p>
-          <div className="mb-5" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12, overflow: 'hidden' }}>
-            {payees.length === 0
-              ? <div className="px-4 py-6 text-white/30 text-sm text-center">No payouts for this run.</div>
-              : payees.map(p => <PayeeRow key={p.id} payee={p} />)}
-          </div>
+          {/* Payee totals — compact summary of each person's lump sum for the run */}
+          {payees.length > 0 && (
+            <div className="mb-4 rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+              <button onClick={() => setShowPayees(s => !s)}
+                className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-white/[0.02] transition-colors">
+                <span className="text-[11px] uppercase tracking-wider text-white/40 font-semibold">
+                  Payee totals · {payees.length} {payees.length === 1 ? 'person' : 'people'}
+                </span>
+                <span className="flex items-center gap-2">
+                  <span className="text-[13px] font-bold text-teal">{fmt(totals.total)}</span>
+                  <ChevronDown size={14} className={`text-white/30 transition-transform ${showPayees ? 'rotate-180' : ''}`} />
+                </span>
+              </button>
+              {showPayees && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 px-4 pb-3 pt-1">
+                  {payees.map(p => (
+                    <div key={p.id} className="flex items-center justify-between py-1 border-t border-white/5">
+                      <span className="text-[13px] text-white/80 truncate mr-2">{p.name}</span>
+                      <span className="text-[13px] font-semibold text-white whitespace-nowrap">{fmt(p.total)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
-          {/* Deal review — by deal */}
-          <p className="text-[11px] uppercase tracking-wider text-white/30 font-semibold mb-2">Deal review</p>
+          {/* Deals in this run — each card shows its own payouts inline */}
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">Deals in this run</p>
+            <span className="text-[11px] text-white/30">{runDeals.length} deal{runDeals.length === 1 ? '' : 's'}</span>
+          </div>
           <div className="space-y-2">
             {runDeals.map(d => {
               const a = dealAmounts(d)
               const color = statusColor(d.status)
               const isPaid = d.status === PAID
+              const payouts = dealPayouts(d)
               return (
                 <div key={d.id} className="rounded-xl p-3 md:p-4" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
                   <div className="flex items-start justify-between gap-3">
@@ -285,10 +293,22 @@ export default function Payroll() {
                   </div>
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 mt-3 text-[12px]">
-                    <div><p className="text-white/30 text-[10px] uppercase">Setter</p><p className="text-white/80 truncate">{d.setter?.name ?? '—'}</p></div>
-                    <div><p className="text-white/30 text-[10px] uppercase">Closer</p><p className="text-white/80 truncate">{d.closer?.name ?? '—'}</p></div>
                     <div><p className="text-white/30 text-[10px] uppercase">Baseline</p><p className="text-white/80">{fmt(a.baseline)}</p></div>
                     <div><p className="text-white/30 text-[10px] uppercase">Job price</p><p className="text-white/80">{fmt(a.job)}</p></div>
+                    <div><p className="text-white/30 text-[10px] uppercase">Rep pool</p><p className="text-white/80">{fmt(Math.max(a.job - a.baseline, 0))}</p></div>
+                    <div><p className="text-white/30 text-[10px] uppercase">Pay date</p><p className="text-white/80">{fmtDay(d.pay_date) || 'TBD'}</p></div>
+                  </div>
+
+                  {/* Payouts on this deal — the rep/override breakdown, merged in */}
+                  <div className="mt-3 rounded-lg overflow-hidden" style={{ background: '#171717', border: '1px solid #262626' }}>
+                    {payouts.length === 0 ? (
+                      <div className="px-3 py-2 text-[12px] text-white/30">No payouts on this deal.</div>
+                    ) : payouts.map((p, i) => (
+                      <div key={i} className="flex items-center justify-between px-3 py-1.5 text-[12px] border-b border-white/5 last:border-0">
+                        <span className="text-white/70 truncate mr-2">{p.name} <span className="text-white/30">· {p.role}</span></span>
+                        <span className="font-semibold text-white whitespace-nowrap">{fmt(p.amount)}</span>
+                      </div>
+                    ))}
                   </div>
 
                   {a.deduction > 0 && (
