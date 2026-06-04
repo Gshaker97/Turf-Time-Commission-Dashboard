@@ -1,0 +1,19 @@
+{
+  "name": "Turf Time Dashboard",
+  "short_name": "Turf Time",
+  "description": "Turf Time sales pipeline & commission tracker",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1a1a1a",
+  "theme_color": "#1a1a1a",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

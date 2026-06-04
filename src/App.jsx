@@ -1,15 +1,19 @@
+import { lazy } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { SettingsProvider } from './contexts/SettingsContext'
 import Layout from './components/Layout'
 import Login from './pages/Login'
-import Deals from './pages/Deals'
-import Dashboard from './pages/Dashboard'
-import Commissions from './pages/Commissions'
-import Team from './pages/Team'
-import Admin from './pages/Admin'
-import NewDeal from './pages/NewDeal'
-import Home from './pages/Home'
+
+// Authenticated pages are code-split — each loads on demand (and the heavy
+// charting lib only ships with the Dashboard chunk), shrinking the initial load.
+const Deals       = lazy(() => import('./pages/Deals'))
+const Dashboard   = lazy(() => import('./pages/Dashboard'))
+const Commissions = lazy(() => import('./pages/Commissions'))
+const Team        = lazy(() => import('./pages/Team'))
+const Admin       = lazy(() => import('./pages/Admin'))
+const NewDeal     = lazy(() => import('./pages/NewDeal'))
+const Home        = lazy(() => import('./pages/Home'))
 
 function Spinner() {
   return (
