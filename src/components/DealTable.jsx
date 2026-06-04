@@ -135,21 +135,37 @@ export function StatusBadge({ status, color = '#94a3b8' }) {
   )
 }
 
-// Inline-editable text cell backed by a settings list (office, payment method).
-// Reads as plain text to match the other cells; an invisible <select> overlay
-// handles the edit. Uncontrolled (defaultValue + key) so the native control
-// keeps the picked value and the write fires reliably on change — mirroring the
-// DateField pattern. The visible text is driven by the `value` prop, which
-// refreshes after the row reloads.
-function InlineSelectCell({ value, options, field, canEdit, dealId, onUpdate }) {
-  if (!canEdit) return <span className="text-[12px] text-white/70 whitespace-nowrap">{value || '—'}</span>
-  return (
-    <div className="relative inline-block">
-      <span className={`text-[12px] whitespace-nowrap cursor-pointer transition-colors ${
-        value ? 'text-white/70 hover:text-white' : 'text-white/30 hover:text-white/60'
-      }`}>
+// Office badge colors — drawn from the app's existing accent palette so they
+// fit the rest of the UI. Phoenix = warm orange, Tucson = violet. Any other
+// office falls back to the neutral slate used elsewhere for unset badges.
+const OFFICE_COLORS = {
+  Phoenix: '#fb923c',
+  Tucson:  '#a78bfa',
+}
+const officeColor = (name) => OFFICE_COLORS[name] || '#94a3b8'
+
+// Inline-editable cell backed by a settings list (office, payment method).
+// An invisible <select> overlay handles the edit. Uncontrolled (defaultValue +
+// key) so the native control keeps the picked value and the write fires
+// reliably on change — mirroring the DateField pattern. The visible value is
+// driven by the `value` prop, which refreshes after the row reloads. Pass
+// `colorFor` to render the value as a colored badge instead of plain text.
+function InlineSelectCell({ value, options, field, canEdit, dealId, onUpdate, colorFor }) {
+  const display = colorFor
+    ? (value
+        ? <StatusBadge status={value} color={colorFor(value)} />
+        : <span className="text-[12px] text-white/30">—</span>)
+    : <span className={`text-[12px] whitespace-nowrap transition-colors ${
+        value ? 'text-white/70' : 'text-white/30'
+      } ${canEdit ? 'hover:text-white cursor-pointer' : ''}`}>
         {value || '—'}
       </span>
+
+  if (!canEdit) return display
+
+  return (
+    <div className="relative inline-block cursor-pointer">
+      {display}
       <select
         key={value ?? ''}
         defaultValue={value ?? ''}
@@ -302,7 +318,7 @@ export default function DealTable({
                   {deal.project_id && <p className="text-[11px] text-white/40 truncate max-w-[260px]">{deal.project_id}</p>}
                 </td>
                 <td className="px-3 py-3">
-                  <InlineSelectCell value={deal.office} options={offices}
+                  <InlineSelectCell value={deal.office} options={offices} colorFor={officeColor}
                     field="office" canEdit={canEdit} dealId={deal.id} onUpdate={onUpdate} />
                 </td>
                 <td className="px-3 py-3">
