@@ -21,9 +21,14 @@ export function dealAmounts(deal) {
   const split    = deal.setter_split_pct == null ? 0.5 : num(deal.setter_split_pct)
   const deduction = num(deal.deduction_amount)
 
-  // Stored amounts win when present (sheet sync / manual entry), else compute.
-  const setter   = deal.setter_amount   != null ? num(deal.setter_amount)   : repPool * (solo ? 1 : split)
-  const closer   = deal.closer_amount   != null ? num(deal.closer_amount)   : (solo ? 0 : repPool * (1 - split))
+  // Stored amounts win when present (sheet sync / manual entry — already NET of
+  // deductions). Otherwise compute the split and net the deduction off whoever
+  // absorbs it: the setter on a solo deal, the closer on a split deal (mirrors
+  // the New Deal entry form). Overrides are never reduced by a deduction.
+  const rawSetter = repPool * (solo ? 1 : split)
+  const rawCloser = solo ? 0 : repPool * (1 - split)
+  const setter   = deal.setter_amount   != null ? num(deal.setter_amount)   : Math.max(rawSetter - (solo ? deduction : 0), 0)
+  const closer   = deal.closer_amount   != null ? num(deal.closer_amount)   : Math.max(rawCloser - (solo ? 0 : deduction), 0)
   const manager  = deal.manager_amount  != null ? num(deal.manager_amount)  : baseline * num(deal.manager_override_pct)
   const director = deal.director_amount != null ? num(deal.director_amount) : baseline * num(deal.director_override_pct)
   const vp       = deal.vp_amount       != null ? num(deal.vp_amount)       : baseline * num(deal.vp_override_pct)
