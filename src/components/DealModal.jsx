@@ -309,7 +309,7 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
                   </div>
                   <div className="sm:w-28">
                     <Field label="Override %">
-                      <Inp type="number" min="0" max="100" step="0.1"
+                      <Inp type="number" min="0" max="100" step="0.01"
                         value={form[pctKey]} onChange={e => set(pctKey, e.target.value)}
                         placeholder="0" disabled={!form[idKey]} />
                     </Field>
