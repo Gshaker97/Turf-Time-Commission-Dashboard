@@ -1,8 +1,125 @@
-import { useState } from 'react'
-import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2 } from 'lucide-react'
+import { useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
+import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check } from 'lucide-react'
 import { calcDealCommissions, fmt, fmtPct } from '../utils/commission'
 import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
+
+// New-deal "is it clean?" checklist. Checked items are stored as an array of
+// these keys in deals.checklist (jsonb).
+const CHECKLIST_ITEMS = [
+  { key: 'contract_signed',  label: 'Contract Signed' },
+  { key: 'detailed_drawing', label: 'Detailed Drawing' },
+  { key: 'payment_method',   label: 'Payment Method' },
+  { key: 'scheduled',        label: 'Scheduled' },
+  { key: 'no_issues',        label: 'No Issues' },
+]
+
+// Compact indicator (progress ring → green check) that opens an inline popover
+// of checkboxes. Saves each toggle straight to the deal — no full edit needed.
+function DealChecklist({ deal, canEdit, onUpdate }) {
+  const [open, setOpen] = useState(false)
+  const [pos, setPos]   = useState({ top: 0, left: 0 })
+  const btnRef = useRef(null)
+  const popRef = useRef(null)
+
+  const checked    = Array.isArray(deal.checklist) ? deal.checklist : []
+  const checkedSet = new Set(checked)
+  const total = CHECKLIST_ITEMS.length
+  const done  = CHECKLIST_ITEMS.filter(i => checkedSet.has(i.key)).length
+  const complete = done === total
+  const pct = total ? done / total : 0
+  const R = 9, C = 2 * Math.PI * R
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e) => {
+      if (btnRef.current?.contains(e.target) || popRef.current?.contains(e.target)) return
+      setOpen(false)
+    }
+    const onScroll = () => setOpen(false)
+    document.addEventListener('mousedown', onDown)
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onScroll)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onScroll)
+    }
+  }, [open])
+
+  const indicator = complete ? (
+    <span className="w-[22px] h-[22px] rounded-full flex items-center justify-center flex-shrink-0" style={{ background: '#00b894' }}>
+      <Check size={13} strokeWidth={3} className="text-dark" />
+    </span>
+  ) : (
+    <span className="relative w-[22px] h-[22px] inline-flex items-center justify-center flex-shrink-0">
+      <svg width="22" height="22" viewBox="0 0 22 22">
+        <circle cx="11" cy="11" r={R} fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="2.5" />
+        {done > 0 && (
+          <circle cx="11" cy="11" r={R} fill="none" stroke="#2dd4bf" strokeWidth="2.5" strokeLinecap="round"
+            strokeDasharray={C} strokeDashoffset={(1 - pct) * C} transform="rotate(-90 11 11)" />
+        )}
+      </svg>
+      {done > 0 && <span className="absolute text-[8px] font-bold text-white leading-none">{done}</span>}
+    </span>
+  )
+
+  if (!canEdit) return <span title={`Checklist ${done}/${total}`} className="inline-flex">{indicator}</span>
+
+  function openMenu() {
+    if (!open) {
+      const r = btnRef.current.getBoundingClientRect()
+      const width = 236
+      let left = r.left
+      if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8)
+      setPos({ top: r.bottom + 6, left })
+    }
+    setOpen(o => !o)
+  }
+  const toggle = (key) => onUpdate(deal.id, { checklist: checkedSet.has(key) ? checked.filter(k => k !== key) : [...checked, key] })
+  const setAll = (all) => onUpdate(deal.id, { checklist: all ? CHECKLIST_ITEMS.map(i => i.key) : [] })
+
+  return (
+    <>
+      <button ref={btnRef} type="button" onClick={openMenu}
+        title={`New-deal checklist · ${done}/${total}`}
+        className="flex-shrink-0 hover:opacity-80 transition-opacity">
+        {indicator}
+      </button>
+      {open && createPortal(
+        <div ref={popRef} className="fixed z-[60] w-[236px] rounded-xl shadow-2xl p-1.5"
+          style={{ top: pos.top, left: pos.left, background: '#242424', border: '1px solid #3a3a3a' }}>
+          <div className="px-2 py-1.5 flex items-center justify-between">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-white/40">New-deal checklist</span>
+            <span className="text-[11px] font-semibold" style={{ color: complete ? '#00b894' : '#fff' }}>{done}/{total}</span>
+          </div>
+          <div className="h-1 rounded-full mx-2 mb-1.5 overflow-hidden" style={{ background: '#ffffff15' }}>
+            <div className="h-full rounded-full transition-all" style={{ width: `${pct * 100}%`, background: complete ? '#00b894' : '#2dd4bf' }} />
+          </div>
+          {CHECKLIST_ITEMS.map(item => {
+            const on = checkedSet.has(item.key)
+            return (
+              <button key={item.key} type="button" onClick={() => toggle(item.key)}
+                className="w-full flex items-center gap-2.5 px-2 py-2 rounded-lg text-left hover:bg-white/[0.04] transition-colors">
+                <span className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0"
+                  style={on ? { background: '#00b894' } : { border: '1.5px solid rgba(255,255,255,0.3)' }}>
+                  {on && <Check size={11} strokeWidth={3} className="text-dark" />}
+                </span>
+                <span className={`text-[12px] ${on ? 'text-white/45 line-through' : 'text-white/85'}`}>{item.label}</span>
+              </button>
+            )
+          })}
+          <div className="flex gap-1 px-1 pt-1 mt-1 border-t border-white/5">
+            <button type="button" onClick={() => setAll(true)} className="flex-1 text-[11px] py-1.5 rounded-lg text-teal hover:bg-teal/10 transition-colors">Mark all</button>
+            <button type="button" onClick={() => setAll(false)} className="flex-1 text-[11px] py-1.5 rounded-lg text-white/40 hover:bg-white/5 transition-colors">Clear</button>
+          </div>
+        </div>,
+        document.body
+      )}
+    </>
+  )
+}
 
 // Consolidated columns — related fields are stacked inside one cell so the
 // whole table fits on screen without horizontal scrolling.
@@ -222,7 +339,10 @@ function DealCard({ deal, canEdit, onEdit, onDelete, onUpdate, statusColor, stat
     <div className="p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[14px] font-semibold text-white truncate">{deal.deal_name}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-[14px] font-semibold text-white truncate">{deal.deal_name}</p>
+            <DealChecklist deal={deal} canEdit={canEdit} onUpdate={onUpdate} />
+          </div>
           <p className="text-[11px] text-white/40 truncate">{subline(deal)}</p>
         </div>
         <StatusCell status={deal.status} color={statusColor(deal.status)} options={statusLabels}
@@ -314,7 +434,10 @@ export default function DealTable({
                 style={{ background: isEven ? '#242424' : '#262626' }}
                 className="hover:bg-white/[0.03] transition-colors align-top">
                 <td className="px-3 py-3">
-                  <p className="text-[13px] font-semibold text-white truncate max-w-[260px]">{deal.deal_name}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-[13px] font-semibold text-white truncate max-w-[230px]">{deal.deal_name}</p>
+                    <DealChecklist deal={deal} canEdit={canEdit} onUpdate={onUpdate} />
+                  </div>
                   {deal.project_id && <p className="text-[11px] text-white/40 truncate max-w-[260px]">{deal.project_id}</p>}
                 </td>
                 <td className="px-3 py-3">
