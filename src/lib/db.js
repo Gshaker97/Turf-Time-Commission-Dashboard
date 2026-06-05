@@ -11,6 +11,7 @@ import {
   DEMO_GOALS,
   DEMO_WEEKLY_STATS,
   DEMO_SETTINGS,
+  DEMO_COMPETITIONS,
 } from './demoData'
 
 // Local mutable copies for demo CRUD
@@ -20,6 +21,7 @@ let _payments    = DEMO_PAYMENTS.map(p => ({ ...p }))
 let _goals       = { ...DEMO_GOALS } // keyed "YYYY-M" -> baseline_target
 let _weeklyStats = DEMO_WEEKLY_STATS.map(s => ({ ...s }))
 let _settings    = JSON.parse(JSON.stringify(DEMO_SETTINGS))
+let _competitions = (DEMO_COMPETITIONS || []).map(c => ({ ...c }))
 
 const goalKey = (y, m) => `${y}-${m}`
 
@@ -109,6 +111,40 @@ export async function deleteDeal(id) {
   // .select() returns the rows actually deleted — so the caller can tell when
   // RLS silently blocked the delete (0 rows, no error).
   return supabase.from('deals').delete().eq('id', id).select('id')
+}
+
+// ── Competitions ──────────────────────────────────────────────
+export async function fetchCompetitions() {
+  if (DEMO_MODE) return { data: _competitions, error: null }
+  const res = await supabase.from('competitions').select('*').order('created_at', { ascending: false })
+  // Table may not exist yet (before 009 is run) — degrade gracefully.
+  if (res.error) return { data: [], error: res.error }
+  return res
+}
+
+export async function insertCompetition(data, profileId) {
+  if (DEMO_MODE) {
+    const c = { ...data, id: 'comp-' + Math.random().toString(36).slice(2, 9), created_by: profileId, created_at: new Date().toISOString() }
+    _competitions = [c, ..._competitions]
+    return { data: [c], error: null }
+  }
+  return supabase.from('competitions').insert([{ ...data, created_by: profileId }]).select()
+}
+
+export async function updateCompetition(id, data) {
+  if (DEMO_MODE) {
+    _competitions = _competitions.map(c => c.id === id ? { ...c, ...data } : c)
+    return { error: null }
+  }
+  return supabase.from('competitions').update(data).eq('id', id)
+}
+
+export async function deleteCompetition(id) {
+  if (DEMO_MODE) {
+    _competitions = _competitions.filter(c => c.id !== id)
+    return { error: null, data: [{ id }] }
+  }
+  return supabase.from('competitions').delete().eq('id', id).select('id')
 }
 
 // ── Users / Profiles ──────────────────────────────────────────

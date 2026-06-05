@@ -1,6 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { fetchDeals, fetchGoal, saveGoal } from "../lib/db";
+import { Link } from "react-router-dom";
+import { Trophy } from "lucide-react";
+import { fetchDeals, fetchGoal, saveGoal, fetchCompetitions, fetchUsers } from "../lib/db";
 import { rollup } from "../utils/commission";
+import { useAuth } from "../contexts/AuthContext";
+import { competitionStandings, competitionStatus, fmtScore } from "../utils/competition";
 
 const money = (n) => "$" + Math.round(Number(n) || 0).toLocaleString("en-US");
 
@@ -21,9 +25,12 @@ function getMonths(n = 12) {
 }
 
 export default function Home() {
+  const { profile } = useAuth();
   const months = useMemo(() => getMonths(12), []);
   const [selected, setSelected] = useState(0);
   const [allDeals, setAllDeals] = useState([]);
+  const [comps, setComps] = useState([]);
+  const [users, setUsers] = useState([]);
   const [target, setTarget] = useState(0);
   const [goalInput, setGoalInput] = useState("");
   const [loading, setLoading] = useState(true);
@@ -31,10 +38,25 @@ export default function Home() {
 
   const mr = months[selected];
 
-  // Load all deals once
+  // Load all deals once (+ competitions/users for the active-comps card)
   useEffect(() => {
     fetchDeals().then(({ data }) => { setAllDeals(data ?? []); });
+    Promise.all([fetchCompetitions(), fetchUsers()]).then(([{ data: c }, { data: u }]) => {
+      setComps(c || []); setUsers(u || []);
+    });
   }, []);
+
+  const activeComps = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return comps
+      .filter(c => competitionStatus(c, today) === 'active')
+      .slice(0, 4)
+      .map(c => {
+        const standings = competitionStandings(c, allDeals, users);
+        const mine = standings.find(e => e.id === profile?.id || (c.type === 'team' && e.id === profile?.manager_id));
+        return { comp: c, leader: standings[0], count: standings.length, mine };
+      });
+  }, [comps, allDeals, users, profile]);
 
   // Load the goal whenever the selected month changes
   useEffect(() => {
@@ -127,6 +149,34 @@ export default function Home() {
               </>
             )}
           </div>
+
+          {/* Active competitions */}
+          {activeComps.length > 0 && (
+            <div className="rounded-xl p-4 md:p-5 mt-3" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-[10px] uppercase tracking-wider text-white/30 font-semibold flex items-center gap-1.5">
+                  <Trophy size={13} className="text-teal" /> Active competitions
+                </p>
+                <Link to="/competitions" className="text-[11px] text-teal hover:underline">View all</Link>
+              </div>
+              <div className="space-y-2">
+                {activeComps.map(({ comp, leader, count, mine }) => (
+                  <Link key={comp.id} to="/competitions"
+                    className="block rounded-lg px-3 py-2.5 hover:bg-white/[0.03] transition-colors"
+                    style={{ background: '#171717', border: '1px solid #262626' }}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[13px] font-semibold text-white truncate">{comp.name}</span>
+                      {mine && <span className="text-[11px] font-bold text-teal whitespace-nowrap">#{mine.rank} of {count}</span>}
+                    </div>
+                    <div className="text-[11px] text-white/40 mt-0.5 truncate">
+                      {leader ? <>🏆 {leader.name} — {fmtScore(leader.score, comp.metric)}</> : 'No entries yet'}
+                      {mine && <span className="text-white/30"> · you: {fmtScore(mine.score, comp.metric)}</span>}
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>

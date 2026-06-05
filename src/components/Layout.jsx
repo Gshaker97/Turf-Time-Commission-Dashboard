@@ -3,7 +3,7 @@ import { NavLink, Outlet } from 'react-router-dom'
 import {
   LayoutDashboard, BarChart2, DollarSign,
   Users2, ShieldCheck, Eye, X,
-  Home, PlusCircle, Wallet,
+  Home, PlusCircle, Wallet, Trophy,
 } from 'lucide-react'
 import NavBar from './NavBar'
 import { useAuth } from '../contexts/AuthContext'
@@ -13,6 +13,7 @@ const NAV = [
   { to: '/dashboard',   icon: LayoutDashboard, label: 'Dashboard',   short: 'Stats',   roles: ['rep','manager','director','vp','admin'] },
   { to: '/deals',       icon: BarChart2,       label: 'Deals',       short: 'Deals',   roles: ['rep','manager','director','vp','admin'] },
   { to: '/commissions', icon: DollarSign,      label: 'Commissions', short: 'Pay',     roles: ['rep','manager','director','vp','admin'] },
+  { to: '/competitions',icon: Trophy,          label: 'Competitions',short: 'Comps',   roles: ['rep','manager','director','vp','admin'] },
   { to: '/team',        icon: Users2,          label: 'Team',        short: 'Team',    roles: ['rep','manager','director','vp','admin'] },
   { to: '/payroll',     icon: Wallet,          label: 'Payroll',     short: 'Payroll', roles: ['vp','admin'] },
   { to: '/new-deal',    icon: PlusCircle,      label: 'New Deal',    short: 'New',     roles: ['vp','admin'] },

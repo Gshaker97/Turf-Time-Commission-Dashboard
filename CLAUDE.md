@@ -68,7 +68,9 @@ setup + deploy steps.
   `install_date` (Friday following the install week; only fills rows where
   `pay_date` is null, so it never clobbers a hand-set value); `008` adds the
   `deals.checklist` jsonb column backing the inline new-deal checklist on the
-  Deals page. Do not re-run `001`/`002` against a populated database.
+  Deals page; `009` adds the `competitions` table (sales contests; standings
+  computed on the frontend, VP/admin-managed). Do not re-run `001`/`002`
+  against a populated database.
 
 ## Security notes (already fixed — keep them fixed)
 
