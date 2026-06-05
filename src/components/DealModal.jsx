@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { X } from 'lucide-react'
+import { useState, useEffect, useMemo } from 'react'
+import { X, AlertTriangle } from 'lucide-react'
 import { calcDealCommissions, fmt, fmtPct } from '../utils/commission'
 import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
@@ -37,10 +37,18 @@ const overrideDefaults = (office) => ({
   vp_override_pct: dirVpDefault(office),
 })
 
-export default function DealModal({ deal, users = [], onSave, onClose }) {
+export default function DealModal({ deal, users = [], existingDeals = [], onSave, onClose }) {
   const { statusLabels, offices, paymentMethods } = useSettings()
   const [form, setForm] = useState(BLANK)
   const [saving, setSaving] = useState(false)
+
+  // Warn about a likely duplicate when creating a new deal whose name already
+  // exists (case-insensitive). Editing an existing deal never flags.
+  const duplicate = useMemo(() => {
+    if (deal || !form.deal_name?.trim()) return null
+    const n = form.deal_name.trim().toLowerCase()
+    return existingDeals.find(d => (d.deal_name || '').trim().toLowerCase() === n) || null
+  }, [deal, form.deal_name, existingDeals])
 
   useEffect(() => {
     if (deal) {
@@ -101,6 +109,7 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
 
   async function handleSubmit(e) {
     e.preventDefault()
+    if (duplicate && !window.confirm(`A deal named "${duplicate.deal_name}" already exists${duplicate.sale_date ? ` (sold ${duplicate.sale_date})` : ''}. Create this one anyway?`)) return
     setSaving(true)
     await onSave({
       ...form,
@@ -162,6 +171,11 @@ export default function DealModal({ deal, users = [], onSave, onClose }) {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4">
             <Field label="Deal Name *">
               <Inp required value={form.deal_name} onChange={e => set('deal_name', e.target.value)} placeholder="Smith Residence" />
+              {duplicate && (
+                <p className="text-[11px] text-amber-400 mt-1 flex items-center gap-1">
+                  <AlertTriangle size={11} className="flex-shrink-0" /> A deal named “{duplicate.deal_name}” already exists{duplicate.sale_date ? ` (${duplicate.sale_date})` : ''}.
+                </p>
+              )}
             </Field>
             <Field label="Status">
               <Sel value={form.status} onChange={e => set('status', e.target.value)}>

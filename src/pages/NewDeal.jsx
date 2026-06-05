@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { useSettings } from "../contexts/SettingsContext";
-import { fetchUsers, insertDeal } from "../lib/db";
+import { fetchUsers, fetchDeals, insertDeal } from "../lib/db";
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const money = (n) => "$" + (Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -50,6 +50,7 @@ export default function NewDeal() {
   const { profile } = useAuth();
   const { statusLabels, offices, paymentMethods } = useSettings();
   const [profiles, setProfiles] = useState([]);
+  const [existingDeals, setExistingDeals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
@@ -91,7 +92,14 @@ export default function NewDeal() {
       setProfiles((data || []).filter(u => u.active !== false));
       setLoading(false);
     });
+    fetchDeals().then(({ data }) => setExistingDeals(data || []));
   }, []);
+
+  const duplicate = useMemo(() => {
+    const n = dealName.trim().toLowerCase();
+    if (!n) return null;
+    return existingDeals.find(d => (d.deal_name || "").trim().toLowerCase() === n) || null;
+  }, [dealName, existingDeals]);
 
   const director  = useMemo(() => profiles.find(p => p.role === "director"), [profiles]);
   const vpProfile = useMemo(() => profiles.find(p => p.role === "vp"), [profiles]);
@@ -124,6 +132,7 @@ export default function NewDeal() {
   async function save() {
     setMsg(null);
     if (!dealName.trim())   return setMsg({ type: "err", text: "Deal name is required." });
+    if (duplicate && !window.confirm(`A deal named "${duplicate.deal_name}" already exists${duplicate.sale_date ? ` (sold ${duplicate.sale_date})` : ""}. Create this one anyway?`)) return;
     if (!base)              return setMsg({ type: "err", text: "Baseline price is required." });
     if (!Number(jobPrice))  return setMsg({ type: "err", text: "Total deal value is required." });
     const primarySetter = selfGen ? repId : setterId;
@@ -171,6 +180,11 @@ export default function NewDeal() {
             <div className="space-y-3">
               <Field label="Deal name">
                 <Inp value={dealName} onChange={e => setDealName(e.target.value)} placeholder="e.g. Smith — 1423 Mesa Dr" />
+                {duplicate && (
+                  <p className="text-[11px] mt-1 flex items-center gap-1" style={{ color: '#fdcb6e' }}>
+                    ⚠ A deal named “{duplicate.deal_name}” already exists{duplicate.sale_date ? ` (${duplicate.sale_date})` : ''}.
+                  </p>
+                )}
               </Field>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Field label="Sale date">

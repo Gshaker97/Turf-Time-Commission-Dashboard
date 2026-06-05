@@ -104,9 +104,11 @@ export async function updateDeal(id, data) {
 export async function deleteDeal(id) {
   if (DEMO_MODE) {
     _deals = _deals.filter(d => d.id !== id)
-    return { error: null }
+    return { error: null, data: [{ id }] }
   }
-  return supabase.from('deals').delete().eq('id', id)
+  // .select() returns the rows actually deleted — so the caller can tell when
+  // RLS silently blocked the delete (0 rows, no error).
+  return supabase.from('deals').delete().eq('id', id).select('id')
 }
 
 // ── Users / Profiles ──────────────────────────────────────────
