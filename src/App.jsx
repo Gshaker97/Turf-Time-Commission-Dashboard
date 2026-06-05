@@ -15,6 +15,7 @@ const Admin       = lazy(() => import('./pages/Admin'))
 const NewDeal     = lazy(() => import('./pages/NewDeal'))
 const Home        = lazy(() => import('./pages/Home'))
 const Payroll     = lazy(() => import('./pages/Payroll'))
+const Competitions = lazy(() => import('./pages/Competitions'))
 
 function Spinner() {
   return (
@@ -47,6 +48,7 @@ function AppRoutes() {
         <Route path="deals"       element={<Deals />} />
         <Route path="dashboard"   element={<Dashboard />} />
         <Route path="commissions" element={<Commissions />} />
+        <Route path="competitions" element={<Competitions />} />
         <Route path="home"        element={<Home />} />
         <Route path="new-deal"    element={<Guard roles={['vp','admin']}><NewDeal /></Guard>} />
         <Route path="payroll"     element={<Guard roles={['vp','admin']}><Payroll /></Guard>} />

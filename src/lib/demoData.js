@@ -1,6 +1,6 @@
 // Demo data — mirrors the Turf Time roster in supabase/migrations/003_seed.sql.
 // Used only when no Supabase env vars are set (local/offline preview).
-import { startOfWeek, subWeeks, format } from 'date-fns'
+import { startOfWeek, subWeeks, format, startOfMonth, endOfMonth } from 'date-fns'
 
 const CO = 'Turf Time'
 
@@ -174,4 +174,43 @@ export const DEMO_WEEKLY_STATS = (() => {
     }
   })
   return rows
+})()
+
+// Demo competitions — exercise each type. Standings are derived from the demo
+// deals; the company one auto-includes all sellers.
+export const DEMO_COMPETITIONS = (() => {
+  const now = new Date()
+  const start = format(startOfMonth(now), 'yyyy-MM-dd')
+  const end   = format(endOfMonth(now),   'yyyy-MM-dd')
+  return [
+    {
+      id: 'comp-rep-revenue',
+      name: 'Top Closer — Revenue',
+      description: 'Most baseline revenue this month.',
+      rules: 'Counts deals you set or closed during the month. Highest revenue wins a steak dinner.',
+      type: 'individual', metric: 'revenue',
+      start_date: start, end_date: end,
+      participant_ids: ['u-mattj', 'u-johnk', 'u-bryan', 'u-jeremy', 'u-charlieh', 'u-stephen'],
+      manual_scores: {}, active: true, created_by: 'u-keaton',
+    },
+    {
+      id: 'comp-team-deals',
+      name: 'Team Deal Race',
+      description: 'Which team closes the most deals this month.',
+      rules: 'Every deal a team member sets or closes counts. Winning team gets a half-day Friday.',
+      type: 'team', metric: 'deals',
+      start_date: start, end_date: end,
+      participant_ids: ['u-jared', 'u-jordan', 'u-conner', 'u-colt', 'u-danny'],
+      manual_scores: {}, active: true, created_by: 'u-keaton',
+    },
+    {
+      id: 'comp-company',
+      name: 'Company Leaderboard',
+      description: 'Everyone, ranked by revenue this month.',
+      rules: 'Company-wide standings — automatically includes all reps and managers.',
+      type: 'company', metric: 'revenue',
+      start_date: start, end_date: end,
+      participant_ids: [], manual_scores: {}, active: true, created_by: 'u-keaton',
+    },
+  ]
 })()
