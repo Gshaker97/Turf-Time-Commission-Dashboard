@@ -66,8 +66,9 @@ setup + deploy steps.
   column on `deals`, and **drops the fixed `deals.status` CHECK** so statuses
   are admin-configurable; `007` is a one-time backfill of `deals.pay_date` from
   `install_date` (Friday following the install week; only fills rows where
-  `pay_date` is null, so it never clobbers a hand-set value). Do not re-run
-  `001`/`002` against a populated database.
+  `pay_date` is null, so it never clobbers a hand-set value); `008` adds the
+  `deals.checklist` jsonb column backing the inline new-deal checklist on the
+  Deals page. Do not re-run `001`/`002` against a populated database.
 
 ## Security notes (already fixed — keep them fixed)
 
