@@ -59,6 +59,7 @@ export default function Payroll() {
   const [modal, setModal]     = useState(false)
   const [showPayees, setShowPayees] = useState(true)
   const [tab, setTab] = useState('run')   // 'run' | 'deductions'
+  const [repFilter, setRepFilter] = useState('')
   const today = todayISO()
 
   useEffect(() => { load() }, [])
@@ -164,13 +165,30 @@ export default function Payroll() {
   const canPay     = statusLabels?.includes(PAID)
   const viewLabel  = view === 'overdue' ? 'Overdue (unpaid)' : (fmtDay(view) || '—')
 
+  // Optional filter: scope the run to a single payee/rep. Auto-clears if that
+  // person isn't in the current run.
+  const effFilter = repFilter && payees.some(p => p.id === repFilter) ? repFilter : ''
+  const shownDeals  = effFilter ? runDeals.filter(d => dealPayouts(d).some(p => p.id === effFilter)) : runDeals
+  const shownPayees = effFilter ? payees.filter(p => p.id === effFilter) : payees
+  const summary = (() => {
+    let total = 0, paid = 0, paidCount = 0
+    for (const d of shownDeals) {
+      const amt = effFilter
+        ? dealPayouts(d).filter(p => p.id === effFilter).reduce((s, p) => s + p.amount, 0)
+        : dealAmounts(d).totalCommission
+      total += amt
+      if (d.status === PAID) { paid += amt; paidCount++ }
+    }
+    return { total, paid, remaining: total - paid, count: shownDeals.length, paidCount, payees: shownPayees.length }
+  })()
+
   async function setStatus(id, status) {
     setDeals(ds => ds.map(d => d.id === id ? { ...d, status } : d))
     const res = await updateDeal(id, { status })
     if (res?.error) load()
   }
   async function markAll(status) {
-    const ids = runDeals.filter(d => d.status !== status).map(d => d.id)
+    const ids = shownDeals.filter(d => d.status !== status).map(d => d.id)
     if (!ids.length) return
     if (!confirm(`Mark ${ids.length} deal${ids.length === 1 ? '' : 's'} as "${status}"?`)) return
     setDeals(ds => ds.map(d => ids.includes(d.id) ? { ...d, status } : d))
@@ -191,9 +209,9 @@ export default function Payroll() {
 
   function exportCsv() {
     const rows = [['Pay Date', 'Payee', 'Deal', 'Role', 'Amount']]
-    for (const p of payees) for (const l of p.lines) rows.push([viewLabel, p.name, l.deal, l.role, l.amount.toFixed(2)])
+    for (const p of shownPayees) for (const l of p.lines) rows.push([viewLabel, p.name, l.deal, l.role, l.amount.toFixed(2)])
     rows.push([])
-    rows.push(['', 'TOTAL', '', '', totals.total.toFixed(2)])
+    rows.push(['', 'TOTAL', '', '', summary.total.toFixed(2)])
     downloadCsv(`payroll-${view === 'overdue' ? 'overdue' : view}.csv`, rows)
   }
 
@@ -208,7 +226,7 @@ export default function Payroll() {
           <p className="text-[12px] text-white/40 mt-0.5">Review deals due for pay, approve them, and track deductions.</p>
         </div>
         {tab === 'run' && (
-          <button onClick={exportCsv} disabled={!runDeals.length}
+          <button onClick={exportCsv} disabled={!shownDeals.length}
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold text-white/70 hover:text-white disabled:opacity-40 transition-colors"
             style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
             <Download size={14} /> Export CSV
@@ -263,14 +281,30 @@ export default function Payroll() {
         <>
           {/* Summary */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mb-3">
-            <Card label="Total payout" value={fmt(totals.total)} color="#00b894" sub={viewLabel} />
-            <Card label="Remaining" value={fmt(totals.remaining)} color="#fdcb6e" sub="not yet paid" />
-            <Card label="Deals" value={`${totals.paidCount}/${totals.count}`} sub="paid / total" />
-            <Card label="Payees" value={payees.length} sub="people to pay" />
+            <Card label={effFilter ? "Rep payout" : "Total payout"} value={fmt(summary.total)} color="#00b894" sub={viewLabel} />
+            <Card label="Remaining" value={fmt(summary.remaining)} color="#fdcb6e" sub="not yet paid" />
+            <Card label="Deals" value={`${summary.paidCount}/${summary.count}`} sub="paid / total" />
+            <Card label="Payees" value={summary.payees} sub="people to pay" />
           </div>
 
+          {/* Filter by rep */}
+          {payees.length > 0 && (
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
+              <span className="text-[11px] text-white/30">Filter by rep:</span>
+              <select value={effFilter} onChange={e => setRepFilter(e.target.value)}
+                className="px-3 py-1.5 rounded-lg text-[12px] font-semibold text-white focus:outline-none"
+                style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+                <option value="">All reps</option>
+                {payees.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              {effFilter && (
+                <button onClick={() => setRepFilter('')} className="text-[11px] text-white/40 hover:text-white transition-colors">Clear</button>
+              )}
+            </div>
+          )}
+
           {/* Bulk actions */}
-          {view !== 'overdue' && runDeals.length > 0 && (
+          {view !== 'overdue' && shownDeals.length > 0 && (
             <div className="flex items-center gap-2 mb-4 flex-wrap">
               {canApprove && (
                 <button onClick={() => markAll(APPROVED)}
@@ -290,21 +324,21 @@ export default function Payroll() {
           )}
 
           {/* Payee totals — compact summary of each person's lump sum for the run */}
-          {payees.length > 0 && (
+          {shownPayees.length > 0 && (
             <div className="mb-4 rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
               <button onClick={() => setShowPayees(s => !s)}
                 className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-white/[0.02] transition-colors">
                 <span className="text-[11px] uppercase tracking-wider text-white/40 font-semibold">
-                  Payee totals · {payees.length} {payees.length === 1 ? 'person' : 'people'}
+                  Payee totals · {shownPayees.length} {shownPayees.length === 1 ? 'person' : 'people'}
                 </span>
                 <span className="flex items-center gap-2">
-                  <span className="text-[13px] font-bold text-teal">{fmt(totals.total)}</span>
+                  <span className="text-[13px] font-bold text-teal">{fmt(summary.total)}</span>
                   <ChevronDown size={14} className={`text-white/30 transition-transform ${showPayees ? 'rotate-180' : ''}`} />
                 </span>
               </button>
               {showPayees && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 px-4 pb-3 pt-1">
-                  {payees.map(p => (
+                  {shownPayees.map(p => (
                     <div key={p.id} className="flex items-center justify-between py-1 border-t border-white/5">
                       <span className="text-[13px] text-white/80 truncate mr-2">
                         {p.name}
@@ -321,10 +355,10 @@ export default function Payroll() {
           {/* Deals in this run — each card shows its own payouts inline */}
           <div className="flex items-center justify-between mb-2">
             <p className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">Deals in this run</p>
-            <span className="text-[11px] text-white/30">{runDeals.length} deal{runDeals.length === 1 ? '' : 's'}</span>
+            <span className="text-[11px] text-white/30">{shownDeals.length} deal{shownDeals.length === 1 ? '' : 's'}</span>
           </div>
           <div className="space-y-2">
-            {runDeals.map(d => {
+            {shownDeals.map(d => {
               const a = dealAmounts(d)
               const color = statusColor(d.status)
               const isPaid = d.status === PAID
@@ -397,9 +431,9 @@ export default function Payroll() {
                 </div>
               )
             })}
-            {runDeals.length === 0 && (
+            {shownDeals.length === 0 && (
               <div className="rounded-xl px-4 py-6 text-white/30 text-sm text-center" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-                No deals in this run.
+                {effFilter ? 'No deals for this rep in this run.' : 'No deals in this run.'}
               </div>
             )}
           </div>
