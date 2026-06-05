@@ -58,6 +58,7 @@ export default function Payroll() {
   const [editDeal, setEditDeal] = useState(null)
   const [modal, setModal]     = useState(false)
   const [showPayees, setShowPayees] = useState(true)
+  const [tab, setTab] = useState('run')   // 'run' | 'deductions'
   const today = todayISO()
 
   useEffect(() => { load() }, [])
@@ -113,9 +114,10 @@ export default function Payroll() {
     const m = {}
     const add = (person, role, amount, deal) => {
       if (!person || !person.id || !(amount > 0)) return
-      if (!m[person.id]) m[person.id] = { id: person.id, name: person.name, total: 0, lines: [] }
+      if (!m[person.id]) m[person.id] = { id: person.id, name: person.name, total: 0, lines: [], dealIds: new Set() }
       m[person.id].total += amount
       m[person.id].lines.push({ deal: deal.deal_name, role, amount })
+      m[person.id].dealIds.add(deal.id)
     }
     for (const d of runDeals) {
       const a = dealAmounts(d)
@@ -127,6 +129,36 @@ export default function Payroll() {
     }
     return Object.values(m).sort((a, b) => b.total - a.total)
   }, [runDeals])
+
+  // All deals that carry a deduction — across all time, for the Deductions tab.
+  // A deduction is "applied" once its deal is Paid; otherwise it's still pending.
+  const deductions = useMemo(() => {
+    return deals
+      .filter(d => (Number(d.deduction_amount) || 0) > 0)
+      .map(d => {
+        const solo = !d.closer_id || d.setter_id === d.closer_id
+        return {
+          id: d.id,
+          deal: d,
+          name: d.deal_name,
+          office: d.office,
+          amount: Number(d.deduction_amount) || 0,
+          note: d.deduction_note,
+          // who absorbs it: setter on a solo deal, closer on a split (mirrors the engine)
+          absorbedBy: solo ? (d.setter?.name ?? '—') : (d.closer?.name ?? '—'),
+          payDate: d.pay_date,
+          status: d.status,
+          applied: d.status === PAID,
+        }
+      })
+      .sort((a, b) => (b.payDate || '').localeCompare(a.payDate || ''))
+  }, [deals])
+
+  const deductionTotals = useMemo(() => {
+    let total = 0, applied = 0, pending = 0
+    for (const x of deductions) { total += x.amount; if (x.applied) applied += x.amount; else pending += x.amount }
+    return { total, applied, pending, count: deductions.length, pendingCount: deductions.filter(x => !x.applied).length }
+  }, [deductions])
 
   const canApprove = statusLabels?.includes(APPROVED)
   const canPay     = statusLabels?.includes(PAID)
@@ -168,20 +200,33 @@ export default function Payroll() {
   return (
     <div style={{ background: '#1a1a1a', color: '#fff', minHeight: '100%' }}>
       {/* Header */}
-      <div className="mb-4 flex items-start justify-between gap-3">
+      <div className="mb-3 flex items-start justify-between gap-3">
         <div>
           <h1 className="text-lg md:text-xl font-bold text-white flex items-center gap-2">
-            <Wallet size={18} className="text-teal" /> Payroll Run
+            <Wallet size={18} className="text-teal" /> Payroll
           </h1>
-          <p className="text-[12px] text-white/40 mt-0.5">Review deals due for pay and approve them.</p>
+          <p className="text-[12px] text-white/40 mt-0.5">Review deals due for pay, approve them, and track deductions.</p>
         </div>
-        <button onClick={exportCsv} disabled={!runDeals.length}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold text-white/70 hover:text-white disabled:opacity-40 transition-colors"
-          style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-          <Download size={14} /> Export CSV
-        </button>
+        {tab === 'run' && (
+          <button onClick={exportCsv} disabled={!runDeals.length}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold text-white/70 hover:text-white disabled:opacity-40 transition-colors"
+            style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+            <Download size={14} /> Export CSV
+          </button>
+        )}
       </div>
 
+      {/* Tabs */}
+      <div className="flex gap-1 mb-4 p-1 rounded-xl w-fit" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+        {[['run', 'Pay run'], ['deductions', `Deductions${deductionTotals.count ? ` (${deductionTotals.count})` : ''}`]].map(([k, label]) => (
+          <button key={k} onClick={() => setTab(k)}
+            className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors ${tab === k ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'run' && (<>
       {/* Pay-date navigator */}
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <button onClick={() => idx > 0 && setView(payDates[idx - 1])} disabled={view === 'overdue' || idx <= 0}
@@ -261,7 +306,10 @@ export default function Payroll() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 px-4 pb-3 pt-1">
                   {payees.map(p => (
                     <div key={p.id} className="flex items-center justify-between py-1 border-t border-white/5">
-                      <span className="text-[13px] text-white/80 truncate mr-2">{p.name}</span>
+                      <span className="text-[13px] text-white/80 truncate mr-2">
+                        {p.name}
+                        <span className="text-white/30 text-[11px]"> · {p.dealIds.size} deal{p.dealIds.size === 1 ? '' : 's'}</span>
+                      </span>
                       <span className="text-[13px] font-semibold text-white whitespace-nowrap">{fmt(p.total)}</span>
                     </div>
                   ))}
@@ -354,6 +402,54 @@ export default function Payroll() {
                 No deals in this run.
               </div>
             )}
+          </div>
+        </>
+      )}
+      </>)}
+
+      {tab === 'deductions' && (
+        <>
+          {/* Deduction summary */}
+          <div className="grid grid-cols-3 gap-2 md:gap-3 mb-4">
+            <Card label="Total deductions" value={fmt(deductionTotals.total)} color="#f87171" sub={`${deductionTotals.count} total`} />
+            <Card label="Pending" value={fmt(deductionTotals.pending)} color="#fdcb6e" sub={`${deductionTotals.pendingCount} not yet paid`} />
+            <Card label="Applied" value={fmt(deductionTotals.applied)} color="#74b9ff" sub="on paid deals" />
+          </div>
+
+          <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12, overflow: 'hidden' }}>
+            <div className="px-4 py-3 border-b border-white/5">
+              <span className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">All deductions · present & past</span>
+            </div>
+            {loading ? (
+              <div className="px-4 py-8 text-center text-white/30 text-sm">Loading…</div>
+            ) : deductions.length === 0 ? (
+              <div className="px-4 py-8 text-center text-white/30 text-sm">No deductions on any deal.</div>
+            ) : deductions.map(x => (
+              <div key={x.id} className="flex items-start justify-between gap-3 px-4 py-3 border-b border-white/5 last:border-0">
+                <div className="min-w-0">
+                  <p className="text-[13px] font-semibold text-white/90 truncate">{x.name}</p>
+                  <p className="text-[11px] text-white/40 mt-0.5">
+                    From <span className="text-white/60">{x.absorbedBy}</span>
+                    {x.office ? ` · ${x.office}` : ''}
+                    {x.payDate ? ` · pays ${fmtDay(x.payDate)}` : ' · pay date TBD'}
+                  </p>
+                  {x.note && <p className="text-[11px] text-white/50 mt-1 italic">“{x.note}”</p>}
+                </div>
+                <div className="text-right flex-shrink-0 flex flex-col items-end gap-1">
+                  <span className="text-[15px] font-bold text-red-400">−{fmt(x.amount)}</span>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                    style={x.applied
+                      ? { color: '#74b9ff', border: '1px solid #74b9ff40' }
+                      : { color: '#fdcb6e', border: '1px solid #fdcb6e40' }}>
+                    {x.applied ? 'Applied' : 'Pending'}
+                  </span>
+                  <button onClick={() => { setEditDeal(x.deal); setModal(true) }}
+                    className="text-[11px] text-white/40 hover:text-teal transition-colors flex items-center gap-1">
+                    <Pencil size={11} /> Edit
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         </>
       )}
