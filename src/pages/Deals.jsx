@@ -125,7 +125,11 @@ export default function Deals() {
     if (!confirm('Delete this deal? This cannot be undone.')) return
     setDeals(ds => ds.filter(d => d.id !== id))   // optimistic remove
     const res = await deleteDeal(id)
-    if (res?.error) load(true)                     // resync if it failed
+    const deletedCount = Array.isArray(res?.data) ? res.data.length : 1
+    if (res?.error || deletedCount === 0) {
+      alert('Could not delete this deal — only an admin can delete deals. Sign in with the admin account to delete it, or have VP deletes enabled in the database.')
+      load(true)                                   // bring the row back so the UI matches reality
+    }
   }
 
   return (
@@ -183,6 +187,7 @@ export default function Deals() {
         <DealModal
           deal={editDeal}
           users={users}
+          existingDeals={deals}
           onSave={handleSave}
           onClose={() => { setModal(false); setEditDeal(null) }}
         />
