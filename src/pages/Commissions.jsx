@@ -180,13 +180,18 @@ export default function Commissions() {
 
   // ── Period totals ─────────────────────────────────────────────
   const totals = useMemo(() => {
-    let earned = 0, paid = 0
+    let earned = 0, paid = 0, commissions = 0, overrides = 0
     for (const d of periodMine) {
-      const t = take(d)
+      let t = 0
+      for (const p of myParts(d, id)) {
+        t += p.amount
+        if (p.role === 'Setter' || p.role === 'Closer') commissions += p.amount
+        else overrides += p.amount
+      }
       earned += t
       if (d.status === PAID) paid += t
     }
-    return { earned, paid, upcoming: Math.max(earned - paid, 0) }
+    return { earned, paid, upcoming: Math.max(earned - paid, 0), commissions, overrides }
   }, [periodMine, id])
 
   // Per-status breakdown for the period (respects configurable statuses).
@@ -254,9 +259,26 @@ export default function Commissions() {
         </div>
       </div>
 
-      {/* Period summary cards */}
-      <div className="grid grid-cols-3 gap-2 md:gap-3 mb-3">
-        <Card label="Earned"   value={fmt(totals.earned)}   color="#00b894" sub={periodLabel} />
+      {/* Earned — total with commissions vs overrides breakdown */}
+      <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12 }} className="p-3 md:p-4 mb-2">
+        <div className="text-[9px] md:text-[11px] uppercase tracking-wider text-white/30 font-semibold mb-1.5">Earned · {periodLabel}</div>
+        <div className="text-[18px] md:text-2xl font-bold text-teal">{fmt(totals.earned)}</div>
+        <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-white/5">
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-white/30 font-semibold mb-0.5">Commissions</div>
+            <div className="text-[15px] md:text-[17px] font-bold text-white">{fmt(totals.commissions)}</div>
+            <div className="text-[10px] text-white/30">setter / closer</div>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-white/30 font-semibold mb-0.5">Overrides</div>
+            <div className="text-[15px] md:text-[17px] font-bold text-white">{fmt(totals.overrides)}</div>
+            <div className="text-[10px] text-white/30">manager / director / VP</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Paid / Upcoming */}
+      <div className="grid grid-cols-2 gap-2 md:gap-3 mb-3">
         <Card label="Paid"     value={fmt(totals.paid)}     color="#74b9ff" sub="status = Paid" />
         <Card label="Upcoming" value={fmt(totals.upcoming)} color="#fdcb6e" sub="not yet paid" />
       </div>
