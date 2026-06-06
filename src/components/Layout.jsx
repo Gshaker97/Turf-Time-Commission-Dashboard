@@ -22,9 +22,11 @@ const NAV = [
 ]
 
 export default function Layout() {
-  const { profile, isPreviewMode, clearPreview } = useAuth()
+  const { profile, isPreviewMode, clearPreview, isAdmin } = useAuth()
   const role  = profile?.role ?? 'rep'
-  const items = NAV.filter(n => n.roles.includes(role))
+  // Admin-flag users see admin-gated nav items in addition to their title's.
+  const effectiveRoles = isAdmin ? [role, 'admin'] : [role]
+  const items = NAV.filter(n => n.roles.some(r => effectiveRoles.includes(r)))
 
   return (
     <div className="flex flex-col h-screen" style={{ background: '#1a1a1a' }}>

@@ -104,6 +104,9 @@ export function AuthProvider({ children }) {
     user: user ?? null,
     profile:        effectiveProfile,
     realProfile:    profile,
+    // Site access (admin) is separate from sales title (role): admin = the
+    // 'admin' title OR the is_admin flag.
+    isAdmin:        effectiveProfile?.role === 'admin' || effectiveProfile?.is_admin === true,
     isPreviewMode:  !!previewProfile,
     previewAs:      (userProfile) => setPreviewProfile(userProfile),
     clearPreview:   () => setPreviewProfile(null),
