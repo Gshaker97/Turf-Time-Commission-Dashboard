@@ -28,8 +28,10 @@ export default function Deals() {
   const [editDeal, setEditDeal] = useState(null)
 
   const [repFilter,    setRepFilter]    = useState('')
+  const [repRole,      setRepRole]      = useState('')   // '' = setter or closer, else 'setter' | 'closer'
   const [search,       setSearch]       = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  const [dateField,    setDateField]    = useState('sale_date')  // which date the range applies to
   const [dateFrom,     setDateFrom]     = useState(getPresetRange('mtd').from)
   const [dateTo,       setDateTo]       = useState(getPresetRange('mtd').to)
   const [datePreset,   setDatePreset]   = useState('mtd')
@@ -58,14 +60,19 @@ export default function Deals() {
   const filtered = useMemo(() => {
     let rows = [...deals]
     if (role === 'rep') rows = rows.filter(d => d.setter_id === profile.id || d.closer_id === profile.id)
-    if (repFilter)    rows = rows.filter(d => d.setter_id === repFilter || d.closer_id === repFilter)
+    if (repFilter) {
+      rows = rows.filter(d =>
+        repRole === 'setter' ? d.setter_id === repFilter
+      : repRole === 'closer' ? d.closer_id === repFilter
+      : (d.setter_id === repFilter || d.closer_id === repFilter))
+    }
     if (search) {
       const q = search.toLowerCase()
       rows = rows.filter(d => d.deal_name?.toLowerCase().includes(q) || d.office?.toLowerCase().includes(q) || d.project_id?.toLowerCase().includes(q))
     }
     if (statusFilter) rows = rows.filter(d => d.status === statusFilter)
-    if (dateFrom)     rows = rows.filter(d => d.sale_date >= dateFrom)
-    if (dateTo)       rows = rows.filter(d => d.sale_date <= dateTo)
+    if (dateFrom)     rows = rows.filter(d => (d[dateField] ?? '') >= dateFrom)
+    if (dateTo)       rows = rows.filter(d => (d[dateField] ?? '') && d[dateField] <= dateTo)
     rows.sort((a, b) => {
       let av = sortValue(a, sortKey), bv = sortValue(b, sortKey)
       if (typeof av === 'string') av = av.toLowerCase()
@@ -76,7 +83,7 @@ export default function Deals() {
       return ac < bc ? 1 : ac > bc ? -1 : 0
     })
     return rows
-  }, [deals, profile, role, repFilter, search, statusFilter, dateFrom, dateTo, sortKey, sortDir])
+  }, [deals, profile, role, repFilter, repRole, search, statusFilter, dateField, dateFrom, dateTo, sortKey, sortDir])
 
   const kpis = useMemo(() => {
     let baseline = 0, totalComm = 0, totalJobPrice = 0, totalMarkupPct = 0
@@ -140,8 +147,10 @@ export default function Deals() {
       <FilterBar
         users={users}
         repFilter={repFilter}       setRepFilter={setRepFilter}
+        repRole={repRole}           setRepRole={setRepRole}
         search={search}             setSearch={setSearch}
         statusFilter={statusFilter} setStatusFilter={setStatusFilter}
+        dateField={dateField}       setDateField={setDateField}
         dateFrom={dateFrom}         setDateFrom={setDateFrom}
         dateTo={dateTo}             setDateTo={setDateTo}
         datePreset={datePreset}     setDatePreset={setDatePreset}

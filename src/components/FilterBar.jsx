@@ -6,11 +6,19 @@ import { useSettings } from '../contexts/SettingsContext'
 const inputStyle = { background: '#2a2a2a', border: '1px solid #333' }
 const inputCls = 'h-9 rounded-lg text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-teal/40 transition-colors px-3'
 
+const DATE_FIELDS = [
+  { value: 'sale_date',    label: 'Closing date' },
+  { value: 'install_date', label: 'Install date' },
+  { value: 'pay_date',     label: 'Pay date' },
+]
+
 export default function FilterBar({
   users = [],
   repFilter, setRepFilter,
+  repRole, setRepRole,
   search, setSearch,
   statusFilter, setStatusFilter,
+  dateField, setDateField,
   dateFrom, setDateFrom,
   dateTo, setDateTo,
   datePreset, setDatePreset,
@@ -20,6 +28,7 @@ export default function FilterBar({
   const { statusLabels } = useSettings()
   const reps = users.filter(u => ['rep','manager','director','vp'].includes(u.role))
   const hasFilters = repFilter || statusFilter || dateFrom || dateTo
+  const dateFieldLabel = DATE_FIELDS.find(f => f.value === dateField)?.label ?? 'date'
 
   return (
     <div className="rounded-xl p-3 md:p-4 space-y-3" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
@@ -69,6 +78,21 @@ export default function FilterBar({
           <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 pointer-events-none" />
         </div>
 
+        {/* Rep role — setter / closer / either. Only meaningful once a rep is picked. */}
+        {setRepRole && (
+          <div className="relative">
+            <select value={repRole} onChange={e => setRepRole(e.target.value)}
+              disabled={!repFilter}
+              style={inputStyle}
+              className={`${inputCls} pr-8 min-w-[110px] md:min-w-[120px] ${!repFilter ? 'opacity-40' : ''}`}>
+              <option value="">As Setter or Closer</option>
+              <option value="setter">As Setter</option>
+              <option value="closer">As Closer</option>
+            </select>
+            <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 pointer-events-none" />
+          </div>
+        )}
+
         {/* Status */}
         <div className="relative">
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
@@ -81,15 +105,27 @@ export default function FilterBar({
 
         {/* Clear filters — mobile only */}
         {hasFilters && (
-          <button onClick={() => { setRepFilter(''); setStatusFilter(''); setDateFrom(''); setDateTo('') }}
+          <button onClick={() => { setRepFilter(''); setRepRole?.(''); setStatusFilter(''); setDateFrom(''); setDateTo('') }}
             className="md:hidden text-[12px] text-white/40 hover:text-white underline">
             Clear
           </button>
         )}
       </div>
 
-      {/* Date range — presets + custom (sale date) */}
-      <div className={`${open ? 'block' : 'hidden md:block'}`}>
+      {/* Date range — choose which date the range applies to, then presets + custom */}
+      <div className={`${open ? 'block' : 'hidden md:block'} space-y-2`}>
+        {setDateField && (
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">Filter by</span>
+            <div className="relative">
+              <select value={dateField} onChange={e => setDateField(e.target.value)}
+                style={inputStyle} className={`${inputCls} pr-8 min-w-[140px]`}>
+                {DATE_FIELDS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+              </select>
+              <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 pointer-events-none" />
+            </div>
+          </div>
+        )}
         <DateRangeFilter
           from={dateFrom}
           to={dateTo}
