@@ -69,8 +69,10 @@ setup + deploy steps.
   `pay_date` is null, so it never clobbers a hand-set value); `008` adds the
   `deals.checklist` jsonb column backing the inline new-deal checklist on the
   Deals page; `009` adds the `competitions` table (sales contests; standings
-  computed on the frontend, VP/admin-managed). Do not re-run `001`/`002`
-  against a populated database.
+  computed on the frontend, VP/admin-managed); `010` adds
+  `deals.financed_amount` + `deals.dealer_fee_pct` (financing dealer fee,
+  treated as a deduction = financed × fee% in the commission engine). Do not
+  re-run `001`/`002` against a populated database.
 
 ## Security notes (already fixed — keep them fixed)
 

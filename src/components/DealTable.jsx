@@ -208,9 +208,8 @@ function DeductionTag({ amount, note }) {
 }
 
 function CommissionCell({ deal }) {
-  const { gross, commPct, setterAmt, closerAmt } = calcDealCommissions(deal)
+  const { gross, commPct, setterAmt, closerAmt, deduction } = calcDealCommissions(deal)
   const split = deal.setter_id && deal.closer_id && deal.setter_id !== deal.closer_id
-  const deduction = parseFloat(deal.deduction_amount) || 0
 
   return (
     <div className="flex flex-col items-end gap-1 leading-tight">

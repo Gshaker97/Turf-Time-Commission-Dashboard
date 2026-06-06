@@ -26,6 +26,7 @@ const BLANK = {
   director_id: '', director_override_pct: '',
   vp_id: '', vp_override_pct: '',
   deduction_amount: '', deduction_note: '',
+  financed_amount: '', dealer_fee_pct: '',
 }
 // Director/VP override % defaults are driven by the office: Phoenix → 5%,
 // Tucson → 3.75% (any other/unknown office falls back to 5%). Manager always
@@ -65,6 +66,8 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
         pay_date:        deal.pay_date         ?? '',
         deduction_amount: deal.deduction_amount != null ? String(deal.deduction_amount) : '',
         deduction_note:   deal.deduction_note   ?? '',
+        financed_amount:  deal.financed_amount  != null ? String(deal.financed_amount) : '',
+        dealer_fee_pct:   deal.dealer_fee_pct   != null ? (deal.dealer_fee_pct * 100).toString() : '',
       })
     } else {
       setForm(BLANK)
@@ -107,6 +110,11 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
     vp_override_pct:       parseFloat(form.vp_override_pct)       / 100 || 0,
   })
 
+  // Financing dealer fee = financed amount × fee%. Counts as a deduction.
+  const financed = parseFloat(form.financed_amount) || 0
+  const dealerFee = financed * (parseFloat(form.dealer_fee_pct) || 0) / 100
+  const totalDeduction = (parseFloat(form.deduction_amount) || 0) + dealerFee
+
   async function handleSubmit(e) {
     e.preventDefault()
     if (duplicate && !window.confirm(`A deal named "${duplicate.deal_name}" already exists${duplicate.sale_date ? ` (sold ${duplicate.sale_date})` : ''}. Create this one anyway?`)) return
@@ -126,6 +134,8 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
       pay_date:         form.pay_date || null,
       deduction_amount: form.deduction_amount !== '' ? Math.max(0, parseFloat(form.deduction_amount) || 0) : null,
       deduction_note:   form.deduction_note?.trim() || null,
+      financed_amount:  form.financed_amount !== '' ? Math.max(0, parseFloat(form.financed_amount) || 0) : null,
+      dealer_fee_pct:   form.dealer_fee_pct ? parseFloat(form.dealer_fee_pct) / 100 : null,
     })
     setSaving(false)
   }
@@ -291,8 +301,8 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
           <div className="rounded-xl px-4 py-3 space-y-3" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
             <div className="flex items-center justify-between">
               <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest">Deduction</p>
-              {parseFloat(form.deduction_amount) > 0 && (
-                <span className="text-[12px] font-bold text-red-400">−{fmt(parseFloat(form.deduction_amount) || 0)}</span>
+              {totalDeduction > 0 && (
+                <span className="text-[12px] font-bold text-red-400">−{fmt(totalDeduction)}</span>
               )}
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] gap-3">
@@ -304,6 +314,28 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                 <Inp value={form.deduction_note} onChange={e => set('deduction_note', e.target.value)}
                   placeholder="What is this deduction for?" />
               </Field>
+            </div>
+
+            {/* Dealer fee — a % of the financed amount */}
+            <div className="pt-3 border-t border-white/5">
+              <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-2">Dealer Fee</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <Field label="Financed amount ($)">
+                  <Inp type="number" min="0" step="0.01" value={form.financed_amount}
+                    onChange={e => set('financed_amount', e.target.value)} placeholder="0.00" />
+                </Field>
+                <Field label="Dealer fee %">
+                  <Inp type="number" min="0" max="100" step="0.01" value={form.dealer_fee_pct}
+                    onChange={e => set('dealer_fee_pct', e.target.value)} placeholder="0" />
+                </Field>
+                <Field label="Dealer fee">
+                  <div className="px-3 py-2 rounded-lg text-[13px] font-semibold" style={inputStyle}>
+                    <span style={{ color: dealerFee > 0 ? '#f87171' : 'rgba(255,255,255,0.3)' }}>
+                      {dealerFee > 0 ? `−${fmt(dealerFee)}` : '—'}
+                    </span>
+                  </div>
+                </Field>
+              </div>
             </div>
           </div>
 

@@ -135,15 +135,18 @@ export default function Payroll() {
   // A deduction is "applied" once its deal is Paid; otherwise it's still pending.
   const deductions = useMemo(() => {
     return deals
-      .filter(d => (Number(d.deduction_amount) || 0) > 0)
-      .map(d => {
+      .map(d => ({ d, a: dealAmounts(d) }))
+      .filter(({ a }) => a.deduction > 0)
+      .map(({ d, a }) => {
         const solo = !d.closer_id || d.setter_id === d.closer_id
         return {
           id: d.id,
           deal: d,
           name: d.deal_name,
           office: d.office,
-          amount: Number(d.deduction_amount) || 0,
+          amount: a.deduction,            // manual + dealer fee
+          manual: a.manualDeduction,
+          dealerFee: a.dealerFee,
           note: d.deduction_note,
           // who absorbs it: setter on a solo deal, closer on a split (mirrors the engine)
           absorbedBy: solo ? (d.setter?.name ?? '—') : (d.closer?.name ?? '—'),
@@ -467,6 +470,11 @@ export default function Payroll() {
                     {x.office ? ` · ${x.office}` : ''}
                     {x.payDate ? ` · pays ${fmtDay(x.payDate)}` : ' · pay date TBD'}
                   </p>
+                  {x.dealerFee > 0 && (
+                    <p className="text-[11px] text-white/40 mt-0.5">
+                      Dealer fee −{fmt(x.dealerFee)}{x.manual > 0 ? ` · other −${fmt(x.manual)}` : ''}
+                    </p>
+                  )}
                   {x.note && <p className="text-[11px] text-white/50 mt-1 italic">“{x.note}”</p>}
                 </div>
                 <div className="text-right flex-shrink-0 flex flex-col items-end gap-1">
