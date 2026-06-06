@@ -184,22 +184,37 @@ export default function Dashboard() {
 
   const repData = useMemo(() => {
     const map = {}
-    for (const deal of filtered) {
-      const sid = deal.setter_id; if (!sid) continue
-      if (!map[sid]) {
-        const u   = users.find(u => u.id === sid)
+    const ensure = (id) => {
+      if (!map[id]) {
+        const u   = users.find(u => u.id === id)
         const mgr = u ? users.find(m => m.id === u.manager_id) : null
-        map[sid]  = { id: sid, name: u?.name ?? '—', team: mgr?.name ?? '—', deals: 0, revenue: 0, commission: 0, prevRev: 0 }
+        map[id]   = { id, name: u?.name ?? '—', team: mgr?.name ?? '—', deals: 0, leads: 0, revenue: 0, commission: 0, prevRev: 0 }
       }
-      map[sid].revenue    += parseFloat(deal.baseline_revenue) || 0
-      map[sid].commission += getSetterCommission(deal)
-      map[sid].deals      += 1
+      return map[id]
+    }
+    for (const deal of filtered) {
+      const sid = deal.setter_id
+      const cid = deal.closer_id
+      // Deal (revenue + setter-share commission) credits the setter.
+      if (sid) {
+        const s = ensure(sid)
+        s.revenue    += parseFloat(deal.baseline_revenue) || 0
+        s.commission += getSetterCommission(deal)
+        s.deals      += 1
+      }
+      // Lead credits the closer when they aren't also the setter — they closed
+      // this deal for someone else, so they get the lead + their closer share.
+      if (cid && cid !== sid) {
+        const c = ensure(cid)
+        c.commission += dealAmounts(deal).closer
+        c.leads      += 1
+      }
     }
     for (const deal of prevFiltered) {
       const sid = deal.setter_id
       if (sid && map[sid]) map[sid].prevRev += parseFloat(deal.baseline_revenue) || 0
     }
-    return Object.values(map).sort((a, b) => b.revenue - a.revenue).slice(0, 10)
+    return Object.values(map).sort((a, b) => b.revenue - a.revenue || b.leads - a.leads).slice(0, 10)
       .map(r => ({ ...r, pct: (r.revenue / companyTotalRev) * 100 }))
   }, [filtered, prevFiltered, users, companyTotalRev])
 
@@ -360,7 +375,7 @@ export default function Dashboard() {
         <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
           <div className="flex items-baseline gap-3 mb-4">
             <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Rep Leaderboard</h3>
-            <p className="text-[11px] text-white/30 hidden sm:block">Setter revenue · setter-share commission</p>
+            <p className="text-[11px] text-white/30 hidden sm:block">Deals to setter · leads to closer</p>
           </div>
           <table className="w-full">
             <thead>
@@ -368,6 +383,7 @@ export default function Dashboard() {
                 <th className="text-left pb-2 w-6">#</th>
                 <th className="text-left pb-2">Rep</th>
                 <th className="text-center pb-2 hidden sm:table-cell">Deals</th>
+                <th className="text-center pb-2 hidden sm:table-cell" title="Deals closed for another setter">Leads</th>
                 <th className="text-right pb-2">Revenue</th>
                 <th className="text-right pb-2 hidden md:table-cell">Commission</th>
                 <th className="text-right pb-2 w-12 hidden sm:table-cell">Trend</th>
@@ -382,6 +398,9 @@ export default function Dashboard() {
                     <td className="py-2"><RankBadge n={i + 1} /></td>
                     <td className="py-2 text-[12px] font-medium text-white/80 truncate max-w-[100px]">{rep.name}</td>
                     <td className="py-2 text-[12px] text-white/60 text-center hidden sm:table-cell">{rep.deals}</td>
+                    <td className="py-2 text-[12px] text-center hidden sm:table-cell">
+                      {rep.leads > 0 ? <span className="text-white/60">{rep.leads}</span> : <span className="text-white/20">—</span>}
+                    </td>
                     <td className="py-2 text-right whitespace-nowrap">
                       <p className="text-[12px] font-bold text-teal">{fmt(rep.revenue)}</p>
                       <p className="text-[10px] text-white/30 hidden sm:block">{rep.pct.toFixed(1)}%</p>
@@ -399,7 +418,7 @@ export default function Dashboard() {
                 )
               })}
               {repData.length === 0 && (
-                <tr><td colSpan={6} className="py-8 text-center text-white/30 text-[13px]">No data for this period</td></tr>
+                <tr><td colSpan={7} className="py-8 text-center text-white/30 text-[13px]">No data for this period</td></tr>
               )}
             </tbody>
           </table>
