@@ -131,7 +131,7 @@ const COLS = [
   { key: 'setter',         label: 'People',     sortAccessor: d => d.setter?.name ?? '' },
   { key: 'sale_date',      label: 'Dates' },
   { key: 'job_price',      label: 'Revenue',    align: 'right' },
-  { key: 'commission',     label: 'Commission', align: 'right', sortAccessor: d => calcDealCommissions(d).gross },
+  { key: 'commission',     label: 'Commission', align: 'right', sortAccessor: d => calcDealCommissions(d).repCommission },
 ]
 
 function SortIcon({ col, sortKey, sortDir }) {
@@ -208,15 +208,18 @@ function DeductionTag({ amount, note }) {
 }
 
 function CommissionCell({ deal }) {
-  const { gross, commPct, setterAmt, closerAmt, deduction } = calcDealCommissions(deal)
+  const { repCommission, commPct, setterAmt, closerAmt, deduction, job } = calcDealCommissions(deal)
   const split = deal.setter_id && deal.closer_id && deal.setter_id !== deal.closer_id
+  // Rep commission only (setter + closer, net of deductions) — overrides go to
+  // leadership and are tracked on the Payroll page, not in this column.
+  const repPct = job > 0 ? repCommission / job : 0
 
   return (
     <div className="flex flex-col items-end gap-1 leading-tight">
       {!split ? (
         <div className="flex flex-col items-end">
-          <span className="text-[13px] font-bold text-teal">{fmt(gross)}</span>
-          <span className="text-[11px] text-white/30">{fmtPct(commPct)}</span>
+          <span className="text-[13px] font-bold text-teal">{fmt(repCommission)}</span>
+          <span className="text-[11px] text-white/30">{fmtPct(repPct)}</span>
         </div>
       ) : (
         <div className="flex flex-col items-end gap-0.5">
@@ -230,7 +233,7 @@ function CommissionCell({ deal }) {
               style={{ fontSize: 8 }}>{deal.closer?.name?.[0]?.toUpperCase() ?? 'C'}</span>
             <span className="text-[12px] font-semibold text-teal">{fmt(closerAmt)}</span>
           </div>
-          <span className="text-[10px] text-white/20">{fmtPct(commPct)}</span>
+          <span className="text-[10px] text-white/20">{fmtPct(repPct)}</span>
         </div>
       )}
       {deduction > 0 && <DeductionTag amount={deduction} note={deal.deduction_note} />}
