@@ -14,12 +14,14 @@
  *    Baseline & price come in pre-filled; you finish splits/overrides on review.
  *
  * Setup:
- *   1. In THIS scheduler spreadsheet: Extensions → Apps Script → paste this file
- *   2. Project Settings → Script Properties:
+ *   1. Add as a file in the scheduler spreadsheet's Apps Script project.
+ *   2. Script Properties (likely already set by the commission sync):
  *        SUPABASE_URL          (Kong public URL, no trailing slash)
  *        SUPABASE_SERVICE_KEY  (service_role key — NOT the anon key)
- *   3. Run importJobs() once to authorize
- *   4. Triggers → Add Trigger → importJobs → Time-driven → every 10 minutes
+ *   3. Run baselineNow() ONCE — marks all current jobs as already-handled so
+ *      only deals signed from now on import.
+ *   4. Set DRY_RUN = false (below) once the preview looks right.
+ *   5. Triggers → Add Trigger → importJobs → Time-driven → every minute.
  */
 
 // ── CONFIG ──────────────────────────────────────────────────
@@ -29,6 +31,10 @@ const DIRECTOR_NAME = 'garrison shaker'; // default override chain
 const VP_NAME       = 'keaton shaker';
 // Never import jobs whose Sales Rep name contains any of these (case-insensitive).
 const EXCLUDE_REPS  = ['rhett', 'ronnie'];
+// Skip junk/test proposals whose Customer contains any of these (case-insensitive).
+const SKIP_NAME_CONTAINS = ['test', 'cute'];
+// Property holding the "ignore these existing jobs" baseline (set by baselineNow()).
+const BASELINE_PROP = 'ARCSITE_BASELINE_IDS';
 // Set true to mark rows where the sale is below baseline (negative commission)
 // as "Sales Issue" instead of "Deal Review".
 const FLAG_NEGATIVE_AS_ISSUE = false;
@@ -56,6 +62,10 @@ function importJobs() {
   // Also skip anything whose customer name already exists — protects deals you
   // entered by hand (which have no Project ID to match on).
   const seenNames = new Set(existing.map(d => String(d.deal_name || '').trim().toLowerCase()).filter(Boolean));
+  // Baseline: everything that was in the sheet when you ran baselineNow() is
+  // ignored, so only jobs signed AFTER that point import.
+  const baseline = props.getProperty(BASELINE_PROP);
+  if (baseline) baseline.split(',').forEach(id => { if (id) seen.add(id); });
 
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(JOBS_TAB);
   if (!sheet) throw new Error('Tab not found: ' + JOBS_TAB);
@@ -84,6 +94,8 @@ function importJobs() {
     const row = rows[r];
     const customer = String(row[ix.customer] || '').trim();
     if (!customer) { out.skipped++; continue; }
+    const custLc = customer.toLowerCase();
+    if (SKIP_NAME_CONTAINS.some(x => custLc.indexOf(x) !== -1)) { out.skipped++; continue; } // junk/test row
 
     const status = String(ix.status >= 0 ? row[ix.status] : '').trim().toUpperCase();
     if (ONLY_STATUS && status !== ONLY_STATUS) { out.skipped++; continue; }
@@ -139,6 +151,28 @@ function importJobs() {
   Logger.log((DRY_RUN ? '[DRY RUN — nothing written] ' : '') + 'ArcSite import — ' + (DRY_RUN ? 'would create ' : 'created ') + out.created + ', skipped ' + out.skipped + ', errors ' + out.errors);
   if (out.details.length) Logger.log(out.details.join('\n'));
   return out;
+}
+
+// ── BASELINE (run once) ─────────────────────────────────────
+// Records every job currently in the sheet as "already handled" so the importer
+// only brings in deals signed from now on. Run this ONCE before going live.
+function baselineNow() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(JOBS_TAB);
+  if (!sheet) throw new Error('Tab not found: ' + JOBS_TAB);
+  const rows = sheet.getDataRange().getDisplayValues();
+  if (rows.length < 2) { Logger.log('No rows to baseline.'); return 0; }
+  const headers = rows[0].map(h => String(h).trim());
+  const pi = headers.indexOf('Project ID');
+  const ppi = headers.indexOf('Proposal ID');
+  const ids = [];
+  for (let r = 1; r < rows.length; r++) {
+    const id = String(rows[r][pi] || '').trim() || (ppi >= 0 ? String(rows[r][ppi] || '').trim() : '');
+    if (id) ids.push(id);
+  }
+  const uniq = [...new Set(ids)];
+  PropertiesService.getScriptProperties().setProperty(BASELINE_PROP, uniq.join(','));
+  Logger.log('Baseline set — ' + uniq.length + ' existing jobs will be ignored. Only NEW jobs import from now on.');
+  return uniq.length;
 }
 
 // ── SUPABASE HELPERS ────────────────────────────────────────
