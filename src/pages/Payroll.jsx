@@ -139,6 +139,12 @@ export default function Payroll() {
       .filter(({ a }) => a.deduction > 0)
       .map(({ d, a }) => {
         const solo = !d.closer_id || d.setter_id === d.closer_id
+        const paidBy = d.deduction_paid_by || 'closer'
+        const setterNm = d.setter?.name ?? '—', closerNm = d.closer?.name ?? '—'
+        const absorbedBy = solo ? setterNm
+          : paidBy === 'setter' ? setterNm
+          : paidBy === 'split'  ? `${setterNm} & ${closerNm} (split)`
+          : closerNm
         return {
           id: d.id,
           deal: d,
@@ -148,8 +154,7 @@ export default function Payroll() {
           manual: a.manualDeduction,
           dealerFee: a.dealerFee,
           note: d.deduction_note,
-          // who absorbs it: setter on a solo deal, closer on a split (mirrors the engine)
-          absorbedBy: solo ? (d.setter?.name ?? '—') : (d.closer?.name ?? '—'),
+          absorbedBy,
           payDate: d.pay_date,
           status: d.status,
           applied: d.status === PAID,

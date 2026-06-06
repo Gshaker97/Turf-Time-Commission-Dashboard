@@ -27,6 +27,7 @@ const BLANK = {
   vp_id: '', vp_override_pct: '',
   deduction_amount: '', deduction_note: '',
   financed_amount: '', dealer_fee_pct: '',
+  deduction_paid_by: 'closer',
 }
 // Director/VP override % defaults are driven by the office: Phoenix → 5%,
 // Tucson → 3.75% (any other/unknown office falls back to 5%). Manager always
@@ -68,6 +69,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
         deduction_note:   deal.deduction_note   ?? '',
         financed_amount:  deal.financed_amount  != null ? String(deal.financed_amount) : '',
         dealer_fee_pct:   deal.dealer_fee_pct   != null ? (deal.dealer_fee_pct * 100).toString() : '',
+        deduction_paid_by: deal.deduction_paid_by ?? 'closer',
       })
     } else {
       setForm(BLANK)
@@ -114,6 +116,9 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
   const financed = parseFloat(form.financed_amount) || 0
   const dealerFee = financed * (parseFloat(form.dealer_fee_pct) || 0) / 100
   const totalDeduction = (parseFloat(form.deduction_amount) || 0) + dealerFee
+  const isSplitDeal = !!(form.setter_id && form.closer_id && form.setter_id !== form.closer_id)
+  const setterName = users.find(u => u.id === form.setter_id)?.name || 'Setter'
+  const closerName = users.find(u => u.id === form.closer_id)?.name || 'Closer'
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -136,6 +141,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
       deduction_note:   form.deduction_note?.trim() || null,
       financed_amount:  form.financed_amount !== '' ? Math.max(0, parseFloat(form.financed_amount) || 0) : null,
       dealer_fee_pct:   form.dealer_fee_pct ? parseFloat(form.dealer_fee_pct) / 100 : null,
+      deduction_paid_by: form.deduction_paid_by || 'closer',
     })
     setSaving(false)
   }
@@ -337,6 +343,26 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                 </Field>
               </div>
             </div>
+
+            {/* Who pays the deduction — split deals only */}
+            {isSplitDeal && totalDeduction > 0 && (
+              <div className="pt-3 border-t border-white/5">
+                <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-2">Who pays the deduction?</p>
+                <div className="inline-flex w-full rounded-lg overflow-hidden border border-white/10">
+                  {[['closer', closerName], ['setter', setterName], ['split', 'Split 50/50']].map(([v, label]) => (
+                    <button key={v} type="button" onClick={() => set('deduction_paid_by', v)}
+                      className={`flex-1 px-2 py-2 text-[12px] font-semibold truncate transition-colors ${form.deduction_paid_by === v ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-white/40 mt-1.5">
+                  {form.deduction_paid_by === 'split'
+                    ? `${setterName} & ${closerName} each pay ${fmt(totalDeduction / 2)}`
+                    : `${form.deduction_paid_by === 'setter' ? setterName : closerName} pays the full ${fmt(totalDeduction)}`}
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Override chain */}
