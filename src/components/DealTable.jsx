@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, Fragment } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check } from 'lucide-react'
+import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, MessageSquare } from 'lucide-react'
 import { calcDealCommissions, fmt, fmtPct } from '../utils/commission'
 import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
@@ -331,18 +331,54 @@ function ActionButtons({ deal, onEdit, onDelete }) {
   )
 }
 
+// Collapsible per-deal notes. Editable for managers+/admin; read-only otherwise.
+function NotesEditor({ deal, canEdit, onUpdate }) {
+  const [val, setVal] = useState(deal.notes ?? '')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  useEffect(() => { setVal(deal.notes ?? '') }, [deal.id])
+
+  if (!canEdit) {
+    return deal.notes
+      ? <p className="text-[12px] text-white/70 whitespace-pre-wrap">{deal.notes}</p>
+      : <p className="text-[12px] text-white/30 italic">No notes.</p>
+  }
+  async function save() {
+    setSaving(true)
+    await onUpdate(deal.id, { notes: val.trim() || null })
+    setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 1500)
+  }
+  return (
+    <div className="space-y-2">
+      <textarea value={val} onChange={e => setVal(e.target.value)} rows={3}
+        placeholder="Add a note about this deal…"
+        className="w-full px-3 py-2 rounded-lg text-[12px] text-white placeholder-white/20 focus:outline-none resize-y"
+        style={{ background: '#171717', border: '1px solid #2a2a2a' }} />
+      <div className="flex items-center gap-2">
+        <button onClick={save} disabled={saving || val === (deal.notes ?? '')}
+          className="px-3 py-1.5 rounded-lg text-[11px] font-bold text-dark bg-teal disabled:opacity-40 transition-colors">
+          {saving ? 'Saving…' : 'Save note'}
+        </button>
+        {saved && <span className="text-[11px] text-teal">Saved ✓</span>}
+      </div>
+    </div>
+  )
+}
+
 const subline = (deal) => [deal.office, deal.payment_method].filter(Boolean).join(' · ') || '—'
 
 // ── Mobile card (below lg) ────────────────────────────────────
 function DealCard({ deal, canEdit, onEdit, onDelete, onUpdate, statusColor, statusLabels }) {
   const baseline = parseFloat(deal.baseline_revenue) || 0
   const jobPrice = parseFloat(deal.job_price)        || 0
+  const [showNotes, setShowNotes] = useState(false)
   return (
     <div className="p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <p className="text-[14px] font-semibold text-white truncate">{deal.deal_name}</p>
+            <button onClick={() => setShowNotes(s => !s)} className="text-[14px] font-semibold text-white truncate text-left">{deal.deal_name}</button>
+            {deal.notes && <MessageSquare size={12} className="text-teal/70 flex-shrink-0" />}
             <DealChecklist deal={deal} canEdit={canEdit} onUpdate={onUpdate} />
           </div>
           <p className="text-[11px] text-white/40 truncate">{subline(deal)}</p>
@@ -367,6 +403,13 @@ function DealCard({ deal, canEdit, onEdit, onDelete, onUpdate, statusColor, stat
         </div>
       </div>
 
+      {showNotes && (
+        <div className="mt-3 rounded-lg p-3" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+          <p className="text-[10px] font-bold uppercase tracking-wider text-white/30 mb-2">Notes</p>
+          <NotesEditor deal={deal} canEdit={canEdit} onUpdate={onUpdate} />
+        </div>
+      )}
+
       {canEdit && (
         <div className="mt-3 pt-3 border-t border-white/5">
           <ActionButtons deal={deal} onEdit={onEdit} onDelete={onDelete} />
@@ -382,7 +425,10 @@ export default function DealTable({
   onEdit, onDelete, onUpdate, loading,
 }) {
   const { statusColor, statusLabels, offices, paymentMethods } = useSettings()
-  const canEdit = ['admin', 'manager', 'director', 'vp'].includes(profile?.role)
+  const canEdit = ['admin', 'manager', 'director', 'vp'].includes(profile?.role) || profile?.is_admin === true
+  const [notesOpen, setNotesOpen] = useState(() => new Set())
+  const toggleNotes = (id) => setNotesOpen(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const colCount = COLS.length + (canEdit ? 1 : 0)
 
   if (loading) return (
     <div className="rounded-xl p-16 text-center text-white/30 text-[13px]"
@@ -432,12 +478,17 @@ export default function DealTable({
             const jobPrice = parseFloat(deal.job_price)        || 0
             const isEven   = i % 2 === 0
             return (
-              <tr key={deal.id}
+              <Fragment key={deal.id}>
+              <tr
                 style={{ background: isEven ? '#242424' : '#262626' }}
                 className="hover:bg-white/[0.03] transition-colors align-top">
                 <td className="px-3 py-3">
                   <div className="flex items-center gap-2">
-                    <p className="text-[13px] font-semibold text-white truncate max-w-[230px]">{deal.deal_name}</p>
+                    <button onClick={() => toggleNotes(deal.id)} title="Notes"
+                      className="text-[13px] font-semibold text-white truncate max-w-[210px] text-left hover:text-teal transition-colors">
+                      {deal.deal_name}
+                    </button>
+                    {deal.notes && <MessageSquare size={12} className="text-teal/70 flex-shrink-0" />}
                     <DealChecklist deal={deal} canEdit={canEdit} onUpdate={onUpdate} />
                   </div>
                   {deal.project_id && <p className="text-[11px] text-white/40 truncate max-w-[260px]">{deal.project_id}</p>}
@@ -469,6 +520,17 @@ export default function DealTable({
                   <td className="px-3 py-3"><ActionButtons deal={deal} onEdit={onEdit} onDelete={onDelete} /></td>
                 )}
               </tr>
+              {notesOpen.has(deal.id) && (
+                <tr style={{ background: isEven ? '#242424' : '#262626' }}>
+                  <td colSpan={colCount} className="px-3 pb-3 pt-0">
+                    <div className="rounded-lg p-3" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-white/30 mb-2">Notes — {deal.deal_name}</p>
+                      <NotesEditor deal={deal} canEdit={canEdit} onUpdate={onUpdate} />
+                    </div>
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             )
           })}
         </tbody>
