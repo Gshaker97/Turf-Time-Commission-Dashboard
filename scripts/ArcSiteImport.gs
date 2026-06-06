@@ -39,14 +39,14 @@ function importJobs() {
   if (!url || !key) throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_KEY in Script Properties');
 
   // Roster (id, name, manager_id) → match Sales Rep names to dashboard people.
-  const profiles = sbGet_(url, key, '/rest/v1/profiles?select=id,name,manager_id');
+  const profiles = asGet_(url, key, '/rest/v1/profiles?select=id,name,manager_id');
   const byName = {};
   profiles.forEach(p => { if (p.name) byName[String(p.name).trim().toLowerCase()] = p; });
   const directorId = (byName[DIRECTOR_NAME] || {}).id || null;
   const vpId       = (byName[VP_NAME] || {}).id || null;
 
   // Existing project_ids → insert-once dedupe.
-  const existing = sbGet_(url, key, '/rest/v1/deals?select=project_id');
+  const existing = asGet_(url, key, '/rest/v1/deals?select=project_id');
   const seen = new Set(existing.map(d => String(d.project_id || '')).filter(Boolean));
 
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(JOBS_TAB);
@@ -90,13 +90,13 @@ function importJobs() {
     const rep = byName[repName.toLowerCase()];
     if (!rep) { out.skipped++; continue; } // not on your team / name doesn't match
 
-    const baseline = parseMoney_(row[ix.baseline]);
-    const sale     = parseMoney_(row[ix.sale]);
+    const baseline = asMoney_(row[ix.baseline]);
+    const sale     = asMoney_(row[ix.sale]);
     const isLoss   = baseline != null && sale != null && sale < baseline;
 
     const deal = {
       deal_name:        customer,
-      sale_date:        parseDate_(row[ix.approved]),
+      sale_date:        asDate_(row[ix.approved]),
       status:           (FLAG_NEGATIVE_AS_ISSUE && isLoss) ? 'Sales Issue' : 'Deal Review',
       setter_id:        rep.id,
       closer_id:        rep.id,            // single Sales Rep → solo
@@ -110,7 +110,7 @@ function importJobs() {
     };
 
     try {
-      sbInsert_(url, key, '/rest/v1/deals', deal);
+      asInsert_(url, key, '/rest/v1/deals', deal);
       seen.add(projectId);
       out.created++;
     } catch (e) {
@@ -125,7 +125,7 @@ function importJobs() {
 }
 
 // ── SUPABASE HELPERS ────────────────────────────────────────
-function sbGet_(url, key, path) {
+function asGet_(url, key, path) {
   const resp = UrlFetchApp.fetch(url + path, {
     method: 'get',
     headers: { apikey: key, Authorization: 'Bearer ' + key },
@@ -135,7 +135,7 @@ function sbGet_(url, key, path) {
   return JSON.parse(resp.getContentText());
 }
 
-function sbInsert_(url, key, path, payload) {
+function asInsert_(url, key, path, payload) {
   const resp = UrlFetchApp.fetch(url + path, {
     method: 'post',
     contentType: 'application/json',
@@ -147,7 +147,7 @@ function sbInsert_(url, key, path, payload) {
 }
 
 // ── PARSERS ─────────────────────────────────────────────────
-function parseMoney_(val) {
+function asMoney_(val) {
   if (val === '' || val === null || val === undefined) return null;
   if (typeof val === 'number') return val;
   const raw = String(val).trim();
@@ -158,7 +158,7 @@ function parseMoney_(val) {
   return isNaN(n) ? null : (neg ? -n : n);
 }
 
-function parseDate_(val) {
+function asDate_(val) {
   if (!val) return null;
   if (val instanceof Date) return Utilities.formatDate(val, Session.getScriptTimeZone(), 'yyyy-MM-dd');
   const s = String(val).trim();
