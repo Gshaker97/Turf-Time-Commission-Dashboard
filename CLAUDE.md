@@ -73,8 +73,9 @@ setup + deploy steps.
   `deals.financed_amount` + `deals.dealer_fee_pct` (financing dealer fee,
   treated as a deduction = financed × fee% in the commission engine); `011`
   adds `deals.deduction_paid_by` (`closer` default | `setter` | `split`) —
-  who absorbs the deduction on a split deal. Do not re-run `001`/`002`
-  against a populated database.
+  who absorbs the deduction on a split deal; `012` adds
+  `deals.deduction_split_pct` (setter's share when `deduction_paid_by='split'`,
+  fraction, default 0.5). Do not re-run `001`/`002` against a populated database.
 
 ## Security notes (already fixed — keep them fixed)
 

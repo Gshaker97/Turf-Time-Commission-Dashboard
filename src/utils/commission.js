@@ -36,7 +36,11 @@ export function dealAmounts(deal) {
   let setterDed = 0, closerDed = 0
   if (solo)                     setterDed = deduction
   else if (paidBy === 'setter') setterDed = deduction
-  else if (paidBy === 'split')  { setterDed = deduction / 2; closerDed = deduction / 2 }
+  else if (paidBy === 'split')  {
+    const dsp = deal.deduction_split_pct == null ? 0.5 : num(deal.deduction_split_pct)  // setter's share
+    setterDed = deduction * dsp
+    closerDed = deduction * (1 - dsp)
+  }
   else                          closerDed = deduction          // 'closer' (default)
   const setter   = deal.setter_amount   != null ? num(deal.setter_amount)   : Math.max(rawSetter - setterDed, 0)
   const closer   = deal.closer_amount   != null ? num(deal.closer_amount)   : Math.max(rawCloser - closerDed, 0)

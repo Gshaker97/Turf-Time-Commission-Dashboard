@@ -27,7 +27,7 @@ const BLANK = {
   vp_id: '', vp_override_pct: '',
   deduction_amount: '', deduction_note: '',
   financed_amount: '', dealer_fee_pct: '',
-  deduction_paid_by: 'closer',
+  deduction_paid_by: 'closer', deduction_split_pct: '50',
 }
 // Director/VP override % defaults are driven by the office: Phoenix → 5%,
 // Tucson → 3.75% (any other/unknown office falls back to 5%). Manager always
@@ -70,6 +70,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
         financed_amount:  deal.financed_amount  != null ? String(deal.financed_amount) : '',
         dealer_fee_pct:   deal.dealer_fee_pct   != null ? (deal.dealer_fee_pct * 100).toString() : '',
         deduction_paid_by: deal.deduction_paid_by ?? 'closer',
+        deduction_split_pct: deal.deduction_split_pct != null ? (deal.deduction_split_pct * 100).toString() : '50',
       })
     } else {
       setForm(BLANK)
@@ -119,6 +120,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
   const isSplitDeal = !!(form.setter_id && form.closer_id && form.setter_id !== form.closer_id)
   const setterName = users.find(u => u.id === form.setter_id)?.name || 'Setter'
   const closerName = users.find(u => u.id === form.closer_id)?.name || 'Closer'
+  const dedSplit = Math.min(100, Math.max(0, parseFloat(form.deduction_split_pct) || 50))  // setter's %
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -142,6 +144,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
       financed_amount:  form.financed_amount !== '' ? Math.max(0, parseFloat(form.financed_amount) || 0) : null,
       dealer_fee_pct:   form.dealer_fee_pct ? parseFloat(form.dealer_fee_pct) / 100 : null,
       deduction_paid_by: form.deduction_paid_by || 'closer',
+      deduction_split_pct: Math.min(1, Math.max(0, (parseFloat(form.deduction_split_pct) || 50) / 100)),
     })
     setSaving(false)
   }
@@ -349,16 +352,24 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
               <div className="pt-3 border-t border-white/5">
                 <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-2">Who pays the deduction?</p>
                 <div className="inline-flex w-full rounded-lg overflow-hidden border border-white/10">
-                  {[['closer', closerName], ['setter', setterName], ['split', 'Split 50/50']].map(([v, label]) => (
+                  {[['closer', closerName], ['setter', setterName], ['split', 'Split']].map(([v, label]) => (
                     <button key={v} type="button" onClick={() => set('deduction_paid_by', v)}
                       className={`flex-1 px-2 py-2 text-[12px] font-semibold truncate transition-colors ${form.deduction_paid_by === v ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
                       {label}
                     </button>
                   ))}
                 </div>
+                {form.deduction_paid_by === 'split' && (
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mt-3">
+                    <span className="text-[11px] text-white/50 sm:w-28 sm:text-right shrink-0 truncate">{setterName} {dedSplit}%</span>
+                    <input type="range" min="0" max="100" step="1" value={dedSplit}
+                      onChange={e => set('deduction_split_pct', e.target.value)} className="flex-1 accent-teal" />
+                    <span className="text-[11px] text-white/50 sm:w-28 shrink-0 truncate">{closerName} {100 - dedSplit}%</span>
+                  </div>
+                )}
                 <p className="text-[11px] text-white/40 mt-1.5">
                   {form.deduction_paid_by === 'split'
-                    ? `${setterName} & ${closerName} each pay ${fmt(totalDeduction / 2)}`
+                    ? `${setterName} pays ${fmt(totalDeduction * dedSplit / 100)} · ${closerName} pays ${fmt(totalDeduction * (100 - dedSplit) / 100)}`
                     : `${form.deduction_paid_by === 'setter' ? setterName : closerName} pays the full ${fmt(totalDeduction)}`}
                 </p>
               </div>
