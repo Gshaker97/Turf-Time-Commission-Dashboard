@@ -3,7 +3,7 @@ import { NavLink, Outlet } from 'react-router-dom'
 import {
   LayoutDashboard, BarChart2, DollarSign,
   Users2, ShieldCheck, Eye, X,
-  Home, PlusCircle, Wallet, Trophy,
+  Home, PlusCircle, Wallet, Trophy, Upload,
 } from 'lucide-react'
 import NavBar from './NavBar'
 import { useAuth } from '../contexts/AuthContext'
@@ -17,6 +17,7 @@ const NAV = [
   { to: '/team',        icon: Users2,          label: 'Team',        short: 'Team',    roles: ['rep','manager','director','vp','admin'] },
   { to: '/payroll',     icon: Wallet,          label: 'Payroll',     short: 'Payroll', roles: ['vp','admin'] },
   { to: '/new-deal',    icon: PlusCircle,      label: 'New Deal',    short: 'New',     roles: ['vp','admin'] },
+  { to: '/import',      icon: Upload,          label: 'Import',      short: 'Import',  roles: ['vp','admin'] },
   { to: '/admin',       icon: ShieldCheck,     label: 'Admin',       short: 'Admin',   roles: ['admin'] },
 ]
 
