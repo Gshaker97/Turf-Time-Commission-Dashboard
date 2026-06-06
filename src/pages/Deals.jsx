@@ -70,7 +70,10 @@ export default function Deals() {
       let av = sortValue(a, sortKey), bv = sortValue(b, sortKey)
       if (typeof av === 'string') av = av.toLowerCase()
       if (typeof bv === 'string') bv = bv.toLowerCase()
-      return sortDir === 'asc' ? (av < bv ? -1 : av > bv ? 1 : 0) : (av > bv ? -1 : av < bv ? 1 : 0)
+      if (av !== bv) return sortDir === 'asc' ? (av < bv ? -1 : 1) : (av > bv ? -1 : 1)
+      // Tie-breaker: most recently added on top.
+      const ac = a.created_at ?? '', bc = b.created_at ?? ''
+      return ac < bc ? 1 : ac > bc ? -1 : 0
     })
     return rows
   }, [deals, profile, role, repFilter, search, statusFilter, dateFrom, dateTo, sortKey, sortDir])
@@ -115,7 +118,7 @@ export default function Deals() {
     }
     // New deal — show it instantly with a temp id, then reload to swap in the
     // real persisted row (real id, server-side defaults, etc.).
-    setDeals(ds => [{ ...withJoins(data), id: 'temp-' + Date.now() }, ...ds])
+    setDeals(ds => [{ ...withJoins(data), id: 'temp-' + Date.now(), created_at: new Date().toISOString() }, ...ds])
     setModal(false); setEditDeal(null)
     await insertDeal(data, profile?.id)
     load(true)
