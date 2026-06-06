@@ -4,6 +4,14 @@ import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, MessageS
 import { calcDealCommissions, fmt, fmtPct } from '../utils/commission'
 import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
+import DateRangeFilter from './DateRangeFilter'
+
+// Date columns the Dates header can filter on.
+export const DATE_FIELDS = [
+  { value: 'sale_date',    label: 'Closing date' },
+  { value: 'install_date', label: 'Install date' },
+  { value: 'pay_date',     label: 'Pay date' },
+]
 
 // New-deal "is it clean?" checklist. Checked items are stored as an array of
 // these keys in deals.checklist (jsonb).
@@ -125,11 +133,11 @@ function DealChecklist({ deal, canEdit, onUpdate }) {
 // whole table fits on screen without horizontal scrolling.
 const COLS = [
   { key: 'deal_name',      label: 'Deal' },
-  { key: 'office',         label: 'Office' },
-  { key: 'payment_method', label: 'Payment' },
-  { key: 'status',         label: 'Status' },
-  { key: 'setter',         label: 'People',     sortAccessor: d => d.setter?.name ?? '' },
-  { key: 'sale_date',      label: 'Dates' },
+  { key: 'office',         label: 'Office',     filter: 'office' },
+  { key: 'payment_method', label: 'Payment',    filter: 'payment' },
+  { key: 'status',         label: 'Status',     filter: 'status' },
+  { key: 'setter',         label: 'People',     filter: 'rep',  sortAccessor: d => d.setter?.name ?? '' },
+  { key: 'sale_date',      label: 'Dates',      filter: 'date', menuWidth: 300 },
   { key: 'job_price',      label: 'Revenue',    align: 'right' },
   { key: 'commission',     label: 'Commission', align: 'right', sortAccessor: d => calcDealCommissions(d).repCommission },
 ]
@@ -139,6 +147,130 @@ function SortIcon({ col, sortKey, sortDir }) {
   return sortDir === 'asc'
     ? <ChevronUp size={12} className="text-dark ml-1 flex-shrink-0" />
     : <ChevronDown size={12} className="text-dark ml-1 flex-shrink-0" />
+}
+
+// ── Column-header menu ────────────────────────────────────────
+// A clickable header that opens a dark popover with Sort (asc/desc) and, when
+// the column declares one, an inline filter (status / office / payment / rep /
+// date). Replaces the separate top filter bar on the desktop table — click a
+// header to decide how to slice that column.
+function HeaderMenu({ col, sortKey, sortDir, onSort, active, renderFilter }) {
+  const [open, setOpen] = useState(false)
+  const [pos, setPos]   = useState({ top: 0, left: 0 })
+  const btnRef = useRef(null)
+  const popRef = useRef(null)
+  const width  = col.menuWidth || 224
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e) => {
+      if (btnRef.current?.contains(e.target) || popRef.current?.contains(e.target)) return
+      setOpen(false)
+    }
+    const onScroll = () => setOpen(false)
+    document.addEventListener('mousedown', onDown)
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onScroll)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onScroll)
+    }
+  }, [open])
+
+  function openMenu() {
+    if (!open) {
+      const r = btnRef.current.getBoundingClientRect()
+      let left = col.align === 'right' ? r.right - width : r.left
+      if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8)
+      if (left < 8) left = 8
+      setPos({ top: r.bottom + 4, left })
+    }
+    setOpen(o => !o)
+  }
+
+  const sortBtn = (dir, label) => {
+    const on = sortKey === col.key && sortDir === dir
+    return (
+      <button type="button" onClick={() => onSort(col.key, dir)}
+        className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg text-left hover:bg-white/[0.04] transition-colors">
+        <span className="flex items-center gap-1.5 text-[12px]" style={{ color: on ? '#2dd4bf' : 'rgba(255,255,255,0.8)' }}>
+          {dir === 'asc' ? <ChevronUp size={13} /> : <ChevronDown size={13} />} {label}
+        </span>
+        {on && <Check size={12} className="text-teal" />}
+      </button>
+    )
+  }
+
+  return (
+    <>
+      <button ref={btnRef} type="button" onClick={openMenu}
+        className={`flex items-center hover:opacity-80 transition-opacity ${col.align === 'right' ? 'justify-end w-full' : ''}`}>
+        {col.label}
+        <SortIcon col={col.key} sortKey={sortKey} sortDir={sortDir} />
+        {active && <span className="w-1.5 h-1.5 rounded-full bg-dark ml-1 flex-shrink-0" />}
+      </button>
+      {open && createPortal(
+        <div ref={popRef} className="fixed z-[60] rounded-xl shadow-2xl p-1.5"
+          style={{ top: pos.top, left: pos.left, width, background: '#242424', border: '1px solid #3a3a3a' }}>
+          <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-white/40">Sort</div>
+          {sortBtn('asc',  'Ascending')}
+          {sortBtn('desc', 'Descending')}
+          {renderFilter && (
+            <>
+              <div className="border-t border-white/5 my-1" />
+              <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-white/40">Filter</div>
+              {renderFilter()}
+            </>
+          )}
+        </div>,
+        document.body
+      )}
+    </>
+  )
+}
+
+// One selectable row inside a filter popover.
+function FilterRow({ label, active, onClick }) {
+  return (
+    <button type="button" onClick={onClick}
+      className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg text-left hover:bg-white/[0.04] transition-colors">
+      <span className="text-[12px] truncate" style={{ color: active ? '#2dd4bf' : 'rgba(255,255,255,0.85)' }}>{label}</span>
+      {active && <Check size={12} className="text-teal flex-shrink-0" />}
+    </button>
+  )
+}
+
+// Single-select option list. `options` is an array of strings or {value,label}.
+function OptionFilter({ value, options, onChange, allLabel = 'All' }) {
+  const norm = options.map(o => (typeof o === 'string' ? { value: o, label: o } : o))
+  return (
+    <div className="max-h-60 overflow-auto">
+      <FilterRow label={allLabel} active={!value} onClick={() => onChange('')} />
+      {norm.map(o => (
+        <FilterRow key={o.value} label={o.label} active={value === o.value}
+          onClick={() => onChange(value === o.value ? '' : o.value)} />
+      ))}
+    </div>
+  )
+}
+
+// Dates filter: pick which date column the range applies to, then a range.
+function DateFilterPanel({ dateField, setDateField, dateFrom, dateTo, datePreset, setDateRange }) {
+  return (
+    <div className="px-1 pb-1 space-y-2">
+      <div className="relative">
+        <select value={dateField} onChange={e => setDateField(e.target.value)}
+          style={{ background: '#1e1e1e', border: '1px solid #333' }}
+          className="h-8 w-full rounded-lg text-[12px] text-white px-2 pr-7 focus:outline-none focus:border-teal/50">
+          {DATE_FIELDS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+        </select>
+        <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-white/30 pointer-events-none" />
+      </div>
+      <DateRangeFilter from={dateFrom} to={dateTo} preset={datePreset}
+        onChange={({ from, to, preset }) => setDateRange(from, to, preset)} />
+    </div>
+  )
 }
 
 function DateField({ label, value, field, dealId, canEdit, onUpdate, deriveExtra }) {
@@ -420,8 +552,14 @@ function DealCard({ deal, canEdit, onEdit, onDelete, onUpdate, statusColor, stat
 }
 
 export default function DealTable({
-  deals, profile,
+  deals, profile, users = [],
   sortKey, sortDir, onSort,
+  repFilter, setRepFilter,
+  statusFilter, setStatusFilter,
+  officeFilter, setOfficeFilter,
+  paymentFilter, setPaymentFilter,
+  dateField, setDateField,
+  dateFrom, dateTo, datePreset, setDateRange,
   onEdit, onDelete, onUpdate, loading,
 }) {
   const { statusColor, statusLabels, offices, paymentMethods } = useSettings()
@@ -429,6 +567,30 @@ export default function DealTable({
   const [notesOpen, setNotesOpen] = useState(() => new Set())
   const toggleNotes = (id) => setNotesOpen(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
   const colCount = COLS.length + (canEdit ? 1 : 0)
+
+  const reps = users.filter(u => ['rep', 'manager', 'director', 'vp'].includes(u.role))
+
+  // Whether a given column currently has a filter applied (drives the header dot).
+  const colActive = (col) => ({
+    status:  !!statusFilter,
+    office:  !!officeFilter,
+    payment: !!paymentFilter,
+    rep:     !!repFilter,
+    date:    !!(dateFrom || dateTo),
+  }[col.filter] || false)
+
+  // The filter UI rendered inside a column's header popover, if any.
+  const colFilter = (col) => {
+    switch (col.filter) {
+      case 'status':  return () => <OptionFilter value={statusFilter}  options={statusLabels}  onChange={setStatusFilter}  allLabel="All statuses" />
+      case 'office':  return () => <OptionFilter value={officeFilter}  options={offices}        onChange={setOfficeFilter}  allLabel="All offices" />
+      case 'payment': return () => <OptionFilter value={paymentFilter} options={paymentMethods} onChange={setPaymentFilter} allLabel="All payments" />
+      case 'rep':     return () => <OptionFilter value={repFilter}     options={reps.map(r => ({ value: r.id, label: r.name }))} onChange={setRepFilter} allLabel="All reps" />
+      case 'date':    return () => <DateFilterPanel dateField={dateField} setDateField={setDateField}
+                                     dateFrom={dateFrom} dateTo={dateTo} datePreset={datePreset} setDateRange={setDateRange} />
+      default:        return null
+    }
+  }
 
   if (loading) return (
     <div className="rounded-xl p-16 text-center text-white/30 text-[13px]"
@@ -455,14 +617,11 @@ export default function DealTable({
           <tr style={{ background: '#00b894' }}>
             {COLS.map(col => (
               <th key={col.key}
-                onClick={() => onSort(col.key)}
-                className={`px-3 py-3 text-[11px] font-bold text-dark uppercase tracking-wider cursor-pointer select-none whitespace-nowrap hover:bg-black/10 ${
+                className={`px-3 py-3 text-[11px] font-bold text-dark uppercase tracking-wider select-none whitespace-nowrap ${
                   col.align === 'right' ? 'text-right' : 'text-left'
                 }`}>
-                <span className={`flex items-center ${col.align === 'right' ? 'justify-end' : ''}`}>
-                  {col.label}
-                  <SortIcon col={col.key} sortKey={sortKey} sortDir={sortDir} />
-                </span>
+                <HeaderMenu col={col} sortKey={sortKey} sortDir={sortDir} onSort={onSort}
+                  active={colActive(col)} renderFilter={colFilter(col)} />
               </th>
             ))}
             {canEdit && (
