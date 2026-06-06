@@ -28,8 +28,9 @@ function myParts(deal, id) {
   const split = deal.setter_split_pct == null ? 0.5 : num(deal.setter_split_pct)
   const deduction = a.deduction   // manual deduction + dealer fee
   const paidBy = deal.deduction_paid_by || 'closer'
-  const setterDed = deal.setter_amount != null ? 0 : (solo ? deduction : paidBy === 'setter' ? deduction : paidBy === 'split' ? deduction / 2 : 0)
-  const closerDed = deal.closer_amount != null ? 0 : (solo ? 0 : paidBy === 'closer' ? deduction : paidBy === 'split' ? deduction / 2 : 0)
+  const dsp = deal.deduction_split_pct == null ? 0.5 : num(deal.deduction_split_pct)  // setter's share when split
+  const setterDed = deal.setter_amount != null ? 0 : (solo ? deduction : paidBy === 'setter' ? deduction : paidBy === 'split' ? deduction * dsp : 0)
+  const closerDed = deal.closer_amount != null ? 0 : (solo ? 0 : paidBy === 'closer' ? deduction : paidBy === 'split' ? deduction * (1 - dsp) : 0)
   const parts = []
   if (deal.setter_id === id) {
     const gross = repPool * (solo ? 1 : split)
