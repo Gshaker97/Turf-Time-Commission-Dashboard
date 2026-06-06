@@ -6,7 +6,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { Check, X, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchDeals, fetchUsers, fetchGoal, saveGoal as saveGoalDb, deleteGoal as deleteGoalDb } from '../lib/db'
-import { fmt, dealAmounts, getSetterCommission } from '../utils/commission'
+import { fmt, dealAmounts } from '../utils/commission'
 import { getPresetRange, getPreviousRange } from '../utils/dateRanges'
 import DateRangeFilter from '../components/DateRangeFilter'
 
@@ -188,35 +188,32 @@ export default function Dashboard() {
       if (!map[id]) {
         const u   = users.find(u => u.id === id)
         const mgr = u ? users.find(m => m.id === u.manager_id) : null
-        map[id]   = { id, name: u?.name ?? '—', team: mgr?.name ?? '—', deals: 0, leads: 0, revenue: 0, commission: 0, prevRev: 0 }
+        map[id]   = { id, name: u?.name ?? '—', team: mgr?.name ?? '—',
+          deals: 0, revenue: 0, leads: 0, leadRevenue: 0, commission: 0 }
       }
       return map[id]
     }
     for (const deal of filtered) {
       const sid = deal.setter_id
-      const cid = deal.closer_id
-      // Deal (revenue + setter-share commission) credits the setter.
-      if (sid) {
-        const s = ensure(sid)
-        s.revenue    += parseFloat(deal.baseline_revenue) || 0
-        s.commission += getSetterCommission(deal)
-        s.deals      += 1
+      const ec  = deal.closer_id ?? sid          // effective closer (solo deal: the setter closes)
+      const bl  = parseFloat(deal.baseline_revenue) || 0
+      const a   = dealAmounts(deal)
+      // Closer-centric counts: credit the rep who closed the deal.
+      if (ec) {
+        const c = ensure(ec)
+        if (sid === ec) { c.deals += 1; c.revenue     += bl }   // closed a deal they set themselves
+        else            { c.leads += 1; c.leadRevenue += bl }   // closed a lead for another setter
       }
-      // Lead credits the closer when they aren't also the setter — they closed
-      // this deal for someone else, so they get the lead + their closer share.
-      if (cid && cid !== sid) {
-        const c = ensure(cid)
-        c.commission += dealAmounts(deal).closer
-        c.leads      += 1
-      }
+      // Commission: every rep earns their own setter/closer share, wherever the
+      // deal came from (setter share for deals they set, closer share for leads).
+      if (sid) ensure(sid).commission += a.setter
+      if (deal.closer_id && deal.closer_id !== sid) ensure(deal.closer_id).commission += a.closer
     }
-    for (const deal of prevFiltered) {
-      const sid = deal.setter_id
-      if (sid && map[sid]) map[sid].prevRev += parseFloat(deal.baseline_revenue) || 0
-    }
-    return Object.values(map).sort((a, b) => b.revenue - a.revenue || b.leads - a.leads).slice(0, 10)
+    return Object.values(map)
+      .sort((a, b) => b.commission - a.commission || b.revenue - a.revenue)
+      .slice(0, 10)
       .map(r => ({ ...r, pct: (r.revenue / companyTotalRev) * 100 }))
-  }, [filtered, prevFiltered, users, companyTotalRev])
+  }, [filtered, users, companyTotalRev])
 
   const weeklyData = useMemo(() => {
     const now    = new Date()
@@ -375,45 +372,40 @@ export default function Dashboard() {
         <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
           <div className="flex items-baseline gap-3 mb-4">
             <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Rep Leaderboard</h3>
-            <p className="text-[11px] text-white/30 hidden sm:block">Deals to setter · leads to closer</p>
+            <p className="text-[11px] text-white/30 hidden sm:block">Self-closed · leads from other setters</p>
           </div>
           <table className="w-full">
             <thead>
               <tr className="text-[9px] md:text-[10px] font-bold text-white/30 uppercase tracking-wider">
                 <th className="text-left pb-2 w-6">#</th>
                 <th className="text-left pb-2">Rep</th>
-                <th className="text-center pb-2 hidden sm:table-cell">Deals</th>
-                <th className="text-center pb-2 hidden sm:table-cell" title="Deals closed for another setter">Leads</th>
+                <th className="text-center pb-2 hidden sm:table-cell" title="Deals they set and closed themselves">Deals</th>
                 <th className="text-right pb-2">Revenue</th>
-                <th className="text-right pb-2 hidden md:table-cell">Commission</th>
-                <th className="text-right pb-2 w-12 hidden sm:table-cell">Trend</th>
+                <th className="text-center pb-2 hidden md:table-cell" title="Deals they closed for another setter">Leads</th>
+                <th className="text-right pb-2 hidden md:table-cell" title="Revenue from deals closed for other setters">Lead Rev</th>
+                <th className="text-right pb-2">Comm</th>
               </tr>
             </thead>
             <tbody>
               {repData.map((rep, i) => {
-                const hasPrev  = prevPeriod && rep.prevRev > 0
-                const trendPct = hasPrev ? ((rep.revenue - rep.prevRev) / rep.prevRev) * 100 : null
                 return (
                   <tr key={rep.id} className="border-t border-white/[0.04]">
                     <td className="py-2"><RankBadge n={i + 1} /></td>
                     <td className="py-2 text-[12px] font-medium text-white/80 truncate max-w-[100px]">{rep.name}</td>
                     <td className="py-2 text-[12px] text-white/60 text-center hidden sm:table-cell">{rep.deals}</td>
-                    <td className="py-2 text-[12px] text-center hidden sm:table-cell">
-                      {rep.leads > 0 ? <span className="text-white/60">{rep.leads}</span> : <span className="text-white/20">—</span>}
-                    </td>
                     <td className="py-2 text-right whitespace-nowrap">
                       <p className="text-[12px] font-bold text-teal">{fmt(rep.revenue)}</p>
                       <p className="text-[10px] text-white/30 hidden sm:block">{rep.pct.toFixed(1)}%</p>
                     </td>
-                    <td className="py-2 text-[12px] font-semibold text-emerald-400 text-right whitespace-nowrap hidden md:table-cell">{fmt(rep.commission)}</td>
-                    <td className="py-2 text-right hidden sm:table-cell">
-                      {trendPct !== null ? (
-                        <span className={`text-[10px] font-semibold inline-flex items-center gap-0.5 ${trendPct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                          {trendPct >= 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
-                          {Math.abs(trendPct).toFixed(0)}%
-                        </span>
-                      ) : prevPeriod ? <span className="text-[10px] text-white/20">new</span> : null}
+                    <td className="py-2 text-[12px] text-center hidden md:table-cell">
+                      {rep.leads > 0 ? <span className="text-white/60">{rep.leads}</span> : <span className="text-white/20">—</span>}
                     </td>
+                    <td className="py-2 text-right whitespace-nowrap hidden md:table-cell">
+                      {rep.leadRevenue > 0
+                        ? <span className="text-[12px] text-white/70">{fmt(rep.leadRevenue)}</span>
+                        : <span className="text-[12px] text-white/20">—</span>}
+                    </td>
+                    <td className="py-2 text-[12px] font-semibold text-emerald-400 text-right whitespace-nowrap">{fmt(rep.commission)}</td>
                   </tr>
                 )
               })}
