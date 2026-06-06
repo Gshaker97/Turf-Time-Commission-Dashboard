@@ -27,14 +27,16 @@ export default function Deals() {
   const [modal,    setModal]    = useState(false)
   const [editDeal, setEditDeal] = useState(null)
 
-  const [repFilter,    setRepFilter]    = useState('')
-  const [repRole,      setRepRole]      = useState('')   // '' = setter or closer, else 'setter' | 'closer'
-  const [search,       setSearch]       = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
-  const [dateField,    setDateField]    = useState('sale_date')  // which date the range applies to
-  const [dateFrom,     setDateFrom]     = useState(getPresetRange('mtd').from)
-  const [dateTo,       setDateTo]       = useState(getPresetRange('mtd').to)
-  const [datePreset,   setDatePreset]   = useState('mtd')
+  const [repFilter,     setRepFilter]     = useState('')
+  const [search,        setSearch]        = useState('')
+  const [statusFilter,  setStatusFilter]  = useState('')
+  const [officeFilter,  setOfficeFilter]  = useState('')
+  const [paymentFilter, setPaymentFilter] = useState('')
+  const [dateField,     setDateField]     = useState('sale_date')  // which date the range applies to
+  const [dateFrom,      setDateFrom]      = useState(getPresetRange('mtd').from)
+  const [dateTo,        setDateTo]        = useState(getPresetRange('mtd').to)
+  const [datePreset,    setDatePreset]    = useState('mtd')
+  const setDateRange = (from, to, preset) => { setDateFrom(from); setDateTo(to); setDatePreset(preset) }
   const [sortKey,      setSortKey]      = useState('sale_date')
   const [sortDir,      setSortDir]      = useState('desc')
 
@@ -60,19 +62,16 @@ export default function Deals() {
   const filtered = useMemo(() => {
     let rows = [...deals]
     if (role === 'rep') rows = rows.filter(d => d.setter_id === profile.id || d.closer_id === profile.id)
-    if (repFilter) {
-      rows = rows.filter(d =>
-        repRole === 'setter' ? d.setter_id === repFilter
-      : repRole === 'closer' ? d.closer_id === repFilter
-      : (d.setter_id === repFilter || d.closer_id === repFilter))
-    }
+    if (repFilter)     rows = rows.filter(d => d.setter_id === repFilter || d.closer_id === repFilter)
     if (search) {
       const q = search.toLowerCase()
       rows = rows.filter(d => d.deal_name?.toLowerCase().includes(q) || d.office?.toLowerCase().includes(q) || d.project_id?.toLowerCase().includes(q))
     }
-    if (statusFilter) rows = rows.filter(d => d.status === statusFilter)
-    if (dateFrom)     rows = rows.filter(d => (d[dateField] ?? '') >= dateFrom)
-    if (dateTo)       rows = rows.filter(d => (d[dateField] ?? '') && d[dateField] <= dateTo)
+    if (statusFilter)  rows = rows.filter(d => d.status === statusFilter)
+    if (officeFilter)  rows = rows.filter(d => d.office === officeFilter)
+    if (paymentFilter) rows = rows.filter(d => d.payment_method === paymentFilter)
+    if (dateFrom)      rows = rows.filter(d => (d[dateField] ?? '') >= dateFrom)
+    if (dateTo)        rows = rows.filter(d => (d[dateField] ?? '') && d[dateField] <= dateTo)
     rows.sort((a, b) => {
       let av = sortValue(a, sortKey), bv = sortValue(b, sortKey)
       if (typeof av === 'string') av = av.toLowerCase()
@@ -83,7 +82,7 @@ export default function Deals() {
       return ac < bc ? 1 : ac > bc ? -1 : 0
     })
     return rows
-  }, [deals, profile, role, repFilter, repRole, search, statusFilter, dateField, dateFrom, dateTo, sortKey, sortDir])
+  }, [deals, profile, role, repFilter, search, statusFilter, officeFilter, paymentFilter, dateField, dateFrom, dateTo, sortKey, sortDir])
 
   const kpis = useMemo(() => {
     let baseline = 0, totalComm = 0, totalJobPrice = 0, totalMarkupPct = 0
@@ -98,7 +97,8 @@ export default function Deals() {
     return { baseline, totalComm, count, avgDeal: count ? totalJobPrice/count : 0, avgComm: count ? totalComm/count : 0, avgMarkupPct: count ? totalMarkupPct/count : 0 }
   }, [filtered])
 
-  function handleSort(key) {
+  function handleSort(key, dir) {
+    if (dir) { setSortKey(key); setSortDir(dir); return }   // explicit (from header menu)
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortKey(key); setSortDir('asc') }
   }
@@ -146,14 +146,14 @@ export default function Deals() {
     <div className="space-y-3 pb-32 md:pb-20">
       <FilterBar
         users={users}
-        repFilter={repFilter}       setRepFilter={setRepFilter}
-        repRole={repRole}           setRepRole={setRepRole}
-        search={search}             setSearch={setSearch}
-        statusFilter={statusFilter} setStatusFilter={setStatusFilter}
-        dateField={dateField}       setDateField={setDateField}
-        dateFrom={dateFrom}         setDateFrom={setDateFrom}
-        dateTo={dateTo}             setDateTo={setDateTo}
-        datePreset={datePreset}     setDatePreset={setDatePreset}
+        repFilter={repFilter}         setRepFilter={setRepFilter}
+        search={search}               setSearch={setSearch}
+        statusFilter={statusFilter}   setStatusFilter={setStatusFilter}
+        officeFilter={officeFilter}   setOfficeFilter={setOfficeFilter}
+        paymentFilter={paymentFilter} setPaymentFilter={setPaymentFilter}
+        dateField={dateField}         setDateField={setDateField}
+        dateFrom={dateFrom}           dateTo={dateTo}
+        datePreset={datePreset}       setDateRange={setDateRange}
         recordCount={filtered.length}
       />
 
@@ -172,9 +172,17 @@ export default function Deals() {
         deals={filtered}
         payments={payments}
         profile={profile}
+        users={users}
         sortKey={sortKey}
         sortDir={sortDir}
         onSort={handleSort}
+        repFilter={repFilter}         setRepFilter={setRepFilter}
+        statusFilter={statusFilter}   setStatusFilter={setStatusFilter}
+        officeFilter={officeFilter}   setOfficeFilter={setOfficeFilter}
+        paymentFilter={paymentFilter} setPaymentFilter={setPaymentFilter}
+        dateField={dateField}         setDateField={setDateField}
+        dateFrom={dateFrom}           dateTo={dateTo}
+        datePreset={datePreset}       setDateRange={setDateRange}
         onEdit={d => { setEditDeal(d); setModal(true) }}
         onDelete={handleDelete}
         onUpdate={async (id, data) => {
