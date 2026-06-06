@@ -6,7 +6,7 @@ const CO = 'Turf Time'
 
 export const DEMO_USERS = [
   // Leadership
-  { id: 'u-keaton',   name: 'Keaton Shaker',   email: 'keaton@turftime.com',   role: 'vp',       company_name: CO, manager_id: null,        director_id: null,         vp_id: null,       active: true },
+  { id: 'u-keaton',   name: 'Keaton Shaker',   email: 'keaton@turftime.com',   role: 'vp',       company_name: CO, manager_id: null,        director_id: null,         vp_id: null,       active: true, is_admin: true },
   { id: 'u-garrison', name: 'Garrison Shaker', email: 'garrison@turftime.com', role: 'director', company_name: CO, manager_id: null,        director_id: null,         vp_id: 'u-keaton', active: true },
 
   // Managers

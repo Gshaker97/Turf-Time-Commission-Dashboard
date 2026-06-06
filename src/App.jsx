@@ -30,11 +30,13 @@ function Spinner() {
 }
 
 function Guard({ children, roles }) {
-  const { user, profile, loading } = useAuth()
+  const { user, profile, loading, isAdmin } = useAuth()
   if (loading) return <Spinner />
   if (!user)   return <Navigate to="/login" replace />
   if (!profile) return <Spinner />
-  if (roles && !roles.includes(profile.role)) return <Navigate to="/dashboard" replace />
+  // Admin-flag users satisfy any 'admin' requirement, on top of their title.
+  const effectiveRoles = isAdmin ? [profile.role, 'admin'] : [profile.role]
+  if (roles && !roles.some(r => effectiveRoles.includes(r))) return <Navigate to="/dashboard" replace />
   return children
 }
 
