@@ -3,7 +3,7 @@ import {
   format, subMonths, startOfMonth, startOfWeek, endOfWeek, addDays,
 } from 'date-fns'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { Check, X, TrendingUp, TrendingDown, Minus } from 'lucide-react'
+import { Check, X, TrendingUp, TrendingDown, Minus, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchDeals, fetchUsers, fetchGoal, saveGoal as saveGoalDb, deleteGoal as deleteGoalDb } from '../lib/db'
 import { fmt, dealAmounts } from '../utils/commission'
@@ -39,6 +39,23 @@ function Trend({ cur, prev, suffix = 'vs prev' }) {
   )
 }
 
+// Clickable, sortable leaderboard column header. Shows the active sort arrow,
+// or a faint up/down hint when inactive.
+function SortTh({ label, active, dir, onClick, align = 'center', className = '', title }) {
+  const justify = align === 'right' ? 'justify-end' : align === 'left' ? 'justify-start' : 'justify-center'
+  return (
+    <th className={`pb-2 ${className}`} title={title}>
+      <button onClick={onClick}
+        className={`w-full flex items-center gap-0.5 uppercase tracking-wider transition-colors ${justify} ${active ? 'text-teal' : 'text-white/30 hover:text-white/60'}`}>
+        <span>{label}</span>
+        {active
+          ? (dir === 'asc' ? <ChevronUp size={10} /> : <ChevronDown size={10} />)
+          : <ChevronsUpDown size={10} className="opacity-40" />}
+      </button>
+    </th>
+  )
+}
+
 function StatCard({ label, value, sub, trend }) {
   return (
     <div className="rounded-xl p-3 md:p-4 min-w-0 flex-1" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
@@ -61,6 +78,7 @@ export default function Dashboard() {
   const [dateTo,       setDateTo]       = useState(getPresetRange('mtd').to)
   const [activePreset, setActivePreset] = useState('mtd')
   const [teamFilter,   setTeamFilter]   = useState('')
+  const [repSort,      setRepSort]      = useState({ key: 'revenue', dir: 'desc' })  // leaderboard ranking
   const [editingGoal,  setEditingGoal]  = useState(false)
   const [goalInput,    setGoalInput]    = useState('')
   const [savedGoal,    setSavedGoal]    = useState(null)
@@ -209,11 +227,19 @@ export default function Dashboard() {
       if (sid) ensure(sid).commission += a.setter
       if (deal.closer_id && deal.closer_id !== sid) ensure(deal.closer_id).commission += a.closer
     }
-    return Object.values(map)
-      .sort((a, b) => b.commission - a.commission || b.revenue - a.revenue)
-      .slice(0, 10)
-      .map(r => ({ ...r, pct: (r.revenue / companyTotalRev) * 100 }))
+    return Object.values(map).map(r => ({ ...r, pct: (r.revenue / companyTotalRev) * 100 }))
   }, [filtered, users, companyTotalRev])
+
+  // Rank + trim to the top 10 by the chosen column (defaults to self-gen
+  // revenue). All sortable columns are numeric. Revenue breaks ties.
+  const toggleRepSort = (key) =>
+    setRepSort(s => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }))
+  const rankedReps = useMemo(() => {
+    const { key, dir } = repSort
+    return [...repData]
+      .sort((a, b) => (dir === 'asc' ? (a[key] - b[key]) : (b[key] - a[key])) || (b.revenue - a.revenue))
+      .slice(0, 10)
+  }, [repData, repSort])
 
   const weeklyData = useMemo(() => {
     const now    = new Date()
@@ -372,22 +398,27 @@ export default function Dashboard() {
         <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
           <div className="flex items-baseline gap-3 mb-4">
             <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Rep Leaderboard</h3>
-            <p className="text-[11px] text-white/30 hidden sm:block">Self-closed · leads from other setters</p>
+            <p className="text-[11px] text-white/30 hidden sm:block">Tap a column to rank by it</p>
           </div>
           <table className="w-full">
             <thead>
               <tr className="text-[9px] md:text-[10px] font-bold text-white/30 uppercase tracking-wider">
                 <th className="text-left pb-2 w-6">#</th>
                 <th className="text-left pb-2">Rep</th>
-                <th className="text-center pb-2 hidden sm:table-cell" title="Deals they set and closed themselves">Deals</th>
-                <th className="text-right pb-2">Revenue</th>
-                <th className="text-center pb-2 hidden md:table-cell" title="Deals they closed for another setter">Leads</th>
-                <th className="text-right pb-2 hidden md:table-cell" title="Revenue from deals closed for other setters">Lead Rev</th>
-                <th className="text-right pb-2">Comm</th>
+                <SortTh label="Deals" align="center" className="hidden sm:table-cell" title="Deals they set and closed themselves"
+                  active={repSort.key === 'deals'} dir={repSort.dir} onClick={() => toggleRepSort('deals')} />
+                <SortTh label="Revenue" align="right"
+                  active={repSort.key === 'revenue'} dir={repSort.dir} onClick={() => toggleRepSort('revenue')} />
+                <SortTh label="Leads" align="center" className="hidden md:table-cell" title="Deals they closed for another setter"
+                  active={repSort.key === 'leads'} dir={repSort.dir} onClick={() => toggleRepSort('leads')} />
+                <SortTh label="Lead Rev" align="right" className="hidden md:table-cell" title="Revenue from deals closed for other setters"
+                  active={repSort.key === 'leadRevenue'} dir={repSort.dir} onClick={() => toggleRepSort('leadRevenue')} />
+                <SortTh label="Comm" align="right"
+                  active={repSort.key === 'commission'} dir={repSort.dir} onClick={() => toggleRepSort('commission')} />
               </tr>
             </thead>
             <tbody>
-              {repData.map((rep, i) => {
+              {rankedReps.map((rep, i) => {
                 return (
                   <tr key={rep.id} className="border-t border-white/[0.04]">
                     <td className="py-2"><RankBadge n={i + 1} /></td>
@@ -409,7 +440,7 @@ export default function Dashboard() {
                   </tr>
                 )
               })}
-              {repData.length === 0 && (
+              {rankedReps.length === 0 && (
                 <tr><td colSpan={7} className="py-8 text-center text-white/30 text-[13px]">No data for this period</td></tr>
               )}
             </tbody>
