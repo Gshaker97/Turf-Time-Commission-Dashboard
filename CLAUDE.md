@@ -78,8 +78,9 @@ setup + deploy steps.
   fraction, default 0.5); `013` adds `profiles.is_admin` and makes `my_role()`
   report `admin` for flag-holders — **site access (admin) is now separate from
   sales title (`role`)**, so someone can be e.g. VP (title/overrides) **and**
-  Admin (access). The guard trigger protects `is_admin` from self-escalation.
-  Do not re-run `001`/`002` against a populated database.
+  Admin (access). The guard trigger protects `is_admin` from self-escalation;
+  `014` adds `deals.notes` (free-text, the collapsible notes box on the Deals
+  page). Do not re-run `001`/`002` against a populated database.
 
 ## Security notes (already fixed — keep them fixed)
 
