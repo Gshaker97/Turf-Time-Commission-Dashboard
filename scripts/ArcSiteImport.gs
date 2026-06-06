@@ -30,6 +30,9 @@ const VP_NAME       = 'keaton shaker';
 // Set true to mark rows where the sale is below baseline (negative commission)
 // as "Sales Issue" instead of "Deal Review".
 const FLAG_NEGATIVE_AS_ISSUE = false;
+// SAFETY: true = preview only. Logs what it WOULD create and writes nothing.
+// Review the Execution log, then set to false to actually import.
+const DRY_RUN = true;
 
 // ── ENTRY POINT ─────────────────────────────────────────────
 function importJobs() {
@@ -46,8 +49,11 @@ function importJobs() {
   const vpId       = (byName[VP_NAME] || {}).id || null;
 
   // Existing project_ids → insert-once dedupe.
-  const existing = asGet_(url, key, '/rest/v1/deals?select=project_id');
+  const existing = asGet_(url, key, '/rest/v1/deals?select=project_id,deal_name');
   const seen = new Set(existing.map(d => String(d.project_id || '')).filter(Boolean));
+  // Also skip anything whose customer name already exists — protects deals you
+  // entered by hand (which have no Project ID to match on).
+  const seenNames = new Set(existing.map(d => String(d.deal_name || '').trim().toLowerCase()).filter(Boolean));
 
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(JOBS_TAB);
   if (!sheet) throw new Error('Tab not found: ' + JOBS_TAB);
@@ -83,7 +89,8 @@ function importJobs() {
     const projectId = String(row[ix.projectId] || '').trim()
       || String(ix.proposalId >= 0 ? row[ix.proposalId] : '').trim();
     if (!projectId) { out.skipped++; out.details.push('Row ' + (r + 1) + ' (' + customer + '): no Project/Proposal ID'); continue; }
-    if (seen.has(projectId)) { out.skipped++; continue; } // already imported
+    if (seen.has(projectId)) { out.skipped++; continue; } // already imported (by Project ID)
+    if (seenNames.has(customer.toLowerCase())) { out.skipped++; continue; } // already in dashboard (by name)
 
     // Team filter: Sales Rep must be a known dashboard person (strip "(group)" suffixes)
     const repName = String(row[ix.rep] || '').replace(/\s*\(.*$/, '').trim();
@@ -109,9 +116,15 @@ function importJobs() {
       project_id:       projectId,
     };
 
+    if (DRY_RUN) {
+      out.created++;
+      seen.add(projectId); seenNames.add(customer.toLowerCase());
+      out.details.push('WOULD CREATE — ' + customer + ' (base ' + (baseline || 0) + ' / sale ' + (sale || 0) + ', ' + repName + ')');
+      continue;
+    }
     try {
       asInsert_(url, key, '/rest/v1/deals', deal);
-      seen.add(projectId);
+      seen.add(projectId); seenNames.add(customer.toLowerCase());
       out.created++;
     } catch (e) {
       out.errors++;
@@ -119,7 +132,7 @@ function importJobs() {
     }
   }
 
-  Logger.log('ArcSite import — created ' + out.created + ', skipped ' + out.skipped + ', errors ' + out.errors);
+  Logger.log((DRY_RUN ? '[DRY RUN — nothing written] ' : '') + 'ArcSite import — ' + (DRY_RUN ? 'would create ' : 'created ') + out.created + ', skipped ' + out.skipped + ', errors ' + out.errors);
   if (out.details.length) Logger.log(out.details.join('\n'));
   return out;
 }
