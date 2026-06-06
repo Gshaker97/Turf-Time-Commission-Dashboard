@@ -27,6 +27,8 @@ const JOBS_TAB      = 'Jobs';
 const ONLY_STATUS   = 'APPROVED';        // import only rows with this Status (blank = import all)
 const DIRECTOR_NAME = 'garrison shaker'; // default override chain
 const VP_NAME       = 'keaton shaker';
+// Never import jobs whose Sales Rep name contains any of these (case-insensitive).
+const EXCLUDE_REPS  = ['rhett', 'ronnie'];
 // Set true to mark rows where the sale is below baseline (negative commission)
 // as "Sales Issue" instead of "Deal Review".
 const FLAG_NEGATIVE_AS_ISSUE = false;
@@ -94,7 +96,9 @@ function importJobs() {
 
     // Team filter: Sales Rep must be a known dashboard person (strip "(group)" suffixes)
     const repName = String(row[ix.rep] || '').replace(/\s*\(.*$/, '').trim();
-    const rep = byName[repName.toLowerCase()];
+    const repLc = repName.toLowerCase();
+    if (EXCLUDE_REPS.some(x => repLc.indexOf(x) !== -1)) { out.skipped++; continue; } // inside-sales / excluded rep
+    const rep = byName[repLc];
     if (!rep) { out.skipped++; continue; } // not on your team / name doesn't match
 
     const baseline = asMoney_(row[ix.baseline]);
