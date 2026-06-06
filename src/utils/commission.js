@@ -19,7 +19,12 @@ export function dealAmounts(deal) {
   const repPool  = Math.max(job - baseline, 0)
   const solo     = !deal.closer_id || deal.setter_id === deal.closer_id
   const split    = deal.setter_split_pct == null ? 0.5 : num(deal.setter_split_pct)
-  const deduction = num(deal.deduction_amount)
+
+  // Deduction = the manual amount + a financing dealer fee (financed × fee%).
+  const manualDeduction = num(deal.deduction_amount)
+  const financed   = num(deal.financed_amount)
+  const dealerFee  = financed * num(deal.dealer_fee_pct)
+  const deduction  = manualDeduction + dealerFee
 
   // Stored amounts win when present (sheet sync / manual entry — already NET of
   // deductions). Otherwise compute the split and net the deduction off whoever
@@ -38,7 +43,7 @@ export function dealAmounts(deal) {
   const totalCommission = repCommission + overrides
 
   return {
-    baseline, job, revenue: baseline, deduction,
+    baseline, job, revenue: baseline, deduction, manualDeduction, dealerFee, financed,
     setter, closer, manager, director, vp,
     repCommission, overrides, totalCommission,
   }

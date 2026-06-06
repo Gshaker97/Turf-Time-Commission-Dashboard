@@ -26,7 +26,7 @@ function myParts(deal, id) {
   const repPool = Math.max(num(deal.job_price) - num(deal.baseline_revenue), 0)
   const solo = !deal.closer_id || deal.setter_id === deal.closer_id
   const split = deal.setter_split_pct == null ? 0.5 : num(deal.setter_split_pct)
-  const deduction = num(deal.deduction_amount)
+  const deduction = a.deduction   // manual deduction + dealer fee
   const parts = []
   if (deal.setter_id === id) {
     const gross = repPool * (solo ? 1 : split)
