@@ -71,8 +71,10 @@ setup + deploy steps.
   Deals page; `009` adds the `competitions` table (sales contests; standings
   computed on the frontend, VP/admin-managed); `010` adds
   `deals.financed_amount` + `deals.dealer_fee_pct` (financing dealer fee,
-  treated as a deduction = financed × fee% in the commission engine). Do not
-  re-run `001`/`002` against a populated database.
+  treated as a deduction = financed × fee% in the commission engine); `011`
+  adds `deals.deduction_paid_by` (`closer` default | `setter` | `split`) —
+  who absorbs the deduction on a split deal. Do not re-run `001`/`002`
+  against a populated database.
 
 ## Security notes (already fixed — keep them fixed)
 
