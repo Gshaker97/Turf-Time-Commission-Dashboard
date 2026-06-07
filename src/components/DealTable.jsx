@@ -23,6 +23,11 @@ const CHECKLIST_ITEMS = [
   { key: 'no_issues',        label: 'No Issues' },
 ]
 
+// When every checklist box is ticked, a deal sitting in CHECKLIST_FROM_STATUS
+// auto-advances to CHECKLIST_TO_STATUS.
+const CHECKLIST_FROM_STATUS = 'Deal Review'
+const CHECKLIST_TO_STATUS   = 'Pending Install'
+
 // Compact indicator (progress ring → green check) that opens an inline popover
 // of checkboxes. Saves each toggle straight to the deal — no full edit needed.
 function DealChecklist({ deal, canEdit, onUpdate }) {
@@ -85,8 +90,17 @@ function DealChecklist({ deal, canEdit, onUpdate }) {
     }
     setOpen(o => !o)
   }
-  const toggle = (key) => onUpdate(deal.id, { checklist: checkedSet.has(key) ? checked.filter(k => k !== key) : [...checked, key] })
-  const setAll = (all) => onUpdate(deal.id, { checklist: all ? CHECKLIST_ITEMS.map(i => i.key) : [] })
+  // Write the new checklist; if it's now fully complete and the deal is still in
+  // Deal Review, advance it to Pending Install in the same update.
+  const applyChecklist = (next) => {
+    const payload = { checklist: next }
+    if (CHECKLIST_ITEMS.every(i => next.includes(i.key)) && deal.status === CHECKLIST_FROM_STATUS) {
+      payload.status = CHECKLIST_TO_STATUS
+    }
+    onUpdate(deal.id, payload)
+  }
+  const toggle = (key) => applyChecklist(checkedSet.has(key) ? checked.filter(k => k !== key) : [...checked, key])
+  const setAll = (all) => applyChecklist(all ? CHECKLIST_ITEMS.map(i => i.key) : [])
 
   return (
     <>

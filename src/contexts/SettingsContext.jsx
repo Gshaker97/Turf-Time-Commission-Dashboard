@@ -11,6 +11,7 @@ const DEFAULTS = {
     { label: 'Pay Finalized',   color: '#22d3ee' },
     { label: 'Paid',            color: '#4ade80' },
     { label: 'Sales Issue',     color: '#f87171' },
+    { label: 'Canceled',        color: '#6b7280' },
   ],
   payment_methods: ['Self-Pay', 'Goodleap', 'Sunlight', 'Self-Pay + Sunlight', 'Self-Pay + Goodleap'],
   offices: ['Phoenix', 'Tucson'],
