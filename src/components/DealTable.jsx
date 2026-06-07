@@ -90,13 +90,15 @@ function DealChecklist({ deal, canEdit, onUpdate }) {
     }
     setOpen(o => !o)
   }
-  // Write the new checklist; if it's now fully complete and the deal is still in
-  // Deal Review, advance it to Pending Install in the same update.
+  // Write the new checklist and keep status in sync with completeness:
+  //  • fully complete + still in Deal Review → advance to Pending Install
+  //  • no longer complete + in Pending Install → drop back to Deal Review
+  // (Only flips between those two; never disturbs Paid/Canceled/etc.)
   const applyChecklist = (next) => {
     const payload = { checklist: next }
-    if (CHECKLIST_ITEMS.every(i => next.includes(i.key)) && deal.status === CHECKLIST_FROM_STATUS) {
-      payload.status = CHECKLIST_TO_STATUS
-    }
+    const complete = CHECKLIST_ITEMS.every(i => next.includes(i.key))
+    if (complete && deal.status === CHECKLIST_FROM_STATUS)       payload.status = CHECKLIST_TO_STATUS
+    else if (!complete && deal.status === CHECKLIST_TO_STATUS)   payload.status = CHECKLIST_FROM_STATUS
     onUpdate(deal.id, payload)
   }
   const toggle = (key) => applyChecklist(checkedSet.has(key) ? checked.filter(k => k !== key) : [...checked, key])
