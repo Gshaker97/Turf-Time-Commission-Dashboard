@@ -99,11 +99,15 @@ etc.) mirroring the seed file.
 
 ## Deal statuses & other config lists (admin-editable)
 
-Deal statuses, payment methods, and offices are NOT hard-coded anymore — they
-live in `app_settings` and are edited live from **Admin → Settings**. Read them
-through `useSettings()` (`src/contexts/SettingsContext.jsx`):
-`statusLabels`, `statusColor(label)`, `paymentMethods`, `offices`. Never
-re-introduce a hard-coded status/office/payment list in a page or component.
+Deal statuses, payment methods, offices, and the **new-deal checklist items**
+are NOT hard-coded anymore — they live in `app_settings` and are edited live
+from **Admin → Settings**. Read them through `useSettings()`
+(`src/contexts/SettingsContext.jsx`): `statusLabels`, `statusColor(label)`,
+`paymentMethods`, `offices`, `checklistItems` (`[{key,label}]`, ordered). Never
+re-introduce a hard-coded status/office/payment/checklist list in a page or
+component. `checklistItems` keys are stable across renames so deals' saved
+`checklist` progress survives edits; `DealChecklist` falls back to the built-in
+`CHECKLIST_ITEMS` only when settings haven't loaded.
 The default seed is `Deal Review`, `Pending Install`, `Pay Finalized`, `Paid`,
 `Sales Issue`, `Canceled` (each with a color). Because statuses are
 configurable, there is no longer a DB CHECK on `deals.status` (see

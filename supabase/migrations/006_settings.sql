@@ -53,5 +53,12 @@ INSERT INTO app_settings (key, value) VALUES
      {"label":"Canceled","color":"#6b7280"}
    ]'::jsonb),
   ('payment_methods', '["Self-Pay","Goodleap","Sunlight","Self-Pay + Sunlight","Self-Pay + Goodleap"]'::jsonb),
-  ('offices', '["Phoenix","Tucson"]'::jsonb)
+  ('offices', '["Phoenix","Tucson"]'::jsonb),
+  ('checklist_items', '[
+     {"key":"contract_signed","label":"Contract Signed"},
+     {"key":"detailed_drawing","label":"Detailed Drawing"},
+     {"key":"payment_method","label":"Payment Method"},
+     {"key":"scheduled","label":"Scheduled"},
+     {"key":"no_issues","label":"No Issues"}
+   ]'::jsonb)
 ON CONFLICT (key) DO NOTHING;
