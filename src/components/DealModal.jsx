@@ -282,7 +282,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
               <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-3">Commission Preview</p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 md:gap-3 text-center">
                 {[
-                  ['Gross', fmt(preview.gross)],
+                  ['Gross Comm', fmt(preview.repCommission)],
                   [`Setter (${form.setter_id===form.closer_id?'100':splitPct.toFixed(0)}%)`, fmt(preview.setterAmt)],
                   [`Closer (${form.setter_id===form.closer_id?'0':(100-splitPct).toFixed(0)}%)`, fmt(preview.closerAmt)],
                   ['Rep Comm %', fmtPct(preview.commPct)],
@@ -294,13 +294,19 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                 ))}
               </div>
               {(preview.managerAmt > 0 || preview.directorAmt > 0 || preview.vpAmt > 0) && (
-                <div className="grid grid-cols-3 gap-2 text-center mt-3 pt-3 border-t border-white/5">
-                  {[['Mgr', preview.managerAmt], ['Dir', preview.directorAmt], ['VP', preview.vpAmt]].map(([lbl, val]) => (
-                    <div key={lbl}>
-                      <p className="text-[10px] text-white/30 mb-0.5">{lbl} Override</p>
-                      <p className="text-[13px] font-semibold text-white/60">{fmt(val)}</p>
-                    </div>
-                  ))}
+                <div className="mt-3 pt-3 border-t border-white/5">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest">Overrides</p>
+                    <span className="text-[12px] font-bold text-white/70">Gross {fmt(preview.overrides)}</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    {[['Mgr', preview.managerAmt], ['Dir', preview.directorAmt], ['VP', preview.vpAmt]].map(([lbl, val]) => (
+                      <div key={lbl}>
+                        <p className="text-[10px] text-white/30 mb-0.5">{lbl} Override</p>
+                        <p className="text-[13px] font-semibold text-white/60">{fmt(val)}</p>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
