@@ -30,16 +30,17 @@ const CHECKLIST_TO_STATUS   = 'Pending Install'
 
 // Compact indicator (progress ring → green check) that opens an inline popover
 // of checkboxes. Saves each toggle straight to the deal — no full edit needed.
-function DealChecklist({ deal, canEdit, onUpdate }) {
+function DealChecklist({ deal, canEdit, onUpdate, items }) {
+  const list = items?.length ? items : CHECKLIST_ITEMS
   const [open, setOpen] = useState(false)
-  const [pos, setPos]   = useState({ top: 0, left: 0 })
+  const [pos, setPos]   = useState({ left: 0 })
   const btnRef = useRef(null)
   const popRef = useRef(null)
 
   const checked    = Array.isArray(deal.checklist) ? deal.checklist : []
   const checkedSet = new Set(checked)
-  const total = CHECKLIST_ITEMS.length
-  const done  = CHECKLIST_ITEMS.filter(i => checkedSet.has(i.key)).length
+  const total = list.length
+  const done  = list.filter(i => checkedSet.has(i.key)).length
   const complete = done === total
   const pct = total ? done / total : 0
   const R = 9, C = 2 * Math.PI * R
@@ -86,7 +87,17 @@ function DealChecklist({ deal, canEdit, onUpdate }) {
       const width = 236
       let left = r.left
       if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8)
-      setPos({ top: r.bottom + 6, left })
+      if (left < 8) left = 8
+      // Open downward by default; flip upward when the row is near the bottom of
+      // the viewport so the popover never spills off-screen. Cap its height to
+      // the available space and let it scroll.
+      const spaceBelow = window.innerHeight - r.bottom - 12
+      const spaceAbove = r.top - 12
+      const openUp = spaceBelow < 280 && spaceAbove > spaceBelow
+      const maxH = Math.max(180, Math.min(420, openUp ? spaceAbove : spaceBelow))
+      setPos(openUp
+        ? { left, bottom: window.innerHeight - r.top + 6, maxH }
+        : { left, top: r.bottom + 6, maxH })
     }
     setOpen(o => !o)
   }
@@ -96,13 +107,13 @@ function DealChecklist({ deal, canEdit, onUpdate }) {
   // (Only flips between those two; never disturbs Paid/Canceled/etc.)
   const applyChecklist = (next) => {
     const payload = { checklist: next }
-    const complete = CHECKLIST_ITEMS.every(i => next.includes(i.key))
+    const complete = list.every(i => next.includes(i.key))
     if (complete && deal.status === CHECKLIST_FROM_STATUS)       payload.status = CHECKLIST_TO_STATUS
     else if (!complete && deal.status === CHECKLIST_TO_STATUS)   payload.status = CHECKLIST_FROM_STATUS
     onUpdate(deal.id, payload)
   }
   const toggle = (key) => applyChecklist(checkedSet.has(key) ? checked.filter(k => k !== key) : [...checked, key])
-  const setAll = (all) => applyChecklist(all ? CHECKLIST_ITEMS.map(i => i.key) : [])
+  const setAll = (all) => applyChecklist(all ? list.map(i => i.key) : [])
 
   return (
     <>
@@ -112,8 +123,9 @@ function DealChecklist({ deal, canEdit, onUpdate }) {
         {indicator}
       </button>
       {open && createPortal(
-        <div ref={popRef} className="fixed z-[60] w-[236px] rounded-xl shadow-2xl p-1.5"
-          style={{ top: pos.top, left: pos.left, background: '#242424', border: '1px solid #3a3a3a' }}>
+        <div ref={popRef} className="fixed z-[60] w-[236px] rounded-xl shadow-2xl p-1.5 overflow-y-auto"
+          style={{ left: pos.left, ...(pos.top != null ? { top: pos.top } : { bottom: pos.bottom }),
+                   maxHeight: pos.maxH, background: '#242424', border: '1px solid #3a3a3a' }}>
           <div className="px-2 py-1.5 flex items-center justify-between">
             <span className="text-[10px] font-bold uppercase tracking-wider text-white/40">New-deal checklist</span>
             <span className="text-[11px] font-semibold" style={{ color: complete ? '#00b894' : '#fff' }}>{done}/{total}</span>
@@ -121,7 +133,7 @@ function DealChecklist({ deal, canEdit, onUpdate }) {
           <div className="h-1 rounded-full mx-2 mb-1.5 overflow-hidden" style={{ background: '#ffffff15' }}>
             <div className="h-full rounded-full transition-all" style={{ width: `${pct * 100}%`, background: complete ? '#00b894' : '#2dd4bf' }} />
           </div>
-          {CHECKLIST_ITEMS.map(item => {
+          {list.map(item => {
             const on = checkedSet.has(item.key)
             return (
               <button key={item.key} type="button" onClick={() => toggle(item.key)}
@@ -516,7 +528,7 @@ function NotesEditor({ deal, canEdit, onUpdate }) {
 const subline = (deal) => [deal.office, deal.payment_method].filter(Boolean).join(' · ') || '—'
 
 // ── Mobile card (below lg) ────────────────────────────────────
-function DealCard({ deal, canEdit, onEdit, onDelete, onUpdate, statusColor, statusLabels }) {
+function DealCard({ deal, canEdit, onEdit, onDelete, onUpdate, statusColor, statusLabels, checklistItems }) {
   const baseline = parseFloat(deal.baseline_revenue) || 0
   const jobPrice = parseFloat(deal.job_price)        || 0
   const [showNotes, setShowNotes] = useState(false)
@@ -527,7 +539,7 @@ function DealCard({ deal, canEdit, onEdit, onDelete, onUpdate, statusColor, stat
           <div className="flex items-center gap-2">
             <button onClick={() => setShowNotes(s => !s)} className="text-[14px] font-semibold text-white truncate text-left">{deal.deal_name}</button>
             {deal.notes && <MessageSquare size={12} className="text-teal/70 flex-shrink-0" />}
-            <DealChecklist deal={deal} canEdit={canEdit} onUpdate={onUpdate} />
+            <DealChecklist deal={deal} canEdit={canEdit} onUpdate={onUpdate} items={checklistItems} />
           </div>
           <p className="text-[11px] text-white/40 truncate">{subline(deal)}</p>
         </div>
@@ -578,7 +590,7 @@ export default function DealTable({
   dateFrom, dateTo, datePreset, setDateRange,
   onEdit, onDelete, onUpdate, loading,
 }) {
-  const { statusColor, statusLabels, offices, paymentMethods } = useSettings()
+  const { statusColor, statusLabels, offices, paymentMethods, checklistItems } = useSettings()
   const canEdit = ['admin', 'manager', 'director', 'vp'].includes(profile?.role) || profile?.is_admin === true
   const [notesOpen, setNotesOpen] = useState(() => new Set())
   const toggleNotes = (id) => setNotesOpen(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -664,7 +676,7 @@ export default function DealTable({
                       {deal.deal_name}
                     </button>
                     {deal.notes && <MessageSquare size={12} className="text-teal/70 flex-shrink-0" />}
-                    <DealChecklist deal={deal} canEdit={canEdit} onUpdate={onUpdate} />
+                    <DealChecklist deal={deal} canEdit={canEdit} onUpdate={onUpdate} items={checklistItems} />
                   </div>
                   {deal.project_id && <p className="text-[11px] text-white/40 truncate max-w-[260px]">{deal.project_id}</p>}
                 </td>
@@ -716,7 +728,7 @@ export default function DealTable({
         {deals.map(deal => (
           <DealCard key={deal.id} deal={deal} canEdit={canEdit}
             onEdit={onEdit} onDelete={onDelete} onUpdate={onUpdate}
-            statusColor={statusColor} statusLabels={statusLabels} />
+            statusColor={statusColor} statusLabels={statusLabels} checklistItems={checklistItems} />
         ))}
       </div>
     </div>

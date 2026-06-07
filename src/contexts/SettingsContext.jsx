@@ -15,6 +15,13 @@ const DEFAULTS = {
   ],
   payment_methods: ['Self-Pay', 'Goodleap', 'Sunlight', 'Self-Pay + Sunlight', 'Self-Pay + Goodleap'],
   offices: ['Phoenix', 'Tucson'],
+  checklist_items: [
+    { key: 'contract_signed',  label: 'Contract Signed' },
+    { key: 'detailed_drawing', label: 'Detailed Drawing' },
+    { key: 'payment_method',   label: 'Payment Method' },
+    { key: 'scheduled',        label: 'Scheduled' },
+    { key: 'no_issues',        label: 'No Issues' },
+  ],
 }
 
 const SettingsContext = createContext(null)
@@ -52,6 +59,7 @@ export function SettingsProvider({ children }) {
     statuses, statusLabels, statusColor,
     paymentMethods: settings.payment_methods ?? [],
     offices: settings.offices ?? [],
+    checklistItems: settings.checklist_items?.length ? settings.checklist_items : DEFAULTS.checklist_items,
   }
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>
 }
@@ -60,4 +68,5 @@ export const useSettings = () => useContext(SettingsContext) ?? {
   settings: DEFAULTS, loaded: false, refresh: () => {}, save: async () => ({}),
   statuses: DEFAULTS.deal_statuses, statusLabels: DEFAULTS.deal_statuses.map(s => s.label),
   statusColor: () => '#94a3b8', paymentMethods: DEFAULTS.payment_methods, offices: DEFAULTS.offices,
+  checklistItems: DEFAULTS.checklist_items,
 }
