@@ -49,7 +49,8 @@ INSERT INTO app_settings (key, value) VALUES
      {"label":"Pending Install","color":"#2dd4bf"},
      {"label":"Pay Finalized","color":"#22d3ee"},
      {"label":"Paid","color":"#4ade80"},
-     {"label":"Sales Issue","color":"#f87171"}
+     {"label":"Sales Issue","color":"#f87171"},
+     {"label":"Canceled","color":"#6b7280"}
    ]'::jsonb),
   ('payment_methods', '["Self-Pay","Goodleap","Sunlight","Self-Pay + Sunlight","Self-Pay + Goodleap"]'::jsonb),
   ('offices', '["Phoenix","Tucson"]'::jsonb)

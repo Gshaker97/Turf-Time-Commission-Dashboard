@@ -105,8 +105,17 @@ through `useSettings()` (`src/contexts/SettingsContext.jsx`):
 `statusLabels`, `statusColor(label)`, `paymentMethods`, `offices`. Never
 re-introduce a hard-coded status/office/payment list in a page or component.
 The default seed is `Deal Review`, `Pending Install`, `Pay Finalized`, `Paid`,
-`Sales Issue` (each with a color). Because statuses are configurable, there is
-no longer a DB CHECK on `deals.status` (see `006_settings.sql`).
+`Sales Issue`, `Canceled` (each with a color). Because statuses are
+configurable, there is no longer a DB CHECK on `deals.status` (see
+`006_settings.sql`).
+
+**Status lifecycle automation:** new deals (manual or scheduler-imported)
+default to `Deal Review`. When all items in a deal's inline checklist are ticked,
+a deal in `Deal Review` auto-advances to `Pending Install` (`DealChecklist` in
+`src/components/DealTable.jsx`, the `CHECKLIST_FROM_STATUS` →
+`CHECKLIST_TO_STATUS` transition). A job marked CANCELLED on the scheduler moves
+to `Canceled` via `scripts/ScheduleSync.gs`; that sync never changes status on a
+plain update — only the checklist advances it.
 
 ## Known low-severity items (not yet addressed)
 

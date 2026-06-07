@@ -19,11 +19,13 @@
  *     the Sales Rep closes (split 50/50). "Self Gen"/blank → Sales Rep is solo.
  *   • UPSERT keyed on the Project ID:
  *       – Deal exists  → PATCH only schedule-owned facts that changed
- *         (install_date, pay_date computed, payment_method, office) and bump
- *         status to "Pending Install" — preserves splits/overrides/notes/etc.
- *       – Deal missing → CREATE it (status "Pending Install"), gated by the
+ *         (install_date, pay_date computed, payment_method, office). Status is
+ *         left alone — preserves splits/overrides/notes/etc.
+ *       – Deal missing → CREATE it in status "Deal Review", gated by the
  *         forward-only baseline so your existing backlog doesn't flood in.
- *   • CANCELLED row → flips the matching deal's status to "Sales Issue"
+ *   • A deal advances "Deal Review" → "Pending Install" only when its checklist
+ *     is completed in the dashboard (not here).
+ *   • CANCELLED row → flips the matching deal's status to "Canceled"
  *     (never creates, never touches a deal already Pay Finalized / Paid).
  *
  * Setup (in the scheduler spreadsheet's Apps Script project):
@@ -47,8 +49,8 @@ const SCH_DIRECTOR         = 'garrison shaker'; // default override chain (lower
 const SCH_VP               = 'keaton shaker';
 const SCH_EXCLUDE_REPS     = ['rhett', 'ronnie'];       // never import inside-sales reps
 const SCH_SKIP_NAME_CONTAINS = ['test', 'cute'];        // junk/test customers
-const SCH_NEW_STATUS       = 'Pending Install'; // status for a freshly scheduled deal
-const SCH_CANCEL_STATUS    = 'Sales Issue';     // CANCELLED schedule row → this status
+const SCH_NEW_STATUS       = 'Deal Review';     // status for a freshly created deal
+const SCH_CANCEL_STATUS    = 'Canceled';        // CANCELLED schedule row → this status
 const SCH_LOCKED_STATUSES  = ['Pay Finalized', 'Paid']; // never auto-overridden
 const SCH_BASELINE_PROP    = 'SCHED_BASELINE_IDS';
 // SAFETY: true = preview only (logs what it WOULD do, writes nothing).
@@ -152,11 +154,8 @@ function schSync() {
       if (payDate     && existing.pay_date       !== payDate)     patch.pay_date       = payDate;
       if (payment     && existing.payment_method !== payment)     patch.payment_method = payment;
       if (office      && existing.office         !== office)      patch.office         = office;
-      if (existing.status !== SCH_NEW_STATUS &&
-          existing.status !== SCH_CANCEL_STATUS &&
-          SCH_LOCKED_STATUSES.indexOf(existing.status) === -1) {
-        patch.status = SCH_NEW_STATUS;
-      }
+      // Status is NOT touched here — a deal advances to Pending Install only when
+      // its checklist is completed in the dashboard.
       if (!Object.keys(patch).length) { out.skipped++; continue; }
       if (SCH_DRY_RUN) { out.updated++; out.details.push('WOULD UPDATE — ' + customer + ' ' + JSON.stringify(patch)); continue; }
       try { schPatch_(url, key, '/rest/v1/deals?id=eq.' + existing.id, patch); out.updated++; }
