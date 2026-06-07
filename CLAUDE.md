@@ -111,9 +111,11 @@ configurable, there is no longer a DB CHECK on `deals.status` (see
 
 **Status lifecycle automation:** new deals (manual or scheduler-imported)
 default to `Deal Review`. When all items in a deal's inline checklist are ticked,
-a deal in `Deal Review` auto-advances to `Pending Install` (`DealChecklist` in
-`src/components/DealTable.jsx`, the `CHECKLIST_FROM_STATUS` →
-`CHECKLIST_TO_STATUS` transition). A job marked CANCELLED on the scheduler moves
+a deal in `Deal Review` auto-advances to `Pending Install`; unchecking an item on
+a `Pending Install` deal drops it back to `Deal Review` (`DealChecklist` in
+`src/components/DealTable.jsx`, the `CHECKLIST_FROM_STATUS` ↔
+`CHECKLIST_TO_STATUS` transition — only flips between those two, never disturbs
+Paid/Canceled/etc.). A job marked CANCELLED on the scheduler moves
 to `Canceled` via `scripts/ScheduleSync.gs`; that sync never changes status on a
 plain update — only the checklist advances it.
 
