@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { ChevronDown, CalendarClock, AlertTriangle } from 'lucide-react'
 import { format } from 'date-fns'
 import { fetchDeals } from '../lib/db'
+import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import { dealAmounts, getUserCommission, fmt } from '../utils/commission'
@@ -148,6 +149,7 @@ export default function Commissions() {
     setLoading(true)
     fetchDeals().then(({ data }) => { setAllDeals(data || []); setLoading(false) })
   }, [])
+  useRefreshOnFocus(() => fetchDeals().then(({ data }) => setAllDeals(data || [])))
 
   // Every deal this user has any stake in (unfiltered — for the forward-looking
   // "next payday", which shouldn't disappear when you filter a past period).

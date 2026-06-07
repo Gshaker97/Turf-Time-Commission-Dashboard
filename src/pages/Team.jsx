@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { format, subMonths, startOfWeek, endOfWeek, addDays } from 'date-fns'
 import { fetchDeals, fetchUsers } from '../lib/db'
+import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserCommission, calcDealCommissions, fmt } from '../utils/commission'
 import { getPresetRange, presetLabel } from '../utils/dateRanges'
@@ -218,11 +219,12 @@ export default function Team() {
     setTeamGoalVersion(n => n + 1); setEditingTeamGoal(false)
   }
 
-  useEffect(() => {
+  const loadData = () =>
     Promise.all([fetchDeals(), fetchUsers()]).then(([{ data: d }, { data: u }]) => {
-      setDeals(d ?? []); setUsers(u ?? []); setLoading(false)
+      setDeals(d ?? []); setUsers(u ?? [])
     })
-  }, [])
+  useEffect(() => { loadData().finally(() => setLoading(false)) }, [])
+  useRefreshOnFocus(loadData)
 
   function handleRangeChange({ from, to, preset }) {
     setDateFrom(from); setDateTo(to); setActivePreset(preset)

@@ -9,6 +9,7 @@ import { fetchDeals, fetchUsers, fetchGoal, saveGoal as saveGoalDb, deleteGoal a
 import { fmt, dealAmounts } from '../utils/commission'
 import { getPresetRange, getPreviousRange } from '../utils/dateRanges'
 import DateRangeFilter from '../components/DateRangeFilter'
+import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 
 const MEDAL = {
   1: { bg: '#fbbf2420', color: '#fbbf24' },
@@ -90,13 +91,14 @@ export default function Dashboard() {
   const goalYear  = goalDate.getFullYear()
   const goalMonth = goalDate.getMonth() + 1
 
-  useEffect(() => {
+  const loadData = () =>
     Promise.all([fetchDeals(), fetchUsers()]).then(([{ data: d }, { data: u }]) => {
       setDeals(d ?? [])
       setUsers(u ?? [])
-      setLoading(false)
     })
-  }, [])
+
+  useEffect(() => { loadData().finally(() => setLoading(false)) }, [])
+  useRefreshOnFocus(loadData)   // repull when returning to the tab so stats stay current
 
   useEffect(() => {
     setSavedGoal(null)
@@ -236,9 +238,11 @@ export default function Dashboard() {
     setRepSort(s => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }))
   const rankedReps = useMemo(() => {
     const { key, dir } = repSort
+    // Show every rep with any activity — ranked, scrollable. (No top-N cut, so
+    // setter-only reps who hand deals off to a closer still appear.)
     return [...repData]
+      .filter(r => r.deals || r.leads || r.revenue || r.leadRevenue || r.commission)
       .sort((a, b) => (dir === 'asc' ? (a[key] - b[key]) : (b[key] - a[key])) || (b.revenue - a.revenue))
-      .slice(0, 10)
   }, [repData, repSort])
 
   const weeklyData = useMemo(() => {
@@ -400,8 +404,9 @@ export default function Dashboard() {
             <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Rep Leaderboard</h3>
             <p className="text-[11px] text-white/30 hidden sm:block">Tap a column to rank by it</p>
           </div>
+          <div className="max-h-[460px] overflow-y-auto">
           <table className="w-full">
-            <thead>
+            <thead className="sticky top-0 z-10" style={{ background: '#242424' }}>
               <tr className="text-[9px] md:text-[10px] font-bold text-white/30 uppercase tracking-wider">
                 <th className="text-left pb-2 w-6">#</th>
                 <th className="text-left pb-2">Rep</th>
@@ -445,6 +450,7 @@ export default function Dashboard() {
               )}
             </tbody>
           </table>
+          </div>
         </div>
 
         {/* Team Breakdown */}
