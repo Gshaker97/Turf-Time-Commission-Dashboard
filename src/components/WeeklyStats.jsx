@@ -54,8 +54,9 @@ export default function WeeklyStats({ deals = [], reps = [], users = [], canEdit
   }, [stats])
 
   // Closes from deals, bucketed by sale week:
-  //  • self-gen close = rep set AND closed it (solo)
-  //  • lead close     = rep closed a deal someone else set
+  //  • self-gen close = a deal the rep SET that sold (credited to the setter,
+  //    even if a different rep closed it)
+  //  • lead close     = a deal the rep CLOSED that someone else set
   const { sgClosed, ldClosed } = useMemo(() => {
     const wk = new Set(weeks.map(w => w.weekStart))
     const sc = {}, lc = {}
@@ -64,11 +65,8 @@ export default function WeeklyStats({ deals = [], reps = [], users = [], canEdit
       const ws = weekStartOf(d.sale_date)
       if (!wk.has(ws)) continue
       const setter = d.setter_id, closer = d.closer_id
-      if (setter && (!closer || closer === setter)) {
-        sc[`${setter}|${ws}`] = (sc[`${setter}|${ws}`] || 0) + 1
-      } else if (closer && setter && closer !== setter) {
-        lc[`${closer}|${ws}`] = (lc[`${closer}|${ws}`] || 0) + 1
-      }
+      if (setter) sc[`${setter}|${ws}`] = (sc[`${setter}|${ws}`] || 0) + 1
+      if (closer && closer !== setter) lc[`${closer}|${ws}`] = (lc[`${closer}|${ws}`] || 0) + 1
     }
     return { sgClosed: sc, ldClosed: lc }
   }, [deals, weeks])
