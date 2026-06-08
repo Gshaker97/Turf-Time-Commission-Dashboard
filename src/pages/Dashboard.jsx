@@ -6,7 +6,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { Check, X, TrendingUp, TrendingDown, Minus, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchDeals, fetchUsers, fetchGoal, saveGoal as saveGoalDb, deleteGoal as deleteGoalDb } from '../lib/db'
-import { fmt, dealAmounts } from '../utils/commission'
+import { fmt, dealAmounts, activeDeals } from '../utils/commission'
 import { getPresetRange, getPreviousRange } from '../utils/dateRanges'
 import DateRangeFilter from '../components/DateRangeFilter'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
@@ -93,7 +93,7 @@ export default function Dashboard() {
 
   const loadData = () =>
     Promise.all([fetchDeals(), fetchUsers()]).then(([{ data: d }, { data: u }]) => {
-      setDeals(d ?? [])
+      setDeals(activeDeals(d ?? []))   // canceled jobs never count toward stats
       setUsers(u ?? [])
     })
 

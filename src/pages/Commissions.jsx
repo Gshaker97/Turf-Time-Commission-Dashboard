@@ -147,9 +147,9 @@ export default function Commissions() {
 
   useEffect(() => {
     setLoading(true)
-    fetchDeals().then(({ data }) => { setAllDeals(data || []); setLoading(false) })
+    fetchDeals().then(({ data }) => { setAllDeals(activeDeals(data || [])); setLoading(false) })
   }, [])
-  useRefreshOnFocus(() => fetchDeals().then(({ data }) => setAllDeals(data || [])))
+  useRefreshOnFocus(() => fetchDeals().then(({ data }) => setAllDeals(activeDeals(data || []))))
 
   // Every deal this user has any stake in (unfiltered — for the forward-looking
   // "next payday", which shouldn't disappear when you filter a past period).

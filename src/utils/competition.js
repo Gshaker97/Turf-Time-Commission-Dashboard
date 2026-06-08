@@ -12,7 +12,7 @@
 //                  (only solo deals), 'setter', 'closer', or 'split' (setter and
 //                  closer share it by credit_split_pct = the closer's share).
 // ============================================================
-import { fmt } from './commission'
+import { fmt, isCanceled } from './commission'
 
 export const COMP_TYPES = [
   { key: 'individual', label: 'Individual' },
@@ -81,7 +81,7 @@ function personCredit(deal, userId, comp) {
 function personScore(userId, deals, comp) {
   let total = 0
   for (const d of deals) {
-    if (!inWindow(d, comp)) continue
+    if (!inWindow(d, comp) || isCanceled(d)) continue   // canceled jobs don't count
     const credit = personCredit(d, userId, comp)
     if (credit) total += dealValue(d, comp.metric) * credit
   }
@@ -94,7 +94,7 @@ function teamScore(managerId, deals, users, comp) {
   const ids = new Set([managerId, ...users.filter(u => u.manager_id === managerId).map(u => u.id)])
   let total = 0
   for (const d of deals) {
-    if (!inWindow(d, comp)) continue
+    if (!inWindow(d, comp) || isCanceled(d)) continue   // canceled jobs don't count
     const setterIn  = ids.has(d.setter_id)
     const solo      = !d.closer_id || d.setter_id === d.closer_id
     const closerIn  = ids.has(d.closer_id ?? d.setter_id)
@@ -110,34 +110,39 @@ function teamScore(managerId, deals, users, comp) {
   return total
 }
 
+// Whether a team is credited for a deal under the chosen mode (ignores cancel).
+function teamCounts(deal, ids, comp) {
+  const setterIn = ids.has(deal.setter_id)
+  const solo     = !deal.closer_id || deal.setter_id === deal.closer_id
+  const closerIn = ids.has(deal.closer_id ?? deal.setter_id)
+  switch (comp.credit_mode || 'both') {
+    case 'self_gen': return solo && setterIn
+    case 'setter':   return setterIn
+    case 'closer':   return closerIn
+    default:         return setterIn || closerIn
+  }
+}
+
 // The deals that make up an entrant's score, for the admin drill-down:
 // [{ deal, value, credit, contribution }] newest-first. `value` is the deal's
 // metric (baseline or 1), `credit` the fraction earned, `contribution` the
 // product that's added to the score.
 export function competitionEntryDeals(comp, entrantId, deals = [], users = []) {
   const out = []
-  if (comp.type === 'team') {
-    const ids = new Set([entrantId, ...users.filter(u => u.manager_id === entrantId).map(u => u.id)])
-    for (const d of deals) {
-      if (!inWindow(d, comp)) continue
-      const setterIn = ids.has(d.setter_id)
-      const solo     = !d.closer_id || d.setter_id === d.closer_id
-      const closerIn = ids.has(d.closer_id ?? d.setter_id)
-      let counts
-      switch (comp.credit_mode || 'both') {
-        case 'self_gen': counts = solo && setterIn; break
-        case 'setter':   counts = setterIn; break
-        case 'closer':   counts = closerIn; break
-        default:         counts = setterIn || closerIn; break
-      }
-      if (counts) { const v = dealValue(d, comp.metric); out.push({ deal: d, value: v, credit: 1, contribution: v }) }
-    }
-  } else {
-    for (const d of deals) {
-      if (!inWindow(d, comp)) continue
-      const credit = personCredit(d, entrantId, comp)
-      if (credit) { const v = dealValue(d, comp.metric); out.push({ deal: d, value: v, credit, contribution: v * credit }) }
-    }
+  const ids = comp.type === 'team'
+    ? new Set([entrantId, ...users.filter(u => u.manager_id === entrantId).map(u => u.id)])
+    : null
+  for (const d of deals) {
+    if (!inWindow(d, comp)) continue
+    const credit = comp.type === 'team'
+      ? (teamCounts(d, ids, comp) ? 1 : 0)
+      : personCredit(d, entrantId, comp)
+    if (!credit) continue
+    // Include canceled deals too, but flagged & worth 0 — they show struck-out
+    // so an admin can see what WOULD count if the job weren't canceled.
+    const canceled = isCanceled(d)
+    const value = dealValue(d, comp.metric)
+    out.push({ deal: d, value, credit, contribution: canceled ? 0 : value * credit, canceled })
   }
   return out.sort((a, b) => ((a.deal.sale_date ?? '') < (b.deal.sale_date ?? '') ? 1 : -1))
 }
