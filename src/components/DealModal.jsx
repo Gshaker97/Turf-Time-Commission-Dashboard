@@ -83,7 +83,8 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
   // the following week). Clearing the install date leaves pay date untouched,
   // and the pay date stays manually editable.
   function setInstallDate(v) {
-    setForm(f => ({ ...f, install_date: v, ...(v ? { pay_date: payDateFromInstall(v) } : {}) }))
+    // Setting an install date auto-fills the pay date; clearing it clears both.
+    setForm(f => ({ ...f, install_date: v, pay_date: v ? payDateFromInstall(v) : '' }))
   }
 
   function handleOverrideId(idKey, pctKey, value) {

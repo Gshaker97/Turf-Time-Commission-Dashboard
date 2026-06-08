@@ -97,7 +97,8 @@ export default function Payroll() {
   )
 
   const runDeals = useMemo(() => {
-    const list = view === 'overdue' ? overdueDeals : deals.filter(d => d.pay_date === view)
+    // Sales-Issue deals are pulled from the run (they're flagged, not payable).
+    const list = view === 'overdue' ? overdueDeals : deals.filter(d => d.pay_date === view && d.status !== ISSUE)
     // Pay oldest-sold first: sort by sale date ascending (blanks last).
     return [...list].sort((a, b) => (a.sale_date || '9999').localeCompare(b.sale_date || '9999'))
   }, [deals, view, overdueDeals])
