@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, Fragment } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, X, MessageSquare } from 'lucide-react'
+import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, X, MessageSquare, BadgeCheck } from 'lucide-react'
 import { calcDealCommissions, fmt, fmtPct, isCanceled } from '../utils/commission'
 import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
@@ -377,7 +377,21 @@ function DeductionTag({ amount, note }) {
   )
 }
 
-function CommissionCell({ deal }) {
+// Leadership sign-off seal next to the commission. Distinct from the name's
+// progress ring: a BadgeCheck that lights up green once the commission is
+// confirmed. Toggleable by VP/admin; read-only (shown only if verified) to others.
+function VerifySeal({ verified, canVerify, onToggle }) {
+  if (!verified && !canVerify) return null
+  if (!canVerify) return <BadgeCheck size={15} className="text-emerald-400 flex-shrink-0" title="Commission checked" />
+  return (
+    <button type="button" onClick={onToggle} className="flex-shrink-0 hover:opacity-80 transition-opacity"
+      title={verified ? 'Commission checked — click to unmark' : 'Mark commission as checked'}>
+      <BadgeCheck size={16} className={verified ? 'text-emerald-400' : 'text-white/20 hover:text-white/50'} />
+    </button>
+  )
+}
+
+function CommissionCell({ deal, canVerify, onUpdate }) {
   const { repCommission, commPct, setterAmt, closerAmt, deduction, job } = calcDealCommissions(deal)
   const split = deal.setter_id && deal.closer_id && deal.setter_id !== deal.closer_id
   // Rep commission only (setter + closer, net of deductions) — overrides go to
@@ -385,7 +399,10 @@ function CommissionCell({ deal }) {
   const repPct = job > 0 ? repCommission / job : 0
 
   return (
-    <div className="flex flex-col items-end gap-1 leading-tight">
+    <div className="flex items-center justify-end gap-2">
+      <VerifySeal verified={deal.commission_verified === true} canVerify={canVerify}
+        onToggle={() => onUpdate?.(deal.id, { commission_verified: !deal.commission_verified })} />
+      <div className="flex flex-col items-end gap-1 leading-tight">
       {!split ? (
         <div className="flex flex-col items-end">
           <span className="text-[13px] font-bold text-teal">{fmt(repCommission)}</span>
@@ -407,6 +424,7 @@ function CommissionCell({ deal }) {
         </div>
       )}
       {deduction > 0 && <DeductionTag amount={deduction} note={deal.deduction_note} />}
+      </div>
     </div>
   )
 }
@@ -538,7 +556,7 @@ function NotesEditor({ deal, canEdit, onUpdate }) {
 const subline = (deal) => [deal.office, deal.payment_method].filter(Boolean).join(' · ') || '—'
 
 // ── Mobile card (below lg) ────────────────────────────────────
-function DealCard({ deal, canEdit, onEdit, onDelete, onUpdate, statusColor, statusLabels, checklistItems }) {
+function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onUpdate, statusColor, statusLabels, checklistItems }) {
   const baseline = parseFloat(deal.baseline_revenue) || 0
   const jobPrice = parseFloat(deal.job_price)        || 0
   const [showNotes, setShowNotes] = useState(false)
@@ -569,7 +587,7 @@ function DealCard({ deal, canEdit, onEdit, onDelete, onUpdate, statusColor, stat
           <DateField key={`pay-${deal.pay_date ?? ''}`} label="Pay" value={deal.pay_date} field="pay_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
         </div>
         <div className="flex items-end justify-end">
-          <CommissionCell deal={deal} />
+          <CommissionCell deal={deal} canVerify={canVerify} onUpdate={onUpdate} />
         </div>
       </div>
 
@@ -602,6 +620,8 @@ export default function DealTable({
 }) {
   const { statusColor, statusLabels, offices, paymentMethods, checklistItems } = useSettings()
   const canEdit = ['admin', 'manager', 'director', 'vp'].includes(profile?.role) || profile?.is_admin === true
+  // Commission sign-off is a leadership action (VP/admin).
+  const canVerify = ['vp', 'admin'].includes(profile?.role) || profile?.is_admin === true
   const [notesOpen, setNotesOpen] = useState(() => new Set())
   const toggleNotes = (id) => setNotesOpen(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
   const colCount = COLS.length + (canEdit ? 1 : 0)
@@ -713,7 +733,7 @@ export default function DealTable({
                   </div>
                 </td>
                 <td className="px-3 py-3"><RevenueCell baseline={baseline} jobPrice={jobPrice} /></td>
-                <td className="px-3 py-3"><CommissionCell deal={deal} /></td>
+                <td className="px-3 py-3"><CommissionCell deal={deal} canVerify={canVerify} onUpdate={onUpdate} /></td>
                 {canEdit && (
                   <td className="px-3 py-3"><ActionButtons deal={deal} onEdit={onEdit} onDelete={onDelete} /></td>
                 )}
@@ -737,7 +757,7 @@ export default function DealTable({
       {/* Mobile / tablet cards (below lg) */}
       <div className="lg:hidden divide-y divide-white/5">
         {deals.map(deal => (
-          <DealCard key={deal.id} deal={deal} canEdit={canEdit}
+          <DealCard key={deal.id} deal={deal} canEdit={canEdit} canVerify={canVerify}
             onEdit={onEdit} onDelete={onDelete} onUpdate={onUpdate}
             statusColor={statusColor} statusLabels={statusLabels} checklistItems={checklistItems} />
         ))}
