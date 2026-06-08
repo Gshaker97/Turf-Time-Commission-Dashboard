@@ -103,6 +103,16 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
   }
 
   const splitPct = Math.min(100, Math.max(0, parseFloat(form.setter_split_pct) || 50))
+  // Let the split be set by typing a $ amount (back-calculated from the rep pool).
+  const repPoolForm = Math.max((parseFloat(form.job_price) || 0) - (parseFloat(form.baseline_revenue) || 0), 0)
+  const setterDollars = repPoolForm * splitPct / 100
+  const closerDollars = repPoolForm * (100 - splitPct) / 100
+  function setSplitFromDollars(which, raw) {
+    if (repPoolForm <= 0) return
+    const v = Math.max(0, parseFloat(String(raw).replace(/[$,]/g, '')) || 0)
+    let sp = which === 'setter' ? (v / repPoolForm) * 100 : (1 - v / repPoolForm) * 100
+    set('setter_split_pct', Math.min(100, Math.max(0, sp)).toFixed(2))
+  }
   const preview  = calcDealCommissions({
     job_price:             parseFloat(form.job_price)        || 0,
     baseline_revenue:      parseFloat(form.baseline_revenue) || 0,
@@ -146,6 +156,10 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
       dealer_fee_pct:   form.dealer_fee_pct ? parseFloat(form.dealer_fee_pct) / 100 : null,
       deduction_paid_by: form.deduction_paid_by || 'closer',
       deduction_split_pct: Math.min(1, Math.max(0, (parseFloat(form.deduction_split_pct) || 50) / 100)),
+      // Any edit recomputes from the current numbers — clear stored sheet amounts
+      // so the engine uses baseline/job + the splits/%s above, not stale values.
+      setter_amount: null, closer_amount: null,
+      manager_amount: null, director_amount: null, vp_amount: null,
     })
     setSaving(false)
   }
@@ -262,6 +276,20 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                   className="px-2 py-2 rounded-lg text-[13px] text-white text-center focus:outline-none w-16 shrink-0"
                   style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }} />
               </div>
+              {/* Or type the dollar amount — the slider/% follow */}
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+                <span className="text-[11px] text-white/40 sm:w-20 sm:text-right shrink-0">Setter $</span>
+                <input type="number" step="any" min="0" value={repPoolForm > 0 ? setterDollars.toFixed(2) : ''}
+                  onChange={e => setSplitFromDollars('setter', e.target.value)} placeholder="—" disabled={repPoolForm <= 0}
+                  className="flex-1 px-2 py-2 rounded-lg text-[13px] text-white focus:outline-none disabled:opacity-40"
+                  style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }} />
+                <span className="text-[11px] text-white/40 sm:w-20 sm:text-right shrink-0">Closer $</span>
+                <input type="number" step="any" min="0" value={repPoolForm > 0 ? closerDollars.toFixed(2) : ''}
+                  onChange={e => setSplitFromDollars('closer', e.target.value)} placeholder="—" disabled={repPoolForm <= 0}
+                  className="flex-1 px-2 py-2 rounded-lg text-[13px] text-white focus:outline-none disabled:opacity-40"
+                  style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }} />
+              </div>
+              <p className="text-[10px] text-white/30">Type a $ amount to set the split (of the {fmt(repPoolForm)} rep pool) — the slider and % follow.</p>
             </div>
           )}
 
