@@ -80,29 +80,37 @@ export default function Home() {
   const setterRevForMonth = (key) => allDeals
     .filter(d => d.setter_id === me && d.sale_date?.startsWith(key))
     .reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0);
-  const estForMonth = (key) => weekly
+  const wkSum = (key, field) => weekly
     .filter(s => s.rep_id === me && (s.week_start || "").startsWith(key))
-    .reduce((s, x) => s + (Number(x.estimates) || 0), 0);
+    .reduce((s, x) => s + (Number(x[field]) || 0), 0);
+  const sgEstForMonth = (key) => wkSum(key, "self_gen_estimates");
+  const ldEstForMonth = (key) => wkSum(key, "lead_estimates");
   const setterCountForMonth = (key) => allDeals.filter(d => d.setter_id === me && d.sale_date?.startsWith(key)).length;
 
-  // My stats for the selected month.
+  // My stats for the selected month — split self-gen (deals I set) vs leads
+  // (deals I closed that someone else set).
   const stats = useMemo(() => {
-    const revenue = setterRevForMonth(mr.key);
-    const deals = setterCountForMonth(mr.key);
-    const commission = getUserCommission(monthDeals, me);
-    const estimates = estForMonth(mr.key);
-    const closeRate = estimates > 0 ? (deals / estimates) * 100 : null;
-    const avgDeal = deals > 0 ? revenue / deals : 0;
-    return { revenue, deals, commission, estimates, closeRate, avgDeal };
+    const setterDeals = monthDeals.filter(d => d.setter_id === me);
+    const leadDeals   = monthDeals.filter(d => d.closer_id === me && d.setter_id !== me);
+    const sum = (arr) => arr.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0);
+    const sgRevenue = sum(setterDeals), sgCloses = setterDeals.length, sgEst = sgEstForMonth(mr.key);
+    const ldRevenue = sum(leadDeals),   ldCloses = leadDeals.length,   ldEst = ldEstForMonth(mr.key);
+    return {
+      sgRevenue, sgCloses, sgEst, sgRate: sgEst > 0 ? (sgCloses / sgEst) * 100 : null,
+      ldRevenue, ldCloses, ldEst, ldRate: ldEst > 0 ? (ldCloses / ldEst) * 100 : null,
+      commission: getUserCommission(monthDeals, me),
+      avgDeal: sgCloses > 0 ? sgRevenue / sgCloses : 0,
+      hasLeads: ldEst > 0 || ldCloses > 0,
+    };
   }, [monthDeals, weekly, allDeals, me, mr.key]);
 
-  // Closing-% trend vs the previous month.
+  // Self-gen closing-% trend vs the previous month.
   const closeDelta = useMemo(() => {
     const pm = months[selected + 1]; if (!pm) return null;
-    const est = estForMonth(pm.key); if (!est) return null;
+    const est = sgEstForMonth(pm.key); if (!est) return null;
     const prev = (setterCountForMonth(pm.key) / est) * 100;
-    return stats.closeRate == null ? null : stats.closeRate - prev;
-  }, [months, selected, allDeals, weekly, me, stats.closeRate]);
+    return stats.sgRate == null ? null : stats.sgRate - prev;
+  }, [months, selected, allDeals, weekly, me, stats.sgRate]);
 
   // Company rank by setter revenue this month (ghosts excluded for non-admins).
   const rank = useMemo(() => {
@@ -129,8 +137,8 @@ export default function Home() {
     const prev = [1, 2, 3].map(i => months[selected + i]).filter(Boolean).map(m => setterRevForMonth(m.key));
     if (!prev.length) return null;
     const goal = Math.max((prev.reduce((s, v) => s + v, 0) / prev.length) * 1.1, 5000);
-    return { goal, pct: Math.min((stats.revenue / goal) * 100, 100) };
-  }, [allDeals, me, months, selected, stats.revenue]);
+    return { goal, pct: Math.min((stats.sgRevenue / goal) * 100, 100) };
+  }, [allDeals, me, months, selected, stats.sgRevenue]);
 
   // Momentum: weekly win streak + last sale.
   const momentum = useMemo(() => {
@@ -154,7 +162,7 @@ export default function Home() {
     for (const m of months) { const r = setterRevForMonth(m.key); if (r > br) { br = r; bk = m.key; bl = m.label; } }
     return br > 0 ? { key: bk, label: bl, rev: br } : null;
   }, [allDeals, me, months]);
-  const isBest = best && best.key === mr.key && stats.revenue > 0;
+  const isBest = best && best.key === mr.key && stats.sgRevenue > 0;
 
   // Active competitions the rep is entered in.
   const myComps = useMemo(() => {
@@ -178,41 +186,35 @@ export default function Home() {
   const drillData = useMemo(() => {
     if (!drill) return null;
     const fmtD = (d) => d ? dfFormat(new Date(d + "T12:00:00"), "MMM d") : "—";
-    const setterDeals = monthDeals.filter(d => d.setter_id === me)
-      .sort((a, b) => (b.sale_date || "").localeCompare(a.sale_date || ""));
-    if (drill === "revenue" || drill === "avgDeal") {
-      return {
-        title: drill === "avgDeal" ? "Avg deal — deals you set" : "Revenue — deals you set",
-        total: drill === "avgDeal" ? `avg ${money(stats.avgDeal)} · ${money(stats.revenue)} total` : `${money(stats.revenue)} total`,
-        rows: setterDeals.map(d => ({ id: d.id, name: d.deal_name, sub: `${fmtD(d.sale_date)} · ${d.status}`, value: money(parseFloat(d.baseline_revenue) || 0) })),
-      };
-    }
-    if (drill === "deals" || drill === "closeRate") {
-      return {
-        title: drill === "closeRate" ? "Closing % — deals closed" : "Deals you set",
-        total: drill === "closeRate" ? `${stats.deals} closed / ${stats.estimates} estimates` : `${stats.deals} deals`,
-        rows: setterDeals.map(d => ({ id: d.id, name: d.deal_name, sub: fmtD(d.sale_date), value: d.status })),
-      };
+    const byDate = (arr) => arr.slice().sort((a, b) => (b.sale_date || "").localeCompare(a.sale_date || ""));
+    const setterDeals = byDate(monthDeals.filter(d => d.setter_id === me));
+    const leadDeals   = byDate(monthDeals.filter(d => d.closer_id === me && d.setter_id !== me));
+    const dealRows = (arr) => arr.map(d => ({ id: d.id, name: d.deal_name, sub: `${fmtD(d.sale_date)} · ${d.status}`, value: money(parseFloat(d.baseline_revenue) || 0) }));
+
+    if (drill === "sgRevenue" || drill === "sgCloses" || drill === "avgDeal")
+      return { title: "Self-gen — deals you set", total: `${stats.sgCloses} deals · ${money(stats.sgRevenue)}`, rows: dealRows(setterDeals) };
+    if (drill === "ldRevenue" || drill === "ldCloses")
+      return { title: "Leads — deals you closed for another setter", total: `${stats.ldCloses} deals · ${money(stats.ldRevenue)}`, rows: dealRows(leadDeals) };
+    if (drill === "sgEst" || drill === "ldEst") {
+      const field = drill === "sgEst" ? "self_gen_estimates" : "lead_estimates";
+      const rows = weekly.filter(s => s.rep_id === me && (s.week_start || "").startsWith(mr.key))
+        .sort((a, b) => (b.week_start || "").localeCompare(a.week_start || ""))
+        .map(s => ({ id: s.week_start, name: `Week of ${fmtD(s.week_start)}`, value: String(Number(s[field]) || 0) }));
+      return { title: drill === "sgEst" ? "Self-gen estimates" : "Lead estimates", total: `${drill === "sgEst" ? stats.sgEst : stats.ldEst} estimates`, rows };
     }
     if (drill === "commission") {
       const rows = monthDeals.map(d => ({ d, amt: getUserCommission([d], me) })).filter(x => x.amt > 0)
         .sort((a, b) => b.amt - a.amt)
         .map(({ d, amt }) => {
           const roles = [];
-          if (d.setter_id === me) roles.push("Setter");
+          if (d.setter_id === me) roles.push("Self-gen");
           if (d.closer_id === me && d.closer_id !== d.setter_id) roles.push("Closer");
-          if (d.manager_id === me) roles.push("Mgr");
-          if (d.director_id === me) roles.push("Dir");
-          if (d.vp_id === me) roles.push("VP");
-          return { id: d.id, name: d.deal_name, sub: `${fmtD(d.sale_date)} · ${roles.join(", ") || "—"}`, value: money(amt) };
+          if (d.manager_id === me) roles.push("Override");
+          if (d.director_id === me) roles.push("Override");
+          if (d.vp_id === me) roles.push("Override");
+          return { id: d.id, name: d.deal_name, sub: `${fmtD(d.sale_date)} · ${[...new Set(roles)].join(", ") || "—"}`, value: money(amt) };
         });
       return { title: "Commission — your earnings", total: `${money(stats.commission)} total`, rows };
-    }
-    if (drill === "estimates") {
-      const rows = weekly.filter(s => s.rep_id === me && (s.week_start || "").startsWith(mr.key))
-        .sort((a, b) => (b.week_start || "").localeCompare(a.week_start || ""))
-        .map(s => ({ id: s.week_start, name: `Week of ${fmtD(s.week_start)}`, value: String(s.estimates) }));
-      return { title: "Estimates given", total: `${stats.estimates} estimates`, rows };
     }
     return null;
   }, [drill, monthDeals, weekly, me, mr.key, stats]);
@@ -257,12 +259,12 @@ export default function Home() {
 
     // stat cards
     const tiles = [
-      ["REVENUE", money(stats.revenue), "#2dd4bf"],
+      ["REVENUE", money(stats.sgRevenue), "#2dd4bf"],
       ["COMMISSION", money(stats.commission), "#34d399"],
-      ["DEALS", String(stats.deals), "#fff"],
-      ["CLOSING %", stats.closeRate == null ? "—" : `${stats.closeRate.toFixed(0)}%`, rateColor(stats.closeRate)],
-      ["ESTIMATES", String(stats.estimates), "#74b9ff"],
-      ["WIN STREAK", `${momentum.streak} wk`, "#fb923c"],
+      ["DEALS", String(stats.sgCloses), "#fff"],
+      ["CLOSING %", stats.sgRate == null ? "—" : `${stats.sgRate.toFixed(0)}%`, rateColor(stats.sgRate)],
+      ["ESTIMATES", String(stats.sgEst), "#74b9ff"],
+      [stats.hasLeads ? "LEADS CLOSED" : "WIN STREAK", stats.hasLeads ? String(stats.ldCloses) : `${momentum.streak} wk`, "#fbbf24"],
     ];
     const cw = (W - P * 2 - 40) / 2, ch = 190, gap = 40;
     tiles.forEach((t, i) => {
@@ -391,19 +393,35 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Stat tiles */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-2 md:gap-3 mb-3">
-        <StatTile icon={DollarSign}    label="Revenue"    value={money(stats.revenue)} sub="baseline you set · tap to view" onClick={() => toggleDrill("revenue")} />
-        <StatTile icon={Wallet}        label="Commission" value={money(stats.commission)} sub="your earnings · tap to view" color="#34d399" onClick={() => toggleDrill("commission")} />
-        <StatTile icon={Layers}        label="Deals"      value={stats.deals} sub="closed this month · tap to view" color="#fff" onClick={() => toggleDrill("deals")} />
-        <StatTile icon={ClipboardList} label="Estimates"  value={stats.estimates} sub="given this month · tap to view" color="#74b9ff" onClick={() => toggleDrill("estimates")} />
-        <StatTile icon={Percent}       label="Closing %"  value={stats.closeRate == null ? "—" : `${stats.closeRate.toFixed(0)}%`} color={rateColor(stats.closeRate)} onClick={() => toggleDrill("closeRate")}
+      {/* Self-gen stats */}
+      <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold mb-2">Self-gen</p>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mb-3">
+        <StatTile icon={DollarSign}    label="Revenue"    value={money(stats.sgRevenue)} sub="baseline you set · tap" onClick={() => toggleDrill("sgRevenue")} />
+        <StatTile icon={Layers}        label="Closes"     value={stats.sgCloses} sub="deals you set · tap" color="#fff" onClick={() => toggleDrill("sgCloses")} />
+        <StatTile icon={ClipboardList} label="Estimates"  value={stats.sgEst} sub="self-gen · tap" color="#74b9ff" onClick={() => toggleDrill("sgEst")} />
+        <StatTile icon={Percent}       label="Closing %"  value={stats.sgRate == null ? "—" : `${stats.sgRate.toFixed(0)}%`} color={rateColor(stats.sgRate)} onClick={() => toggleDrill("sgCloses")}
           trend={closeDelta == null ? null : (
             <span className="text-[10px] font-semibold" style={{ color: closeDelta >= 0 ? "#4ade80" : "#f87171" }}>
               {closeDelta >= 0 ? "▲" : "▼"} {Math.abs(closeDelta).toFixed(0)} pts vs last mo
             </span>
           )} />
-        <StatTile icon={TrendingUp}    label="Avg Deal"   value={money(stats.avgDeal)} sub="per deal · tap to view" color="#fff" onClick={() => toggleDrill("avgDeal")} />
+      </div>
+
+      {/* Leads stats — only when the rep has run leads */}
+      {stats.hasLeads && (<>
+        <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold mb-2">Leads</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mb-3">
+          <StatTile icon={DollarSign}    label="Lead Rev"   value={money(stats.ldRevenue)} sub="closed for setters · tap" color="#a78bfa" onClick={() => toggleDrill("ldRevenue")} />
+          <StatTile icon={Layers}        label="Leads Closed" value={stats.ldCloses} sub="you closed · tap" color="#fff" onClick={() => toggleDrill("ldCloses")} />
+          <StatTile icon={ClipboardList} label="Lead Est"   value={stats.ldEst} sub="leads ran · tap" color="#74b9ff" onClick={() => toggleDrill("ldEst")} />
+          <StatTile icon={Percent}       label="Closing %"  value={stats.ldRate == null ? "—" : `${stats.ldRate.toFixed(0)}%`} color={rateColor(stats.ldRate)} onClick={() => toggleDrill("ldCloses")} />
+        </div>
+      </>)}
+
+      {/* Combined earnings */}
+      <div className="grid grid-cols-2 gap-2 md:gap-3 mb-3">
+        <StatTile icon={Wallet}     label="Commission" value={money(stats.commission)} sub="your total earnings · tap" color="#34d399" onClick={() => toggleDrill("commission")} />
+        <StatTile icon={TrendingUp} label="Avg Deal"   value={money(stats.avgDeal)} sub="per self-gen deal · tap" color="#fff" onClick={() => toggleDrill("avgDeal")} />
       </div>
 
       {/* Stat drill-down — inline, subtle */}
@@ -440,7 +458,7 @@ export default function Home() {
               <Target size={12} className="text-teal" /> Monthly pace
             </p>
             <p className="text-[11px] text-white/40">
-              <span className="font-bold text-white">{money(stats.revenue)}</span> of {money(pace.goal)} target
+              <span className="font-bold text-white">{money(stats.sgRevenue)}</span> of {money(pace.goal)} target
             </p>
           </div>
           <div className="h-2.5 rounded-full overflow-hidden" style={{ background: "#2a2a2a" }}>
