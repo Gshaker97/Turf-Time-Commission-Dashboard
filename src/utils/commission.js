@@ -116,3 +116,13 @@ export const fmt = (n) =>
   '$' + (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 export const fmtPct = (n) => ((Number(n) || 0) * 100).toFixed(1) + '%'
+
+// A canceled deal is excluded from every aggregate — revenue, commissions,
+// leaderboards, competitions, payroll. It still shows on the Deals page so it
+// can be moved out of "Canceled", at which point it counts again. Tolerates the
+// "Cancelled" spelling too.
+export const isCanceled = (deal) => {
+  const s = (deal?.status || '').trim().toLowerCase()
+  return s === 'canceled' || s === 'cancelled'
+}
+export const activeDeals = (deals = []) => deals.filter(d => !isCanceled(d))

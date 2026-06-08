@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight, ChevronDown, Download, Pencil, AlertTriangle
 import { format } from 'date-fns'
 import { fetchDeals, fetchUsers, updateDeal } from '../lib/db'
 import { useSettings } from '../contexts/SettingsContext'
-import { dealAmounts, fmt } from '../utils/commission'
+import { dealAmounts, fmt, activeDeals } from '../utils/commission'
 import DealModal from '../components/DealModal'
 
 const todayISO = () => new Date().toISOString().slice(0, 10)
@@ -65,7 +65,7 @@ export default function Payroll() {
   useEffect(() => { load() }, [])
   async function load() {
     const [{ data: d }, { data: u }] = await Promise.all([fetchDeals(), fetchUsers()])
-    const dd = d || []
+    const dd = activeDeals(d || [])   // canceled jobs are never paid / counted
     setDeals(dd); setUsers(u || [])
     setView(v => {
       if (v) return v

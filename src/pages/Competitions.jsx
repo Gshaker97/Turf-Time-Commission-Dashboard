@@ -63,19 +63,22 @@ function StandRow({ e, comp, deals, users, canManage, mine }) {
       {open && (
         <div className="mx-3 mb-2 rounded-lg p-2" style={{ background: '#141414', border: '1px solid #262626' }}>
           {entryDeals.length === 0 ? (
-            <p className="text-[11px] text-white/30 px-1 py-1.5">No deals counted in this window.</p>
+            <p className="text-[11px] text-white/30 px-1 py-1.5">No deals in this window.</p>
           ) : (
             <>
               <div className="flex items-center justify-between px-1 pb-1.5 mb-1 border-b border-white/5 text-[9px] font-bold uppercase tracking-wider text-white/30">
-                <span>{entryDeals.length} deal{entryDeals.length === 1 ? '' : 's'} counted</span>
+                <span>{entryDeals.filter(x => !x.canceled).length} deal{entryDeals.filter(x => !x.canceled).length === 1 ? '' : 's'} counted</span>
                 <span>Counts toward score</span>
               </div>
-              {entryDeals.map(({ deal, credit, contribution }) => (
-                <div key={deal.id} className="flex items-center gap-2 px-1 py-1 text-[11px]">
-                  <span className="flex-1 min-w-0 truncate text-white/75">{deal.deal_name || '—'}</span>
-                  <span className="text-white/30 whitespace-nowrap">{fmtDate(deal.sale_date)}</span>
-                  {credit !== 1 && <span className="text-white/30 whitespace-nowrap">{Math.round(credit * 100)}%</span>}
-                  <span className="font-semibold text-white/80 whitespace-nowrap w-20 text-right">{fmtScore(contribution, metric)}</span>
+              {entryDeals.map(({ deal, value, credit, contribution, canceled }) => (
+                <div key={deal.id} className={`flex items-center gap-2 px-1 py-1 text-[11px] ${canceled ? 'opacity-60' : ''}`}>
+                  <span className={`flex-1 min-w-0 truncate ${canceled ? 'line-through text-white/40' : 'text-white/75'}`}>{deal.deal_name || '—'}</span>
+                  {canceled && <span className="text-[8px] font-bold uppercase tracking-wide text-red-400 whitespace-nowrap">canceled</span>}
+                  <span className={`whitespace-nowrap ${canceled ? 'text-white/25' : 'text-white/30'}`}>{fmtDate(deal.sale_date)}</span>
+                  {credit !== 1 && <span className={`whitespace-nowrap ${canceled ? 'text-white/25' : 'text-white/30'}`}>{Math.round(credit * 100)}%</span>}
+                  <span className={`font-semibold whitespace-nowrap w-20 text-right ${canceled ? 'line-through text-red-400/60' : 'text-white/80'}`}>
+                    {fmtScore(canceled ? value * credit : contribution, metric)}
+                  </span>
                 </div>
               ))}
               <div className="flex items-center justify-between px-1 pt-1.5 mt-1 border-t border-white/5 text-[11px]">

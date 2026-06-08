@@ -6,7 +6,7 @@ import FilterBar from '../components/FilterBar'
 import KpiCard from '../components/KpiCard'
 import DealTable from '../components/DealTable'
 import DealModal from '../components/DealModal'
-import { calcDealCommissions, fmt } from '../utils/commission'
+import { calcDealCommissions, fmt, isCanceled } from '../utils/commission'
 import { getPresetRange } from '../utils/dateRanges'
 
 function sortValue(d, key) {
@@ -86,14 +86,17 @@ export default function Deals() {
 
   const kpis = useMemo(() => {
     let baseline = 0, totalComm = 0, totalJobPrice = 0, totalMarkupPct = 0
-    for (const d of filtered) {
+    // KPI totals exclude canceled jobs (they still appear in the table below so
+    // they can be moved out of Canceled).
+    const counted = filtered.filter(d => !isCanceled(d))
+    for (const d of counted) {
       const bl = parseFloat(d.baseline_revenue) || 0
       const jp = parseFloat(d.job_price) || 0
       const gross = jp - bl
       baseline += bl; totalComm += gross; totalJobPrice += jp
       if (bl > 0) totalMarkupPct += (gross / bl) * 100
     }
-    const count = filtered.length
+    const count = counted.length
     return { baseline, totalComm, count, avgDeal: count ? totalJobPrice/count : 0, avgComm: count ? totalComm/count : 0, avgMarkupPct: count ? totalMarkupPct/count : 0 }
   }, [filtered])
 

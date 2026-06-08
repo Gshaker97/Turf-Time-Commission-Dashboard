@@ -53,6 +53,13 @@ setup + deploy steps.
    `src/lib/demoData.js` instead of hitting Supabase. Calling Supabase directly
    white-screens demo mode.
 
+4. **Canceled deals never count in aggregates.** A deal whose `status` is
+   `Canceled` (or `Cancelled`) is excluded from every roll-up — revenue, KPIs,
+   the rep leaderboard, team breakdown, competitions, commissions, and payroll —
+   via `isCanceled` / `activeDeals` in `src/utils/commission.js`. It still
+   appears on the Deals page (and struck-through in the competition drill-down)
+   so it can be moved back to another status, which makes it count again.
+
 ## Database migrations — read before touching the DB
 
 - Fresh install: run `001_schema.sql`, `002_rls.sql`, `003_seed.sql`,

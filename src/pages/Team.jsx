@@ -3,7 +3,7 @@ import { format, subMonths, startOfWeek, endOfWeek, addDays } from 'date-fns'
 import { fetchDeals, fetchUsers } from '../lib/db'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { useAuth } from '../contexts/AuthContext'
-import { getUserCommission, calcDealCommissions, fmt } from '../utils/commission'
+import { getUserCommission, calcDealCommissions, fmt, activeDeals } from '../utils/commission'
 import { getPresetRange, presetLabel } from '../utils/dateRanges'
 import DateRangeFilter from '../components/DateRangeFilter'
 import WeeklyStats from '../components/WeeklyStats'
@@ -221,7 +221,7 @@ export default function Team() {
 
   const loadData = () =>
     Promise.all([fetchDeals(), fetchUsers()]).then(([{ data: d }, { data: u }]) => {
-      setDeals(d ?? []); setUsers(u ?? [])
+      setDeals(activeDeals(d ?? [])); setUsers(u ?? [])   // exclude canceled jobs
     })
   useEffect(() => { loadData().finally(() => setLoading(false)) }, [])
   useRefreshOnFocus(loadData)
