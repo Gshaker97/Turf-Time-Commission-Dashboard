@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, Fragment } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, MessageSquare } from 'lucide-react'
-import { calcDealCommissions, fmt, fmtPct } from '../utils/commission'
+import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, X, MessageSquare } from 'lucide-react'
+import { calcDealCommissions, fmt, fmtPct, isCanceled } from '../utils/commission'
 import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
 import DateRangeFilter from './DateRangeFilter'
@@ -63,7 +63,13 @@ function DealChecklist({ deal, canEdit, onUpdate, items }) {
     }
   }, [open])
 
-  const indicator = complete ? (
+  const canceled = isCanceled(deal)
+  const indicator = canceled ? (
+    <span className="w-[22px] h-[22px] rounded-full flex items-center justify-center flex-shrink-0"
+      style={{ background: '#ef444418', border: '1px solid #ef444455' }} title="Canceled">
+      <X size={13} strokeWidth={3} className="text-red-400" />
+    </span>
+  ) : complete ? (
     <span className="w-[22px] h-[22px] rounded-full flex items-center justify-center flex-shrink-0" style={{ background: '#00b894' }}>
       <Check size={13} strokeWidth={3} className="text-dark" />
     </span>
@@ -537,7 +543,7 @@ function DealCard({ deal, canEdit, onEdit, onDelete, onUpdate, statusColor, stat
   const jobPrice = parseFloat(deal.job_price)        || 0
   const [showNotes, setShowNotes] = useState(false)
   return (
-    <div className="p-4">
+    <div className={`p-4 ${isCanceled(deal) ? 'opacity-50' : ''}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -668,11 +674,12 @@ export default function DealTable({
             const baseline = parseFloat(deal.baseline_revenue) || 0
             const jobPrice = parseFloat(deal.job_price)        || 0
             const isEven   = i % 2 === 0
+            const canceled = isCanceled(deal)
             return (
               <Fragment key={deal.id}>
               <tr
                 style={{ background: isEven ? '#242424' : '#262626' }}
-                className="hover:bg-white/[0.03] transition-colors align-top">
+                className={`hover:bg-white/[0.03] transition-colors align-top ${canceled ? 'opacity-50' : ''}`}>
                 <td className="px-3 py-3">
                   <div className="flex items-center gap-2">
                     <button onClick={() => toggleNotes(deal.id)} title="Notes"
