@@ -47,6 +47,7 @@ INSERT INTO app_settings (key, value) VALUES
   ('deal_statuses', '[
      {"label":"Deal Review","color":"#94a3b8"},
      {"label":"Pending Install","color":"#2dd4bf"},
+     {"label":"Change Order","color":"#f59e0b"},
      {"label":"Pay Finalized","color":"#22d3ee"},
      {"label":"Paid","color":"#4ade80"},
      {"label":"Sales Issue","color":"#f87171"},
