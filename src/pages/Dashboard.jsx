@@ -69,7 +69,7 @@ function StatCard({ label, value, sub, trend }) {
 }
 
 export default function Dashboard() {
-  const { profile } = useAuth()
+  const { profile, isAdmin } = useAuth()
   const canEditGoal = ['admin', 'vp', 'director'].includes(profile?.role)
 
   const [deals,        setDeals]        = useState([])
@@ -242,14 +242,16 @@ export default function Dashboard() {
   // are numeric. Revenue breaks ties.
   const toggleRepSort = (key) =>
     setRepSort(s => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }))
+  const ghostIds = useMemo(() => new Set(users.filter(u => u.ghost).map(u => u.id)), [users])
   const rankedReps = useMemo(() => {
     const { key, dir } = repSort
     // Show every rep with any activity — ranked, scrollable. (No top-N cut, so
-    // setter-only reps who hand deals off to a closer still appear.)
+    // setter-only reps who hand deals off to a closer still appear.) Ghost reps
+    // are hidden from non-admins, but their deals still feed every total above.
     return [...repData]
-      .filter(r => r.deals || r.leads || r.revenue || r.leadRevenue || r.commission)
+      .filter(r => (r.deals || r.leads || r.revenue || r.leadRevenue || r.commission) && (isAdmin || !ghostIds.has(r.id)))
       .sort((a, b) => (dir === 'asc' ? (a[key] - b[key]) : (b[key] - a[key])) || (b.revenue - a.revenue))
-  }, [repData, repSort])
+  }, [repData, repSort, ghostIds, isAdmin])
 
   const weeklyData = useMemo(() => {
     const now    = new Date()

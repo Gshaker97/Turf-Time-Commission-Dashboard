@@ -19,7 +19,7 @@ function sortValue(d, key) {
 }
 
 export default function Deals() {
-  const { profile } = useAuth()
+  const { profile, isAdmin } = useAuth()
   const [deals,    setDeals]    = useState([])
   const [payments, setPayments] = useState([])
   const [users,    setUsers]    = useState([])
@@ -58,6 +58,8 @@ export default function Deals() {
   const patchDeal = (id, data) => setDeals(ds => ds.map(d => d.id === id ? { ...d, ...data } : d))
 
   const role = profile?.role
+  // Rep-filter dropdowns hide ghost users from non-admins (their deals still show/count).
+  const pickUsers = isAdmin ? users : users.filter(u => !u.ghost)
 
   const filtered = useMemo(() => {
     let rows = [...deals]
@@ -148,7 +150,7 @@ export default function Deals() {
   return (
     <div className="space-y-3 pb-32 md:pb-20">
       <FilterBar
-        users={users}
+        users={pickUsers}
         repFilter={repFilter}         setRepFilter={setRepFilter}
         search={search}               setSearch={setSearch}
         statusFilter={statusFilter}   setStatusFilter={setStatusFilter}
@@ -175,7 +177,7 @@ export default function Deals() {
         deals={filtered}
         payments={payments}
         profile={profile}
-        users={users}
+        users={pickUsers}
         sortKey={sortKey}
         sortDir={sortDir}
         onSort={handleSort}

@@ -156,8 +156,12 @@ export function competitionStatus(comp, todayISO) {
 
 // Ranked entrants: [{ id, name, score, manual, rank, target, earned, progress }]
 // sorted high → low. target/earned/progress are populated for 'target' goals.
-export function competitionStandings(comp, deals = [], users = []) {
+// opts.hiddenIds: entrant ids to drop from the displayed standings (ghost users
+// for non-admins). Their deals still feed team scores — only their own row is
+// removed, then ranks are renumbered.
+export function competitionStandings(comp, deals = [], users = [], opts = {}) {
   const nameOf = (id) => users.find(u => u.id === id)?.name ?? '—'
+  const hidden = opts.hiddenIds
   let entrants = []
   if (comp.type === 'company') {
     entrants = users.filter(u => ['rep', 'manager', 'director', 'vp'].includes(u.role)).map(u => ({ id: u.id, name: u.name }))
@@ -166,6 +170,7 @@ export function competitionStandings(comp, deals = [], users = []) {
   } else {
     entrants = (comp.participant_ids || []).map(id => ({ id, name: nameOf(id) }))
   }
+  if (hidden && hidden.size) entrants = entrants.filter(e => !hidden.has(e.id))
 
   const manual = comp.manual_scores || {}
   const target = comp.goal_mode === 'target' ? (Number(comp.goal_target) || 0) : 0

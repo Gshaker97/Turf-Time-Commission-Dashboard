@@ -93,9 +93,13 @@ function StandRow({ e, comp, deals, users, canManage, mine }) {
   )
 }
 
-function CompetitionCard({ comp, deals, users, profileId, canManage, onEdit, onDelete }) {
+function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, onEdit, onDelete }) {
   const [open, setOpen] = useState(false)
-  const standings = useMemo(() => competitionStandings(comp, deals, users), [comp, deals, users])
+  const ghostIds = useMemo(() => new Set(users.filter(u => u.ghost).map(u => u.id)), [users])
+  const standings = useMemo(
+    () => competitionStandings(comp, deals, users, { hiddenIds: isAdmin ? null : ghostIds }),
+    [comp, deals, users, isAdmin, ghostIds]
+  )
   const status = competitionStatus(comp, todayISO())
   const st = STATUS[status]
   const isMine = (e) => e.id === profileId || (comp.type === 'team' && users.find(u => u.id === profileId)?.manager_id === e.id)
@@ -164,8 +168,8 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, onEdit, onD
 }
 
 export default function Competitions() {
-  const { profile } = useAuth()
-  const canManage = ['vp', 'admin'].includes(profile?.role)
+  const { profile, isAdmin } = useAuth()
+  const canManage = ['vp', 'admin'].includes(profile?.role) || isAdmin
   const [comps, setComps] = useState([])
   const [deals, setDeals] = useState([])
   const [users, setUsers] = useState([])
@@ -225,14 +229,14 @@ export default function Competitions() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           {sorted.map(comp => (
             <CompetitionCard key={comp.id} comp={comp} deals={deals} users={users}
-              profileId={profile?.id} canManage={canManage}
+              profileId={profile?.id} canManage={canManage} isAdmin={isAdmin}
               onEdit={(c) => { setEditComp(c); setModal(true) }} onDelete={handleDelete} />
           ))}
         </div>
       )}
 
       {modal && (
-        <CompetitionModal competition={editComp} users={users}
+        <CompetitionModal competition={editComp} users={users} isAdmin={isAdmin}
           onSave={handleSave} onClose={() => { setModal(false); setEditComp(null) }} />
       )}
     </div>
