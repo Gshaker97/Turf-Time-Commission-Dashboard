@@ -271,7 +271,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                 <span className="text-[11px] text-white/50 sm:w-20 shrink-0">
                   Closer {(100-splitPct).toFixed(0)}%
                 </span>
-                <input type="number" min="0" max="100" step="1" value={form.setter_split_pct}
+                <input type="number" min="0" max="100" step="any" value={form.setter_split_pct}
                   onChange={e => set('setter_split_pct', e.target.value)} placeholder="50"
                   className="px-2 py-2 rounded-lg text-[13px] text-white text-center focus:outline-none w-16 shrink-0"
                   style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }} />
