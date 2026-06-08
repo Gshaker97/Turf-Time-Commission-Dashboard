@@ -248,9 +248,15 @@ export default function Payroll() {
   // pastes into email/Sheets/Docs) plus a plain-text version. Admin only.
   async function copyPayee(p) {
     const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    const lines = p.lines.slice().sort((a, b) => b.amount - a.amount)
+    // Export-friendly labels: Setter → Self-gen, overrides → Override. Ordered
+    // self-gens, then closes, then overrides.
+    const EXPORT_LABEL = { Setter: 'Self-gen', Closer: 'Closer', Manager: 'Override', Director: 'Override', VP: 'Override' }
+    const ORDER = { 'Self-gen': 0, 'Closer': 1, 'Override': 2 }
+    const lines = p.lines
+      .map(l => ({ ...l, label: EXPORT_LABEL[l.role] || l.role }))
+      .sort((a, b) => (ORDER[a.label] ?? 9) - (ORDER[b.label] ?? 9) || b.amount - a.amount)
     const text = `Pay statement — ${p.name} — ${viewLabel}\n\n`
-      + lines.map(l => `• ${l.deal} — ${l.role}: ${fmt(l.amount)}`).join('\n')
+      + lines.map(l => `• ${l.deal} — ${l.label}: ${fmt(l.amount)}`).join('\n')
       + `\n\nTotal: ${fmt(p.total)}`
     const cell = 'padding:6px 12px;border:1px solid #d1d5db'
     const html =
@@ -259,7 +265,7 @@ export default function Payroll() {
       `<thead><tr style="background:#00b894;color:#0b0b0b">` +
       `<th style="${cell};text-align:left">Deal</th><th style="${cell};text-align:left">Role</th><th style="${cell};text-align:right">Amount</th></tr></thead><tbody>` +
       lines.map((l, i) => `<tr style="background:${i % 2 ? '#f3f4f6' : '#ffffff'};color:#111">` +
-        `<td style="${cell}">${esc(l.deal)}</td><td style="${cell}">${esc(l.role)}</td><td style="${cell};text-align:right">${fmt(l.amount)}</td></tr>`).join('') +
+        `<td style="${cell}">${esc(l.deal)}</td><td style="${cell}">${esc(l.label)}</td><td style="${cell};text-align:right">${fmt(l.amount)}</td></tr>`).join('') +
       `<tr style="font-weight:bold;color:#111"><td style="${cell}" colspan="2">Total</td><td style="${cell};text-align:right">${fmt(p.total)}</td></tr>` +
       `</tbody></table>`
     try {
