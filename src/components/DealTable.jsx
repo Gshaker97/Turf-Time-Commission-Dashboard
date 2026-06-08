@@ -51,14 +51,15 @@ function DealChecklist({ deal, canEdit, onUpdate, items }) {
       if (btnRef.current?.contains(e.target) || popRef.current?.contains(e.target)) return
       setOpen(false)
     }
-    const onScroll = () => setOpen(false)
+    const onScroll = (e) => { if (!popRef.current?.contains(e.target)) setOpen(false) }
+    const onResize = () => setOpen(false)
     document.addEventListener('mousedown', onDown)
     window.addEventListener('scroll', onScroll, true)
-    window.addEventListener('resize', onScroll)
+    window.addEventListener('resize', onResize)
     return () => {
       document.removeEventListener('mousedown', onDown)
       window.removeEventListener('scroll', onScroll, true)
-      window.removeEventListener('resize', onScroll)
+      window.removeEventListener('resize', onResize)
     }
   }, [open])
 
@@ -195,14 +196,17 @@ function HeaderMenu({ col, sortKey, sortDir, onSort, active, renderFilter }) {
       if (btnRef.current?.contains(e.target) || popRef.current?.contains(e.target)) return
       setOpen(false)
     }
-    const onScroll = () => setOpen(false)
+    // Close on page scroll/resize (the popover is fixed-positioned), but ignore
+    // scrolling inside the popover itself — e.g. a long, scrollable rep list.
+    const onScroll = (e) => { if (!popRef.current?.contains(e.target)) setOpen(false) }
+    const onResize = () => setOpen(false)
     document.addEventListener('mousedown', onDown)
     window.addEventListener('scroll', onScroll, true)
-    window.addEventListener('resize', onScroll)
+    window.addEventListener('resize', onResize)
     return () => {
       document.removeEventListener('mousedown', onDown)
       window.removeEventListener('scroll', onScroll, true)
-      window.removeEventListener('resize', onScroll)
+      window.removeEventListener('resize', onResize)
     }
   }, [open])
 
