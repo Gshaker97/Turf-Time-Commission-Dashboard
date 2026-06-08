@@ -166,13 +166,19 @@ export default function Commissions() {
   const periodLabel = presetLabel(rangeMatches(preset, from, to) ? preset : matchPreset(from, to))
   const viewUser = useMemo(() => users.find(u => u.id === id) || profile, [users, id, profile])
 
+  const [loadError, setLoadError] = useState('')
   useEffect(() => {
-    setLoading(true)
-    Promise.all([fetchDeals(), fetchUsers()]).then(([{ data: d }, { data: u }]) => {
-      setAllDeals(activeDeals(d || [])); setUsers(u || []); setLoading(false)
-    })
+    setLoading(true); setLoadError('')
+    Promise.all([fetchDeals(), fetchUsers()])
+      .then(([dealsRes, usersRes]) => {
+        if (dealsRes?.error) throw dealsRes.error
+        setAllDeals(activeDeals(dealsRes?.data || []))
+        setUsers(usersRes?.data || [])
+      })
+      .catch(e => { console.error('Commissions load failed:', e); setLoadError(e?.message || 'Could not load deals.') })
+      .finally(() => setLoading(false))
   }, [])
-  useRefreshOnFocus(() => fetchDeals().then(({ data }) => setAllDeals(activeDeals(data || []))))
+  useRefreshOnFocus(() => fetchDeals().then(({ data }) => setAllDeals(activeDeals(data || []))).catch(() => {}))
 
   // Every deal this user has any stake in (unfiltered — for the forward-looking
   // "next payday", which shouldn't disappear when you filter a past period).
@@ -373,6 +379,8 @@ export default function Commissions() {
 
         {loading ? (
           <div className="px-4 py-8 text-white/30 text-sm text-center">Loading…</div>
+        ) : loadError ? (
+          <div className="px-4 py-8 text-red-300 text-sm text-center">Couldn’t load deals: {loadError}</div>
         ) : groups.length === 0 ? (
           <div className="px-4 py-8 text-white/30 text-sm text-center">No deals in this period.</div>
         ) : (
