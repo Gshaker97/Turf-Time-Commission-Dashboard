@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { startOfWeek, endOfWeek, addDays, format as dfFormat } from "date-fns";
-import { Trophy, TrendingUp, Award, Target, ClipboardList, Percent, DollarSign, Wallet, Layers, Flame, Clock, Share2, Check } from "lucide-react";
+import { Trophy, TrendingUp, Award, Target, ClipboardList, Percent, DollarSign, Wallet, Layers, Flame, Clock, Share2, Check, X } from "lucide-react";
 import { fetchDeals, fetchCompetitions, fetchUsers, fetchWeeklyStats } from "../lib/db";
 import { getUserCommission, isCanceled } from "../utils/commission";
 import { useAuth } from "../contexts/AuthContext";
@@ -32,16 +32,19 @@ function rateColor(r) {
   return "#fb923c";
 }
 
-function StatTile({ icon: Icon, label, value, sub, color = "#00b894", trend }) {
+function StatTile({ icon: Icon, label, value, sub, color = "#00b894", trend, onClick }) {
+  const Tag = onClick ? "button" : "div";
   return (
-    <div className="rounded-xl p-3 md:p-4 min-w-0" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
+    <Tag onClick={onClick}
+      className={`rounded-xl p-3 md:p-4 min-w-0 text-left w-full ${onClick ? "cursor-pointer hover:border-white/25 transition-colors" : ""}`}
+      style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
       <div className="flex items-center gap-1.5 mb-1.5">
         <Icon size={12} style={{ color }} />
         <p className="text-[9px] md:text-[10px] uppercase tracking-widest text-white/30 font-semibold leading-tight">{label}</p>
       </div>
       <p className="text-[17px] md:text-[22px] font-bold leading-none truncate" style={{ color }}>{value}</p>
       {trend ? <div className="mt-1">{trend}</div> : sub && <p className="text-[10px] text-white/30 mt-1 truncate">{sub}</p>}
-    </div>
+    </Tag>
   );
 }
 
@@ -168,6 +171,50 @@ export default function Home() {
       })
       .filter(Boolean);
   }, [comps, allDeals, users, me, viewUser, isAdmin, ghostIds]);
+
+  // Tap-to-view breakdown for a stat tile.
+  const [drill, setDrill] = useState(null);
+  const drillData = useMemo(() => {
+    if (!drill) return null;
+    const fmtD = (d) => d ? dfFormat(new Date(d + "T12:00:00"), "MMM d") : "—";
+    const setterDeals = monthDeals.filter(d => d.setter_id === me)
+      .sort((a, b) => (b.sale_date || "").localeCompare(a.sale_date || ""));
+    if (drill === "revenue" || drill === "avgDeal") {
+      return {
+        title: drill === "avgDeal" ? "Avg deal — deals you set" : "Revenue — deals you set",
+        total: drill === "avgDeal" ? `avg ${money(stats.avgDeal)} · ${money(stats.revenue)} total` : `${money(stats.revenue)} total`,
+        rows: setterDeals.map(d => ({ id: d.id, name: d.deal_name, sub: `${fmtD(d.sale_date)} · ${d.status}`, value: money(parseFloat(d.baseline_revenue) || 0) })),
+      };
+    }
+    if (drill === "deals" || drill === "closeRate") {
+      return {
+        title: drill === "closeRate" ? "Closing % — deals closed" : "Deals you set",
+        total: drill === "closeRate" ? `${stats.deals} closed / ${stats.estimates} estimates` : `${stats.deals} deals`,
+        rows: setterDeals.map(d => ({ id: d.id, name: d.deal_name, sub: fmtD(d.sale_date), value: d.status })),
+      };
+    }
+    if (drill === "commission") {
+      const rows = monthDeals.map(d => ({ d, amt: getUserCommission([d], me) })).filter(x => x.amt > 0)
+        .sort((a, b) => b.amt - a.amt)
+        .map(({ d, amt }) => {
+          const roles = [];
+          if (d.setter_id === me) roles.push("Setter");
+          if (d.closer_id === me && d.closer_id !== d.setter_id) roles.push("Closer");
+          if (d.manager_id === me) roles.push("Mgr");
+          if (d.director_id === me) roles.push("Dir");
+          if (d.vp_id === me) roles.push("VP");
+          return { id: d.id, name: d.deal_name, sub: `${fmtD(d.sale_date)} · ${roles.join(", ") || "—"}`, value: money(amt) };
+        });
+      return { title: "Commission — your earnings", total: `${money(stats.commission)} total`, rows };
+    }
+    if (drill === "estimates") {
+      const rows = weekly.filter(s => s.rep_id === me && (s.week_start || "").startsWith(mr.key))
+        .sort((a, b) => (b.week_start || "").localeCompare(a.week_start || ""))
+        .map(s => ({ id: s.week_start, name: `Week of ${fmtD(s.week_start)}`, value: String(s.estimates) }));
+      return { title: "Estimates given", total: `${stats.estimates} estimates`, rows };
+    }
+    return null;
+  }, [drill, monthDeals, weekly, me, mr.key, stats]);
 
   const firstName = (viewUser?.name || "").split(" ")[0] || "there";
   const initials = (viewUser?.name || "?").split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase();
@@ -345,17 +392,17 @@ export default function Home() {
 
       {/* Stat tiles */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-2 md:gap-3 mb-3">
-        <StatTile icon={DollarSign}    label="Revenue"    value={money(stats.revenue)} sub="baseline you set" />
-        <StatTile icon={Wallet}        label="Commission" value={money(stats.commission)} sub="your earnings" color="#34d399" />
-        <StatTile icon={Layers}        label="Deals"      value={stats.deals} sub="closed this month" color="#fff" />
-        <StatTile icon={ClipboardList} label="Estimates"  value={stats.estimates} sub="given this month" color="#74b9ff" />
-        <StatTile icon={Percent}       label="Closing %"  value={stats.closeRate == null ? "—" : `${stats.closeRate.toFixed(0)}%`} color={rateColor(stats.closeRate)}
+        <StatTile icon={DollarSign}    label="Revenue"    value={money(stats.revenue)} sub="baseline you set · tap to view" onClick={() => setDrill("revenue")} />
+        <StatTile icon={Wallet}        label="Commission" value={money(stats.commission)} sub="your earnings · tap to view" color="#34d399" onClick={() => setDrill("commission")} />
+        <StatTile icon={Layers}        label="Deals"      value={stats.deals} sub="closed this month · tap to view" color="#fff" onClick={() => setDrill("deals")} />
+        <StatTile icon={ClipboardList} label="Estimates"  value={stats.estimates} sub="given this month · tap to view" color="#74b9ff" onClick={() => setDrill("estimates")} />
+        <StatTile icon={Percent}       label="Closing %"  value={stats.closeRate == null ? "—" : `${stats.closeRate.toFixed(0)}%`} color={rateColor(stats.closeRate)} onClick={() => setDrill("closeRate")}
           trend={closeDelta == null ? null : (
             <span className="text-[10px] font-semibold" style={{ color: closeDelta >= 0 ? "#4ade80" : "#f87171" }}>
               {closeDelta >= 0 ? "▲" : "▼"} {Math.abs(closeDelta).toFixed(0)} pts vs last mo
             </span>
           )} />
-        <StatTile icon={TrendingUp}    label="Avg Deal"   value={money(stats.avgDeal)} sub="per deal" color="#fff" />
+        <StatTile icon={TrendingUp}    label="Avg Deal"   value={money(stats.avgDeal)} sub="per deal · tap to view" color="#fff" onClick={() => setDrill("avgDeal")} />
       </div>
 
       {/* Personal pace */}
@@ -422,6 +469,36 @@ export default function Home() {
           </div>
         )}
       </div>
+
+      {/* Stat drill-down */}
+      {drill && drillData && (
+        <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center md:p-4">
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setDrill(null)} />
+          <div className="relative w-full md:max-w-md rounded-t-2xl md:rounded-2xl overflow-hidden shadow-2xl"
+            style={{ background: "#1e1e1e", border: "1px solid #2a2a2a", maxHeight: "85dvh" }}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-white/5" style={{ background: "#171717" }}>
+              <div className="min-w-0">
+                <p className="text-[13px] font-bold text-white truncate">{drillData.title}</p>
+                <p className="text-[11px] text-white/40">{mr.label} · {drillData.total}</p>
+              </div>
+              <button onClick={() => setDrill(null)} className="p-1.5 rounded-lg text-white/40 hover:text-white hover:bg-white/10 flex-shrink-0"><X size={16} /></button>
+            </div>
+            <div className="overflow-y-auto" style={{ maxHeight: "70dvh" }}>
+              {drillData.rows.length === 0 ? (
+                <p className="px-4 py-8 text-center text-white/30 text-[13px]">Nothing here for {mr.label}.</p>
+              ) : drillData.rows.map(r => (
+                <div key={r.id} className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-white/5 last:border-0">
+                  <div className="min-w-0">
+                    <p className="text-[13px] text-white/85 truncate">{r.name}</p>
+                    {r.sub && <p className="text-[11px] text-white/35">{r.sub}</p>}
+                  </div>
+                  <span className="text-[13px] font-semibold text-teal whitespace-nowrap">{r.value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
