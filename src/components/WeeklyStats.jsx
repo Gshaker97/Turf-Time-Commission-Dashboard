@@ -16,6 +16,15 @@ function rateColor(rate) {
 const pct = (r) => (r == null ? '—' : `${r.toFixed(0)}%`)
 const rate = (closed, est) => (est > 0 ? (closed / est) * 100 : null)
 
+function NumTile({ label, value, color = '#fff' }) {
+  return (
+    <div className="rounded-xl p-3 md:p-4 min-w-0" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
+      <p className="text-[9px] md:text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1 leading-tight">{label}</p>
+      <p className="text-[18px] md:text-[22px] font-bold leading-none" style={{ color }}>{value}</p>
+    </div>
+  )
+}
+
 function Kpi({ label, est, closed, color = '#00b894' }) {
   const r = rate(closed, est)
   return (
@@ -92,7 +101,9 @@ export default function WeeklyStats({ deals = [], reps = [], users = [], canEdit
     const nameOf = (id) => users.find(u => u.id === id)?.name
     const groups = {}
     for (const rep of reps) {
-      const mid = rep.manager_id || 'unassigned'
+      // A manager heads their own team (group under their own id); reps group
+      // under their manager. So a team lead shows with their team, not Unassigned.
+      const mid = rep.role === 'manager' ? rep.id : (rep.manager_id || 'unassigned')
       if (!groups[mid]) groups[mid] = { id: mid, name: mid === 'unassigned' ? 'Unassigned' : (nameOf(mid) ? `${nameOf(mid)}'s Team` : 'Team'), rows: [] }
       groups[mid].rows.push(rowFor(rep))
     }
@@ -160,6 +171,14 @@ export default function WeeklyStats({ deals = [], reps = [], users = [], canEdit
           <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" /> <span>{error}</span>
         </div>
       )}
+
+      {/* Period totals */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3">
+        <NumTile label="Self-gen estimates" value={totals.sgEst} color="#74b9ff" />
+        <NumTile label="Self-gen closes"    value={totals.sgCl} color="#00b894" />
+        <NumTile label="Lead estimates"     value={totals.ldEst} color="#74b9ff" />
+        <NumTile label="Lead closes"        value={totals.ldCl} color="#00b894" />
+      </div>
 
       {/* Overall close-rate KPIs */}
       <div className="grid grid-cols-3 gap-2 md:flex md:gap-3">
