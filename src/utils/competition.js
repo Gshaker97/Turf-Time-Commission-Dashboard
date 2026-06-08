@@ -30,9 +30,9 @@ export const COMP_GOAL_MODES = [
 ]
 export const COMP_CREDIT_MODES = [
   { key: 'both',     label: 'Setter & closer — both get full credit' },
-  { key: 'self_gen', label: 'Self-gen only — setter = closer' },
-  { key: 'setter',   label: 'Setter only' },
-  { key: 'closer',   label: 'Closer only' },
+  { key: 'setter',   label: 'Setter only — the rep who generated the lead' },
+  { key: 'closer',   label: 'Closer only — the rep who closed it' },
+  { key: 'self_gen', label: 'Solo only — one rep both set AND closed it' },
   { key: 'split',    label: 'Split between setter & closer' },
 ]
 
