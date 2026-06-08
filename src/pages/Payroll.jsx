@@ -392,7 +392,10 @@ export default function Payroll() {
                 <div key={d.id} className="rounded-xl p-3 md:p-4" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-[14px] font-semibold text-white truncate">{d.deal_name}</p>
+                      <button onClick={() => { setEditDeal(d); setModal(true) }}
+                        className="text-[14px] font-semibold text-white truncate text-left hover:text-teal transition-colors" title="Click to edit this deal">
+                        {d.deal_name}
+                      </button>
                       <p className="text-[11px] text-white/40">{[d.office, d.payment_method].filter(Boolean).join(' · ') || '—'}</p>
                     </div>
                     <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0"
@@ -491,7 +494,10 @@ export default function Payroll() {
                 <div key={d.id} className="px-4 py-3 border-b border-white/5 last:border-0">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-[13px] font-semibold text-white/90 truncate">{d.deal_name}</p>
+                      <button onClick={() => { setEditDeal(d); setModal(true) }}
+                        className="text-[13px] font-semibold text-white/90 truncate text-left hover:text-teal transition-colors" title="Click to edit this deal">
+                        {d.deal_name}
+                      </button>
                       <p className="text-[11px] text-white/40 mt-0.5">
                         {[d.office, d.payment_method].filter(Boolean).join(' · ') || '—'}
                         {d.pay_date ? ` · pays ${fmtDay(d.pay_date)}` : ' · pay date TBD'}
@@ -558,7 +564,10 @@ export default function Payroll() {
             ) : deductions.map(x => (
               <div key={x.id} className="flex items-start justify-between gap-3 px-4 py-3 border-b border-white/5 last:border-0">
                 <div className="min-w-0">
-                  <p className="text-[13px] font-semibold text-white/90 truncate">{x.name}</p>
+                  <button onClick={() => { setEditDeal(x.deal); setModal(true) }}
+                    className="text-[13px] font-semibold text-white/90 truncate text-left hover:text-teal transition-colors" title="Click to edit this deal">
+                    {x.name}
+                  </button>
                   <p className="text-[11px] text-white/40 mt-0.5">
                     From <span className="text-white/60">{x.absorbedBy}</span>
                     {x.office ? ` · ${x.office}` : ''}
