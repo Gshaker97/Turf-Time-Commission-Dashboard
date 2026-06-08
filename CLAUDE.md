@@ -121,9 +121,9 @@ re-introduce a hard-coded status/office/payment/checklist list in a page or
 component. `checklistItems` keys are stable across renames so deals' saved
 `checklist` progress survives edits; `DealChecklist` falls back to the built-in
 `CHECKLIST_ITEMS` only when settings haven't loaded.
-The default seed is `Deal Review`, `Pending Install`, `Pay Finalized`, `Paid`,
-`Sales Issue`, `Canceled` (each with a color). Because statuses are
-configurable, there is no longer a DB CHECK on `deals.status` (see
+The default seed is `Deal Review`, `Pending Install`, `Change Order`,
+`Pay Finalized`, `Paid`, `Sales Issue`, `Canceled` (each with a color). Because
+statuses are configurable, there is no longer a DB CHECK on `deals.status` (see
 `006_settings.sql`).
 
 **Status lifecycle automation:** new deals (manual or scheduler-imported)
@@ -132,9 +132,18 @@ a deal in `Deal Review` auto-advances to `Pending Install`; unchecking an item o
 a `Pending Install` deal drops it back to `Deal Review` (`DealChecklist` in
 `src/components/DealTable.jsx`, the `CHECKLIST_FROM_STATUS` ↔
 `CHECKLIST_TO_STATUS` transition — only flips between those two, never disturbs
-Paid/Canceled/etc.). A job marked CANCELLED on the scheduler moves
-to `Canceled` via `scripts/ScheduleSync.gs`; that sync never changes status on a
-plain update — only the checklist advances it.
+Paid/Canceled/etc.).
+
+**Spreadsheet sync (`scripts/ScheduleSync.gs`, entry `schSync`).** One Apps
+Script trigger drives everything: the **Jobs** tab (ArcSite "sold" feed) is the
+source of truth — every APPROVED job becomes a deal as soon as it lands (status
+`Deal Review`; Rhett/Ronnie excluded; hand-entered deals protected by name). The
+**Schedule** tab then layers on install date (+pay date), payment, office, and
+the real setter from Lead Source. A **change order** (the sheet's baseline or
+sale price changed for an existing deal) updates the deal, sets status
+`Change Order`, and clears its `checklist` + `commission_verified` so it gets
+re-verified. A CANCELLED schedule row moves the deal to `Canceled`. The sync
+never overrides `Pay Finalized`/`Paid`.
 
 ## Known low-severity items (not yet addressed)
 

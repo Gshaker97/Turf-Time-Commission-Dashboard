@@ -1,60 +1,52 @@
 /**
- * Turf Time — "Schedule" tab → Supabase (auto-import scheduled jobs)
+ * Turf Time — Spreadsheet → Supabase sync (Jobs + Schedule, with change orders)
  *
- * Pulls scheduled installs from the scheduler spreadsheet's "Schedule" tab and
- * upserts them into the dashboard's `deals` table. This is the no-webhook path:
- * ArcSite already lands every job in this spreadsheet, so we push straight from
- * the Sheet over the normal Supabase REST API — no Edge Function required.
+ * One trigger drives everything. Paste this file into the scheduler
+ * spreadsheet's Apps Script project and run schSync() on a 1-minute timer.
  *
- * Flow:
- *   ArcSite (sold) → "Jobs" tab (baseline + Project ID)
- *                 → "Schedule" tab (install date, payment, office, setter)
- *                 → [this script, on a 1-min trigger] → deals → the site
+ * What it does each run:
+ *   1) JOBS tab (the ArcSite "sold" feed) — the source of truth for deals:
+ *        • Every APPROVED job becomes a deal as soon as it lands (status
+ *          "Deal Review"), with the details it has (baseline, sale price, sale
+ *          date, Sales Rep as setter+closer). Rhett & Ronnie are never imported.
+ *        • Already imported? If the baseline or sale price changed (a change
+ *          order / re-sign), the deal is updated to the new numbers, its status
+ *          is set to "Change Order", and its checklist + commission sign-off are
+ *          cleared so you re-verify. Unchanged jobs are left alone.
+ *        • Hand-entered deals are protected (matched by customer name).
+ *   2) SCHEDULE tab — layers scheduling info onto the matching deal:
+ *        • install_date (+ pay_date computed), payment method, office, and the
+ *          real setter from Lead Source ("Setter: Name" → setter, Sales Rep →
+ *          closer). Status is left alone here.
+ *        • A CANCELLED schedule row flips the deal to "Canceled".
  *
- * What it does per BOOKED row that has an Install Date:
- *   • Joins the "Jobs" tab by Proposal ID to recover the baseline cost, the
- *     ArcSite Project ID (the dedupe key), a clean Sales Rep, and the sale date.
- *     Rows with no Jobs match (e.g. CAL-… calendar imports) are skipped.
- *   • Setter/closer from Lead Source: "Setter: John Kostiv" → John sets,
- *     the Sales Rep closes (split 50/50). "Self Gen"/blank → Sales Rep is solo.
- *   • UPSERT keyed on the Project ID:
- *       – Deal exists  → PATCH only schedule-owned facts that changed
- *         (install_date, pay_date computed, payment_method, office). Status is
- *         left alone — preserves splits/overrides/notes/etc.
- *       – Deal missing → CREATE it in status "Deal Review", gated by the
- *         forward-only baseline so your existing backlog doesn't flood in.
- *   • A deal advances "Deal Review" → "Pending Install" only when its checklist
- *     is completed in the dashboard (not here).
- *   • CANCELLED row → flips the matching deal's status to "Canceled"
- *     (never creates, never touches a deal already Pay Finalized / Paid).
- *
- * Setup (in the scheduler spreadsheet's Apps Script project):
- *   1. Add this as a new .gs file (it shares Script Properties with the other
- *      syncs — all names here are sch*-prefixed to avoid collisions).
- *   2. Script Properties (already set by the commission/ArcSite syncs):
- *        SUPABASE_URL          (Kong public URL, no trailing slash)
- *        SUPABASE_SERVICE_KEY  (service_role key — NOT the anon key)
- *   3. Run schBaselineNow() ONCE — marks currently-scheduled jobs as handled so
- *      only jobs scheduled from now on get auto-CREATED. (Existing deals still
- *      receive schedule updates.)
- *   4. Run schSync() once with SCH_DRY_RUN = true and read the Execution log.
- *   5. Set SCH_DRY_RUN = false, then Triggers → Add Trigger → schSync →
- *      Time-driven → every minute.
+ * Setup:
+ *   1. Paste as a file in the spreadsheet's Apps Script project (replaces the
+ *      old ScheduleSync). DISABLE the old ArcSiteImport `importJobs` trigger —
+ *      this script now owns creation.
+ *   2. Script Properties: SUPABASE_URL, SUPABASE_SERVICE_KEY (already set).
+ *   3. Run schSync() once with SCH_DRY_RUN = true and read the Execution log.
+ *      (Heads up: the first real run imports every job on the sheet that isn't
+ *      already a deal. To only bring in jobs from now on, run schBaselineNow()
+ *      once first.)
+ *   4. Set SCH_DRY_RUN = false, then Triggers → schSync → time-driven → every minute.
  */
 
 // ── CONFIG ──────────────────────────────────────────────────
-const SCH_TAB              = 'Schedule';        // per-scheduled-job source tab
-const SCH_JOBS_TAB         = 'Jobs';            // ArcSite sold feed (baseline + Project ID)
-const SCH_DIRECTOR         = 'garrison shaker'; // default override chain (lowercased)
-const SCH_VP               = 'keaton shaker';
-const SCH_EXCLUDE_REPS     = ['rhett', 'ronnie'];       // never import inside-sales reps
-const SCH_SKIP_NAME_CONTAINS = ['test', 'cute'];        // junk/test customers
-const SCH_NEW_STATUS       = 'Deal Review';     // status for a freshly created deal
-const SCH_CANCEL_STATUS    = 'Canceled';        // CANCELLED schedule row → this status
-const SCH_LOCKED_STATUSES  = ['Pay Finalized', 'Paid']; // never auto-overridden
-const SCH_BASELINE_PROP    = 'SCHED_BASELINE_IDS';
+const SCH_TAB             = 'Schedule';
+const SCH_JOBS_TAB        = 'Jobs';
+const SCH_ONLY_STATUS     = 'APPROVED';        // only import Jobs rows with this Status (blank = all)
+const SCH_DIRECTOR        = 'garrison shaker'; // default override chain (lowercased)
+const SCH_VP              = 'keaton shaker';
+const SCH_EXCLUDE_REPS    = ['rhett', 'ronnie'];   // never import these reps
+const SCH_SKIP_NAME_CONTAINS = ['test', 'cute'];   // junk/test customers
+const SCH_NEW_STATUS      = 'Deal Review';      // status for a freshly imported deal
+const SCH_CHANGE_STATUS   = 'Change Order';     // a re-signed / changed deal
+const SCH_CANCEL_STATUS   = 'Canceled';         // CANCELLED schedule row → this status
+const SCH_LOCKED_STATUSES = ['Pay Finalized', 'Paid'];  // never auto-overridden
+const SCH_BASELINE_PROP   = 'SCHED_BASELINE_IDS';
 // SAFETY: true = preview only (logs what it WOULD do, writes nothing).
-const SCH_DRY_RUN          = true;
+const SCH_DRY_RUN         = true;
 
 // ── ENTRY POINT (put this on the trigger) ───────────────────
 function schSync() {
@@ -65,217 +57,219 @@ function schSync() {
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
-  // Jobs index: Proposal ID → { projectId, baseline, sale, rep, saleDate }
-  const jobs = schBuildJobsIndex_(ss);
-
   // Roster by name → ids + override chain.
   const profiles = schGet_(url, key, '/rest/v1/profiles?select=id,name,manager_id');
   const byName = {};
-  profiles.forEach(p => { if (p.name) byName[String(p.name).trim().toLowerCase()] = p; });
+  profiles.forEach(p => { if (p?.name) byName[String(p.name).trim().toLowerCase()] = p; });
   const directorId = (byName[SCH_DIRECTOR] || {}).id || null;
   const vpId       = (byName[SCH_VP] || {}).id || null;
 
-  // Existing deals keyed by project_id (with the fields we may patch).
-  const deals = schGet_(url, key, '/rest/v1/deals?select=id,project_id,status,install_date,pay_date,payment_method,office');
-  const dealByKey = {};
-  deals.forEach(d => { if (d.project_id) dealByKey[String(d.project_id)] = d; });
+  // Existing deals, keyed by project_id; plus the set of customer names (to
+  // protect hand-entered deals from being duplicated).
+  const deals = schGet_(url, key,
+    '/rest/v1/deals?select=id,project_id,deal_name,status,baseline_revenue,job_price,install_date,pay_date,payment_method,office,setter_id,closer_id,commission_verified,checklist');
+  const byProject = {}, namesSeen = new Set();
+  deals.forEach(d => {
+    if (d.project_id) byProject[String(d.project_id)] = d;
+    if (d.deal_name) namesSeen.add(String(d.deal_name).trim().toLowerCase());
+  });
 
-  // Forward-only baseline — gates CREATES only (updates always flow through).
   const ignoreCreate = new Set((props.getProperty(SCH_BASELINE_PROP) || '').split(',').filter(Boolean));
+  const out = { created: 0, changed: 0, updated: 0, canceled: 0, skipped: 0, errors: 0, details: [] };
 
-  const sheet = ss.getSheetByName(SCH_TAB);
-  if (!sheet) throw new Error('Tab not found: ' + SCH_TAB);
-  const rows = sheet.getDataRange().getDisplayValues();
-  if (rows.length < 2) return;
+  // ── JOBS PASS — create new deals & catch change orders ──
+  const jobsSheet = ss.getSheetByName(SCH_JOBS_TAB);
+  if (jobsSheet) {
+    const rows = jobsSheet.getDataRange().getDisplayValues();
+    if (rows.length >= 2) {
+      const h = rows[0].map(x => String(x).trim());
+      const c = (n) => h.indexOf(n);
+      const ix = {
+        approved: c('Approved Date'), customer: c('Customer'), rep: c('Sales Rep'),
+        baseline: c('Baseline Cost'), sale: c('Pre-Tax Sale'),
+        project: c('Project ID'), proposal: c('Proposal ID'), status: c('Status'),
+      };
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r];
+        const customer = String(row[ix.customer] || '').trim();
+        if (!customer) { out.skipped++; continue; }
+        if (SCH_SKIP_NAME_CONTAINS.some(x => customer.toLowerCase().indexOf(x) !== -1)) { out.skipped++; continue; }
 
-  const headers = rows[0].map(h => String(h).trim());
-  const col = (n) => headers.indexOf(n);
-  const ix = {
-    booked:   col('Booked At'),
-    install:  col('Install Date'),
-    customer: col('Customer'),
-    jobValue: col('Job Value'),
-    rep:      col('Sales Rep'),
-    status:   col('Status'),
-    proposal: col('Proposal ID'),
-    lead:     col('Lead Source'),
-    payment:  col('Payment'),
-  };
-  const officeIx = schFindOfficeCol_(headers, ix.payment);
-  if (ix.customer === -1 || ix.proposal === -1 || ix.install === -1) {
-    throw new Error("Schedule tab needs 'Customer', 'Proposal ID', and 'Install Date' columns");
+        const status = String(ix.status >= 0 ? row[ix.status] : '').trim().toUpperCase();
+        if (SCH_ONLY_STATUS && status && status !== SCH_ONLY_STATUS) { out.skipped++; continue; }
+
+        const projectId = String(row[ix.project] || '').trim() || String(ix.proposal >= 0 ? row[ix.proposal] : '').trim();
+        if (!projectId) { out.skipped++; continue; }
+
+        const repName = schCleanRep_(row[ix.rep]);
+        const repLc = repName.toLowerCase();
+        if (SCH_EXCLUDE_REPS.some(x => repLc.indexOf(x) !== -1)) { out.skipped++; continue; }
+
+        const baselineVal = schMoney_(row[ix.baseline]);
+        const saleVal     = schMoney_(row[ix.sale]);
+        const existing    = byProject[projectId];
+
+        if (existing) {
+          // Change order: the sheet's financials differ from what we stored.
+          const changed = schChanged_(existing.baseline_revenue, baselineVal) || schChanged_(existing.job_price, saleVal);
+          if (changed && SCH_LOCKED_STATUSES.indexOf(existing.status) === -1) {
+            const patch = { baseline_revenue: baselineVal, job_price: saleVal, status: SCH_CHANGE_STATUS, commission_verified: false, checklist: [] };
+            if (customer && existing.deal_name !== customer) patch.deal_name = customer;
+            if (SCH_DRY_RUN) {
+              out.changed++;
+              out.details.push('WOULD CHANGE-ORDER — ' + customer + ' (base ' + existing.baseline_revenue + '→' + baselineVal + ', sale ' + existing.job_price + '→' + saleVal + ')');
+            } else {
+              try { schPatch_(url, key, '/rest/v1/deals?id=eq.' + existing.id, patch); Object.assign(existing, patch); out.changed++; }
+              catch (e) { out.errors++; out.details.push(customer + ': ' + e.message); }
+            }
+          }
+          continue;
+        }
+
+        // New deal.
+        if (ignoreCreate.has(projectId)) { out.skipped++; continue; }
+        if (namesSeen.has(customer.toLowerCase())) { out.skipped++; continue; }  // protect hand-entered
+        const rep = byName[repLc];
+        if (!rep) { out.skipped++; out.details.push('Unknown rep "' + repName + '" for ' + customer); continue; }
+
+        const deal = {
+          deal_name: customer, sale_date: schDate_(row[ix.approved]), status: SCH_NEW_STATUS,
+          setter_id: rep.id, closer_id: rep.id, setter_split_pct: 1,
+          manager_id: rep.manager_id || null, director_id: directorId, vp_id: vpId,
+          baseline_revenue: baselineVal, job_price: saleVal, project_id: projectId,
+        };
+        if (SCH_DRY_RUN) {
+          out.created++; byProject[projectId] = Object.assign({ id: 'preview' }, deal); namesSeen.add(customer.toLowerCase());
+          out.details.push('WOULD CREATE — ' + customer + ' (base ' + (baselineVal || 0) + ', ' + repName + ')');
+        } else {
+          try { schPost_(url, key, '/rest/v1/deals', deal); byProject[projectId] = Object.assign({ id: 'new' }, deal); namesSeen.add(customer.toLowerCase()); out.created++; }
+          catch (e) { out.errors++; out.details.push(customer + ': ' + e.message); }
+        }
+      }
+    }
   }
 
-  const out = { created: 0, updated: 0, flagged: 0, skipped: 0, errors: 0, details: [] };
+  // ── SCHEDULE PASS — install date, setter, payment, office, cancels ──
+  const schedSheet = ss.getSheetByName(SCH_TAB);
+  if (schedSheet) {
+    const jobsIdx = schBuildJobsIndex_(ss);   // proposalId → { projectId, ... }
+    const rows = schedSheet.getDataRange().getDisplayValues();
+    if (rows.length >= 2) {
+      const h = rows[0].map(x => String(x).trim());
+      const c = (n) => h.indexOf(n);
+      const ix = {
+        install: c('Install Date'), customer: c('Customer'), rep: c('Sales Rep'),
+        status: c('Status'), proposal: c('Proposal ID'), lead: c('Lead Source'),
+        payment: c('Payment'), booked: c('Booked At'),
+      };
+      const officeIx = schFindOfficeCol_(h, ix.payment);
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r];
+        const proposalId = String(row[ix.proposal] || '').trim();
+        if (!proposalId || proposalId.indexOf('CAL-') === 0) { out.skipped++; continue; }
+        const job = jobsIdx[proposalId];
+        const projectId = (job && job.projectId) ? job.projectId : proposalId;
+        const existing = byProject[projectId];
+        if (!existing) { out.skipped++; continue; }   // not imported (e.g. not APPROVED yet)
 
-  for (let r = 1; r < rows.length; r++) {
-    const row = rows[r];
+        const status = String(row[ix.status] || '').trim().toUpperCase();
+        if (status === 'CANCELLED') {
+          if (existing.status !== SCH_CANCEL_STATUS && SCH_LOCKED_STATUSES.indexOf(existing.status) === -1) {
+            if (SCH_DRY_RUN) { out.canceled++; out.details.push('WOULD CANCEL — ' + (existing.deal_name || projectId)); }
+            else { try { schPatch_(url, key, '/rest/v1/deals?id=eq.' + existing.id, { status: SCH_CANCEL_STATUS }); existing.status = SCH_CANCEL_STATUS; out.canceled++; } catch (e) { out.errors++; out.details.push((existing.deal_name || projectId) + ': ' + e.message); } }
+          } else { out.skipped++; }
+          continue;
+        }
+        if (status && status !== 'BOOKED') { out.skipped++; continue; }
 
-    const customer = String(row[ix.customer] || '').trim();
-    if (!customer) { out.skipped++; continue; }
-    if (SCH_SKIP_NAME_CONTAINS.some(x => customer.toLowerCase().indexOf(x) !== -1)) { out.skipped++; continue; }
+        const installDate = schDate_(row[ix.install]);
+        const payDate = installDate ? schPayDate_(installDate) : null;
+        const payment = schPayment_(row[ix.payment]);
+        const office  = officeIx >= 0 ? schTitle_(row[officeIx]) : null;
 
-    const proposalId = String(row[ix.proposal] || '').trim();
-    if (!proposalId || proposalId.indexOf('CAL-') === 0) { out.skipped++; continue; } // calendar junk / no id
+        const patch = {};
+        if (installDate && existing.install_date   !== installDate) patch.install_date   = installDate;
+        if (payDate     && existing.pay_date       !== payDate)     patch.pay_date       = payDate;
+        if (payment     && existing.payment_method !== payment)     patch.payment_method = payment;
+        if (office      && existing.office         !== office)      patch.office         = office;
 
-    const job = jobs[proposalId];
-    if (!job) { out.skipped++; continue; } // no Jobs match → no baseline/Project ID → can't trust it
+        // Real setter from Lead Source ("Setter: Name"); the Sales Rep closes.
+        const setterName = schParseSetter_(row[ix.lead]);
+        if (setterName) {
+          const sp = byName[setterName.toLowerCase()];
+          if (sp) {
+            const closerName = schCleanRep_(row[ix.rep]);
+            const cp = closerName ? byName[closerName.toLowerCase()] : null;
+            const closerId = (cp && cp.id) ? cp.id : (existing.closer_id || sp.id);
+            if (existing.setter_id !== sp.id) {
+              patch.setter_id = sp.id; patch.closer_id = closerId; patch.setter_split_pct = (sp.id === closerId ? 1 : 0.5);
+            }
+          }
+        }
 
-    const dealKey  = job.projectId || proposalId;
-    const existing = dealByKey[dealKey] || dealByKey[proposalId];
-
-    // Rep (schedule row, else from Jobs). Excluded inside-sales reps never import.
-    const repName = schCleanRep_(row[ix.rep]) || job.rep;
-    const repLc   = (repName || '').toLowerCase();
-    if (SCH_EXCLUDE_REPS.some(x => repLc.indexOf(x) !== -1)) { out.skipped++; continue; }
-
-    const status = String(row[ix.status] || '').trim().toUpperCase();
-
-    // CANCELLED → flag an existing deal; never create.
-    if (status === 'CANCELLED') {
-      if (existing && existing.status !== SCH_CANCEL_STATUS && SCH_LOCKED_STATUSES.indexOf(existing.status) === -1) {
-        if (SCH_DRY_RUN) { out.flagged++; out.details.push('WOULD FLAG cancelled — ' + customer); }
-        else { try { schPatch_(url, key, '/rest/v1/deals?id=eq.' + existing.id, { status: SCH_CANCEL_STATUS }); out.flagged++; } catch (e) { out.errors++; out.details.push(customer + ': ' + e.message); } }
-      } else { out.skipped++; }
-      continue;
+        if (!Object.keys(patch).length) { out.skipped++; continue; }
+        if (SCH_DRY_RUN) { out.updated++; out.details.push('WOULD UPDATE — ' + (existing.deal_name || projectId) + ' ' + JSON.stringify(patch)); }
+        else { try { schPatch_(url, key, '/rest/v1/deals?id=eq.' + existing.id, patch); Object.assign(existing, patch); out.updated++; } catch (e) { out.errors++; out.details.push((existing.deal_name || projectId) + ': ' + e.message); } }
+      }
     }
-    if (status !== 'BOOKED') { out.skipped++; continue; } // only act on BOOKED
-
-    const installDate = schDate_(row[ix.install]);
-    if (!installDate) { out.skipped++; continue; } // not actually scheduled yet
-    const payDate = schPayDate_(installDate);
-    const payment = schPayment_(row[ix.payment]);
-    const office  = officeIx >= 0 ? schTitle_(row[officeIx]) : null;
-
-    // ── UPDATE existing deal — only the schedule-owned facts that changed ──
-    if (existing) {
-      const patch = {};
-      if (installDate && existing.install_date   !== installDate) patch.install_date   = installDate;
-      if (payDate     && existing.pay_date       !== payDate)     patch.pay_date       = payDate;
-      if (payment     && existing.payment_method !== payment)     patch.payment_method = payment;
-      if (office      && existing.office         !== office)      patch.office         = office;
-      // Status is NOT touched here — a deal advances to Pending Install only when
-      // its checklist is completed in the dashboard.
-      if (!Object.keys(patch).length) { out.skipped++; continue; }
-      if (SCH_DRY_RUN) { out.updated++; out.details.push('WOULD UPDATE — ' + customer + ' ' + JSON.stringify(patch)); continue; }
-      try { schPatch_(url, key, '/rest/v1/deals?id=eq.' + existing.id, patch); out.updated++; }
-      catch (e) { out.errors++; out.details.push(customer + ': ' + e.message); }
-      continue;
-    }
-
-    // ── CREATE — gated by the forward-only baseline ──
-    if (ignoreCreate.has(dealKey) || ignoreCreate.has(proposalId)) { out.skipped++; continue; }
-
-    const repProfile = byName[repLc];
-    if (!repProfile) { out.skipped++; out.details.push('Unknown rep "' + repName + '" for ' + customer); continue; }
-
-    // Setter from Lead Source ("Setter: Name") → split; else solo.
-    let setterId = repProfile.id, closerId = repProfile.id, split = 1;
-    const setterName = schParseSetter_(row[ix.lead]);
-    if (setterName) {
-      const sp = byName[setterName.toLowerCase()];
-      if (sp && sp.id !== repProfile.id) { setterId = sp.id; closerId = repProfile.id; split = 0.5; }
-    }
-
-    const deal = {
-      deal_name:        customer,
-      sale_date:        job.saleDate || schDate_(row[ix.booked]),
-      install_date:     installDate,
-      pay_date:         payDate,
-      status:           SCH_NEW_STATUS,
-      setter_id:        setterId,
-      closer_id:        closerId,
-      setter_split_pct: split,
-      manager_id:       repProfile.manager_id || null,
-      director_id:      directorId,
-      vp_id:            vpId,
-      baseline_revenue: job.baseline,
-      job_price:        job.sale != null ? job.sale : schMoney_(row[ix.jobValue]),
-      payment_method:   payment,
-      office:           office,
-      project_id:       dealKey,
-    };
-
-    if (SCH_DRY_RUN) {
-      out.created++;
-      dealByKey[dealKey] = { id: 'preview', project_id: dealKey };  // dedupe within this run
-      out.details.push('WOULD CREATE — ' + customer + ' (install ' + installDate + ', base ' + (deal.baseline_revenue || 0) +
-        ', ' + repName + (setterName ? ', set by ' + setterName : '') + ')');
-      continue;
-    }
-    try {
-      schPost_(url, key, '/rest/v1/deals', deal);
-      dealByKey[dealKey] = { id: 'new', project_id: dealKey, status: SCH_NEW_STATUS };
-      out.created++;
-    } catch (e) { out.errors++; out.details.push(customer + ': ' + e.message); }
   }
 
   Logger.log((SCH_DRY_RUN ? '[DRY RUN — nothing written] ' : '') +
-    'Schedule sync — created ' + out.created + ', updated ' + out.updated +
-    ', flagged ' + out.flagged + ', skipped ' + out.skipped + ', errors ' + out.errors);
+    'Sync — created ' + out.created + ', change-orders ' + out.changed + ', updated ' + out.updated +
+    ', canceled ' + out.canceled + ', skipped ' + out.skipped + ', errors ' + out.errors);
   if (out.details.length) Logger.log(out.details.join('\n'));
   return out;
 }
 
-// ── BASELINE (run once) ─────────────────────────────────────
-// Records every job currently on the Schedule tab as "already handled" so the
-// sync only auto-CREATES jobs scheduled from now on. Existing deals still get
-// schedule updates regardless.
+// ── BASELINE (optional, run once) ───────────────────────────
+// Records every job currently on the Jobs tab as "already handled" so the sync
+// only CREATES jobs that land from now on. (Change orders & schedule updates to
+// existing deals still flow through regardless.)
 function schBaselineNow() {
   const props = PropertiesService.getScriptProperties();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const jobs = schBuildJobsIndex_(ss);
-  const sheet = ss.getSheetByName(SCH_TAB);
-  if (!sheet) throw new Error('Tab not found: ' + SCH_TAB);
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SCH_JOBS_TAB);
+  if (!sheet) throw new Error('Tab not found: ' + SCH_JOBS_TAB);
   const rows = sheet.getDataRange().getDisplayValues();
   if (rows.length < 2) { Logger.log('Nothing to baseline.'); return 0; }
-  const proposalIx = rows[0].map(h => String(h).trim()).indexOf('Proposal ID');
-  if (proposalIx === -1) throw new Error("Schedule tab missing 'Proposal ID'");
-  const keys = [];
+  const h = rows[0].map(x => String(x).trim());
+  const pi = h.indexOf('Project ID'), ppi = h.indexOf('Proposal ID');
+  const ids = [];
   for (let r = 1; r < rows.length; r++) {
-    const pid = String(rows[r][proposalIx] || '').trim();
-    if (!pid || pid.indexOf('CAL-') === 0) continue;
-    const job = jobs[pid];
-    keys.push((job && job.projectId) ? job.projectId : pid);
+    const id = String(rows[r][pi] || '').trim() || (ppi >= 0 ? String(rows[r][ppi] || '').trim() : '');
+    if (id) ids.push(id);
   }
-  const uniq = [...new Set(keys)];
+  const uniq = [...new Set(ids)];
   props.setProperty(SCH_BASELINE_PROP, uniq.join(','));
-  Logger.log('Baseline set — ' + uniq.length + ' currently-scheduled jobs will NOT be auto-created. ' +
-    'Newly scheduled jobs import from now on. (Existing deals still get schedule updates.)');
+  Logger.log('Baseline set — ' + uniq.length + ' current jobs will NOT be auto-created. Only new jobs import from now on.');
   return uniq.length;
 }
 
-// ── JOBS INDEX ──────────────────────────────────────────────
+// Clears the baseline so EVERY job on the sheet (not already a deal) imports.
+function schClearBaseline() {
+  PropertiesService.getScriptProperties().deleteProperty(SCH_BASELINE_PROP);
+  Logger.log('Baseline cleared — every job on the sheet will import (minus existing deals & excluded reps).');
+}
+
+// ── JOBS INDEX (proposal → project) ─────────────────────────
 function schBuildJobsIndex_(ss) {
   const sheet = ss.getSheetByName(SCH_JOBS_TAB);
-  if (!sheet) throw new Error('Tab not found: ' + SCH_JOBS_TAB);
+  if (!sheet) return {};
   const rows = sheet.getDataRange().getDisplayValues();
   const map = {};
   if (rows.length < 2) return map;
   const h = rows[0].map(x => String(x).trim());
   const c = (n) => h.indexOf(n);
-  const ix = {
-    proposal: c('Proposal ID'), project: c('Project ID'),
-    baseline: c('Baseline Cost'), sale: c('Pre-Tax Sale'),
-    rep: c('Sales Rep'), approved: c('Approved Date'),
-  };
+  const ix = { proposal: c('Proposal ID'), project: c('Project ID') };
   if (ix.proposal === -1) return map;
   for (let r = 1; r < rows.length; r++) {
     const pid = String(rows[r][ix.proposal] || '').trim();
     if (!pid) continue;
-    map[pid] = {  // last row wins (handles re-signs)
-      projectId: ix.project  >= 0 ? String(rows[r][ix.project] || '').trim() : '',
-      baseline:  schMoney_(rows[r][ix.baseline]),
-      sale:      schMoney_(rows[r][ix.sale]),
-      rep:       ix.rep      >= 0 ? schCleanRep_(rows[r][ix.rep]) : '',
-      saleDate:  ix.approved >= 0 ? schDate_(rows[r][ix.approved]) : null,
-    };
+    map[pid] = { projectId: ix.project >= 0 ? String(rows[r][ix.project] || '').trim() : '' };
   }
   return map;
 }
 
-// The office column on the Schedule tab has a blank header; it sits just after
-// "Payment". Prefer a real "Office" header if one exists.
+// Office column on the Schedule tab has a blank header; it sits after "Payment".
 function schFindOfficeCol_(headers, paymentIx) {
   const named = headers.indexOf('Office');
   if (named >= 0) return named;
@@ -284,26 +278,22 @@ function schFindOfficeCol_(headers, paymentIx) {
 }
 
 // ── PARSERS ─────────────────────────────────────────────────
+function schChanged_(stored, sheetVal) {
+  if (sheetVal == null) return false;                     // missing sheet value → don't wipe
+  return Math.abs((Number(stored) || 0) - (Number(sheetVal) || 0)) > 0.5;
+}
 function schParseSetter_(v) {
   const m = String(v || '').trim().match(/^setter\s*:\s*(.+)$/i);
   return m ? m[1].trim() : null;
 }
-function schCleanRep_(v) {
-  return String(v || '').replace(/\s*\(.*$/, '').trim();   // strip "(group)" suffixes
-}
-function schPayment_(v) {
-  const s = String(v || '').trim();
-  return s ? s.replace(/self\s*pay/ig, 'Self-Pay') : null;
-}
-function schTitle_(v) {
-  const s = String(v || '').trim();
-  return s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : null;  // phoenix → Phoenix
-}
+function schCleanRep_(v) { return String(v || '').replace(/\s*\(.*$/, '').trim(); }
+function schPayment_(v) { const s = String(v || '').trim(); return s ? s.replace(/self\s*pay/ig, 'Self-Pay') : null; }
+function schTitle_(v) { const s = String(v || '').trim(); return s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : null; }
 function schMoney_(val) {
   if (val === '' || val === null || val === undefined) return null;
   if (typeof val === 'number') return val;
   const raw = String(val).trim();
-  const neg = /^\(.*\)$/.test(raw);                  // ($1,234.00) = negative
+  const neg = /^\(.*\)$/.test(raw);
   const cleaned = raw.replace(/[$,\s()]/g, '');
   if (cleaned === '' || cleaned === '-') return null;
   const n = parseFloat(cleaned);
@@ -318,13 +308,12 @@ function schDate_(val) {
   if (m) { let [, mo, d, y] = m; if (y.length === 2) y = '20' + y; return y + '-' + String(mo).padStart(2, '0') + '-' + String(d).padStart(2, '0'); }
   return null;
 }
-// Pay the Friday following the (Monday-anchored) install week = Monday + 11 days.
 function schPayDate_(iso) {
   if (!iso) return null;
   const d = new Date(iso + 'T12:00:00Z');
   if (isNaN(d.getTime())) return null;
-  const dow = d.getUTCDay();                 // 0=Sun..6=Sat
-  const offset = (dow === 0 ? 7 : dow) - 1;  // days since Monday
+  const dow = d.getUTCDay();
+  const offset = (dow === 0 ? 7 : dow) - 1;
   const monday = new Date(d); monday.setUTCDate(d.getUTCDate() - offset);
   const pay = new Date(monday); pay.setUTCDate(monday.getUTCDate() + 11);
   return pay.toISOString().slice(0, 10);
@@ -332,31 +321,15 @@ function schPayDate_(iso) {
 
 // ── SUPABASE HELPERS ────────────────────────────────────────
 function schGet_(url, key, path) {
-  const resp = UrlFetchApp.fetch(url + path, {
-    method: 'get',
-    headers: { apikey: key, Authorization: 'Bearer ' + key },
-    muteHttpExceptions: true,
-  });
+  const resp = UrlFetchApp.fetch(url + path, { method: 'get', headers: { apikey: key, Authorization: 'Bearer ' + key }, muteHttpExceptions: true });
   if (resp.getResponseCode() >= 300) throw new Error('GET ' + path + ' failed: ' + resp.getContentText());
   return JSON.parse(resp.getContentText());
 }
 function schPost_(url, key, path, payload) {
-  const resp = UrlFetchApp.fetch(url + path, {
-    method: 'post',
-    contentType: 'application/json',
-    headers: { apikey: key, Authorization: 'Bearer ' + key, Prefer: 'return=minimal' },
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true,
-  });
+  const resp = UrlFetchApp.fetch(url + path, { method: 'post', contentType: 'application/json', headers: { apikey: key, Authorization: 'Bearer ' + key, Prefer: 'return=minimal' }, payload: JSON.stringify(payload), muteHttpExceptions: true });
   if (resp.getResponseCode() >= 300) throw new Error('Insert failed: ' + resp.getContentText());
 }
 function schPatch_(url, key, path, payload) {
-  const resp = UrlFetchApp.fetch(url + path, {
-    method: 'patch',
-    contentType: 'application/json',
-    headers: { apikey: key, Authorization: 'Bearer ' + key, Prefer: 'return=minimal' },
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true,
-  });
+  const resp = UrlFetchApp.fetch(url + path, { method: 'patch', contentType: 'application/json', headers: { apikey: key, Authorization: 'Bearer ' + key, Prefer: 'return=minimal' }, payload: JSON.stringify(payload), muteHttpExceptions: true });
   if (resp.getResponseCode() >= 300) throw new Error('Patch failed: ' + resp.getContentText());
 }
