@@ -97,8 +97,9 @@ export default function Payroll() {
   )
 
   const runDeals = useMemo(() => {
-    if (view === 'overdue') return overdueDeals
-    return deals.filter(d => d.pay_date === view)
+    const list = view === 'overdue' ? overdueDeals : deals.filter(d => d.pay_date === view)
+    // Pay oldest-sold first: sort by sale date ascending (blanks last).
+    return [...list].sort((a, b) => (a.sale_date || '9999').localeCompare(b.sale_date || '9999'))
   }, [deals, view, overdueDeals])
 
   const totals = useMemo(() => {
@@ -398,7 +399,8 @@ export default function Payroll() {
                       style={{ color, border: `1px solid ${color}40` }}>{d.status}</span>
                   </div>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 mt-3 text-[12px]">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-4 gap-y-2 mt-3 text-[12px]">
+                    <div><p className="text-white/30 text-[10px] uppercase">Sold</p><p className="text-white/80">{fmtDay(d.sale_date) || '—'}</p></div>
                     <div><p className="text-white/30 text-[10px] uppercase">Baseline</p><p className="text-white/80">{fmt(a.baseline)}</p></div>
                     <div><p className="text-white/30 text-[10px] uppercase">Job price</p><p className="text-white/80">{fmt(a.job)}</p></div>
                     <div><p className="text-white/30 text-[10px] uppercase">Rep pool</p><p className="text-white/80">{fmt(Math.max(a.job - a.baseline, 0))}</p></div>
