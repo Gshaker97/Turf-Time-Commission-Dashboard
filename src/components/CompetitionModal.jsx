@@ -43,7 +43,7 @@ export default function CompetitionModal({ competition, users = [], onSave, onCl
     } else setForm(BLANK)
   }, [competition])
 
-  const sellers  = useMemo(() => users.filter(u => u.role === 'rep' || u.role === 'manager'), [users])
+  const sellers  = useMemo(() => users.filter(u => ['rep', 'manager', 'director', 'vp'].includes(u.role)), [users])
   const managers = useMemo(() => users.filter(u => u.role === 'manager'), [users])
   const needsPicks = form.type !== 'company'
   const pickList = form.type === 'team' ? managers : sellers

@@ -160,7 +160,7 @@ export function competitionStandings(comp, deals = [], users = []) {
   const nameOf = (id) => users.find(u => u.id === id)?.name ?? '—'
   let entrants = []
   if (comp.type === 'company') {
-    entrants = users.filter(u => u.role === 'rep' || u.role === 'manager').map(u => ({ id: u.id, name: u.name }))
+    entrants = users.filter(u => ['rep', 'manager', 'director', 'vp'].includes(u.role)).map(u => ({ id: u.id, name: u.name }))
   } else if (comp.type === 'team') {
     entrants = (comp.participant_ids || []).map(id => ({ id, name: `${nameOf(id)}'s Team` }))
   } else {
