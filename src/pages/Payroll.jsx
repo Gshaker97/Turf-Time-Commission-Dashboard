@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronLeft, ChevronRight, ChevronDown, Download, Pencil, AlertTriangle, CheckCircle2, Wallet, BadgeCheck } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronDown, Download, Pencil, AlertTriangle, CheckCircle2, Wallet, BadgeCheck, Copy, Check } from 'lucide-react'
 import { format } from 'date-fns'
 import { fetchDeals, fetchUsers, updateDeal } from '../lib/db'
+import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import { dealAmounts, fmt, activeDeals } from '../utils/commission'
 import DealModal from '../components/DealModal'
@@ -50,7 +51,9 @@ function dealPayouts(d) {
 }
 
 export default function Payroll() {
+  const { isAdmin } = useAuth()
   const { statusColor, statusLabels } = useSettings()
+  const [copiedId, setCopiedId] = useState('')
   const [deals, setDeals]     = useState([])
   const [users, setUsers]     = useState([])
   const [loading, setLoading] = useState(true)
@@ -241,6 +244,35 @@ export default function Payroll() {
     downloadCsv(`payroll-${view === 'overdue' ? 'overdue' : view}.csv`, rows)
   }
 
+  // Copy one rep's pay statement to the clipboard — a styled table (text/html,
+  // pastes into email/Sheets/Docs) plus a plain-text version. Admin only.
+  async function copyPayee(p) {
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const lines = p.lines.slice().sort((a, b) => b.amount - a.amount)
+    const text = `Pay statement — ${p.name} — ${viewLabel}\n\n`
+      + lines.map(l => `• ${l.deal} — ${l.role}: ${fmt(l.amount)}`).join('\n')
+      + `\n\nTotal: ${fmt(p.total)}`
+    const cell = 'padding:6px 12px;border:1px solid #d1d5db'
+    const html =
+      `<p style="font-family:Arial,sans-serif;font-size:13px"><strong>${esc(p.name)}</strong> — pay for ${esc(viewLabel)}</p>` +
+      `<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">` +
+      `<thead><tr style="background:#00b894;color:#0b0b0b">` +
+      `<th style="${cell};text-align:left">Deal</th><th style="${cell};text-align:left">Role</th><th style="${cell};text-align:right">Amount</th></tr></thead><tbody>` +
+      lines.map((l, i) => `<tr style="background:${i % 2 ? '#f3f4f6' : '#ffffff'};color:#111">` +
+        `<td style="${cell}">${esc(l.deal)}</td><td style="${cell}">${esc(l.role)}</td><td style="${cell};text-align:right">${fmt(l.amount)}</td></tr>`).join('') +
+      `<tr style="font-weight:bold;color:#111"><td style="${cell}" colspan="2">Total</td><td style="${cell};text-align:right">${fmt(p.total)}</td></tr>` +
+      `</tbody></table>`
+    try {
+      if (navigator.clipboard && window.ClipboardItem) {
+        await navigator.clipboard.write([new window.ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([text], { type: 'text/plain' }),
+        })])
+      } else { await navigator.clipboard.writeText(text) }
+      setCopiedId(p.id); setTimeout(() => setCopiedId(''), 1800)
+    } catch { try { await navigator.clipboard.writeText(text); setCopiedId(p.id); setTimeout(() => setCopiedId(''), 1800) } catch {} }
+  }
+
   return (
     <div style={{ background: '#1a1a1a', color: '#fff', minHeight: '100%' }}>
       {/* Header */}
@@ -365,12 +397,20 @@ export default function Payroll() {
               {showPayees && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 px-4 pb-3 pt-1">
                   {shownPayees.map(p => (
-                    <div key={p.id} className="flex items-center justify-between py-1 border-t border-white/5">
-                      <span className="text-[13px] text-white/80 truncate mr-2">
+                    <div key={p.id} className="flex items-center justify-between py-1 border-t border-white/5 gap-2">
+                      <span className="text-[13px] text-white/80 truncate mr-1">
                         {p.name}
                         <span className="text-white/30 text-[11px]"> · {p.dealIds.size} deal{p.dealIds.size === 1 ? '' : 's'}</span>
                       </span>
-                      <span className="text-[13px] font-semibold text-white whitespace-nowrap">{fmt(p.total)}</span>
+                      <span className="flex items-center gap-1.5 flex-shrink-0">
+                        <span className="text-[13px] font-semibold text-white whitespace-nowrap">{fmt(p.total)}</span>
+                        {isAdmin && (
+                          <button onClick={() => copyPayee(p)} title="Copy this rep's pay statement to email"
+                            className={`p-1 rounded transition-colors ${copiedId === p.id ? 'text-emerald-400' : 'text-white/30 hover:text-teal hover:bg-teal/10'}`}>
+                            {copiedId === p.id ? <Check size={13} /> : <Copy size={13} />}
+                          </button>
+                        )}
+                      </span>
                     </div>
                   ))}
                 </div>
