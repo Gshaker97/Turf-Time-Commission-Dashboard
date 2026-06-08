@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronLeft, ChevronRight, ChevronDown, Download, Pencil, AlertTriangle, CheckCircle2, Wallet } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronDown, Download, Pencil, AlertTriangle, CheckCircle2, Wallet, BadgeCheck } from 'lucide-react'
 import { format } from 'date-fns'
 import { fetchDeals, fetchUsers, updateDeal } from '../lib/db'
 import { useSettings } from '../contexts/SettingsContext'
@@ -169,6 +169,22 @@ export default function Payroll() {
     return { total, applied, pending, count: deductions.length, pendingCount: deductions.filter(x => !x.applied).length }
   }, [deductions])
 
+  // Deals still awaiting a commission sign-off (soonest pay date first).
+  const unverified = useMemo(() =>
+    deals
+      .filter(d => d.commission_verified !== true && dealAmounts(d).totalCommission > 0)
+      .sort((a, b) => (a.pay_date || '9999').localeCompare(b.pay_date || '9999')),
+    [deals]
+  )
+  const unverifiedTotal = useMemo(() => unverified.reduce((s, d) => s + dealAmounts(d).totalCommission, 0), [unverified])
+  const verifiedCount   = useMemo(() => deals.filter(d => d.commission_verified === true).length, [deals])
+
+  async function verifyDeal(id, value = true) {
+    setDeals(ds => ds.map(d => d.id === id ? { ...d, commission_verified: value } : d))
+    const res = await updateDeal(id, { commission_verified: value })
+    if (res?.error) load()
+  }
+
   const canApprove = statusLabels?.includes(APPROVED)
   const canPay     = statusLabels?.includes(PAID)
   const viewLabel  = view === 'overdue' ? 'Overdue (unpaid)' : (fmtDay(view) || '—')
@@ -244,7 +260,7 @@ export default function Payroll() {
 
       {/* Tabs */}
       <div className="flex gap-1 mb-4 p-1 rounded-xl w-fit" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-        {[['run', 'Pay run'], ['deductions', `Deductions${deductionTotals.count ? ` (${deductionTotals.count})` : ''}`]].map(([k, label]) => (
+        {[['run', 'Pay run'], ['verify', `To verify${unverified.length ? ` (${unverified.length})` : ''}`], ['deductions', `Deductions${deductionTotals.count ? ` (${deductionTotals.count})` : ''}`]].map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors ${tab === k ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
             {label}
@@ -448,6 +464,77 @@ export default function Payroll() {
         </>
       )}
       </>)}
+
+      {tab === 'verify' && (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 md:gap-3 mb-4">
+            <Card label="Deals to verify" value={unverified.length} color="#fbbf24" />
+            <Card label="Commission pending review" value={fmt(unverifiedTotal)} color="#fbbf24" />
+            <Card label="Verified" value={verifiedCount} sub="all-time" />
+          </div>
+
+          <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12, overflow: 'hidden' }}>
+            <div className="px-4 py-3 border-b border-white/5">
+              <span className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">Awaiting commission sign-off</span>
+            </div>
+            {loading ? (
+              <div className="px-4 py-8 text-center text-white/30 text-sm">Loading…</div>
+            ) : unverified.length === 0 ? (
+              <div className="px-4 py-8 text-center text-white/40 text-sm">🎉 Every deal's commission has been verified.</div>
+            ) : unverified.map(d => {
+              const a = dealAmounts(d)
+              const payouts = dealPayouts(d)
+              const color = statusColor(d.status)
+              return (
+                <div key={d.id} className="px-4 py-3 border-b border-white/5 last:border-0">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[13px] font-semibold text-white/90 truncate">{d.deal_name}</p>
+                      <p className="text-[11px] text-white/40 mt-0.5">
+                        {[d.office, d.payment_method].filter(Boolean).join(' · ') || '—'}
+                        {d.pay_date ? ` · pays ${fmtDay(d.pay_date)}` : ' · pay date TBD'}
+                        <span className="ml-1.5" style={{ color }}>· {d.status}</span>
+                      </p>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <span className="text-[15px] font-bold text-teal">{fmt(a.totalCommission)}</span>
+                    </div>
+                  </div>
+
+                  {/* Who earns what — eyeball before signing off */}
+                  <div className="mt-2 rounded-lg overflow-hidden" style={{ background: '#171717', border: '1px solid #262626' }}>
+                    {payouts.map((p, i) => (
+                      <div key={i} className="flex items-center justify-between px-3 py-1.5 text-[12px] border-b border-white/5 last:border-0">
+                        <span className="text-white/70 truncate mr-2">{p.name} <span className="text-white/30">· {p.role}</span></span>
+                        <span className="font-semibold text-white whitespace-nowrap">{fmt(p.amount)}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {a.deduction > 0 && (
+                    <p className="text-[11px] text-red-400/90 mt-2 flex items-center gap-1.5">
+                      <AlertTriangle size={12} /> {fmt(a.deduction)} deduction{d.deduction_note ? ` — ${d.deduction_note}` : ''}
+                    </p>
+                  )}
+
+                  <div className="flex items-center justify-end gap-2 mt-2.5">
+                    <button onClick={() => { setEditDeal(d); setModal(true) }}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-white/60 hover:text-white transition-colors"
+                      style={{ border: '1px solid #3a3a3a' }}>
+                      <Pencil size={12} /> Adjust
+                    </button>
+                    <button onClick={() => verifyDeal(d.id, true)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold text-dark transition-colors"
+                      style={{ background: '#fbbf24' }}>
+                      <BadgeCheck size={13} /> Looks good
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
 
       {tab === 'deductions' && (
         <>
