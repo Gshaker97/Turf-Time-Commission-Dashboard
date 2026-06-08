@@ -60,6 +60,13 @@ export default function Admin() {
     await deleteUser(id); loadAll()
   }
 
+  // Quick inline toggle of a user's ghost flag (hide from non-admins).
+  async function toggleGhost(u) {
+    setUsers(us => us.map(x => x.id === u.id ? { ...x, ghost: !x.ghost } : x))   // optimistic
+    const res = await updateUser(u.id, { ghost: !u.ghost })
+    if (res?.error) { alert('Could not update: ' + res.error.message); loadAll() }
+  }
+
   async function saveDeal(data) {
     if (editDeal) await updateDeal(editDeal.id, data)
     else await insertDeal(data, profile?.id)
@@ -118,6 +125,7 @@ export default function Admin() {
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="text-[13px] font-semibold text-white">{u.name}</p>
                         <span className={`text-[10px] font-bold uppercase ${ROLE_COLOR[u.role]}`}>{u.role}</span>
+                        {u.ghost && <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full" style={{ color: '#a78bfa', border: '1px solid #a78bfa55' }}>Ghost</span>}
                       </div>
                       <p className="text-[11px] text-white/40 mt-0.5 truncate">{u.email}</p>
                       {mgr && <p className="text-[11px] text-white/30 mt-0.5">Mgr: {mgr.name}</p>}
@@ -143,7 +151,7 @@ export default function Admin() {
             <table className="w-full">
               <thead>
                 <tr style={thead}>
-                  {['Name','Email','Role','Company','Manager','Actions'].map(h => (
+                  {['Name','Email','Role','Company','Manager','Ghost','Actions'].map(h => (
                     <th key={h} className="px-4 py-3 text-left text-[10px] font-bold text-dark uppercase tracking-wider">{h}</th>
                   ))}
                 </tr>
@@ -158,6 +166,13 @@ export default function Admin() {
                       <td className="px-4 py-3"><span className={`text-[12px] font-semibold uppercase ${ROLE_COLOR[u.role]}`}>{u.role}</span></td>
                       <td className="px-4 py-3 text-[13px] text-white/50">{u.company_name}</td>
                       <td className="px-4 py-3 text-[13px] text-white/50">{mgr?.name ?? '—'}</td>
+                      <td className="px-4 py-3">
+                        <button onClick={() => toggleGhost(u)} title={u.ghost ? 'Visible to admins only — click to unhide' : 'Click to hide from non-admins'}
+                          className="w-9 h-5 rounded-full flex items-center px-0.5 transition-colors"
+                          style={{ background: u.ghost ? '#a78bfa' : '#3a3a3a', justifyContent: u.ghost ? 'flex-end' : 'flex-start' }}>
+                          <span className="w-4 h-4 rounded-full bg-white block" />
+                        </button>
+                      </td>
                       <td className="px-4 py-3">
                         <div className="flex gap-1.5">
                           <button onClick={() => { setEditUser(u); setUserModal(true) }}

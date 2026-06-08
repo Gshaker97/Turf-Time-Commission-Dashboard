@@ -169,7 +169,7 @@ export async function insertUser(data) {
   }
   // Live: profile row only. The matching auth user must be created in Studio.
   const { password, ...rest } = data
-  return supabase.from('profiles').insert([rest])
+  return writeWithSchemaFallback(p => supabase.from('profiles').insert([p]), rest)
 }
 
 export async function updateUser(id, data) {
@@ -178,7 +178,7 @@ export async function updateUser(id, data) {
     return { error: null }
   }
   const { password, ...rest } = data
-  return supabase.from('profiles').update(rest).eq('id', id)
+  return writeWithSchemaFallback(p => supabase.from('profiles').update(p).eq('id', id), rest)
 }
 
 export async function deleteUser(id) {

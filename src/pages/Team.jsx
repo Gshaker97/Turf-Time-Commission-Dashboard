@@ -194,7 +194,7 @@ function RepCard({ rep, healthTier, canEdit, canEditGoal }) {
 }
 
 export default function Team() {
-  const { profile } = useAuth()
+  const { profile, isAdmin } = useAuth()
   const { statusColor } = useSettings()
   const [deals,           setDeals]           = useState([])
   const [users,           setUsers]           = useState([])
@@ -558,7 +558,7 @@ export default function Team() {
           <p className="text-[11px] text-white/30 hidden sm:block">Ranked by revenue</p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 md:gap-4">
-          {repStats.map(rep => (
+          {repStats.filter(rep => isAdmin || !rep.ghost).map(rep => (
             <RepCard key={rep.id} rep={rep}
               healthTier={companyRepTiers?(companyRepTiers[rep.id]??'green'):'green'}
               canEdit={canEditNotes}

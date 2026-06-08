@@ -23,7 +23,7 @@ const Field = ({ label, children }) => (
 const BLANK = {
   name: '', email: '', role: 'rep', company_name: 'Turf Time',
   manager_id: '', director_id: '', vp_id: '',
-  is_admin: false,
+  is_admin: false, ghost: false,
   password: '',
 }
 
@@ -40,6 +40,7 @@ export default function UserModal({ user, allUsers = [], onSave, onClose }) {
         director_id: user.director_id ?? '',
         vp_id:       user.vp_id       ?? '',
         is_admin:    user.is_admin    ?? false,
+        ghost:       user.ghost       ?? false,
         password: '',
       })
     } else {
@@ -119,6 +120,18 @@ export default function UserModal({ user, allUsers = [], onSave, onClose }) {
                 </span>
               </button>
               <p className="text-[10px] text-white/30 mt-1">Full site/admin powers, independent of sales title.</p>
+            </Field>
+            <Field label="Visibility">
+              <button type="button" onClick={() => set('ghost', !form.ghost)}
+                className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-[13px] transition-colors"
+                style={{ background: '#1a1a1a', border: '1px solid #3a3a3a', color: form.ghost ? '#a78bfa' : 'rgba(255,255,255,0.6)' }}>
+                <span>Ghost {form.ghost ? '— on' : '— off'}</span>
+                <span className="w-9 h-5 rounded-full flex items-center px-0.5 transition-colors"
+                  style={{ background: form.ghost ? '#a78bfa' : '#3a3a3a', justifyContent: form.ghost ? 'flex-end' : 'flex-start' }}>
+                  <span className="w-4 h-4 rounded-full bg-white block" />
+                </span>
+              </button>
+              <p className="text-[10px] text-white/30 mt-1">Deals still count in all totals, but the name is hidden from non-admins on leaderboards, competitions, stats &amp; filters.</p>
             </Field>
           </div>
 

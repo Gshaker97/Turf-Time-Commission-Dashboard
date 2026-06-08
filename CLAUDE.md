@@ -89,8 +89,11 @@ setup + deploy steps.
   `014` adds `deals.notes` (free-text, the collapsible notes box on the Deals
   page); `015` adds competition goal/credit params (`goal_mode`+`goal_target`
   for target-based contests with a progress bar, `credit_mode`+`credit_split_pct`
-  for how setter/closer are credited — see `src/utils/competition.js`). Do not
-  re-run `001`/`002` against a populated database.
+  for how setter/closer are credited — see `src/utils/competition.js`); `016`
+  adds `profiles.ghost` (a ghost user's deals still count in every total, but
+  their name is hidden from non-admins on leaderboards/competitions/team
+  rows/rep filters — gated by `isAdmin`; the guard trigger also protects
+  `ghost`). Do not re-run `001`/`002` against a populated database.
 
 ## Security notes (already fixed — keep them fixed)
 
