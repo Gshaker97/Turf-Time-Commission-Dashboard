@@ -3,7 +3,7 @@ import { Trophy, Plus, Pencil, Trash2, ChevronDown } from 'lucide-react'
 import { format } from 'date-fns'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchCompetitions, fetchDeals, fetchUsers, insertCompetition, updateCompetition, deleteCompetition } from '../lib/db'
-import { competitionStandings, competitionStatus, typeLabel, metricLabel, creditLabel, fmtScore } from '../utils/competition'
+import { competitionStandings, competitionStatus, competitionEntryDeals, typeLabel, metricLabel, creditLabel, fmtScore } from '../utils/competition'
 import CompetitionModal from '../components/CompetitionModal'
 
 const todayISO = () => new Date().toISOString().slice(0, 10)
@@ -20,12 +20,24 @@ const STATUS = {
 }
 const RANK_COLOR = { 1: '#fbbf24', 2: '#cbd5e1', 3: '#fb923c' }
 
-function StandRow({ e, metric, mine }) {
+function StandRow({ e, comp, deals, users, canManage, mine }) {
+  const metric = comp.metric
+  const [open, setOpen] = useState(false)
   const rc = RANK_COLOR[e.rank]
   const hasTarget = e.target > 0
+  // Admins can drill into a (computed, non-manual) entry to verify its deals.
+  const clickable = canManage && !e.manual
+  const entryDeals = useMemo(
+    () => (open ? competitionEntryDeals(comp, e.id, deals, users) : []),
+    [open, comp, e.id, deals, users]
+  )
+  const fmtDate = (d) => d ? format(new Date(d + 'T12:00:00'), 'MMM d') : '—'
+
   return (
-    <div className="px-3 py-2 rounded-lg" style={mine ? { background: '#00b89415', border: '1px solid #00b89430' } : undefined}>
-      <div className="flex items-center gap-3">
+    <div className="rounded-lg" style={mine ? { background: '#00b89415', border: '1px solid #00b89430' } : undefined}>
+      <div className={`flex items-center gap-3 px-3 py-2 rounded-lg ${clickable ? 'cursor-pointer hover:bg-white/[0.04]' : ''}`}
+        onClick={clickable ? () => setOpen(o => !o) : undefined}
+        title={clickable ? 'Click to verify the deals counted' : undefined}>
         <span className="w-6 text-center text-[12px] font-bold flex-shrink-0" style={{ color: rc || 'rgba(255,255,255,0.4)' }}>
           {e.rank <= 3 ? ['🥇', '🥈', '🥉'][e.rank - 1] : e.rank}
         </span>
@@ -36,14 +48,42 @@ function StandRow({ e, metric, mine }) {
             style={{ color: '#00b894', border: '1px solid #00b89455' }}>🎉 Earned</span>
         )}
         <span className="text-[13px] font-bold text-white whitespace-nowrap">{fmtScore(e.score, metric)}</span>
+        {clickable && <ChevronDown size={12} className={`text-white/25 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />}
       </div>
       {hasTarget && (
-        <div className="mt-1.5 flex items-center gap-2 pl-9">
+        <div className="px-3 pb-2 -mt-0.5 flex items-center gap-2">
+          <span className="w-6 flex-shrink-0" />
           <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: '#ffffff12' }}>
             <div className="h-full rounded-full transition-all"
               style={{ width: `${(e.progress || 0) * 100}%`, background: e.earned ? '#00b894' : '#2dd4bf' }} />
           </div>
           <span className="text-[10px] text-white/30 whitespace-nowrap">of {fmtScore(e.target, metric)}</span>
+        </div>
+      )}
+      {open && (
+        <div className="mx-3 mb-2 rounded-lg p-2" style={{ background: '#141414', border: '1px solid #262626' }}>
+          {entryDeals.length === 0 ? (
+            <p className="text-[11px] text-white/30 px-1 py-1.5">No deals counted in this window.</p>
+          ) : (
+            <>
+              <div className="flex items-center justify-between px-1 pb-1.5 mb-1 border-b border-white/5 text-[9px] font-bold uppercase tracking-wider text-white/30">
+                <span>{entryDeals.length} deal{entryDeals.length === 1 ? '' : 's'} counted</span>
+                <span>Counts toward score</span>
+              </div>
+              {entryDeals.map(({ deal, credit, contribution }) => (
+                <div key={deal.id} className="flex items-center gap-2 px-1 py-1 text-[11px]">
+                  <span className="flex-1 min-w-0 truncate text-white/75">{deal.deal_name || '—'}</span>
+                  <span className="text-white/30 whitespace-nowrap">{fmtDate(deal.sale_date)}</span>
+                  {credit !== 1 && <span className="text-white/30 whitespace-nowrap">{Math.round(credit * 100)}%</span>}
+                  <span className="font-semibold text-white/80 whitespace-nowrap w-20 text-right">{fmtScore(contribution, metric)}</span>
+                </div>
+              ))}
+              <div className="flex items-center justify-between px-1 pt-1.5 mt-1 border-t border-white/5 text-[11px]">
+                <span className="font-bold text-white/50 uppercase tracking-wider text-[9px]">Total</span>
+                <span className="font-bold text-teal">{fmtScore(e.score, metric)}</span>
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>
@@ -90,13 +130,13 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, onEdit, onD
           {standings.length === 0 ? (
             <p className="text-[12px] text-white/30 px-3 py-2">No participants yet.</p>
           ) : (
-            top.map(e => <StandRow key={e.id} e={e} metric={comp.metric} mine={isMine(e)} />)
+            top.map(e => <StandRow key={e.id} e={e} comp={comp} deals={deals} users={users} canManage={canManage} mine={isMine(e)} />)
           )}
           {/* If the viewer is outside the visible top and not shown, pin their row */}
           {!open && myEntry && myEntry.rank > 5 && (
             <>
               <p className="text-center text-white/20 text-[11px]">···</p>
-              <StandRow e={myEntry} metric={comp.metric} mine />
+              <StandRow e={myEntry} comp={comp} deals={deals} users={users} canManage={canManage} mine />
             </>
           )}
         </div>

@@ -110,6 +110,38 @@ function teamScore(managerId, deals, users, comp) {
   return total
 }
 
+// The deals that make up an entrant's score, for the admin drill-down:
+// [{ deal, value, credit, contribution }] newest-first. `value` is the deal's
+// metric (baseline or 1), `credit` the fraction earned, `contribution` the
+// product that's added to the score.
+export function competitionEntryDeals(comp, entrantId, deals = [], users = []) {
+  const out = []
+  if (comp.type === 'team') {
+    const ids = new Set([entrantId, ...users.filter(u => u.manager_id === entrantId).map(u => u.id)])
+    for (const d of deals) {
+      if (!inWindow(d, comp)) continue
+      const setterIn = ids.has(d.setter_id)
+      const solo     = !d.closer_id || d.setter_id === d.closer_id
+      const closerIn = ids.has(d.closer_id ?? d.setter_id)
+      let counts
+      switch (comp.credit_mode || 'both') {
+        case 'self_gen': counts = solo && setterIn; break
+        case 'setter':   counts = setterIn; break
+        case 'closer':   counts = closerIn; break
+        default:         counts = setterIn || closerIn; break
+      }
+      if (counts) { const v = dealValue(d, comp.metric); out.push({ deal: d, value: v, credit: 1, contribution: v }) }
+    }
+  } else {
+    for (const d of deals) {
+      if (!inWindow(d, comp)) continue
+      const credit = personCredit(d, entrantId, comp)
+      if (credit) { const v = dealValue(d, comp.metric); out.push({ deal: d, value: v, credit, contribution: v * credit }) }
+    }
+  }
+  return out.sort((a, b) => ((a.deal.sale_date ?? '') < (b.deal.sale_date ?? '') ? 1 : -1))
+}
+
 export function competitionStatus(comp, todayISO) {
   if (comp.active === false) return 'ended'
   if (comp.start_date && todayISO < comp.start_date) return 'upcoming'
