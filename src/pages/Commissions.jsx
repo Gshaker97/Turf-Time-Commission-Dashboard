@@ -5,7 +5,7 @@ import { fetchDeals, fetchUsers } from '../lib/db'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
-import { dealAmounts, getUserCommission, fmt } from '../utils/commission'
+import { dealAmounts, getUserCommission, fmt, activeDeals } from '../utils/commission'
 import DateRangeFilter from '../components/DateRangeFilter'
 import { getPresetRange, matchPreset, rangeMatches, presetLabel } from '../utils/dateRanges'
 
