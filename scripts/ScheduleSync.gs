@@ -67,7 +67,7 @@ function schSync() {
   // Existing deals, keyed by project_id; plus the set of customer names (to
   // protect hand-entered deals from being duplicated).
   const deals = schGet_(url, key,
-    '/rest/v1/deals?select=id,project_id,deal_name,status,baseline_revenue,job_price,install_date,pay_date,payment_method,office,setter_id,closer_id,commission_verified,checklist');
+    '/rest/v1/deals?select=id,project_id,deal_name,status,baseline_revenue,job_price,install_date,pay_date,payment_method,office,setter_id,closer_id,manager_override_pct,director_override_pct,vp_override_pct,commission_verified,checklist');
   const byProject = {}, namesSeen = new Set();
   deals.forEach(d => {
     if (d.project_id) byProject[String(d.project_id)] = d;
@@ -137,6 +137,9 @@ function schSync() {
           setter_id: rep.id, closer_id: rep.id, setter_split_pct: 1,
           manager_id: rep.manager_id || null, director_id: directorId, vp_id: vpId,
           baseline_revenue: baselineVal, job_price: saleVal, project_id: projectId,
+          // Office-based override defaults (office unknown at sold-time → 5%;
+          // the Schedule pass corrects Director/VP to the office rate).
+          manager_override_pct: 0.03, director_override_pct: 0.05, vp_override_pct: 0.05,
         };
         if (SCH_DRY_RUN) {
           out.created++; byProject[projectId] = Object.assign({ id: 'preview' }, deal); namesSeen.add(customer.toLowerCase());
@@ -191,7 +194,15 @@ function schSync() {
         if (installDate && existing.install_date   !== installDate) patch.install_date   = installDate;
         if (payDate     && existing.pay_date       !== payDate)     patch.pay_date       = payDate;
         if (payment     && existing.payment_method !== payment)     patch.payment_method = payment;
-        if (office      && existing.office         !== office)      patch.office         = office;
+        const officeChanged = office && existing.office !== office;
+        if (officeChanged) patch.office = office;
+
+        // Override % by office (Tucson 3.75%, else 5%; manager 3%). Backfill any
+        // nulls and recompute Director/VP when the office is first set/changed.
+        const rate = schOfficeRate_(office);
+        if (existing.manager_override_pct  == null) patch.manager_override_pct  = 0.03;
+        if (existing.director_override_pct == null || officeChanged) patch.director_override_pct = rate;
+        if (existing.vp_override_pct       == null || officeChanged) patch.vp_override_pct       = rate;
 
         // Real setter from Lead Source ("Setter: Name"); the Sales Rep closes.
         const setterName = schParseSetter_(row[ix.lead]);
@@ -278,6 +289,7 @@ function schFindOfficeCol_(headers, paymentIx) {
 }
 
 // ── PARSERS ─────────────────────────────────────────────────
+function schOfficeRate_(office) { return String(office || '').toLowerCase() === 'tucson' ? 0.0375 : 0.05; }
 function schChanged_(stored, sheetVal) {
   if (sheetVal == null) return false;                     // missing sheet value → don't wipe
   return Math.abs((Number(stored) || 0) - (Number(sheetVal) || 0)) > 0.5;

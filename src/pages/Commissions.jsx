@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ChevronDown, CalendarClock, AlertTriangle } from 'lucide-react'
 import { format } from 'date-fns'
-import { fetchDeals } from '../lib/db'
+import { fetchDeals, fetchUsers } from '../lib/db'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
@@ -134,20 +134,25 @@ function DealRow({ deal, id, statusColor }) {
 }
 
 export default function Commissions() {
-  const { profile } = useAuth()
+  const { profile, isAdmin } = useAuth()
   const { statusColor, statusLabels } = useSettings()
-  const id = profile?.id
+  const [viewId, setViewId] = useState(null)        // admins can view another rep's commissions
+  const id = viewId || profile?.id
   const [from,   setFrom]   = useState(getPresetRange('mtd').from)
   const [to,     setTo]     = useState(getPresetRange('mtd').to)
   const [preset, setPreset] = useState('mtd')
   const [allDeals, setAllDeals] = useState([])
+  const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
 
   const periodLabel = presetLabel(rangeMatches(preset, from, to) ? preset : matchPreset(from, to))
+  const viewUser = useMemo(() => users.find(u => u.id === id) || profile, [users, id, profile])
 
   useEffect(() => {
     setLoading(true)
-    fetchDeals().then(({ data }) => { setAllDeals(activeDeals(data || [])); setLoading(false) })
+    Promise.all([fetchDeals(), fetchUsers()]).then(([{ data: d }, { data: u }]) => {
+      setAllDeals(activeDeals(d || [])); setUsers(u || []); setLoading(false)
+    })
   }, [])
   useRefreshOnFocus(() => fetchDeals().then(({ data }) => setAllDeals(activeDeals(data || []))))
 
@@ -231,9 +236,23 @@ export default function Commissions() {
     <div style={{ background: '#1a1a1a', color: '#fff', minHeight: '100%' }}>
       {/* Header */}
       <div className="mb-4 space-y-3">
-        <div>
-          <h1 className="text-lg md:text-xl font-bold text-white">My Commissions</h1>
-          <p className="text-[12px] text-white/40 mt-0.5">{profile?.name}</p>
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="min-w-0">
+            <h1 className="text-lg md:text-xl font-bold text-white">
+              {viewId && viewId !== profile?.id ? `${viewUser?.name}'s Commissions` : 'My Commissions'}
+            </h1>
+            <p className="text-[12px] text-white/40 mt-0.5">{viewUser?.name}</p>
+          </div>
+          {isAdmin && (
+            <select value={viewId || ''} onChange={e => setViewId(e.target.value || null)}
+              className="text-[12px] px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white max-w-[180px] flex-shrink-0"
+              title="View another person's commissions">
+              <option value="" style={{ background: '#2a2a2a' }}>My commissions</option>
+              {users.filter(u => ['rep','manager','director','vp'].includes(u.role)).slice()
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map(u => <option key={u.id} value={u.id} style={{ background: '#2a2a2a' }}>{u.name}{u.ghost ? ' (ghost)' : ''}</option>)}
+            </select>
+          )}
         </div>
         <DateRangeFilter from={from} to={to} preset={preset}
           onChange={({ from, to, preset }) => { setFrom(from); setTo(to); setPreset(preset) }} />
