@@ -128,7 +128,10 @@ export async function insertCompetition(data, profileId) {
     _competitions = [c, ..._competitions]
     return { data: [c], error: null }
   }
-  return supabase.from('competitions').insert([{ ...data, created_by: profileId }]).select()
+  return writeWithSchemaFallback(
+    p => supabase.from('competitions').insert([p]).select(),
+    { ...data, created_by: profileId }
+  )
 }
 
 export async function updateCompetition(id, data) {
@@ -136,7 +139,10 @@ export async function updateCompetition(id, data) {
     _competitions = _competitions.map(c => c.id === id ? { ...c, ...data } : c)
     return { error: null }
   }
-  return supabase.from('competitions').update(data).eq('id', id)
+  return writeWithSchemaFallback(
+    p => supabase.from('competitions').update(p).eq('id', id),
+    { ...data }
+  )
 }
 
 export async function deleteCompetition(id) {

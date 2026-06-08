@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { X } from 'lucide-react'
-import { COMP_TYPES, COMP_METRICS } from '../utils/competition'
+import { COMP_TYPES, COMP_METRICS, COMP_GOAL_MODES, COMP_CREDIT_MODES } from '../utils/competition'
 
 const inputCls = 'w-full px-3 py-2 rounded-lg text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-teal/40 transition-colors'
 const inputStyle = { background: '#1a1a1a', border: '1px solid #3a3a3a' }
@@ -16,6 +16,8 @@ const Field = ({ label, children }) => (
 const BLANK = {
   name: '', description: '', rules: '',
   type: 'individual', metric: 'revenue',
+  goal_mode: 'race', goal_target: '',
+  credit_mode: 'both', credit_split_pct: 0.5,
   start_date: '', end_date: '',
   participant_ids: [], manual_scores: {},
 }
@@ -30,6 +32,10 @@ export default function CompetitionModal({ competition, users = [], onSave, onCl
       setForm({
         ...BLANK, ...competition,
         description: competition.description ?? '', rules: competition.rules ?? '',
+        goal_mode: competition.goal_mode ?? 'race',
+        goal_target: competition.goal_target ?? '',
+        credit_mode: competition.credit_mode ?? 'both',
+        credit_split_pct: competition.credit_split_pct ?? 0.5,
         start_date: competition.start_date ?? '', end_date: competition.end_date ?? '',
         participant_ids: competition.participant_ids ?? [],
         manual_scores: competition.manual_scores ?? {},
@@ -65,6 +71,11 @@ export default function CompetitionModal({ competition, users = [], onSave, onCl
       rules: form.rules.trim() || null,
       type: form.type,
       metric: form.metric,
+      goal_mode: form.goal_mode,
+      goal_target: form.goal_mode === 'target' && form.goal_target !== '' ? Number(form.goal_target) : null,
+      credit_mode: form.credit_mode,
+      credit_split_pct: form.credit_mode === 'split'
+        ? Math.min(1, Math.max(0, Number(form.credit_split_pct) || 0)) : null,
       start_date: form.start_date || null,
       end_date: form.end_date || null,
       participant_ids: needsPicks ? form.participant_ids : [],
@@ -110,6 +121,42 @@ export default function CompetitionModal({ competition, users = [], onSave, onCl
               <Inp type="date" value={form.end_date} onChange={e => set('end_date', e.target.value)} />
             </Field>
           </div>
+
+          {/* Goal: race vs. reach a target */}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Goal">
+              <Sel value={form.goal_mode} onChange={e => set('goal_mode', e.target.value)}>
+                {COMP_GOAL_MODES.map(g => <option key={g.key} value={g.key}>{g.label}</option>)}
+              </Sel>
+            </Field>
+            {form.goal_mode === 'target' && (
+              <Field label={form.metric === 'deals' ? 'Target (deals)' : 'Target ($ baseline)'}>
+                <Inp type="number" step="any" min="0" value={form.goal_target}
+                  onChange={e => set('goal_target', e.target.value)}
+                  placeholder={form.metric === 'deals' ? 'e.g. 20' : 'e.g. 100000'} />
+              </Field>
+            )}
+          </div>
+
+          {/* Credit: how setter/closer are attributed */}
+          <Field label="Who gets credit">
+            <Sel value={form.credit_mode} onChange={e => set('credit_mode', e.target.value)}>
+              {COMP_CREDIT_MODES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </Sel>
+          </Field>
+          {form.credit_mode === 'split' && (
+            <div className="rounded-lg px-3 py-3 space-y-2" style={inputStyle}>
+              <div className="flex items-center justify-between text-[12px]">
+                <span className="text-white/60">Setter {Math.round((1 - (Number(form.credit_split_pct) || 0)) * 100)}%</span>
+                <span className="text-white/60">Closer {Math.round((Number(form.credit_split_pct) || 0) * 100)}%</span>
+              </div>
+              <input type="range" min="0" max="100" step="5"
+                value={Math.round((Number(form.credit_split_pct) || 0) * 100)}
+                onChange={e => set('credit_split_pct', Number(e.target.value) / 100)}
+                className="w-full accent-teal" />
+              <p className="text-[10px] text-white/30">On a lead (setter ≠ closer), each earns this share of the deal toward the contest. Self-gen deals count fully for the one rep.</p>
+            </div>
+          )}
 
           <Field label="Description">
             <Inp value={form.description} onChange={e => set('description', e.target.value)} placeholder="Short summary shown on the card" />

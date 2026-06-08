@@ -80,7 +80,10 @@ setup + deploy steps.
   sales title (`role`)**, so someone can be e.g. VP (title/overrides) **and**
   Admin (access). The guard trigger protects `is_admin` from self-escalation;
   `014` adds `deals.notes` (free-text, the collapsible notes box on the Deals
-  page). Do not re-run `001`/`002` against a populated database.
+  page); `015` adds competition goal/credit params (`goal_mode`+`goal_target`
+  for target-based contests with a progress bar, `credit_mode`+`credit_split_pct`
+  for how setter/closer are credited — see `src/utils/competition.js`). Do not
+  re-run `001`/`002` against a populated database.
 
 ## Security notes (already fixed — keep them fixed)
 
