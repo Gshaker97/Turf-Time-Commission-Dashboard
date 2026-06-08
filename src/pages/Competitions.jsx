@@ -3,7 +3,7 @@ import { Trophy, Plus, Pencil, Trash2, ChevronDown } from 'lucide-react'
 import { format } from 'date-fns'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchCompetitions, fetchDeals, fetchUsers, insertCompetition, updateCompetition, deleteCompetition } from '../lib/db'
-import { competitionStandings, competitionStatus, typeLabel, metricLabel, fmtScore } from '../utils/competition'
+import { competitionStandings, competitionStatus, typeLabel, metricLabel, creditLabel, fmtScore } from '../utils/competition'
 import CompetitionModal from '../components/CompetitionModal'
 
 const todayISO = () => new Date().toISOString().slice(0, 10)
@@ -22,14 +22,30 @@ const RANK_COLOR = { 1: '#fbbf24', 2: '#cbd5e1', 3: '#fb923c' }
 
 function StandRow({ e, metric, mine }) {
   const rc = RANK_COLOR[e.rank]
+  const hasTarget = e.target > 0
   return (
-    <div className="flex items-center gap-3 px-3 py-2 rounded-lg" style={mine ? { background: '#00b89415', border: '1px solid #00b89430' } : undefined}>
-      <span className="w-6 text-center text-[12px] font-bold flex-shrink-0" style={{ color: rc || 'rgba(255,255,255,0.4)' }}>
-        {e.rank <= 3 ? ['🥇', '🥈', '🥉'][e.rank - 1] : e.rank}
-      </span>
-      <span className="flex-1 min-w-0 truncate text-[13px] text-white/85">{e.name}{mine && <span className="text-teal text-[11px]"> · you</span>}</span>
-      {e.manual && <span className="text-[9px] uppercase text-white/30 tracking-wide">manual</span>}
-      <span className="text-[13px] font-bold text-white whitespace-nowrap">{fmtScore(e.score, metric)}</span>
+    <div className="px-3 py-2 rounded-lg" style={mine ? { background: '#00b89415', border: '1px solid #00b89430' } : undefined}>
+      <div className="flex items-center gap-3">
+        <span className="w-6 text-center text-[12px] font-bold flex-shrink-0" style={{ color: rc || 'rgba(255,255,255,0.4)' }}>
+          {e.rank <= 3 ? ['🥇', '🥈', '🥉'][e.rank - 1] : e.rank}
+        </span>
+        <span className="flex-1 min-w-0 truncate text-[13px] text-white/85">{e.name}{mine && <span className="text-teal text-[11px]"> · you</span>}</span>
+        {e.manual && <span className="text-[9px] uppercase text-white/30 tracking-wide">manual</span>}
+        {e.earned && (
+          <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full"
+            style={{ color: '#00b894', border: '1px solid #00b89455' }}>🎉 Earned</span>
+        )}
+        <span className="text-[13px] font-bold text-white whitespace-nowrap">{fmtScore(e.score, metric)}</span>
+      </div>
+      {hasTarget && (
+        <div className="mt-1.5 flex items-center gap-2 pl-9">
+          <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: '#ffffff12' }}>
+            <div className="h-full rounded-full transition-all"
+              style={{ width: `${(e.progress || 0) * 100}%`, background: e.earned ? '#00b894' : '#2dd4bf' }} />
+          </div>
+          <span className="text-[10px] text-white/30 whitespace-nowrap">of {fmtScore(e.target, metric)}</span>
+        </div>
+      )}
     </div>
   )
 }
@@ -54,6 +70,10 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, onEdit, onD
             </div>
             <p className="text-[11px] text-white/40 mt-0.5">
               {typeLabel(comp.type)} · {metricLabel(comp.metric)} · {fmtRange(comp.start_date, comp.end_date)}
+            </p>
+            <p className="text-[10px] text-white/30 mt-0.5">
+              {creditLabel(comp.credit_mode)}
+              {comp.goal_mode === 'target' && comp.goal_target ? ` · Goal ${fmtScore(Number(comp.goal_target), comp.metric)}` : ''}
             </p>
             {comp.description && <p className="text-[12px] text-white/55 mt-1.5">{comp.description}</p>}
           </div>
