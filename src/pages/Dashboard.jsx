@@ -215,25 +215,31 @@ export default function Dashboard() {
     }
     for (const deal of filtered) {
       const sid = deal.setter_id
-      const ec  = deal.closer_id ?? sid          // effective closer (solo deal: the setter closes)
+      const cid = deal.closer_id
       const bl  = parseFloat(deal.baseline_revenue) || 0
       const a   = dealAmounts(deal)
-      // Closer-centric counts: credit the rep who closed the deal.
-      if (ec) {
-        const c = ensure(ec)
-        if (sid === ec) { c.deals += 1; c.revenue     += bl }   // closed a deal they set themselves
-        else            { c.leads += 1; c.leadRevenue += bl }   // closed a lead for another setter
+      // Deals + revenue credit the SETTER — the rep who generated the deal.
+      // (Solo deals: setter is also the closer, still credited here.)
+      if (sid) {
+        const s = ensure(sid)
+        s.deals      += 1
+        s.revenue    += bl
+        s.commission += a.setter
       }
-      // Commission: every rep earns their own setter/closer share, wherever the
-      // deal came from (setter share for deals they set, closer share for leads).
-      if (sid) ensure(sid).commission += a.setter
-      if (deal.closer_id && deal.closer_id !== sid) ensure(deal.closer_id).commission += a.closer
+      // Leads + lead revenue credit the CLOSER when they aren't the setter —
+      // they closed someone else's lead, and earn their closer share.
+      if (cid && cid !== sid) {
+        const c = ensure(cid)
+        c.leads       += 1
+        c.leadRevenue += bl
+        c.commission  += a.closer
+      }
     }
     return Object.values(map).map(r => ({ ...r, pct: (r.revenue / companyTotalRev) * 100 }))
   }, [filtered, users, companyTotalRev])
 
-  // Rank + trim to the top 10 by the chosen column (defaults to self-gen
-  // revenue). All sortable columns are numeric. Revenue breaks ties.
+  // Rank by the chosen column (defaults to set-revenue). All sortable columns
+  // are numeric. Revenue breaks ties.
   const toggleRepSort = (key) =>
     setRepSort(s => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }))
   const rankedReps = useMemo(() => {
@@ -410,9 +416,9 @@ export default function Dashboard() {
               <tr className="text-[9px] md:text-[10px] font-bold text-white/30 uppercase tracking-wider">
                 <th className="text-left pb-2 w-6">#</th>
                 <th className="text-left pb-2">Rep</th>
-                <SortTh label="Deals" align="center" className="hidden sm:table-cell" title="Deals they set and closed themselves"
+                <SortTh label="Deals" align="center" className="hidden sm:table-cell" title="Deals they set (generated)"
                   active={repSort.key === 'deals'} dir={repSort.dir} onClick={() => toggleRepSort('deals')} />
-                <SortTh label="Revenue" align="right"
+                <SortTh label="Revenue" align="right" title="Baseline revenue of deals they set"
                   active={repSort.key === 'revenue'} dir={repSort.dir} onClick={() => toggleRepSort('revenue')} />
                 <SortTh label="Leads" align="center" className="hidden md:table-cell" title="Deals they closed for another setter"
                   active={repSort.key === 'leads'} dir={repSort.dir} onClick={() => toggleRepSort('leads')} />
