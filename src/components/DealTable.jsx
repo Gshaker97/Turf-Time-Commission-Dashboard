@@ -583,7 +583,7 @@ function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onUpdate, status
         <div className="flex flex-col gap-0.5">
           <DateField label="Sale" value={deal.sale_date}    field="sale_date"    dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
           <DateField label="Inst" value={deal.install_date} field="install_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate}
-            deriveExtra={v => v ? { pay_date: payDateFromInstall(v) } : null} />
+            deriveExtra={v => ({ pay_date: v ? payDateFromInstall(v) : null })} />
           <DateField key={`pay-${deal.pay_date ?? ''}`} label="Pay" value={deal.pay_date} field="pay_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
         </div>
         <div className="flex items-end justify-end">
@@ -728,7 +728,7 @@ export default function DealTable({
                   <div className="flex flex-col gap-0.5">
                     <DateField label="Sale" value={deal.sale_date}    field="sale_date"    dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
                     <DateField label="Inst" value={deal.install_date} field="install_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate}
-                      deriveExtra={v => v ? { pay_date: payDateFromInstall(v) } : null} />
+                      deriveExtra={v => ({ pay_date: v ? payDateFromInstall(v) : null })} />
                     <DateField key={`pay-${deal.pay_date ?? ''}`} label="Pay" value={deal.pay_date} field="pay_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
                   </div>
                 </td>

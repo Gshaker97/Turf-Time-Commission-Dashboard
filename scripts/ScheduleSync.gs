@@ -43,7 +43,10 @@ const SCH_SKIP_NAME_CONTAINS = ['test', 'cute'];   // junk/test customers
 const SCH_NEW_STATUS      = 'Deal Review';      // status for a freshly imported deal
 const SCH_CHANGE_STATUS   = 'Change Order';     // a re-signed / changed deal
 const SCH_CANCEL_STATUS   = 'Canceled';         // CANCELLED schedule row → this status
-const SCH_LOCKED_STATUSES = ['Pay Finalized', 'Paid'];  // never auto-overridden
+// Statuses the sync never touches — finalized pay + manual triage. A deal you
+// mark Sales Issue / Canceled (or that's already paid) won't get schedule info
+// re-applied or its status changed by the sync.
+const SCH_LOCKED_STATUSES = ['Pay Finalized', 'Paid', 'Sales Issue', 'Canceled'];
 const SCH_BASELINE_PROP   = 'SCHED_BASELINE_IDS';
 // SAFETY: true = preview only (logs what it WOULD do, writes nothing).
 const SCH_DRY_RUN         = true;
@@ -184,6 +187,10 @@ function schSync() {
           continue;
         }
         if (status && status !== 'BOOKED') { out.skipped++; continue; }
+
+        // Don't re-apply schedule info to finalized/triaged deals (Paid, Pay
+        // Finalized, Sales Issue, Canceled) — respects manual changes.
+        if (SCH_LOCKED_STATUSES.indexOf(existing.status) !== -1) { out.skipped++; continue; }
 
         const installDate = schDate_(row[ix.install]);
         const payDate = installDate ? schPayDate_(installDate) : null;
