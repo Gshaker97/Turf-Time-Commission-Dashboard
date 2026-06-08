@@ -3,7 +3,7 @@ import {
   format, subMonths, startOfMonth, startOfWeek, endOfWeek, addDays,
 } from 'date-fns'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { Check, X, TrendingUp, TrendingDown, Minus, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
+import { Check, X, TrendingUp, TrendingDown, Minus, ChevronUp, ChevronDown, ChevronsUpDown, Copy } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchDeals, fetchUsers, fetchGoal, saveGoal as saveGoalDb, deleteGoal as deleteGoalDb } from '../lib/db'
 import { fmt, dealAmounts, activeDeals } from '../utils/commission'
@@ -80,6 +80,7 @@ export default function Dashboard() {
   const [activePreset, setActivePreset] = useState('mtd')
   const [teamFilter,   setTeamFilter]   = useState('')
   const [repSort,      setRepSort]      = useState({ key: 'revenue', dir: 'desc' })  // leaderboard ranking
+  const [copied,       setCopied]       = useState(false)
   const [editingGoal,  setEditingGoal]  = useState(false)
   const [goalInput,    setGoalInput]    = useState('')
   const [savedGoal,    setSavedGoal]    = useState(null)
@@ -253,6 +254,37 @@ export default function Dashboard() {
       .sort((a, b) => (dir === 'asc' ? (a[key] - b[key]) : (b[key] - a[key])) || (b.revenue - a.revenue))
   }, [repData, repSort, ghostIds, isAdmin])
 
+  // Copy the current leaderboard to the clipboard as a real table (HTML) with a
+  // tab-separated fallback — pastes cleanly into Canva, Sheets, Docs, etc.
+  async function copyLeaderboard() {
+    const cols = ['#', 'Rep', 'Deals', 'Revenue', 'Leads', 'Lead Rev', 'Comm']
+    const rows = rankedReps.map((r, i) => [i + 1, r.name, r.deals, fmt(r.revenue), r.leads, fmt(r.leadRevenue), fmt(r.commission)])
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const tsv = [cols, ...rows].map(r => r.join('\t')).join('\n')
+    const html =
+      `<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">` +
+      `<thead><tr style="background:#00b894;color:#0b0b0b">` +
+      cols.map((c, i) => `<th style="padding:6px 12px;text-align:${i >= 2 ? 'right' : 'left'};border:1px solid #d1d5db">${esc(c)}</th>`).join('') +
+      `</tr></thead><tbody>` +
+      rows.map((r, ri) => `<tr style="background:${ri % 2 ? '#f3f4f6' : '#ffffff'};color:#111">` +
+        r.map((c, ci) => `<td style="padding:6px 12px;text-align:${ci >= 2 ? 'right' : 'left'};border:1px solid #d1d5db">${esc(c)}</td>`).join('') +
+        `</tr>`).join('') +
+      `</tbody></table>`
+    try {
+      if (navigator.clipboard && window.ClipboardItem) {
+        await navigator.clipboard.write([new window.ClipboardItem({
+          'text/html':  new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([tsv],  { type: 'text/plain' }),
+        })])
+      } else {
+        await navigator.clipboard.writeText(tsv)
+      }
+      setCopied(true); setTimeout(() => setCopied(false), 1800)
+    } catch {
+      try { await navigator.clipboard.writeText(tsv); setCopied(true); setTimeout(() => setCopied(false), 1800) } catch {}
+    }
+  }
+
   const weeklyData = useMemo(() => {
     const now    = new Date()
     const toDate = dateTo ? new Date(dateTo + 'T23:59:59') : now
@@ -408,9 +440,20 @@ export default function Dashboard() {
 
         {/* Rep Leaderboard */}
         <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
-          <div className="flex items-baseline gap-3 mb-4">
-            <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Rep Leaderboard</h3>
-            <p className="text-[11px] text-white/30 hidden sm:block">Tap a column to rank by it</p>
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <div className="flex items-baseline gap-3 min-w-0">
+              <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Rep Leaderboard</h3>
+              <p className="text-[11px] text-white/30 hidden sm:block">Tap a column to rank by it</p>
+            </div>
+            {isAdmin && (
+              <button onClick={copyLeaderboard}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold flex-shrink-0 transition-colors"
+                style={{ background: copied ? '#00b89420' : '#1a1a1a', border: `1px solid ${copied ? '#00b89455' : '#2e2e2e'}`, color: copied ? '#00b894' : 'rgba(255,255,255,0.6)' }}
+                title="Copy the leaderboard as a table (paste into Canva, Sheets, etc.)">
+                {copied ? <Check size={12} /> : <Copy size={12} />}
+                {copied ? 'Copied' : 'Export'}
+              </button>
+            )}
           </div>
           <div className="max-h-[460px] overflow-y-auto">
           <table className="w-full">
