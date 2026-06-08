@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Check, X, Pencil, Target, ClipboardList, Percent, AlertTriangle } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Percent, AlertTriangle } from 'lucide-react'
 import { fetchWeeklyStats, upsertWeeklyStat } from '../lib/db'
+import { isCanceled } from '../utils/commission'
 import DateRangeFilter from './DateRangeFilter'
 import {
   getPresetRange, weeksInRange, weekStartOf, matchPreset, rangeMatches, presetLabel,
@@ -13,15 +14,15 @@ function rateColor(rate) {
   return '#fb923c'
 }
 const pct = (r) => (r == null ? '—' : `${r.toFixed(0)}%`)
+const rate = (closed, est) => (est > 0 ? (closed / est) * 100 : null)
 
-function Kpi({ icon: Icon, label, value, color = '#00b894' }) {
+function Kpi({ label, est, closed, color = '#00b894' }) {
+  const r = rate(closed, est)
   return (
     <div className="rounded-xl p-3 md:p-4 min-w-0 md:flex-1" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
-      <div className="flex items-center gap-1.5 mb-1">
-        <Icon size={12} style={{ color }} />
-        <p className="text-[9px] md:text-[10px] font-semibold text-white/30 uppercase tracking-widest">{label}</p>
-      </div>
-      <p className="text-[16px] md:text-[20px] font-bold leading-none truncate" style={{ color }}>{value}</p>
+      <p className="text-[9px] md:text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1">{label}</p>
+      <p className="text-[16px] md:text-[20px] font-bold leading-none" style={{ color: rateColor(r) }}>{pct(r)}</p>
+      <p className="text-[10px] text-white/30 mt-1">{closed}/{est} closed</p>
     </div>
   )
 }
@@ -33,10 +34,7 @@ export default function WeeklyStats({ deals = [], reps = [], users = [], canEdit
   const [preset,  setPreset]  = useState('last_week')
   const [stats,   setStats]   = useState([])
   const [loading, setLoading] = useState(true)
-  const [editing, setEditing] = useState(null)   // repId (single-week edit)
-  const [draft,   setDraft]   = useState('')
   const [error,   setError]   = useState('')
-  const skipBlur = useRef(false)
 
   useEffect(() => {
     fetchWeeklyStats().then(({ data }) => { setStats(data ?? []); setLoading(false) })
@@ -47,91 +45,111 @@ export default function WeeklyStats({ deals = [], reps = [], users = [], canEdit
   const singleWeek = weeks.length === 1 ? weeks[0] : null
   const editable   = canEdit && !!singleWeek
 
-  const estMap = useMemo(() => {
-    const m = {}
-    for (const s of stats) m[`${s.rep_id}|${s.week_start}`] = Number(s.estimates) || 0
-    return m
+  // Manual estimate inputs, keyed rep|week.
+  const sgEstMap = useMemo(() => {
+    const m = {}; for (const s of stats) m[`${s.rep_id}|${s.week_start}`] = Number(s.self_gen_estimates) || 0; return m
+  }, [stats])
+  const ldEstMap = useMemo(() => {
+    const m = {}; for (const s of stats) m[`${s.rep_id}|${s.week_start}`] = Number(s.lead_estimates) || 0; return m
   }, [stats])
 
-  // closed deals = deals the rep SET, bucketed by sale week
-  const closedMap = useMemo(() => {
+  // Closes from deals, bucketed by sale week:
+  //  • self-gen close = rep set AND closed it (solo)
+  //  • lead close     = rep closed a deal someone else set
+  const { sgClosed, ldClosed } = useMemo(() => {
     const wk = new Set(weeks.map(w => w.weekStart))
-    const m = {}
+    const sc = {}, lc = {}
     for (const d of deals) {
-      if (!d.setter_id || !d.sale_date) continue
+      if (!d.sale_date || isCanceled(d)) continue
       const ws = weekStartOf(d.sale_date)
       if (!wk.has(ws)) continue
-      m[`${d.setter_id}|${ws}`] = (m[`${d.setter_id}|${ws}`] || 0) + 1
+      const setter = d.setter_id, closer = d.closer_id
+      if (setter && (!closer || closer === setter)) {
+        sc[`${setter}|${ws}`] = (sc[`${setter}|${ws}`] || 0) + 1
+      } else if (closer && setter && closer !== setter) {
+        lc[`${closer}|${ws}`] = (lc[`${closer}|${ws}`] || 0) + 1
+      }
     }
-    return m
+    return { sgClosed: sc, ldClosed: lc }
   }, [deals, weeks])
 
   const rowFor = (rep) => {
-    let estimates = 0, closed = 0
+    let sgEst = 0, sgCl = 0, ldEst = 0, ldCl = 0
     for (const w of weeks) {
-      estimates += estMap[`${rep.id}|${w.weekStart}`] || 0
-      closed    += closedMap[`${rep.id}|${w.weekStart}`] || 0
+      sgEst += sgEstMap[`${rep.id}|${w.weekStart}`] || 0
+      ldEst += ldEstMap[`${rep.id}|${w.weekStart}`] || 0
+      sgCl  += sgClosed[`${rep.id}|${w.weekStart}`] || 0
+      ldCl  += ldClosed[`${rep.id}|${w.weekStart}`] || 0
     }
-    return { id: rep.id, name: rep.name, estimates, closed, rate: estimates > 0 ? (closed / estimates) * 100 : null }
+    return {
+      id: rep.id, name: rep.name, manager_id: rep.manager_id,
+      sgEst, sgCl, sgRate: rate(sgCl, sgEst),
+      ldEst, ldCl, ldRate: rate(ldCl, ldEst),
+      totEst: sgEst + ldEst, totCl: sgCl + ldCl, totRate: rate(sgCl + ldCl, sgEst + ldEst),
+    }
   }
 
-  // Group visible reps by their manager into teams.
+  // Group visible reps by manager into teams (with subtotals).
   const teams = useMemo(() => {
     const nameOf = (id) => users.find(u => u.id === id)?.name
     const groups = {}
     for (const rep of reps) {
       const mid = rep.manager_id || 'unassigned'
-      if (!groups[mid]) {
-        groups[mid] = {
-          id: mid,
-          name: mid === 'unassigned' ? 'Unassigned' : (nameOf(mid) ? `${nameOf(mid)}'s Team` : 'Team'),
-          rows: [],
-        }
-      }
+      if (!groups[mid]) groups[mid] = { id: mid, name: mid === 'unassigned' ? 'Unassigned' : (nameOf(mid) ? `${nameOf(mid)}'s Team` : 'Team'), rows: [] }
       groups[mid].rows.push(rowFor(rep))
     }
+    const sum = (rows, k) => rows.reduce((s, r) => s + r[k], 0)
     const list = Object.values(groups).map(g => {
-      const est = g.rows.reduce((s, r) => s + r.estimates, 0)
-      const closed = g.rows.reduce((s, r) => s + r.closed, 0)
-      g.rows.sort((a, b) => (b.rate ?? -1) - (a.rate ?? -1) || b.closed - a.closed || b.estimates - a.estimates)
-      return { ...g, est, closed, rate: est > 0 ? (closed / est) * 100 : null }
+      g.rows.sort((a, b) => (b.totRate ?? -1) - (a.totRate ?? -1) || b.totCl - a.totCl)
+      const sgEst = sum(g.rows, 'sgEst'), sgCl = sum(g.rows, 'sgCl')
+      const ldEst = sum(g.rows, 'ldEst'), ldCl = sum(g.rows, 'ldCl')
+      return { ...g, sgEst, sgCl, sgRate: rate(sgCl, sgEst), ldEst, ldCl, ldRate: rate(ldCl, ldEst),
+        totEst: sgEst + ldEst, totCl: sgCl + ldCl, totRate: rate(sgCl + ldCl, sgEst + ldEst) }
     })
-    list.sort((a, b) => (b.rate ?? -1) - (a.rate ?? -1) || b.closed - a.closed)
+    list.sort((a, b) => (b.totRate ?? -1) - (a.totRate ?? -1) || b.totCl - a.totCl)
     return list
-  }, [reps, users, weeks, estMap, closedMap])
+  }, [reps, users, weeks, sgEstMap, ldEstMap, sgClosed, ldClosed])
 
   const totals = useMemo(() => {
-    const est = teams.reduce((s, t) => s + t.est, 0)
-    const closed = teams.reduce((s, t) => s + t.closed, 0)
-    return { est, closed, rate: est > 0 ? (closed / est) * 100 : null }
+    const s = (k) => teams.reduce((acc, t) => acc + t[k], 0)
+    return { sgEst: s('sgEst'), sgCl: s('sgCl'), ldEst: s('ldEst'), ldCl: s('ldCl') }
   }, [teams])
 
-  function startEdit(repId, current) {
-    if (!editable) return
-    setEditing(repId); setDraft(String(current || ''))
-  }
-  async function commit(repId) {
-    const weekStart = singleWeek.weekStart
-    const v = Math.max(0, parseInt(draft, 10) || 0)
-    setEditing(null); setError('')
+  // Save one estimate field for a rep in the (single) selected week — writes both
+  // self-gen and lead so the row stays consistent.
+  async function saveEst(repId, which, raw) {
+    if (!singleWeek) return
+    const ws = singleWeek.weekStart
+    const v = Math.max(0, parseInt(raw, 10) || 0)
+    const cur = stats.find(s => s.rep_id === repId && s.week_start === ws) || {}
+    const sg = which === 'sg' ? v : (Number(cur.self_gen_estimates) || 0)
+    const ld = which === 'ld' ? v : (Number(cur.lead_estimates) || 0)
+    setError('')
     setStats(prev => [
-      ...prev.filter(s => !(s.rep_id === repId && s.week_start === weekStart)),
-      { rep_id: repId, week_start: weekStart, estimates: v },
+      ...prev.filter(s => !(s.rep_id === repId && s.week_start === ws)),
+      { rep_id: repId, week_start: ws, self_gen_estimates: sg, lead_estimates: ld, estimates: sg + ld },
     ])
-    const { error } = await upsertWeeklyStat({ rep_id: repId, week_start: weekStart, estimates: v }, profileId)
-    if (error) setError(`Couldn't save to the database: ${error.message}. (Has migration 005_weekly_stats.sql been run?)`)
+    const { error } = await upsertWeeklyStat({ rep_id: repId, week_start: ws, self_gen_estimates: sg, lead_estimates: ld }, profileId)
+    if (error) setError(`Couldn't save: ${error.message}. (Has migration 018 been run?)`)
   }
-  function onBlur(repId) { if (skipBlur.current) { skipBlur.current = false; return } commit(repId) }
-  function cancel() { skipBlur.current = true; setEditing(null) }
 
-  const periodLabel = singleWeek
-    ? `Week of ${singleWeek.label}`
-    : `${presetLabel(activePreset)} · ${weeks.length} weeks`
+  const periodLabel = singleWeek ? `Week of ${singleWeek.label}` : `${presetLabel(activePreset)} · ${weeks.length} weeks`
+
+  // shared cell classes
+  const th = 'px-2 sm:px-3 py-2 text-[10px] font-bold text-white/30 uppercase tracking-wider whitespace-nowrap'
+  const td = 'px-2 sm:px-3 py-2.5 text-[12px] whitespace-nowrap'
+
+  const EstCell = ({ repId, which, value }) => editable ? (
+    <input type="number" min="0" defaultValue={value} key={`${repId}-${which}-${singleWeek.weekStart}`}
+      onBlur={e => saveEst(repId, which, e.target.value)}
+      className="w-12 rounded px-1.5 py-1 text-[12px] font-semibold text-teal text-center focus:outline-none"
+      style={{ background: '#1a1a1a', border: '1px solid rgba(0,184,148,0.35)' }} />
+  ) : <span className="text-white/70">{value}</span>
 
   return (
     <div className="space-y-4">
       <DateRangeFilter from={from} to={to} preset={preset}
-        onChange={({ from, to, preset }) => { setFrom(from); setTo(to); setPreset(preset); setEditing(null) }} />
+        onChange={({ from, to, preset }) => { setFrom(from); setTo(to); setPreset(preset) }} />
 
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-[12px] font-semibold text-white/70">{periodLabel}</span>
@@ -145,11 +163,11 @@ export default function WeeklyStats({ deals = [], reps = [], users = [], canEdit
         </div>
       )}
 
-      {/* Overall KPIs */}
+      {/* Overall close-rate KPIs */}
       <div className="grid grid-cols-3 gap-2 md:flex md:gap-3">
-        <Kpi icon={ClipboardList} label="Estimates" value={totals.est} color="#74b9ff" />
-        <Kpi icon={Target}        label="Closed"    value={totals.closed} />
-        <Kpi icon={Percent}       label="Close Rate" color={rateColor(totals.rate)} value={pct(totals.rate)} />
+        <Kpi label="Self-gen %" est={totals.sgEst} closed={totals.sgCl} />
+        <Kpi label="Lead %"     est={totals.ldEst} closed={totals.ldCl} />
+        <Kpi label="Combined %" est={totals.sgEst + totals.ldEst} closed={totals.sgCl + totals.ldCl} />
       </div>
 
       {loading ? (
@@ -159,56 +177,45 @@ export default function WeeklyStats({ deals = [], reps = [], users = [], canEdit
       ) : (
         teams.map(team => (
           <div key={team.id} className="rounded-xl overflow-hidden" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
-            {/* Team header with subtotals */}
-            <div className="px-4 md:px-5 py-3 border-b border-white/5 flex items-center justify-between gap-3"
-              style={{ background: '#1e1e1e' }}>
+            <div className="px-4 md:px-5 py-3 border-b border-white/5 flex items-center justify-between gap-3" style={{ background: '#1e1e1e' }}>
               <h3 className="text-[13px] font-bold text-white truncate">{team.name}</h3>
-              <div className="flex items-center gap-4 md:gap-6 text-right flex-shrink-0">
-                <div><p className="text-[9px] uppercase tracking-wider text-white/30">Est</p><p className="text-[13px] font-bold text-white/80">{team.est}</p></div>
-                <div><p className="text-[9px] uppercase tracking-wider text-white/30">Closed</p><p className="text-[13px] font-bold text-white/80">{team.closed}</p></div>
-                <div><p className="text-[9px] uppercase tracking-wider text-white/30">Rate</p><p className="text-[13px] font-bold" style={{ color: rateColor(team.rate) }}>{pct(team.rate)}</p></div>
+              <div className="flex items-center gap-3 md:gap-5 text-right flex-shrink-0">
+                <div><p className="text-[9px] uppercase tracking-wider text-white/30">Self-gen</p><p className="text-[13px] font-bold" style={{ color: rateColor(team.sgRate) }}>{pct(team.sgRate)}</p></div>
+                <div><p className="text-[9px] uppercase tracking-wider text-white/30">Lead</p><p className="text-[13px] font-bold" style={{ color: rateColor(team.ldRate) }}>{pct(team.ldRate)}</p></div>
+                <div><p className="text-[9px] uppercase tracking-wider text-white/30">Combined</p><p className="text-[13px] font-bold" style={{ color: rateColor(team.totRate) }}>{pct(team.totRate)}</p></div>
               </div>
             </div>
 
-            <table className="w-full">
-              <thead>
-                <tr style={{ background: '#202020' }} className="text-[10px] font-bold text-white/30 uppercase tracking-wider">
-                  <th className="px-2 sm:px-4 py-2 text-left">Rep</th>
-                  <th className="px-2 sm:px-4 py-2 text-center">Est.</th>
-                  <th className="px-2 sm:px-4 py-2 text-center">Closed</th>
-                  <th className="px-2 sm:px-4 py-2 text-right">Close Rate</th>
-                </tr>
-              </thead>
-              <tbody>
-                {team.rows.map(rep => (
-                  <tr key={rep.id} className="border-t border-white/[0.04] hover:bg-white/[0.02]">
-                    <td className="px-2 sm:px-4 py-2.5 text-[12px] font-medium text-white/85 truncate max-w-[140px] sm:max-w-[220px]">{rep.name}</td>
-                    <td className="px-2 sm:px-4 py-2.5 text-center">
-                      {editing === rep.id ? (
-                        <div className="flex items-center justify-center gap-1">
-                          <input autoFocus type="number" min="0" value={draft}
-                            onChange={e => setDraft(e.target.value)}
-                            onBlur={() => onBlur(rep.id)}
-                            onKeyDown={e => { if (e.key === 'Enter') commit(rep.id); if (e.key === 'Escape') cancel() }}
-                            className="w-14 rounded px-2 py-1 text-[12px] font-bold text-teal text-center focus:outline-none"
-                            style={{ background: '#1a1a1a', border: '1px solid rgba(0,184,148,0.4)' }} />
-                          <button onMouseDown={e => e.preventDefault()} onClick={() => commit(rep.id)} className="text-emerald-400 p-0.5"><Check size={14} /></button>
-                          <button onMouseDown={e => e.preventDefault()} onClick={cancel} className="text-white/30 p-0.5"><X size={14} /></button>
-                        </div>
-                      ) : (
-                        <button onClick={() => startEdit(rep.id, rep.estimates)} disabled={!editable}
-                          className={`inline-flex items-center gap-1 text-[13px] font-semibold text-white ${editable ? 'hover:text-teal group cursor-pointer' : 'cursor-default'}`}>
-                          {rep.estimates}
-                          {editable && <Pencil size={11} className="text-white/15 group-hover:text-teal/60" />}
-                        </button>
-                      )}
-                    </td>
-                    <td className="px-2 sm:px-4 py-2.5 text-center text-[13px] font-semibold text-white/80">{rep.closed}</td>
-                    <td className="px-2 sm:px-4 py-2.5 text-right text-[13px] font-bold" style={{ color: rateColor(rep.rate) }}>{pct(rep.rate)}</td>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[560px]">
+                <thead>
+                  <tr style={{ background: '#202020' }}>
+                    <th className={`${th} text-left`}>Rep</th>
+                    <th className={`${th} text-center`} title="Self-gen estimates">SG Est</th>
+                    <th className={`${th} text-center`} title="Self-gen closes">SG Cl</th>
+                    <th className={`${th} text-right`}>SG %</th>
+                    <th className={`${th} text-center`} title="Lead estimates">Ld Est</th>
+                    <th className={`${th} text-center`} title="Leads closed">Ld Cl</th>
+                    <th className={`${th} text-right`}>Ld %</th>
+                    <th className={`${th} text-right`}>Total %</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {team.rows.map(r => (
+                    <tr key={r.id} className="border-t border-white/[0.04] hover:bg-white/[0.02]">
+                      <td className={`${td} font-medium text-white/85 truncate max-w-[140px]`}>{r.name}</td>
+                      <td className={`${td} text-center`}><EstCell repId={r.id} which="sg" value={r.sgEst} /></td>
+                      <td className={`${td} text-center text-white/70`}>{r.sgCl}</td>
+                      <td className={`${td} text-right font-bold`} style={{ color: rateColor(r.sgRate) }}>{pct(r.sgRate)}</td>
+                      <td className={`${td} text-center`}><EstCell repId={r.id} which="ld" value={r.ldEst} /></td>
+                      <td className={`${td} text-center text-white/70`}>{r.ldCl}</td>
+                      <td className={`${td} text-right font-bold`} style={{ color: rateColor(r.ldRate) }}>{pct(r.ldRate)}</td>
+                      <td className={`${td} text-right font-bold`} style={{ color: rateColor(r.totRate) }}>{pct(r.totRate)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         ))
       )}

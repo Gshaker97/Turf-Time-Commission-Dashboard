@@ -242,16 +242,22 @@ export async function fetchWeeklyStats() {
   return supabase.from('weekly_stats').select('*').order('week_start', { ascending: false })
 }
 
-export async function upsertWeeklyStat({ rep_id, week_start, estimates }, profileId) {
+export async function upsertWeeklyStat({ rep_id, week_start, self_gen_estimates = 0, lead_estimates = 0 }, profileId) {
+  const sg = Math.max(0, Number(self_gen_estimates) || 0)
+  const ld = Math.max(0, Number(lead_estimates) || 0)
+  const row = { rep_id, week_start, self_gen_estimates: sg, lead_estimates: ld, estimates: sg + ld }
   if (DEMO_MODE) {
     _weeklyStats = [
       ..._weeklyStats.filter(s => !(s.rep_id === rep_id && s.week_start === week_start)),
-      { rep_id, week_start, estimates },
+      row,
     ]
     return { error: null }
   }
-  return supabase.from('weekly_stats')
-    .upsert({ rep_id, week_start, estimates, created_by: profileId }, { onConflict: 'rep_id,week_start' })
+  // schema-fallback: if the split columns aren't there yet, it still saves `estimates`.
+  return writeWithSchemaFallback(
+    p => supabase.from('weekly_stats').upsert(p, { onConflict: 'rep_id,week_start' }),
+    { ...row, created_by: profileId }
+  )
 }
 
 // ── App settings (admin-editable config lists) ────────────────
