@@ -114,8 +114,10 @@ function schSync() {
 
         if (existing) {
           // Change order: the sheet's financials differ from what we stored.
+          // This OVERRIDES any current status (even Paid / Sales Issue) so a
+          // re-signed deal always surfaces as "Change Order" for re-verification.
           const changed = schChanged_(existing.baseline_revenue, baselineVal) || schChanged_(existing.job_price, saleVal);
-          if (changed && SCH_LOCKED_STATUSES.indexOf(existing.status) === -1) {
+          if (changed && existing.status !== SCH_CHANGE_STATUS) {
             const patch = { baseline_revenue: baselineVal, job_price: saleVal, status: SCH_CHANGE_STATUS, commission_verified: false, checklist: [] };
             if (customer && existing.deal_name !== customer) patch.deal_name = customer;
             if (SCH_DRY_RUN) {
