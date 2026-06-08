@@ -129,7 +129,10 @@ function schSync() {
           // re-signed deal always surfaces as "Change Order" for re-verification.
           const changed = schChanged_(existing.baseline_revenue, baselineVal) || schChanged_(existing.job_price, saleVal);
           if (changed && existing.status !== SCH_CHANGE_STATUS) {
-            const patch = { baseline_revenue: baselineVal, job_price: saleVal, status: SCH_CHANGE_STATUS, commission_verified: false, checklist: [] };
+            // Clear stored commission amounts so everything recomputes off the new
+            // baseline/price + override %s (overrides won't go stale).
+            const patch = { baseline_revenue: baselineVal, job_price: saleVal, status: SCH_CHANGE_STATUS, commission_verified: false, checklist: [],
+              setter_amount: null, closer_amount: null, manager_amount: null, director_amount: null, vp_amount: null };
             if (customer && existing.deal_name !== customer) patch.deal_name = customer;
             if (SCH_DRY_RUN) {
               out.changed++;
