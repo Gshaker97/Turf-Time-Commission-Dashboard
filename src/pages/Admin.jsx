@@ -13,9 +13,46 @@ import { DEMO_MODE } from '../lib/supabase'
 
 const TABS = ['Users', 'Deals', 'Payments', 'Settings']
 
+const ROLES = ['rep', 'manager', 'director', 'vp', 'admin']
+
 const ROLE_COLOR = {
   vp: 'text-purple-400', director: 'text-indigo-400',
   manager: 'text-amber-400', rep: 'text-white/50', admin: 'text-teal',
+}
+
+// Click-to-edit text cell — shows the value; click turns it into an input that
+// saves on blur/Enter (Esc cancels).
+function EditableText({ value, onSave, placeholder }) {
+  const [editing, setEditing] = useState(false)
+  const [val, setVal] = useState(value ?? '')
+  useEffect(() => { setVal(value ?? '') }, [value])
+  if (editing) {
+    const commit = () => { setEditing(false); const v = val.trim(); if (v !== (value ?? '')) onSave(v) }
+    return (
+      <input autoFocus value={val} onChange={e => setVal(e.target.value)} onBlur={commit}
+        onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') { setVal(value ?? ''); setEditing(false) } }}
+        placeholder={placeholder} style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }}
+        className="px-2 py-1 rounded-lg text-[13px] text-white w-full max-w-[200px] focus:outline-none" />
+    )
+  }
+  return (
+    <button onClick={() => setEditing(true)} className="text-left hover:text-teal transition-colors" title="Click to edit">
+      {value || <span className="text-white/25">—</span>}
+    </button>
+  )
+}
+
+// Click-to-pick cell — an invisible <select> overlays the displayed value.
+function EditableSelect({ value, options, onChange, children }) {
+  return (
+    <div className="relative inline-block cursor-pointer" title="Click to change">
+      <span className="hover:text-teal transition-colors">{children}</span>
+      <select value={value ?? ''} onChange={e => onChange(e.target.value)}
+        className="absolute inset-0 opacity-0 cursor-pointer w-full">
+        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </div>
+  )
 }
 
 export default function Admin() {
@@ -60,11 +97,16 @@ export default function Admin() {
     await deleteUser(id); loadAll()
   }
 
+  // Optimistic single-field update for inline editing in the Users table.
+  async function patchUser(id, patch) {
+    setUsers(us => us.map(x => x.id === id ? { ...x, ...patch } : x))
+    const res = await updateUser(id, patch)
+    if (res?.error) { alert('Could not update: ' + (res.error.message || '')); loadAll() }
+  }
+
   // Quick inline toggle of a user's ghost flag (hide from non-admins).
   async function toggleGhost(u) {
-    setUsers(us => us.map(x => x.id === u.id ? { ...x, ghost: !x.ghost } : x))   // optimistic
-    const res = await updateUser(u.id, { ghost: !u.ghost })
-    if (res?.error) { alert('Could not update: ' + res.error.message); loadAll() }
+    patchUser(u.id, { ghost: !u.ghost })
   }
 
   async function saveDeal(data) {
@@ -90,6 +132,7 @@ export default function Admin() {
 
   const card  = { background: '#242424', border: '1px solid #2e2e2e' }
   const thead = { background: '#00b894' }
+  const managerOptions = users.filter(u => u.role === 'manager').map(m => ({ value: m.id, label: m.name }))
 
   return (
     <div className="space-y-4 pb-8">
@@ -161,11 +204,28 @@ export default function Admin() {
                   const mgr = users.find(x => x.id === u.manager_id)
                   return (
                     <tr key={u.id} style={{ background: i%2===0?'#242424':'#262626' }} className="hover:bg-white/[0.03]">
-                      <td className="px-4 py-3 text-[13px] font-semibold text-white">{u.name}</td>
-                      <td className="px-4 py-3 text-[13px] text-white/50">{u.email}</td>
-                      <td className="px-4 py-3"><span className={`text-[12px] font-semibold uppercase ${ROLE_COLOR[u.role]}`}>{u.role}</span></td>
-                      <td className="px-4 py-3 text-[13px] text-white/50">{u.company_name}</td>
-                      <td className="px-4 py-3 text-[13px] text-white/50">{mgr?.name ?? '—'}</td>
+                      <td className="px-4 py-3 text-[13px] font-semibold text-white">
+                        <EditableText value={u.name} onSave={v => patchUser(u.id, { name: v })} placeholder="Name" />
+                      </td>
+                      <td className="px-4 py-3 text-[13px] text-white/50">
+                        <EditableText value={u.email} onSave={v => patchUser(u.id, { email: v })} placeholder="Email" />
+                      </td>
+                      <td className="px-4 py-3">
+                        <EditableSelect value={u.role} options={ROLES.map(r => ({ value: r, label: r }))}
+                          onChange={v => patchUser(u.id, { role: v })}>
+                          <span className={`text-[12px] font-semibold uppercase ${ROLE_COLOR[u.role]}`}>{u.role}</span>
+                        </EditableSelect>
+                      </td>
+                      <td className="px-4 py-3 text-[13px] text-white/50">
+                        <EditableText value={u.company_name} onSave={v => patchUser(u.id, { company_name: v })} placeholder="Company" />
+                      </td>
+                      <td className="px-4 py-3 text-[13px] text-white/50">
+                        <EditableSelect value={u.manager_id ?? ''}
+                          options={[{ value: '', label: '— None' }, ...managerOptions]}
+                          onChange={v => patchUser(u.id, { manager_id: v || null })}>
+                          {mgr?.name ?? <span className="text-white/25">—</span>}
+                        </EditableSelect>
+                      </td>
                       <td className="px-4 py-3">
                         <button onClick={() => toggleGhost(u)} title={u.ghost ? 'Visible to admins only — click to unhide' : 'Click to hide from non-admins'}
                           className="w-9 h-5 rounded-full flex items-center px-0.5 transition-colors"
