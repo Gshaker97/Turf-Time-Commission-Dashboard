@@ -382,11 +382,11 @@ function DeductionTag({ amount, note }) {
 // confirmed. Toggleable by VP/admin; read-only (shown only if verified) to others.
 function VerifySeal({ verified, canVerify, onToggle }) {
   if (!verified && !canVerify) return null
-  if (!canVerify) return <BadgeCheck size={15} className="text-emerald-400 flex-shrink-0" title="Commission checked" />
+  if (!canVerify) return <BadgeCheck size={15} className="flex-shrink-0" style={{ color: '#fbbf24' }} title="Commission checked" />
   return (
     <button type="button" onClick={onToggle} className="flex-shrink-0 hover:opacity-80 transition-opacity"
       title={verified ? 'Commission checked — click to unmark' : 'Mark commission as checked'}>
-      <BadgeCheck size={16} className={verified ? 'text-emerald-400' : 'text-white/20 hover:text-white/50'} />
+      <BadgeCheck size={16} className={verified ? '' : 'text-white/20 hover:text-white/50'} style={verified ? { color: '#fbbf24' } : undefined} />
     </button>
   )
 }
