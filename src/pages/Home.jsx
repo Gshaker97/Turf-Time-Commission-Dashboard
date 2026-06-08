@@ -174,6 +174,7 @@ export default function Home() {
 
   // Tap-to-view breakdown for a stat tile.
   const [drill, setDrill] = useState(null);
+  const toggleDrill = (k) => setDrill(d => d === k ? null : k);
   const drillData = useMemo(() => {
     if (!drill) return null;
     const fmtD = (d) => d ? dfFormat(new Date(d + "T12:00:00"), "MMM d") : "—";
@@ -392,18 +393,44 @@ export default function Home() {
 
       {/* Stat tiles */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-2 md:gap-3 mb-3">
-        <StatTile icon={DollarSign}    label="Revenue"    value={money(stats.revenue)} sub="baseline you set · tap to view" onClick={() => setDrill("revenue")} />
-        <StatTile icon={Wallet}        label="Commission" value={money(stats.commission)} sub="your earnings · tap to view" color="#34d399" onClick={() => setDrill("commission")} />
-        <StatTile icon={Layers}        label="Deals"      value={stats.deals} sub="closed this month · tap to view" color="#fff" onClick={() => setDrill("deals")} />
-        <StatTile icon={ClipboardList} label="Estimates"  value={stats.estimates} sub="given this month · tap to view" color="#74b9ff" onClick={() => setDrill("estimates")} />
-        <StatTile icon={Percent}       label="Closing %"  value={stats.closeRate == null ? "—" : `${stats.closeRate.toFixed(0)}%`} color={rateColor(stats.closeRate)} onClick={() => setDrill("closeRate")}
+        <StatTile icon={DollarSign}    label="Revenue"    value={money(stats.revenue)} sub="baseline you set · tap to view" onClick={() => toggleDrill("revenue")} />
+        <StatTile icon={Wallet}        label="Commission" value={money(stats.commission)} sub="your earnings · tap to view" color="#34d399" onClick={() => toggleDrill("commission")} />
+        <StatTile icon={Layers}        label="Deals"      value={stats.deals} sub="closed this month · tap to view" color="#fff" onClick={() => toggleDrill("deals")} />
+        <StatTile icon={ClipboardList} label="Estimates"  value={stats.estimates} sub="given this month · tap to view" color="#74b9ff" onClick={() => toggleDrill("estimates")} />
+        <StatTile icon={Percent}       label="Closing %"  value={stats.closeRate == null ? "—" : `${stats.closeRate.toFixed(0)}%`} color={rateColor(stats.closeRate)} onClick={() => toggleDrill("closeRate")}
           trend={closeDelta == null ? null : (
             <span className="text-[10px] font-semibold" style={{ color: closeDelta >= 0 ? "#4ade80" : "#f87171" }}>
               {closeDelta >= 0 ? "▲" : "▼"} {Math.abs(closeDelta).toFixed(0)} pts vs last mo
             </span>
           )} />
-        <StatTile icon={TrendingUp}    label="Avg Deal"   value={money(stats.avgDeal)} sub="per deal · tap to view" color="#fff" onClick={() => setDrill("avgDeal")} />
+        <StatTile icon={TrendingUp}    label="Avg Deal"   value={money(stats.avgDeal)} sub="per deal · tap to view" color="#fff" onClick={() => toggleDrill("avgDeal")} />
       </div>
+
+      {/* Stat drill-down — inline, subtle */}
+      {drill && drillData && (
+        <div className="rounded-xl mb-3 overflow-hidden" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/5" style={{ background: "#171717" }}>
+            <div className="min-w-0">
+              <p className="text-[12px] font-semibold text-white truncate">{drillData.title}</p>
+              <p className="text-[10px] text-white/40">{mr.label} · {drillData.total}</p>
+            </div>
+            <button onClick={() => setDrill(null)} className="text-white/40 hover:text-white p-1 flex-shrink-0"><X size={15} /></button>
+          </div>
+          <div className="max-h-72 overflow-y-auto">
+            {drillData.rows.length === 0 ? (
+              <p className="px-4 py-6 text-center text-white/30 text-[12px]">Nothing here for {mr.label}.</p>
+            ) : drillData.rows.map(r => (
+              <div key={r.id} className="flex items-center justify-between gap-3 px-4 py-2 border-b border-white/5 last:border-0">
+                <div className="min-w-0">
+                  <p className="text-[12px] text-white/80 truncate">{r.name}</p>
+                  {r.sub && <p className="text-[10px] text-white/35">{r.sub}</p>}
+                </div>
+                <span className="text-[12px] font-semibold text-teal whitespace-nowrap">{r.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Personal pace */}
       {pace && (
@@ -469,36 +496,6 @@ export default function Home() {
           </div>
         )}
       </div>
-
-      {/* Stat drill-down */}
-      {drill && drillData && (
-        <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center md:p-4">
-          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setDrill(null)} />
-          <div className="relative w-full md:max-w-md rounded-t-2xl md:rounded-2xl overflow-hidden shadow-2xl"
-            style={{ background: "#1e1e1e", border: "1px solid #2a2a2a", maxHeight: "85dvh" }}>
-            <div className="flex items-center justify-between px-4 py-3 border-b border-white/5" style={{ background: "#171717" }}>
-              <div className="min-w-0">
-                <p className="text-[13px] font-bold text-white truncate">{drillData.title}</p>
-                <p className="text-[11px] text-white/40">{mr.label} · {drillData.total}</p>
-              </div>
-              <button onClick={() => setDrill(null)} className="p-1.5 rounded-lg text-white/40 hover:text-white hover:bg-white/10 flex-shrink-0"><X size={16} /></button>
-            </div>
-            <div className="overflow-y-auto" style={{ maxHeight: "70dvh" }}>
-              {drillData.rows.length === 0 ? (
-                <p className="px-4 py-8 text-center text-white/30 text-[13px]">Nothing here for {mr.label}.</p>
-              ) : drillData.rows.map(r => (
-                <div key={r.id} className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-white/5 last:border-0">
-                  <div className="min-w-0">
-                    <p className="text-[13px] text-white/85 truncate">{r.name}</p>
-                    {r.sub && <p className="text-[11px] text-white/35">{r.sub}</p>}
-                  </div>
-                  <span className="text-[13px] font-semibold text-teal whitespace-nowrap">{r.value}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
