@@ -47,6 +47,8 @@ const SCH_CANCEL_STATUS   = 'Canceled';         // CANCELLED schedule row → th
 // mark Sales Issue / Canceled (or that's already paid) won't get schedule info
 // re-applied or its status changed by the sync.
 const SCH_LOCKED_STATUSES = ['Pay Finalized', 'Paid', 'Sales Issue', 'Canceled'];
+const SCH_FINALIZED_STATUS = 'Pay Finalized';  // auto-advances to Paid once its pay date arrives
+const SCH_PAID_STATUS      = 'Paid';
 const SCH_BASELINE_PROP   = 'SCHED_BASELINE_IDS';
 // SAFETY: true = preview only (logs what it WOULD do, writes nothing).
 const SCH_DRY_RUN         = true;
@@ -78,7 +80,16 @@ function schSync() {
   });
 
   const ignoreCreate = new Set((props.getProperty(SCH_BASELINE_PROP) || '').split(',').filter(Boolean));
-  const out = { created: 0, changed: 0, updated: 0, canceled: 0, skipped: 0, errors: 0, details: [] };
+  const out = { created: 0, changed: 0, updated: 0, canceled: 0, paid: 0, skipped: 0, errors: 0, details: [] };
+
+  // ── PAID PASS — Pay Finalized → Paid once the pay date has arrived ──
+  const todayISO = new Date().toISOString().slice(0, 10);
+  for (const d of deals) {
+    if (d.status === SCH_FINALIZED_STATUS && d.pay_date && d.pay_date <= todayISO) {
+      if (SCH_DRY_RUN) { out.paid++; out.details.push('WOULD MARK PAID — ' + (d.deal_name || d.project_id)); }
+      else { try { schPatch_(url, key, '/rest/v1/deals?id=eq.' + d.id, { status: SCH_PAID_STATUS }); d.status = SCH_PAID_STATUS; out.paid++; } catch (e) { out.errors++; out.details.push((d.deal_name || d.project_id) + ': ' + e.message); } }
+    }
+  }
 
   // ── JOBS PASS — create new deals & catch change orders ──
   const jobsSheet = ss.getSheetByName(SCH_JOBS_TAB);
@@ -236,7 +247,7 @@ function schSync() {
 
   Logger.log((SCH_DRY_RUN ? '[DRY RUN — nothing written] ' : '') +
     'Sync — created ' + out.created + ', change-orders ' + out.changed + ', updated ' + out.updated +
-    ', canceled ' + out.canceled + ', skipped ' + out.skipped + ', errors ' + out.errors);
+    ', canceled ' + out.canceled + ', paid ' + out.paid + ', skipped ' + out.skipped + ', errors ' + out.errors);
   if (out.details.length) Logger.log(out.details.join('\n'));
   return out;
 }
