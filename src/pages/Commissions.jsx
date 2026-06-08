@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronDown, CalendarClock, AlertTriangle } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, CalendarClock, AlertTriangle } from 'lucide-react'
 import { format } from 'date-fns'
 import { fetchDeals, fetchUsers } from '../lib/db'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
@@ -11,6 +11,15 @@ import { getPresetRange, matchPreset, rangeMatches, presetLabel } from '../utils
 
 const todayISO = () => new Date().toISOString().slice(0, 10)
 const inRange = (date, from, to) => !!date && (!from || date >= from) && (!to || date <= to)
+// Monday–Sunday week containing the given date (ISO strings).
+const isoWeek = (dateStr) => {
+  const d = dateStr ? new Date(dateStr + 'T12:00:00') : new Date()
+  const dow = (d.getDay() + 6) % 7
+  const mon = new Date(d); mon.setDate(d.getDate() - dow)
+  const sun = new Date(mon); sun.setDate(mon.getDate() + 6)
+  const iso = (x) => x.toISOString().slice(0, 10)
+  return { from: iso(mon), to: iso(sun) }
+}
 const PAID = 'Paid'                 // status that means the commission has been paid out
 const ISSUE = 'Sales Issue'         // status that means the deal is in trouble
 const fmtDay = (iso) => iso ? format(new Date(iso + 'T12:00:00'), 'EEE, MMM d') : null
@@ -141,6 +150,15 @@ export default function Commissions() {
   const [from,   setFrom]   = useState(getPresetRange('mtd').from)
   const [to,     setTo]     = useState(getPresetRange('mtd').to)
   const [preset, setPreset] = useState('mtd')
+  const [basis,  setBasis]  = useState('sale')      // filter by 'sale' date or 'pay' date
+
+  const stepWeek = (dir) => {
+    const anchor = new Date((from || todayISO()) + 'T12:00:00')
+    anchor.setDate(anchor.getDate() + dir * 7)
+    const r = isoWeek(anchor.toISOString().slice(0, 10))
+    setFrom(r.from); setTo(r.to); setPreset('custom')
+  }
+  const goThisWeek = () => { const r = isoWeek(todayISO()); setFrom(r.from); setTo(r.to); setPreset('custom') }
   const [allDeals, setAllDeals] = useState([])
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
@@ -165,8 +183,8 @@ export default function Commissions() {
 
   // The period's deals (filtered by sale date) for the cards + grouped list.
   const periodMine = useMemo(
-    () => allMine.filter(d => inRange(d.sale_date, from, to)),
-    [allMine, from, to]
+    () => allMine.filter(d => inRange(basis === 'pay' ? d.pay_date : d.sale_date, from, to)),
+    [allMine, from, to, basis]
   )
 
   const take = (d) => getUserCommission(d, id)
@@ -256,6 +274,26 @@ export default function Commissions() {
         </div>
         <DateRangeFilter from={from} to={to} preset={preset}
           onChange={({ from, to, preset }) => { setFrom(from); setTo(to); setPreset(preset) }} />
+
+        {/* Week scroller + sale/pay basis */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center rounded-lg overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+            <button onClick={() => stepWeek(-1)} className="px-2 py-1.5 text-white/50 hover:text-white" title="Previous week"><ChevronLeft size={15} /></button>
+            <button onClick={goThisWeek} className="px-3 py-1.5 text-[12px] font-semibold text-white/80 hover:text-white border-x border-white/10" title="Jump to this week">
+              {from && to ? `${format(new Date(from + 'T12:00:00'), 'MMM d')} – ${format(new Date(to + 'T12:00:00'), 'MMM d')}` : 'This week'}
+            </button>
+            <button onClick={() => stepWeek(1)} className="px-2 py-1.5 text-white/50 hover:text-white" title="Next week"><ChevronRight size={15} /></button>
+          </div>
+          <div className="flex rounded-lg overflow-hidden text-[11px] font-semibold" style={{ border: '1px solid #2a2a2a' }}>
+            {[['sale', 'By sale date'], ['pay', 'By pay date']].map(([k, label]) => (
+              <button key={k} onClick={() => setBasis(k)}
+                className="px-3 py-1.5 transition-colors"
+                style={basis === k ? { background: '#00b894', color: '#0b0b0b' } : { background: '#1e1e1e', color: 'rgba(255,255,255,0.5)' }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* Next payday hero */}
