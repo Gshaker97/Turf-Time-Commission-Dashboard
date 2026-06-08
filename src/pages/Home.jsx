@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Trophy, TrendingUp, Award, Target, ClipboardList, Percent, DollarSign, Wallet, Layers } from "lucide-react";
+import { startOfWeek, endOfWeek, addDays, format as dfFormat } from "date-fns";
+import { Trophy, TrendingUp, Award, Target, ClipboardList, Percent, DollarSign, Wallet, Layers, Flame, Clock, Share2, Check } from "lucide-react";
 import { fetchDeals, fetchCompetitions, fetchUsers, fetchWeeklyStats } from "../lib/db";
 import { getUserCommission, isCanceled } from "../utils/commission";
 import { useAuth } from "../contexts/AuthContext";
@@ -31,7 +32,7 @@ function rateColor(r) {
   return "#fb923c";
 }
 
-function StatTile({ icon: Icon, label, value, sub, color = "#00b894" }) {
+function StatTile({ icon: Icon, label, value, sub, color = "#00b894", trend }) {
   return (
     <div className="rounded-xl p-3 md:p-4 min-w-0" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
       <div className="flex items-center gap-1.5 mb-1.5">
@@ -39,7 +40,7 @@ function StatTile({ icon: Icon, label, value, sub, color = "#00b894" }) {
         <p className="text-[9px] md:text-[10px] uppercase tracking-widest text-white/30 font-semibold leading-tight">{label}</p>
       </div>
       <p className="text-[17px] md:text-[22px] font-bold leading-none truncate" style={{ color }}>{value}</p>
-      {sub && <p className="text-[10px] text-white/30 mt-1 truncate">{sub}</p>}
+      {trend ? <div className="mt-1">{trend}</div> : sub && <p className="text-[10px] text-white/30 mt-1 truncate">{sub}</p>}
     </div>
   );
 }
@@ -53,9 +54,13 @@ export default function Home() {
   const [users, setUsers] = useState([]);
   const [weekly, setWeekly] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [shared, setShared] = useState("");
+  const [viewId, setViewId] = useState(null);   // admins can view another rep's card
 
   const mr = months[selected];
-  const me = profile?.id;
+  const me = viewId || profile?.id;
+  const viewUser = useMemo(() => users.find(u => u.id === me) || profile, [users, me, profile]);
+  const viewingOther = !!viewId && viewId !== profile?.id;
 
   useEffect(() => {
     Promise.all([fetchDeals(), fetchCompetitions(), fetchUsers(), fetchWeeklyStats()])
@@ -67,30 +72,41 @@ export default function Home() {
   }, []);
 
   const ghostIds = useMemo(() => new Set(users.filter(u => u.ghost).map(u => u.id)), [users]);
-
-  // Deals in the selected month.
   const monthDeals = useMemo(() => allDeals.filter(d => d.sale_date?.startsWith(mr.key)), [allDeals, mr.key]);
 
-  // My personal stats (setter-based revenue/deals to match the company leaderboard).
+  const setterRevForMonth = (key) => allDeals
+    .filter(d => d.setter_id === me && d.sale_date?.startsWith(key))
+    .reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0);
+  const estForMonth = (key) => weekly
+    .filter(s => s.rep_id === me && (s.week_start || "").startsWith(key))
+    .reduce((s, x) => s + (Number(x.estimates) || 0), 0);
+  const setterCountForMonth = (key) => allDeals.filter(d => d.setter_id === me && d.sale_date?.startsWith(key)).length;
+
+  // My stats for the selected month.
   const stats = useMemo(() => {
-    const mine = monthDeals.filter(d => d.setter_id === me);
-    const revenue = mine.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0);
-    const deals = mine.length;
+    const revenue = setterRevForMonth(mr.key);
+    const deals = setterCountForMonth(mr.key);
     const commission = getUserCommission(monthDeals, me);
-    const estimates = weekly
-      .filter(s => s.rep_id === me && (s.week_start || "").startsWith(mr.key))
-      .reduce((s, x) => s + (Number(x.estimates) || 0), 0);
+    const estimates = estForMonth(mr.key);
     const closeRate = estimates > 0 ? (deals / estimates) * 100 : null;
     const avgDeal = deals > 0 ? revenue / deals : 0;
     return { revenue, deals, commission, estimates, closeRate, avgDeal };
-  }, [monthDeals, weekly, me, mr.key]);
+  }, [monthDeals, weekly, allDeals, me, mr.key]);
 
-  // Company rank by setter revenue this month (ghosts excluded so reps don't see them).
+  // Closing-% trend vs the previous month.
+  const closeDelta = useMemo(() => {
+    const pm = months[selected + 1]; if (!pm) return null;
+    const est = estForMonth(pm.key); if (!est) return null;
+    const prev = (setterCountForMonth(pm.key) / est) * 100;
+    return stats.closeRate == null ? null : stats.closeRate - prev;
+  }, [months, selected, allDeals, weekly, me, stats.closeRate]);
+
+  // Company rank by setter revenue this month (ghosts excluded for non-admins).
   const rank = useMemo(() => {
     const revBy = {};
     for (const d of monthDeals) if (d.setter_id) revBy[d.setter_id] = (revBy[d.setter_id] || 0) + (parseFloat(d.baseline_revenue) || 0);
     const board = users
-      .filter(u => SELLER(u) && !u.ghost)
+      .filter(u => SELLER(u) && (isAdmin || !u.ghost))
       .map(u => ({ id: u.id, name: u.name, revenue: revBy[u.id] || 0 }))
       .filter(r => r.revenue > 0)
       .sort((a, b) => b.revenue - a.revenue);
@@ -103,18 +119,39 @@ export default function Home() {
       ahead, gapAhead: ahead ? ahead.revenue - board[idx].revenue : 0,
       behind, leadBehind: behind ? board[idx].revenue - behind.revenue : 0,
     };
-  }, [monthDeals, users, me]);
+  }, [monthDeals, users, me, isAdmin]);
 
-  // Personal pace vs the rep's own trailing 3-month average (×1.1).
+  // Personal pace vs the rep's trailing 3-month average (×1.1).
   const pace = useMemo(() => {
-    const setterRev = (key) => allDeals
-      .filter(d => d.setter_id === me && d.sale_date?.startsWith(key))
-      .reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0);
-    const prev = [1, 2, 3].map(i => months[selected + i]).filter(Boolean).map(m => setterRev(m.key));
+    const prev = [1, 2, 3].map(i => months[selected + i]).filter(Boolean).map(m => setterRevForMonth(m.key));
     if (!prev.length) return null;
     const goal = Math.max((prev.reduce((s, v) => s + v, 0) / prev.length) * 1.1, 5000);
     return { goal, pct: Math.min((stats.revenue / goal) * 100, 100) };
   }, [allDeals, me, months, selected, stats.revenue]);
+
+  // Momentum: weekly win streak + last sale.
+  const momentum = useMemo(() => {
+    const mine = allDeals.filter(d => d.setter_id === me && d.sale_date).map(d => d.sale_date);
+    const last = mine.sort((a, b) => b.localeCompare(a))[0] || null;
+    const now = new Date();
+    const daysSince = last ? Math.max(0, Math.floor((now - new Date(last + "T12:00:00")) / 86400000)) : null;
+    const hasWeek = (p) => {
+      const ws = dfFormat(p, "yyyy-MM-dd"), we = dfFormat(endOfWeek(p, { weekStartsOn: 1 }), "yyyy-MM-dd");
+      return mine.some(d => d >= ws && d <= we);
+    };
+    let streak = 0, ptr = startOfWeek(now, { weekStartsOn: 1 });
+    if (!hasWeek(ptr)) ptr = addDays(ptr, -7);       // current week may be incomplete
+    for (let i = 0; i < 52; i++) { if (!hasWeek(ptr)) break; streak++; ptr = addDays(ptr, -7); }
+    return { last, daysSince, streak };
+  }, [allDeals, me]);
+
+  // Personal best month (by setter revenue) across the last 12 months.
+  const best = useMemo(() => {
+    let bk = null, bl = null, br = 0;
+    for (const m of months) { const r = setterRevForMonth(m.key); if (r > br) { br = r; bk = m.key; bl = m.label; } }
+    return br > 0 ? { key: bk, label: bl, rev: br } : null;
+  }, [allDeals, me, months]);
+  const isBest = best && best.key === mr.key && stats.revenue > 0;
 
   // Active competitions the rep is entered in.
   const myComps = useMemo(() => {
@@ -124,18 +161,95 @@ export default function Home() {
       .filter(c => competitionStatus(c, today) === "active")
       .map(c => {
         const standings = competitionStandings(c, allDeals, users, { hiddenIds });
-        const mine = standings.find(e => e.id === me || (c.type === "team" && e.id === profile?.manager_id));
+        const mine = standings.find(e => e.id === me || (c.type === "team" && e.id === viewUser?.manager_id));
         if (!mine) return null;
         const ahead = mine.rank > 1 ? standings[mine.rank - 2] : null;
         return { comp: c, mine, count: standings.length, leader: standings[0], ahead, gap: ahead ? ahead.score - mine.score : 0 };
       })
       .filter(Boolean);
-  }, [comps, allDeals, users, me, profile, isAdmin, ghostIds]);
+  }, [comps, allDeals, users, me, viewUser, isAdmin, ghostIds]);
 
-  const firstName = (profile?.name || "").split(" ")[0] || "there";
-  const initials = (profile?.name || "?").split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase();
+  const firstName = (viewUser?.name || "").split(" ")[0] || "there";
+  const initials = (viewUser?.name || "?").split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase();
+
+  // Share: render the card to a PNG and copy to clipboard (download fallback).
+  async function shareCard() {
+    const W = 1080, H = 1080, P = 60;
+    const cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+    const ctx = cv.getContext("2d");
+    const rr = (x, y, w, h, r) => { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); };
+
+    ctx.fillStyle = "#141414"; ctx.fillRect(0, 0, W, H);
+    // header band
+    const g = ctx.createLinearGradient(0, 0, W, 300); g.addColorStop(0, "#0e3b35"); g.addColorStop(1, "#143d52");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, 300);
+    // avatar
+    ctx.beginPath(); ctx.arc(P + 56, 150, 56, 0, Math.PI * 2); ctx.fillStyle = "#00b894"; ctx.fill();
+    ctx.fillStyle = "#0b0b0b"; ctx.font = "bold 46px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(initials, P + 56, 152);
+    // name + sub
+    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = "#fff"; ctx.font = "bold 52px Arial"; ctx.fillText(viewUser?.name || "", P + 130, 140);
+    ctx.fillStyle = "rgba(255,255,255,0.55)"; ctx.font = "28px Arial";
+    ctx.fillText(`${(viewUser?.role || "").toUpperCase()} · ${mr.label}`, P + 132, 184);
+    // rank (right)
+    ctx.textAlign = "right";
+    ctx.fillStyle = "rgba(255,255,255,0.5)"; ctx.font = "bold 22px Arial"; ctx.fillText("COMPANY RANK", W - P, 110);
+    ctx.fillStyle = "#fbbf24"; ctx.font = "bold 96px Arial";
+    ctx.fillText(rank.ranked ? `#${rank.rank}` : "—", W - P, 200);
+    if (rank.ranked) { ctx.fillStyle = "rgba(255,255,255,0.5)"; ctx.font = "24px Arial"; ctx.fillText(`of ${rank.total}`, W - P, 240); }
+    ctx.textAlign = "left";
+
+    // gap / best ribbon
+    ctx.fillStyle = "rgba(255,255,255,0.85)"; ctx.font = "26px Arial";
+    const ribbon = isBest ? "🔥 Personal best month"
+      : rank.ranked ? (rank.ahead ? `${money(rank.gapAhead)} to pass ${rank.ahead.name}` : "🏆 #1 in the company")
+      : "Make your first sale to hit the board";
+    ctx.fillText(ribbon, P, 262);
+
+    // stat cards
+    const tiles = [
+      ["REVENUE", money(stats.revenue), "#2dd4bf"],
+      ["COMMISSION", money(stats.commission), "#34d399"],
+      ["DEALS", String(stats.deals), "#fff"],
+      ["CLOSING %", stats.closeRate == null ? "—" : `${stats.closeRate.toFixed(0)}%`, rateColor(stats.closeRate)],
+      ["ESTIMATES", String(stats.estimates), "#74b9ff"],
+      ["WIN STREAK", `${momentum.streak} wk`, "#fb923c"],
+    ];
+    const cw = (W - P * 2 - 40) / 2, ch = 190, gap = 40;
+    tiles.forEach((t, i) => {
+      const col = i % 2, row = Math.floor(i / 2);
+      const x = P + col * (cw + 40), y = 340 + row * (ch + gap);
+      ctx.fillStyle = "#1e1e1e"; rr(x, y, cw, ch, 24); ctx.fill();
+      ctx.strokeStyle = "#2a2a2a"; ctx.lineWidth = 2; rr(x, y, cw, ch, 24); ctx.stroke();
+      ctx.fillStyle = "rgba(255,255,255,0.4)"; ctx.font = "bold 26px Arial"; ctx.fillText(t[0], x + 34, y + 62);
+      ctx.fillStyle = t[2]; ctx.font = "bold 70px Arial"; ctx.fillText(t[1], x + 34, y + 145);
+    });
+
+    // footer
+    ctx.textAlign = "center"; ctx.fillStyle = "#00b894"; ctx.font = "bold 30px Arial";
+    ctx.fillText("TURF TIME", W / 2, H - 46);
+
+    cv.toBlob(async (blob) => {
+      if (!blob) return;
+      try {
+        await navigator.clipboard.write([new window.ClipboardItem({ "image/png": blob })]);
+        setShared("copied");
+      } catch {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `${(viewUser?.name || "card").replace(/\s+/g, "-")}-${mr.key}.png`;
+        a.click(); URL.revokeObjectURL(a.href);
+        setShared("downloaded");
+      }
+      setTimeout(() => setShared(""), 2200);
+    }, "image/png");
+  }
 
   if (loading) return <div className="text-white/30 text-sm py-16 text-center" style={{ background: "#1a1a1a", minHeight: "100%" }}>Loading…</div>;
+
+  const lastLabel = momentum.daysSince == null ? "No sales yet"
+    : momentum.daysSince === 0 ? "Today" : momentum.daysSince === 1 ? "Yesterday" : `${momentum.daysSince} days ago`;
 
   return (
     <div style={{ background: "#1a1a1a", color: "#fff", minHeight: "100%" }} className="pb-8">
@@ -146,19 +260,44 @@ export default function Home() {
           <div className="w-11 h-11 rounded-full flex items-center justify-center text-[15px] font-bold text-dark flex-shrink-0"
             style={{ background: "linear-gradient(135deg,#2dd4bf,#00b894)" }}>{initials}</div>
           <div className="min-w-0">
-            <h1 className="text-lg md:text-xl font-bold text-white truncate">{profile?.name}</h1>
-            <p className="text-[12px] text-white/40 capitalize">{profile?.role} · {mr.label}</p>
+            <h1 className="text-lg md:text-xl font-bold text-white truncate">
+              {viewUser?.name}{viewingOther && <span className="text-[11px] font-semibold text-amber-300 ml-2">· viewing</span>}
+            </h1>
+            <p className="text-[12px] text-white/40 capitalize">{viewUser?.role} · {mr.label}</p>
           </div>
         </div>
-        <select value={selected} onChange={e => setSelected(Number(e.target.value))}
-          className="text-[12px] px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white flex-shrink-0">
-          {months.map((m, i) => <option key={i} value={i} style={{ background: "#2a2a2a" }}>{m.label}</option>)}
-        </select>
+        <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
+          {isAdmin && (
+            <select value={viewId || ""} onChange={e => setViewId(e.target.value || null)}
+              className="text-[12px] px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white max-w-[160px]"
+              title="View another person's card">
+              <option value="" style={{ background: "#2a2a2a" }}>My card</option>
+              {users.filter(SELLER).slice().sort((a, b) => a.name.localeCompare(b.name)).map(u => (
+                <option key={u.id} value={u.id} style={{ background: "#2a2a2a" }}>{u.name}{u.ghost ? " (ghost)" : ""}</option>
+              ))}
+            </select>
+          )}
+          <button onClick={shareCard}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold transition-colors"
+            style={{ background: shared ? "#00b89420" : "#1e1e1e", border: `1px solid ${shared ? "#00b89455" : "#2a2a2a"}`, color: shared ? "#00b894" : "rgba(255,255,255,0.6)" }}
+            title="Copy a shareable card image">
+            {shared ? <Check size={14} /> : <Share2 size={14} />}
+            {shared === "copied" ? "Copied" : shared === "downloaded" ? "Saved" : "Share"}
+          </button>
+          <select value={selected} onChange={e => setSelected(Number(e.target.value))}
+            className="text-[12px] px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white">
+            {months.map((m, i) => <option key={i} value={i} style={{ background: "#2a2a2a" }}>{m.label}</option>)}
+          </select>
+        </div>
       </div>
 
       {/* Rank hero */}
       <div className="rounded-2xl p-4 md:p-5 mb-3 relative overflow-hidden"
         style={{ background: "linear-gradient(135deg,#0e3b35,#143d52)", border: "1px solid #1c5a50" }}>
+        {isBest && (
+          <div className="absolute top-3 right-3 text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-full"
+            style={{ background: "#fb923c22", color: "#fdba74", border: "1px solid #fb923c55" }}>🔥 Personal best</div>
+        )}
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
             <p className="text-[10px] uppercase tracking-widest text-white/50 font-semibold mb-1 flex items-center gap-1.5">
@@ -186,13 +325,36 @@ export default function Home() {
         </div>
       </div>
 
+      {/* Momentum strip */}
+      <div className="grid grid-cols-2 gap-2 md:gap-3 mb-3">
+        <div className="rounded-xl p-3 md:p-4 flex items-center gap-3" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
+          <Flame size={20} className="flex-shrink-0" style={{ color: momentum.streak > 0 ? "#fb923c" : "#4b5563" }} />
+          <div className="min-w-0">
+            <p className="text-[17px] md:text-[20px] font-bold leading-none text-white">{momentum.streak} <span className="text-[12px] font-semibold text-white/40">{momentum.streak === 1 ? "week" : "weeks"}</span></p>
+            <p className="text-[10px] text-white/30 mt-1">win streak</p>
+          </div>
+        </div>
+        <div className="rounded-xl p-3 md:p-4 flex items-center gap-3" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
+          <Clock size={20} className="text-teal flex-shrink-0" />
+          <div className="min-w-0">
+            <p className="text-[15px] md:text-[18px] font-bold leading-none text-white truncate">{lastLabel}</p>
+            <p className="text-[10px] text-white/30 mt-1">last sale</p>
+          </div>
+        </div>
+      </div>
+
       {/* Stat tiles */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-2 md:gap-3 mb-3">
         <StatTile icon={DollarSign}    label="Revenue"    value={money(stats.revenue)} sub="baseline you set" />
         <StatTile icon={Wallet}        label="Commission" value={money(stats.commission)} sub="your earnings" color="#34d399" />
         <StatTile icon={Layers}        label="Deals"      value={stats.deals} sub="closed this month" color="#fff" />
         <StatTile icon={ClipboardList} label="Estimates"  value={stats.estimates} sub="given this month" color="#74b9ff" />
-        <StatTile icon={Percent}       label="Closing %"  value={stats.closeRate == null ? "—" : `${stats.closeRate.toFixed(0)}%`} sub="deals ÷ estimates" color={rateColor(stats.closeRate)} />
+        <StatTile icon={Percent}       label="Closing %"  value={stats.closeRate == null ? "—" : `${stats.closeRate.toFixed(0)}%`} color={rateColor(stats.closeRate)}
+          trend={closeDelta == null ? null : (
+            <span className="text-[10px] font-semibold" style={{ color: closeDelta >= 0 ? "#4ade80" : "#f87171" }}>
+              {closeDelta >= 0 ? "▲" : "▼"} {Math.abs(closeDelta).toFixed(0)} pts vs last mo
+            </span>
+          )} />
         <StatTile icon={TrendingUp}    label="Avg Deal"   value={money(stats.avgDeal)} sub="per deal" color="#fff" />
       </div>
 
@@ -211,7 +373,9 @@ export default function Home() {
             <div className="h-full rounded-full transition-all duration-700"
               style={{ width: `${pace.pct}%`, background: pace.pct >= 100 ? "#4ade80" : "#00b894" }} />
           </div>
-          <p className="text-[10px] text-white/30 mt-1.5">Target = your trailing 3-month average +10%.</p>
+          <p className="text-[10px] text-white/30 mt-1.5">
+            Target = your trailing 3-month average +10%.{best ? ` · Best month: ${best.label} (${money(best.rev)})` : ""}
+          </p>
         </div>
       )}
 
@@ -229,6 +393,8 @@ export default function Home() {
           <div className="space-y-2">
             {myComps.map(({ comp, mine, count, leader, ahead, gap }) => {
               const target = mine.target > 0 ? mine.target : 0;
+              const denom = target > 0 ? target : (leader?.score || 0);
+              const w = denom > 0 ? Math.min((mine.score / denom) * 100, 100) : 0;
               return (
                 <Link key={comp.id} to="/competitions"
                   className="block rounded-lg px-3 py-2.5 hover:bg-white/[0.03] transition-colors"
@@ -247,16 +413,9 @@ export default function Home() {
                         ? <> · <span className="text-amber-300">{fmtScore(gap, comp.metric)}</span> to pass {ahead.name}</>
                         : <> · 🏆 leading</>}
                   </div>
-                  {/* progress bar: toward target, else share of the leader */}
-                  {(() => {
-                    const denom = target > 0 ? target : (leader?.score || 0);
-                    const w = denom > 0 ? Math.min((mine.score / denom) * 100, 100) : 0;
-                    return (
-                      <div className="h-1.5 rounded-full overflow-hidden mt-2" style={{ background: "#ffffff12" }}>
-                        <div className="h-full rounded-full" style={{ width: `${w}%`, background: mine.earned ? "#00b894" : "#2dd4bf" }} />
-                      </div>
-                    );
-                  })()}
+                  <div className="h-1.5 rounded-full overflow-hidden mt-2" style={{ background: "#ffffff12" }}>
+                    <div className="h-full rounded-full" style={{ width: `${w}%`, background: mine.earned ? "#00b894" : "#2dd4bf" }} />
+                  </div>
                 </Link>
               );
             })}
