@@ -81,6 +81,8 @@ export default function Dashboard() {
   const [teamFilter,   setTeamFilter]   = useState('')
   const [repSort,      setRepSort]      = useState({ key: 'revenue', dir: 'desc' })  // leaderboard ranking
   const [copied,       setCopied]       = useState(false)
+  const [openTeams,    setOpenTeams]    = useState(() => new Set())
+  const toggleTeam = (id) => setOpenTeams(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
   const [editingGoal,  setEditingGoal]  = useState(false)
   const [goalInput,    setGoalInput]    = useState('')
   const [savedGoal,    setSavedGoal]    = useState(null)
@@ -194,12 +196,21 @@ export default function Dashboard() {
   const teamData = useMemo(() => {
     const mgrs = teamFilter ? users.filter(u => u.id === teamFilter) : users.filter(u => u.role === 'manager')
     return mgrs.map(mgr => {
-      const teamRepIds = users.filter(u => u.manager_id === mgr.id).map(u => u.id)
-      const repIds  = new Set([...teamRepIds, mgr.id])   // include the manager's own sales
+      const members = [mgr, ...users.filter(u => u.manager_id === mgr.id)]
+      const repIds  = new Set(members.map(m => m.id))   // include the manager's own sales
       const mDeals  = filtered.filter(d => repIds.has(d.setter_id))
       const revenue = mDeals.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
       const prevRev = prevFiltered.filter(d => repIds.has(d.setter_id)).reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
-      return { id: mgr.id, name: mgr.name, repCount: teamRepIds.length, deals: mDeals.length, revenue, prevRev, pct: (revenue / companyTotalRev) * 100 }
+      // Per-member breakdown (setter-based, so the rows sum to the team total).
+      const reps = members.map(m => {
+        const md = filtered.filter(d => d.setter_id === m.id)
+        return {
+          id: m.id, name: m.name, ghost: m.ghost === true, isManager: m.id === mgr.id,
+          deals: md.length,
+          revenue: md.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0),
+        }
+      }).sort((a, b) => b.revenue - a.revenue)
+      return { id: mgr.id, name: mgr.name, repCount: members.length - 1, deals: mDeals.length, revenue, prevRev, reps, pct: (revenue / companyTotalRev) * 100 }
     }).sort((a, b) => b.revenue - a.revenue)
   }, [users, filtered, prevFiltered, companyTotalRev, teamFilter])
 
@@ -508,17 +519,21 @@ export default function Dashboard() {
         <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
           <div className="flex items-baseline gap-3 mb-4">
             <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Team Breakdown</h3>
-            <p className="text-[11px] text-white/30 hidden sm:block">Setter revenue · % of total</p>
+            <p className="text-[11px] text-white/30 hidden sm:block">Tap a team to see reps</p>
           </div>
           <div className="space-y-4">
             {teamData.map((team, i) => {
               const hasPrev  = prevPeriod && team.prevRev > 0
               const trendPct = hasPrev ? ((team.revenue - team.prevRev) / team.prevRev) * 100 : null
+              const isOpen   = openTeams.has(team.id)
+              const reps     = team.reps.filter(r => isAdmin || !r.ghost)
               return (
                 <div key={team.id}>
+                  <button onClick={() => toggleTeam(team.id)} className="w-full text-left">
                   <div className="flex items-center justify-between mb-1.5">
                     <div className="flex items-center gap-2 min-w-0">
                       <RankBadge n={i + 1} />
+                      <ChevronDown size={13} className={`text-white/30 flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
                       <div className="min-w-0">
                         <span className="text-[12px] md:text-[13px] font-semibold text-white">{team.name}'s Team</span>
                         <span className="text-[10px] text-white/30 ml-2 hidden sm:inline">{team.repCount} reps · {team.deals} deals</span>
@@ -540,6 +555,22 @@ export default function Dashboard() {
                   <div className="h-2 rounded-full overflow-hidden ml-8" style={{ background: '#1a1a1a' }}>
                     <div className="h-full rounded-full bg-teal" style={{ width: `${team.pct}%` }} />
                   </div>
+                  </button>
+                  {isOpen && (
+                    <div className="ml-8 mt-2 rounded-lg overflow-hidden" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+                      {reps.length === 0 ? (
+                        <p className="px-3 py-2 text-[11px] text-white/30">No reps on this team.</p>
+                      ) : reps.map(r => (
+                        <div key={r.id} className="flex items-center gap-2 px-3 py-1.5 text-[12px] border-b border-white/5 last:border-0">
+                          <span className="flex-1 min-w-0 truncate text-white/75">
+                            {r.name}{r.isManager && <span className="text-[9px] uppercase tracking-wide text-amber-400/80 ml-1.5">mgr</span>}
+                          </span>
+                          <span className="text-white/40 whitespace-nowrap w-12 text-right">{r.deals} {r.deals === 1 ? 'deal' : 'deals'}</span>
+                          <span className="font-semibold text-teal whitespace-nowrap w-24 text-right">{fmt(r.revenue)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )
             })}
