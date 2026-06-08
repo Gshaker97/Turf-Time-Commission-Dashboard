@@ -93,7 +93,11 @@ setup + deploy steps.
   adds `profiles.ghost` (a ghost user's deals still count in every total, but
   their name is hidden from non-admins on leaderboards/competitions/team
   rows/rep filters — gated by `isAdmin`; the guard trigger also protects
-  `ghost`). Do not re-run `001`/`002` against a populated database.
+  `ghost`); `017` adds `deals.commission_verified` (the gold leadership sign-off
+  seal on the Deals page + the Payroll "To verify" worklist); `018` adds
+  `weekly_stats.self_gen_estimates` + `lead_estimates` (Weekly Stats split into
+  self-gen vs lead estimates/closes/close-rate; old `estimates` kept as the sum).
+  Do not re-run `001`/`002` against a populated database.
 
 ## Security notes (already fixed — keep them fixed)
 
