@@ -111,7 +111,9 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
     if (repPoolForm <= 0) return
     const v = Math.max(0, parseFloat(String(raw).replace(/[$,]/g, '')) || 0)
     let sp = which === 'setter' ? (v / repPoolForm) * 100 : (1 - v / repPoolForm) * 100
-    set('setter_split_pct', Math.min(100, Math.max(0, sp)).toFixed(2))
+    // Keep enough precision (4 decimals) that a typed $ amount round-trips to the
+    // cent — rounding to 2 dropped custom splits off by a few dollars.
+    set('setter_split_pct', Math.min(100, Math.max(0, sp)).toFixed(4))
   }
   const preview  = calcDealCommissions({
     job_price:             parseFloat(form.job_price)        || 0,

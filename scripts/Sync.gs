@@ -14,7 +14,45 @@
  */
 
 // ── CONFIG ──────────────────────────────────────────────────
+// Tabs to always sync, in addition to the recent months computed at runtime.
+// Pin older months here if you ever need to re-sync them; current/recent
+// months are added automatically by recentTabNames_() so this never has to be
+// hand-edited when a new month starts.
 const TABS_TO_SYNC = ["April '26", "May '26"];
+
+// How many months back (in addition to the current month) to sync each run.
+// 2 = current + previous two months, which safely covers deals whose pay date
+// lands in a later month than their closing month.
+const MONTHS_BACK_TO_SYNC = 2;
+
+// Builds tab names for the current month and the previous MONTHS_BACK_TO_SYNC
+// months, matching the sheet's "MMMM 'YY" naming (e.g. "June '26").
+// Tabs that don't exist are harmlessly skipped by syncAll().
+function recentTabNames_() {
+  const tz  = Session.getScriptTimeZone();
+  const now = new Date();
+  const names = [];
+  for (let back = 0; back <= MONTHS_BACK_TO_SYNC; back++) {
+    const d     = new Date(now.getFullYear(), now.getMonth() - back, 1);
+    const month = Utilities.formatDate(d, tz, "MMMM"); // "June"
+    const yy    = Utilities.formatDate(d, tz, "yy");    // "26"
+    names.push(month + " '" + yy);
+  }
+  return names;
+}
+
+// The full, de-duplicated set of tabs to sync this run: pinned + recent months.
+function tabsToSync_() {
+  const seen = {};
+  const out  = [];
+  for (const name of [...recentTabNames_(), ...TABS_TO_SYNC]) {
+    const key = name.trim().toLowerCase();
+    if (seen[key]) continue;
+    seen[key] = true;
+    out.push(name);
+  }
+  return out;
+}
 
 // Sheet status → Dashboard status. "SKIP" means don't import that row.
 const STATUS_MAP = {
@@ -44,7 +82,9 @@ function syncAll() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const summary = { synced: 0, skipped: 0, errors: 0, errorDetails: [] };
 
-  for (const tabName of TABS_TO_SYNC) {
+  const tabs = tabsToSync_();
+  Logger.log("Syncing tabs: " + tabs.join(", "));
+  for (const tabName of tabs) {
     const sheet = ss.getSheetByName(tabName);
     if (!sheet) {
       Logger.log("Tab not found: " + tabName);
