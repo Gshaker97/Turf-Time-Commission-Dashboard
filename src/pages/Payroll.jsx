@@ -106,6 +106,14 @@ export default function Payroll() {
     return [...list].sort((a, b) => (a.sale_date || '9999').localeCompare(b.sale_date || '9999'))
   }, [deals, view, overdueDeals])
 
+  // Deals on this run with no office set — their director/VP override rate
+  // defaulted instead of using the office rate (Tucson 3.75% vs 5%), so the
+  // commission is likely wrong. Flag them so they get fixed before payout.
+  const noOfficeDeals = useMemo(
+    () => runDeals.filter(d => !d.office || !String(d.office).trim()),
+    [runDeals]
+  )
+
   const totals = useMemo(() => {
     let total = 0, paid = 0
     for (const d of runDeals) {
@@ -350,6 +358,31 @@ export default function Payroll() {
             <Card label="Deals" value={`${summary.paidCount}/${summary.count}`} sub="paid / total" />
             <Card label="Payees" value={summary.payees} sub="people to pay" />
           </div>
+
+          {/* Missing-office warning — these deals likely have the wrong override
+              rate until an office is set. Click one to fix it inline. */}
+          {noOfficeDeals.length > 0 && (
+            <div className="mb-3 rounded-xl p-3" style={{ background: '#f59e0b14', border: '1px solid #f59e0b55' }}>
+              <div className="flex items-center gap-2 mb-1">
+                <AlertTriangle size={14} style={{ color: '#f59e0b' }} />
+                <span className="text-[12px] font-semibold" style={{ color: '#f59e0b' }}>
+                  {noOfficeDeals.length} deal{noOfficeDeals.length === 1 ? '' : 's'} on this run {noOfficeDeals.length === 1 ? 'has' : 'have'} no office — override rates may be wrong
+                </span>
+              </div>
+              <p className="text-[11px] text-white/40 mb-2">
+                Set the office to apply the correct director/VP rate (Tucson 3.75%, otherwise 5%). Click a deal to fix it.
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {noOfficeDeals.map(d => (
+                  <button key={d.id} onClick={() => { setEditDeal(d); setModal(true) }}
+                    className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-white/80 hover:text-white transition-colors"
+                    style={{ background: '#1e1e1e', border: '1px solid #f59e0b40' }}>
+                    {d.deal_name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Filter by rep */}
           {payees.length > 0 && (
