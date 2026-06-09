@@ -238,16 +238,19 @@ function schSync() {
         if (existing.vp_override_pct       == null || officeChanged) patch.vp_override_pct       = rate;
 
         // Real setter from Lead Source ("Setter: Name"); the Sales Rep closes.
+        // Resolve names leniently (e.g. "JC" → "JC Correa") so a first-name-only
+        // setter on the schedule still updates the deal.
         const setterName = schParseSetter_(row[ix.lead]);
         if (setterName) {
-          const sp = byName[setterName.toLowerCase()];
+          const sp = schResolvePerson_(setterName, profiles);
           if (sp) {
-            const closerName = schCleanRep_(row[ix.rep]);
-            const cp = closerName ? byName[closerName.toLowerCase()] : null;
+            const cp = schResolvePerson_(schCleanRep_(row[ix.rep]), profiles);
             const closerId = (cp && cp.id) ? cp.id : (existing.closer_id || sp.id);
             if (existing.setter_id !== sp.id) {
               patch.setter_id = sp.id; patch.closer_id = closerId; patch.setter_split_pct = (sp.id === closerId ? 1 : 0.5);
             }
+          } else {
+            out.details.push('Setter "' + setterName + '" on ' + (existing.deal_name || projectId) + ' — no roster match');
           }
         }
 
@@ -353,6 +356,21 @@ function schParseSetter_(v) {
   return m ? m[1].trim() : null;
 }
 function schCleanRep_(v) { return String(v || '').replace(/\s*\(.*$/, '').trim(); }
+// Resolve a sheet name to a roster profile. Exact full-name match first, then a
+// UNIQUE first-name / "starts with" match so "JC" → "JC Correa" and
+// "Jean Carlo" → "Jean Carlo Correa". Returns null if nothing matches or the
+// match is ambiguous (more than one candidate) — never guesses.
+function schResolvePerson_(rawName, profiles) {
+  const name = String(rawName || '').trim().toLowerCase();
+  if (!name) return null;
+  const exact = profiles.find(p => p.name && p.name.trim().toLowerCase() === name);
+  if (exact) return exact;
+  const cands = profiles.filter(p => {
+    const pn = String(p.name || '').trim().toLowerCase();
+    return pn && (pn.startsWith(name + ' ') || pn.split(' ')[0] === name);
+  });
+  return cands.length === 1 ? cands[0] : null;
+}
 function schPayment_(v) { const s = String(v || '').trim(); return s ? s.replace(/self\s*pay/ig, 'Self-Pay') : null; }
 function schTitle_(v) { const s = String(v || '').trim(); return s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : null; }
 function schMoney_(val) {
