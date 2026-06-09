@@ -184,7 +184,7 @@ function schSync() {
         status: c('Status'), proposal: c('Proposal ID'), lead: c('Lead Source'),
         payment: c('Payment'), booked: c('Booked At'),
       };
-      const officeIx = schFindOfficeCol_(h, ix.payment);
+      const officeIx = schFindOfficeCol_(h, rows, ix.payment);
       for (let r = 1; r < rows.length; r++) {
         const row = rows[r];
         const proposalId = String(row[ix.proposal] || '').trim();
@@ -303,10 +303,31 @@ function schBuildJobsIndex_(ss) {
   return map;
 }
 
-// Office column on the Schedule tab has a blank header; it sits after "Payment".
-function schFindOfficeCol_(headers, paymentIx) {
-  const named = headers.indexOf('Office');
-  if (named >= 0) return named;
+// Locate the office column on the Schedule tab. Its header is usually blank, so
+// header-name matching alone is unreliable. Detection order:
+//   1. An explicit header (Office / Location / Market / Branch / Region).
+//   2. By value — the column whose cells actually read like office names
+//      (Tucson / Phoenix / Mesa). This is the robust path for the blank header.
+//   3. Legacy fallback — the column right after "Payment".
+// If detection misses, office stays null and the Tucson 3.75% rate never gets
+// applied, leaving the deal at the 5% default — which is the bug this fixes.
+const SCH_KNOWN_OFFICES = ['tucson', 'phoenix', 'mesa'];
+function schFindOfficeCol_(headers, rows, paymentIx) {
+  for (const name of ['Office', 'Location', 'Market', 'Branch', 'Region']) {
+    const i = headers.indexOf(name);
+    if (i >= 0) return i;
+  }
+  let best = -1, bestHits = 0;
+  const scanTo = Math.min(rows ? rows.length : 0, 60);
+  for (let col = 0; col < headers.length; col++) {
+    let hits = 0;
+    for (let r = 1; r < scanTo; r++) {
+      const v = String(rows[r][col] || '').trim().toLowerCase();
+      if (SCH_KNOWN_OFFICES.indexOf(v) !== -1) hits++;
+    }
+    if (hits > bestHits) { bestHits = hits; best = col; }
+  }
+  if (best >= 0) return best;
   if (paymentIx >= 0 && paymentIx + 1 < headers.length) return paymentIx + 1;
   return -1;
 }
