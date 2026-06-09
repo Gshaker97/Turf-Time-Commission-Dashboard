@@ -23,10 +23,12 @@ const CHECKLIST_ITEMS = [
   { key: 'no_issues',        label: 'No Issues' },
 ]
 
-// When every checklist box is ticked, a deal sitting in CHECKLIST_FROM_STATUS
-// auto-advances to CHECKLIST_TO_STATUS.
-const CHECKLIST_FROM_STATUS = 'Deal Review'
-const CHECKLIST_TO_STATUS   = 'Pending Install'
+// Pre-install staging statuses. A deal here auto-advances to CHECKLIST_TO_STATUS
+// once every checklist box is ticked. "Change Order" (a re-signed deal) is
+// treated like a fresh "Deal Review" so it flows back through staging.
+const CHECKLIST_FROM_STATUSES = ['Deal Review', 'Change Order']
+const CHECKLIST_FROM_STATUS   = 'Deal Review'   // where an un-completed deal sits
+const CHECKLIST_TO_STATUS     = 'Pending Install'
 
 // True once every checklist item is ticked. `items` is the live list from
 // settings (falls back to the built-in CHECKLIST_ITEMS before settings load).
@@ -124,14 +126,14 @@ function DealChecklist({ deal, canEdit, onUpdate, items }) {
     setOpen(o => !o)
   }
   // Write the new checklist and keep status in sync with completeness:
-  //  • fully complete + still in Deal Review → advance to Pending Install
+  //  • fully complete + in Deal Review / Change Order → advance to Pending Install
   //  • no longer complete + in Pending Install → drop back to Deal Review
-  // (Only flips between those two; never disturbs Paid/Canceled/etc.)
+  // (Only flips between those; never disturbs Paid/Canceled/etc.)
   const applyChecklist = (next) => {
     const payload = { checklist: next }
     const complete = list.every(i => next.includes(i.key))
-    if (complete && deal.status === CHECKLIST_FROM_STATUS)       payload.status = CHECKLIST_TO_STATUS
-    else if (!complete && deal.status === CHECKLIST_TO_STATUS)   payload.status = CHECKLIST_FROM_STATUS
+    if (complete && CHECKLIST_FROM_STATUSES.includes(deal.status))  payload.status = CHECKLIST_TO_STATUS
+    else if (!complete && deal.status === CHECKLIST_TO_STATUS)      payload.status = CHECKLIST_FROM_STATUS
     onUpdate(deal.id, payload)
   }
   const toggle = (key) => applyChecklist(checkedSet.has(key) ? checked.filter(k => k !== key) : [...checked, key])
