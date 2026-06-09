@@ -12,6 +12,11 @@ const fmtDay   = (iso) => iso ? format(new Date(iso + 'T12:00:00'), 'EEE, MMM d,
 const APPROVED = 'Pay Finalized'
 const PAID     = 'Paid'
 const ISSUE    = 'Sales Issue'
+// A deal counts toward the payout total only once it's finalized (Pay Finalized
+// or Paid). Pending Install / Deal Review / Change Order deals can carry a pay
+// date but aren't being paid out yet, so they're shown separately, never in the
+// headline total — this is what keeps the run in step with the commission sheet.
+const isFinalized = (d) => d.status === APPROVED || d.status === PAID
 
 const distinctPayDates = (deals) =>
   [...new Set(deals.filter(d => d.pay_date).map(d => d.pay_date))].sort()
@@ -134,6 +139,7 @@ export default function Payroll() {
       m[person.id].dealIds.add(deal.id)
     }
     for (const d of runDeals) {
+      if (!isFinalized(d)) continue   // only finalized deals are being paid out
       const a = dealAmounts(d)
       add(d.setter, 'Setter', a.setter, d)
       if (d.closer_id !== d.setter_id) add(d.closer, 'Closer', a.closer, d)
@@ -208,15 +214,20 @@ export default function Payroll() {
   const shownDeals  = effFilter ? runDeals.filter(d => dealPayouts(d).some(p => p.id === effFilter)) : runDeals
   const shownPayees = effFilter ? payees.filter(p => p.id === effFilter) : payees
   const summary = (() => {
-    let total = 0, paid = 0, paidCount = 0
+    let total = 0, paid = 0, paidCount = 0, pending = 0, pendingCount = 0, finalizedCount = 0
     for (const d of shownDeals) {
       const amt = effFilter
         ? dealPayouts(d).filter(p => p.id === effFilter).reduce((s, p) => s + p.amount, 0)
         : dealAmounts(d).totalCommission
-      total += amt
-      if (d.status === PAID) { paid += amt; paidCount++ }
+      if (isFinalized(d)) {
+        total += amt; finalizedCount++
+        if (d.status === PAID) { paid += amt; paidCount++ }
+      } else {
+        pending += amt; pendingCount++
+      }
     }
-    return { total, paid, remaining: total - paid, count: shownDeals.length, paidCount, payees: shownPayees.length }
+    return { total, paid, remaining: total - paid, pending, pendingCount, finalizedCount,
+             count: shownDeals.length, paidCount, payees: shownPayees.length }
   })()
 
   async function setStatus(id, status) {
@@ -353,11 +364,19 @@ export default function Payroll() {
         <>
           {/* Summary */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mb-3">
-            <Card label={effFilter ? "Rep payout" : "Total payout"} value={fmt(summary.total)} color="#00b894" sub={viewLabel} />
-            <Card label="Remaining" value={fmt(summary.remaining)} color="#fdcb6e" sub="not yet paid" />
-            <Card label="Deals" value={`${summary.paidCount}/${summary.count}`} sub="paid / total" />
+            <Card label={effFilter ? "Rep payout" : "Total payout"} value={fmt(summary.total)} color="#00b894" sub={`${viewLabel} · finalized`} />
+            <Card label="Remaining" value={fmt(summary.remaining)} color="#fdcb6e" sub="finalized, not yet paid" />
+            <Card label="Deals" value={`${summary.paidCount}/${summary.finalizedCount}`} sub="paid / finalized" />
             <Card label="Payees" value={summary.payees} sub="people to pay" />
           </div>
+
+          {/* Not-yet-finalized deals carry this pay date but aren't being paid
+              out yet, so they're excluded from the total above. */}
+          {summary.pending > 0 && (
+            <p className="text-[11px] text-white/40 mb-3 -mt-1">
+              + {fmt(summary.pending)} across {summary.pendingCount} deal{summary.pendingCount === 1 ? '' : 's'} not yet finalized — excluded from the total until they reach “{APPROVED}”.
+            </p>
+          )}
 
           {/* Missing-office warning — these deals likely have the wrong override
               rate until an office is set. Click one to fix it inline. */}
