@@ -18,7 +18,8 @@
  *        • install_date (+ pay_date computed), payment method, office, and the
  *          real setter from Lead Source ("Setter: Name" → setter, Sales Rep →
  *          closer). Status is left alone here.
- *        • A CANCELLED schedule row flips the deal to "Canceled".
+ *        • A CANCELLED schedule row is ignored — the deal's status is never
+ *          changed by the sync; cancel manually in the site if needed.
  *
  * Setup:
  *   1. Paste as a file in the spreadsheet's Apps Script project (replaces the
@@ -196,18 +197,6 @@ function schSync() {
       };
       const officeIx = schFindOfficeCol_(h, rows, ix.payment);
 
-      // A rescheduled job can have BOTH an old CANCELLED row and a new BOOKED
-      // row. Collect every project that has an active (non-cancelled) row first,
-      // so a stale CANCELLED row never drags a rescheduled deal back to Canceled.
-      const bookedProjects = {};
-      for (let r = 1; r < rows.length; r++) {
-        const pid = String(rows[r][ix.proposal] || '').trim();
-        if (!pid || pid.indexOf('CAL-') === 0) continue;
-        if (String(rows[r][ix.status] || '').trim().toUpperCase() === 'CANCELLED') continue;
-        const j = jobsIdx[pid];
-        bookedProjects[(j && j.projectId) ? j.projectId : pid] = true;
-      }
-
       for (let r = 1; r < rows.length; r++) {
         const row = rows[r];
         const proposalId = String(row[ix.proposal] || '').trim();
@@ -218,15 +207,9 @@ function schSync() {
         if (!existing) { out.skipped++; continue; }   // not imported (e.g. not APPROVED yet)
 
         const status = String(row[ix.status] || '').trim().toUpperCase();
-        if (status === 'CANCELLED') {
-          // Rescheduled (has an active row elsewhere) → don't cancel.
-          if (bookedProjects[projectId]) { out.skipped++; continue; }
-          if (existing.status !== SCH_CANCEL_STATUS && SCH_LOCKED_STATUSES.indexOf(existing.status) === -1) {
-            if (SCH_DRY_RUN) { out.canceled++; out.details.push('WOULD CANCEL — ' + (existing.deal_name || projectId)); }
-            else { try { schPatch_(url, key, '/rest/v1/deals?id=eq.' + existing.id, { status: SCH_CANCEL_STATUS }); existing.status = SCH_CANCEL_STATUS; out.canceled++; } catch (e) { out.errors++; out.details.push((existing.deal_name || projectId) + ': ' + e.message); } }
-          } else { out.skipped++; }
-          continue;
-        }
+        // A CANCELLED schedule row no longer changes the deal — the site status
+        // is left alone and you cancel manually if needed. Only BOOKED rows
+        // layer on schedule info below.
         if (status && status !== 'BOOKED') { out.skipped++; continue; }
 
         // Don't re-apply schedule info to finalized/triaged deals (Paid, Pay
