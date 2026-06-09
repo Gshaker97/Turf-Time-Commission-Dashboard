@@ -73,10 +73,14 @@ function schSync() {
   // protect hand-entered deals from being duplicated).
   const deals = schGet_(url, key,
     '/rest/v1/deals?select=id,project_id,deal_name,status,baseline_revenue,job_price,install_date,pay_date,payment_method,office,setter_id,closer_id,manager_override_pct,director_override_pct,vp_override_pct,commission_verified,checklist');
-  const byProject = {}, namesSeen = new Set();
+  const byProject = {}, namesSeen = new Set(), dealByName = {};
   deals.forEach(d => {
     if (d.project_id) byProject[String(d.project_id)] = d;
-    if (d.deal_name) namesSeen.add(String(d.deal_name).trim().toLowerCase());
+    if (d.deal_name) {
+      const k = String(d.deal_name).trim().toLowerCase();
+      namesSeen.add(k);
+      dealByName[k] = d;   // name fallback so a re-sign under a new Project ID still matches
+    }
   });
 
   const ignoreCreate = new Set((props.getProperty(SCH_BASELINE_PROP) || '').split(',').filter(Boolean));
@@ -121,7 +125,10 @@ function schSync() {
 
         const baselineVal = schMoney_(row[ix.baseline]);
         const saleVal     = schMoney_(row[ix.sale]);
-        const existing    = byProject[projectId];
+        // Match by Project ID; fall back to customer name so a re-sign that
+        // lands under a NEW Project/Proposal ID is still recognized as the same
+        // deal (otherwise the change order is silently skipped).
+        const existing    = byProject[projectId] || dealByName[customer.toLowerCase()];
 
         if (existing) {
           // Change order: the sheet's financials differ from what we stored.
@@ -134,6 +141,9 @@ function schSync() {
             const patch = { baseline_revenue: baselineVal, job_price: saleVal, status: SCH_CHANGE_STATUS, commission_verified: false, checklist: [],
               setter_amount: null, closer_amount: null, manager_amount: null, director_amount: null, vp_amount: null };
             if (customer && existing.deal_name !== customer) patch.deal_name = customer;
+            // Re-point project_id when the re-sign came in under a new ID, so
+            // future syncs match it directly.
+            if (projectId && existing.project_id !== projectId) patch.project_id = projectId;
             if (SCH_DRY_RUN) {
               out.changed++;
               out.details.push('WOULD CHANGE-ORDER — ' + customer + ' (base ' + existing.baseline_revenue + '→' + baselineVal + ', sale ' + existing.job_price + '→' + saleVal + ')');
