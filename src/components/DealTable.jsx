@@ -28,6 +28,21 @@ const CHECKLIST_ITEMS = [
 const CHECKLIST_FROM_STATUS = 'Deal Review'
 const CHECKLIST_TO_STATUS   = 'Pending Install'
 
+// True once every checklist item is ticked. `items` is the live list from
+// settings (falls back to the built-in CHECKLIST_ITEMS before settings load).
+export const checklistComplete = (deal, items) => {
+  const list = items?.length ? items : CHECKLIST_ITEMS
+  const checked = Array.isArray(deal.checklist) ? deal.checklist : []
+  return list.length > 0 && list.every(i => checked.includes(i.key))
+}
+
+// A deal sits in the "Needs review" staging area until it's fully vetted:
+// every checklist box ticked AND the commission gold-checked. Canceled deals
+// are never in review. Used to split the Deals page into staging vs. the rest.
+export const dealNeedsReview = (deal, items) =>
+  !isCanceled(deal) && !(checklistComplete(deal, items) && deal.commission_verified === true)
+
+
 // Compact indicator (progress ring → green check) that opens an inline popover
 // of checkboxes. Saves each toggle straight to the deal — no full edit needed.
 function DealChecklist({ deal, canEdit, onUpdate, items }) {
