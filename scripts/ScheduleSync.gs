@@ -195,6 +195,19 @@ function schSync() {
         payment: c('Payment'), booked: c('Booked At'),
       };
       const officeIx = schFindOfficeCol_(h, rows, ix.payment);
+
+      // A rescheduled job can have BOTH an old CANCELLED row and a new BOOKED
+      // row. Collect every project that has an active (non-cancelled) row first,
+      // so a stale CANCELLED row never drags a rescheduled deal back to Canceled.
+      const bookedProjects = {};
+      for (let r = 1; r < rows.length; r++) {
+        const pid = String(rows[r][ix.proposal] || '').trim();
+        if (!pid || pid.indexOf('CAL-') === 0) continue;
+        if (String(rows[r][ix.status] || '').trim().toUpperCase() === 'CANCELLED') continue;
+        const j = jobsIdx[pid];
+        bookedProjects[(j && j.projectId) ? j.projectId : pid] = true;
+      }
+
       for (let r = 1; r < rows.length; r++) {
         const row = rows[r];
         const proposalId = String(row[ix.proposal] || '').trim();
@@ -206,6 +219,8 @@ function schSync() {
 
         const status = String(row[ix.status] || '').trim().toUpperCase();
         if (status === 'CANCELLED') {
+          // Rescheduled (has an active row elsewhere) → don't cancel.
+          if (bookedProjects[projectId]) { out.skipped++; continue; }
           if (existing.status !== SCH_CANCEL_STATUS && SCH_LOCKED_STATUSES.indexOf(existing.status) === -1) {
             if (SCH_DRY_RUN) { out.canceled++; out.details.push('WOULD CANCEL — ' + (existing.deal_name || projectId)); }
             else { try { schPatch_(url, key, '/rest/v1/deals?id=eq.' + existing.id, { status: SCH_CANCEL_STATUS }); existing.status = SCH_CANCEL_STATUS; out.canceled++; } catch (e) { out.errors++; out.details.push((existing.deal_name || projectId) + ': ' + e.message); } }
