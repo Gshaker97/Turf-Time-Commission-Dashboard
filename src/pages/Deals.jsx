@@ -1,10 +1,11 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Plus } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { useSettings } from '../contexts/SettingsContext'
 import { fetchDeals, fetchUsers, fetchPayments, insertDeal, updateDeal, deleteDeal } from '../lib/db'
 import FilterBar from '../components/FilterBar'
 import KpiCard from '../components/KpiCard'
-import DealTable from '../components/DealTable'
+import DealTable, { dealNeedsReview } from '../components/DealTable'
 import DealModal from '../components/DealModal'
 import { calcDealCommissions, fmt, isCanceled } from '../utils/commission'
 import { getPresetRange } from '../utils/dateRanges'
@@ -20,6 +21,7 @@ function sortValue(d, key) {
 
 export default function Deals() {
   const { profile, isAdmin } = useAuth()
+  const { checklistItems } = useSettings()
   const [deals,    setDeals]    = useState([])
   const [payments, setPayments] = useState([])
   const [users,    setUsers]    = useState([])
@@ -85,6 +87,24 @@ export default function Deals() {
     })
     return rows
   }, [deals, profile, role, repFilter, search, statusFilter, officeFilter, paymentFilter, dateField, dateFrom, dateTo, sortKey, sortDir])
+
+  // Staging workflow: VP/admin (who graduate deals) get a "Needs review" view —
+  // new/re-signed deals that aren't yet fully vetted (checklist complete + gold
+  // commission check). Everyone else just sees the normal list.
+  const canStage = isAdmin || profile?.role === 'vp'
+  const needsReview = useMemo(
+    () => canStage ? filtered.filter(d => dealNeedsReview(d, checklistItems)) : [],
+    [filtered, canStage, checklistItems]
+  )
+  const [reviewTab, setReviewTab] = useState('all')   // 'review' | 'all'
+  const didInitTab = useRef(false)
+  // On first load, greet VP/admin with the worklist if there's a backlog.
+  useEffect(() => {
+    if (didInitTab.current || loading || !canStage) return
+    didInitTab.current = true
+    if (needsReview.length) setReviewTab('review')
+  }, [loading, canStage, needsReview.length])
+  const shownDeals = canStage && reviewTab === 'review' ? needsReview : filtered
 
   const kpis = useMemo(() => {
     let baseline = 0, totalComm = 0, totalJobPrice = 0, totalMarkupPct = 0
@@ -173,8 +193,38 @@ export default function Deals() {
         </div>
       </div>
 
+      {/* Staging tabs — VP/admin only. New & re-signed deals wait in "Needs
+          review" until their checklist is complete AND the gold commission
+          check is on, then they join All deals. */}
+      {canStage && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex gap-1 p-1 rounded-xl w-fit" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+            <button onClick={() => setReviewTab('review')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors ${reviewTab === 'review' ? 'bg-amber-400 text-dark' : 'text-white/50 hover:text-white'}`}>
+              Needs review
+              {needsReview.length > 0 && (
+                <span className={`px-1.5 rounded-full text-[10px] font-bold ${reviewTab === 'review' ? 'bg-dark/20 text-dark' : 'bg-amber-400/20 text-amber-400'}`}>
+                  {needsReview.length}
+                </span>
+              )}
+            </button>
+            <button onClick={() => setReviewTab('all')}
+              className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors ${reviewTab === 'all' ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
+              All deals
+            </button>
+          </div>
+          {reviewTab === 'review' && (
+            <span className="text-[11px] text-white/40">
+              {needsReview.length
+                ? 'Tick every checklist box and gold-check the commission to move a deal into All deals.'
+                : '🎉 Nothing to review — every deal is checklisted and verified.'}
+            </span>
+          )}
+        </div>
+      )}
+
       <DealTable
-        deals={filtered}
+        deals={shownDeals}
         payments={payments}
         profile={profile}
         users={pickUsers}
