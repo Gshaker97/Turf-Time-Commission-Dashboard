@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchDeals, fetchUsers, fetchPayments, insertDeal, updateDeal, deleteDeal } from '../lib/db'
@@ -40,6 +41,21 @@ export default function Deals() {
   const setDateRange = (from, to, preset) => { setDateFrom(from); setDateTo(to); setDatePreset(preset) }
   const [sortKey,      setSortKey]      = useState('sale_date')
   const [sortDir,      setSortDir]      = useState('desc')
+
+  // Deep link from a bell notification: /deals?note=<dealId> opens that deal's
+  // note thread (and clears filters that could hide the deal).
+  const [searchParams] = useSearchParams()
+  const noteDealId = searchParams.get('note')
+  useEffect(() => {
+    if (!noteDealId || loading) return
+    const d = deals.find(x => x.id === noteDealId)
+    if (d) {
+      setDateRange('', '', 'all')
+      setSearch(d.deal_name || '')
+      setStatusFilter(''); setOfficeFilter(''); setPaymentFilter(''); setRepFilter('')
+      if (canStage) setReviewTab('all')
+    }
+  }, [noteDealId, loading])
 
   useEffect(() => { load() }, [])
 
@@ -223,6 +239,7 @@ export default function Deals() {
 
       <DealTable
         deals={shownDeals}
+        openNotesId={noteDealId}
         payments={payments}
         profile={profile}
         users={pickUsers}

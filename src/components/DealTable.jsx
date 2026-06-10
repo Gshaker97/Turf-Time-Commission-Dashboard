@@ -4,6 +4,7 @@ import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, X, Messa
 import { calcDealCommissions, fmt, fmtPct, isCanceled } from '../utils/commission'
 import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
+import { fetchDealNotes, fetchDealNoteCounts, addDealNote } from '../lib/db'
 import DateRangeFilter from './DateRangeFilter'
 
 // Date columns the Dates header can filter on.
@@ -406,35 +407,89 @@ function ActionButtons({ deal, onEdit, onDelete }) {
   )
 }
 
-// Collapsible per-deal notes. Editable for managers+/admin; read-only otherwise.
-function NotesEditor({ deal, canEdit, onUpdate }) {
-  const [val, setVal] = useState(deal.notes ?? '')
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
-  useEffect(() => { setVal(deal.notes ?? '') }, [deal.id])
+// Threaded per-deal notes: anyone on the deal can read and reply; every post
+// notifies the rest of the deal's people (setter/closer/manager + admins +
+// prior commenters) via the bell. The old single deals.notes text shows as a
+// legacy first entry so nothing is lost.
+function NotesThread({ deal, profile, users, onCountChange }) {
+  const [notes, setNotes]   = useState(null)   // null = loading
+  const [draft, setDraft]   = useState('')
+  const [posting, setPosting] = useState(false)
 
-  if (!canEdit) {
-    return deal.notes
-      ? <p className="text-[12px] text-white/70 whitespace-pre-wrap">{deal.notes}</p>
-      : <p className="text-[12px] text-white/30 italic">No notes.</p>
+  useEffect(() => {
+    let on = true
+    fetchDealNotes(deal.id).then(({ data }) => { if (on) setNotes(data || []) })
+    return () => { on = false }
+  }, [deal.id])
+
+  const fmtWhen = (iso) => {
+    const d = new Date(iso)
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' · ' +
+           d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
   }
-  async function save() {
-    setSaving(true)
-    await onUpdate(deal.id, { notes: val.trim() || null })
-    setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 1500)
+
+  async function post() {
+    const body = draft.trim()
+    if (!body || !profile?.id) return
+    setPosting(true)
+    const admins = (users || []).filter(u => u.role === 'admin' || u.is_admin === true).map(u => u.id)
+    const commenters = (notes || []).map(n => n.author_id)
+    const recipientIds = [deal.setter_id, deal.closer_id, deal.manager_id, ...admins, ...commenters]
+    const { error } = await addDealNote({
+      dealId: deal.id, dealName: deal.deal_name, body,
+      author: { id: profile.id, name: profile.name },
+      recipientIds,
+    })
+    setPosting(false)
+    if (error) { alert('Could not post: ' + (error.message || '')); return }
+    setDraft('')
+    const { data } = await fetchDealNotes(deal.id)
+    setNotes(data || [])
+    onCountChange?.(deal.id, (data || []).length)
   }
+
   return (
     <div className="space-y-2">
-      <textarea value={val} onChange={e => setVal(e.target.value)} rows={3}
-        placeholder="Add a note about this deal…"
-        className="w-full px-3 py-2 rounded-lg text-[12px] text-white placeholder-white/20 focus:outline-none resize-y"
-        style={{ background: '#171717', border: '1px solid #2a2a2a' }} />
-      <div className="flex items-center gap-2">
-        <button onClick={save} disabled={saving || val === (deal.notes ?? '')}
-          className="px-3 py-1.5 rounded-lg text-[11px] font-bold text-dark bg-teal disabled:opacity-40 transition-colors">
-          {saving ? 'Saving…' : 'Save note'}
+      {/* Legacy single-note text, if this deal has one */}
+      {deal.notes && (
+        <div className="rounded-lg px-3 py-2" style={{ background: '#171717', border: '1px dashed #2e2e2e' }}>
+          <p className="text-[10px] uppercase tracking-wide text-white/25 mb-0.5">Original note</p>
+          <p className="text-[12px] text-white/60 whitespace-pre-wrap">{deal.notes}</p>
+        </div>
+      )}
+
+      {notes === null ? (
+        <p className="text-[12px] text-white/30 py-1">Loading…</p>
+      ) : notes.length === 0 && !deal.notes ? (
+        <p className="text-[12px] text-white/30 italic py-1">No notes yet — start the thread below.</p>
+      ) : (
+        notes.map(n => {
+          const mine = n.author_id === profile?.id
+          return (
+            <div key={n.id} className="rounded-lg px-3 py-2"
+              style={{ background: mine ? '#0e3b3555' : '#171717', border: `1px solid ${mine ? '#1c5a50' : '#2a2a2a'}` }}>
+              <p className="text-[11px] mb-0.5">
+                <span className="font-semibold" style={{ color: mine ? '#2dd4bf' : 'rgba(255,255,255,0.75)' }}>
+                  {n.author?.name || users?.find(u => u.id === n.author_id)?.name || '—'}
+                </span>
+                <span className="text-white/25"> · {fmtWhen(n.created_at)}</span>
+              </p>
+              <p className="text-[12px] text-white/80 whitespace-pre-wrap">{n.body}</p>
+            </div>
+          )
+        })
+      )}
+
+      <div className="flex items-end gap-2 pt-1">
+        <textarea value={draft} onChange={e => setDraft(e.target.value)} rows={2}
+          placeholder="Write a reply… (everyone on this deal gets notified)"
+          onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) post() }}
+          className="flex-1 px-3 py-2 rounded-lg text-[12px] text-white placeholder-white/20 focus:outline-none resize-y"
+          style={{ background: '#171717', border: '1px solid #2a2a2a' }} />
+        <button onClick={post} disabled={posting || !draft.trim()}
+          className="px-3 py-2 rounded-lg text-[11px] font-bold text-dark bg-teal disabled:opacity-40 transition-colors flex-shrink-0">
+          {posting ? 'Posting…' : 'Post'}
         </button>
-        {saved && <span className="text-[11px] text-teal">Saved ✓</span>}
       </div>
     </div>
   )
@@ -443,7 +498,7 @@ function NotesEditor({ deal, canEdit, onUpdate }) {
 const subline = (deal) => [deal.office, deal.payment_method].filter(Boolean).join(' · ') || '—'
 
 // ── Mobile card (below lg) ────────────────────────────────────
-function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onUpdate, statusColor, statusLabels }) {
+function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onUpdate, statusColor, statusLabels, profile, users, noteCount, onCountChange }) {
   const baseline = parseFloat(deal.baseline_revenue) || 0
   const jobPrice = parseFloat(deal.job_price)        || 0
   const [showNotes, setShowNotes] = useState(false)
@@ -453,7 +508,12 @@ function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onUpdate, status
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <button onClick={() => setShowNotes(s => !s)} className="text-[14px] font-semibold text-white truncate text-left">{deal.deal_name}</button>
-            {deal.notes && <MessageSquare size={12} className="text-teal/70 flex-shrink-0" />}
+            {(deal.notes || noteCount > 0) && (
+              <span className="flex items-center gap-0.5 text-teal/70 flex-shrink-0">
+                <MessageSquare size={12} />
+                {noteCount > 0 && <span className="text-[10px] font-semibold">{noteCount}</span>}
+              </span>
+            )}
             {isCanceled(deal) && <CanceledMark />}
           </div>
           <p className="text-[11px] text-white/40 truncate">{subline(deal)}</p>
@@ -481,7 +541,7 @@ function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onUpdate, status
       {showNotes && (
         <div className="mt-3 rounded-lg p-3" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
           <p className="text-[10px] font-bold uppercase tracking-wider text-white/30 mb-2">Notes</p>
-          <NotesEditor deal={deal} canEdit={canEdit} onUpdate={onUpdate} />
+          <NotesThread deal={deal} profile={profile} users={users} onCountChange={onCountChange} />
         </div>
       )}
 
@@ -503,14 +563,20 @@ export default function DealTable({
   paymentFilter, setPaymentFilter,
   dateField, setDateField,
   dateFrom, dateTo, datePreset, setDateRange,
-  onEdit, onDelete, onUpdate, loading,
+  onEdit, onDelete, onUpdate, loading, openNotesId,
 }) {
   const { statusColor, statusLabels, offices, paymentMethods } = useSettings()
   const canEdit = ['admin', 'manager', 'director', 'vp'].includes(profile?.role) || profile?.is_admin === true
   // Commission sign-off is a leadership action (VP/admin).
   const canVerify = ['vp', 'admin'].includes(profile?.role) || profile?.is_admin === true
-  const [notesOpen, setNotesOpen] = useState(() => new Set())
+  const [notesOpen, setNotesOpen] = useState(() => new Set(openNotesId ? [openNotesId] : []))
   const toggleNotes = (id) => setNotesOpen(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  useEffect(() => { if (openNotesId) setNotesOpen(s => new Set([...s, openNotesId])) }, [openNotesId])
+
+  // 💬 badges: how many thread notes each deal has (single bulk query).
+  const [noteCounts, setNoteCounts] = useState({})
+  useEffect(() => { fetchDealNoteCounts().then(({ data }) => setNoteCounts(data || {})) }, [])
+  const setNoteCount = (dealId, count) => setNoteCounts(m => ({ ...m, [dealId]: count }))
   const colCount = COLS.length + (canEdit ? 1 : 0)
 
   const reps = users.filter(u => ['rep', 'manager', 'director', 'vp'].includes(u.role))
@@ -593,7 +659,12 @@ export default function DealTable({
                       className="text-[13px] font-semibold text-white truncate max-w-[210px] text-left hover:text-teal transition-colors">
                       {deal.deal_name}
                     </button>
-                    {deal.notes && <MessageSquare size={12} className="text-teal/70 flex-shrink-0" />}
+                    {(deal.notes || noteCounts[deal.id] > 0) && (
+                      <span className="flex items-center gap-0.5 text-teal/70 flex-shrink-0">
+                        <MessageSquare size={12} />
+                        {noteCounts[deal.id] > 0 && <span className="text-[10px] font-semibold">{noteCounts[deal.id]}</span>}
+                      </span>
+                    )}
                     {canceled && <CanceledMark />}
                   </div>
                   {deal.project_id && <p className="text-[11px] text-white/40 truncate max-w-[260px]">{deal.project_id}</p>}
@@ -631,7 +702,7 @@ export default function DealTable({
                   <td colSpan={colCount} className="px-3 pb-3 pt-0">
                     <div className="rounded-lg p-3" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
                       <p className="text-[10px] font-bold uppercase tracking-wider text-white/30 mb-2">Notes — {deal.deal_name}</p>
-                      <NotesEditor deal={deal} canEdit={canEdit} onUpdate={onUpdate} />
+                      <NotesThread deal={deal} profile={profile} users={users} onCountChange={setNoteCount} />
                     </div>
                   </td>
                 </tr>
