@@ -7,11 +7,10 @@ import { useSettings } from '../contexts/SettingsContext'
 const inputStyle = { background: '#2a2a2a', border: '1px solid #333' }
 const inputCls = 'h-9 rounded-lg text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-teal/40 transition-colors px-3'
 
-// Top bar for the Deals page. Search + record count are always shown. The
-// active-filter chips are always shown so you can see/clear what's applied
-// (filters themselves live in the column headers on desktop). The dropdown
-// filter controls are kept for mobile/tablet (below lg), where the card layout
-// has no column headers to click.
+// Top bar for the Deals page. Search + record count + active-filter chips are
+// always shown; the sliders toggle expands the full filter controls (rep /
+// status / office / payment / date) on every screen size. The same filters
+// also live in the desktop table's column headers — both places work.
 export default function FilterBar({
   users = [],
   repFilter, setRepFilter,
@@ -59,8 +58,14 @@ export default function FilterBar({
             value={search} onChange={e => setSearch(e.target.value)}
             placeholder="Search deal, address, ID…"
             style={inputStyle}
-            className={`${inputCls} pl-8 w-full`}
+            className={`${inputCls} pl-8 pr-8 w-full`}
           />
+          {search && (
+            <button onClick={() => setSearch('')} title="Clear search"
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full text-white/35 hover:text-white hover:bg-white/10 transition-colors">
+              <X size={13} />
+            </button>
+          )}
         </div>
 
         <div className="h-9 px-3 rounded-lg flex items-center gap-1.5 flex-shrink-0"
@@ -69,10 +74,11 @@ export default function FilterBar({
           <span className="text-[12px] text-white/30 hidden sm:inline">Records</span>
         </div>
 
-        {/* Filter toggle — mobile/tablet only (desktop filters from headers) */}
+        {/* Filter toggle — all sizes (the same filters also live in the column
+            headers on desktop; this is the expanded, everything-at-once view) */}
         <button
           onClick={() => setOpen(o => !o)}
-          className={`lg:hidden relative h-9 w-9 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors ${
+          className={`relative h-9 w-9 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors ${
             open || hasFilters ? 'bg-teal/15 text-teal border border-teal/25' : 'text-white/40 border border-white/10'
           }`}
         >
@@ -100,8 +106,8 @@ export default function FilterBar({
         </div>
       )}
 
-      {/* Dropdown filter controls — mobile/tablet only (below lg) */}
-      <div className={`${open ? 'flex' : 'hidden'} lg:hidden flex-wrap gap-2 items-center`}>
+      {/* Dropdown filter controls — toggle open on any screen size */}
+      <div className={`${open ? 'flex' : 'hidden'} flex-wrap gap-2 items-center`}>
         <Select value={repFilter} onChange={setRepFilter} minW="130px">
           <option value="">All Reps</option>
           {reps.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
@@ -120,8 +126,8 @@ export default function FilterBar({
         </Select>
       </div>
 
-      {/* Date range — mobile/tablet only. Pick which date, then the range. */}
-      <div className={`${open ? 'block' : 'hidden'} lg:hidden space-y-2`}>
+      {/* Date range — pick which date, then the range. */}
+      <div className={`${open ? 'block' : 'hidden'} space-y-2`}>
         <div className="flex items-center gap-2">
           <span className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">Filter by</span>
           <Select value={dateField} onChange={setDateField} minW="140px">
