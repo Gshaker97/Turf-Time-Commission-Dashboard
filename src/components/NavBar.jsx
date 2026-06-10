@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
-import { LogOut, ChevronDown, Eye, ChevronRight, KeyRound, Check } from 'lucide-react'
+import { LogOut, ChevronDown, Eye, ChevronRight, KeyRound, Check, Glasses } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchUsers } from '../lib/db'
 
@@ -23,7 +23,7 @@ const ROLE_COLOR = {
 
 export default function NavBar() {
   const { pathname } = useLocation()
-  const { realProfile, signOut, isPreviewMode, previewAs, changePassword, demoMode } = useAuth()
+  const { realProfile, profile: effProfile, signOut, isPreviewMode, previewAs, clearPreview, changePassword, demoMode } = useAuth()
   const [open,        setOpen]        = useState(false)
   const [showPicker,  setShowPicker]  = useState(false)
   const [users,       setUsers]       = useState([])
@@ -65,7 +65,18 @@ export default function NavBar() {
     .join('')
     .toUpperCase() || '?'
 
-  const isAdmin = profile?.role === 'admin'
+  // Site-admin = the admin title OR the is_admin flag — judged on the REAL
+  // profile so the menu stays usable while a preview is active.
+  const isAdmin = profile?.role === 'admin' || profile?.is_admin === true
+
+  // Role preview: stay yourself, but clamp permissions to rep/manager level —
+  // for screen-sharing without exposing overrides/payroll/admin.
+  const roleView = isPreviewMode && effProfile?.id === realProfile?.id ? effProfile?.role : null
+  function toggleRoleView(role) {
+    if (roleView === role) clearPreview()
+    else previewAs({ ...realProfile, role, is_admin: false })
+    setOpen(false)
+  }
 
   async function handlePreviewClick() {
     if (!users.length) {
@@ -156,6 +167,26 @@ export default function NavBar() {
                 {profile?.role}
               </span>
             </div>
+
+            {/* View site as role — admin only. Permission preview for screen
+                sharing: you stay you, overrides/payroll/admin disappear. */}
+            {isAdmin && (
+              <div className="border-b border-white/5 pb-1 mb-1">
+                <p className="px-4 pt-1 pb-0.5 text-[9px] font-bold uppercase tracking-widest text-white/30">View site as</p>
+                {[['rep', 'Rep view'], ['manager', 'Manager view']].map(([role, label]) => (
+                  <button key={role}
+                    onClick={() => toggleRoleView(role)}
+                    className="w-full flex items-center justify-between gap-2 px-4 py-2 text-[13px] text-white/60 hover:text-white hover:bg-white/5 transition-colors"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Glasses size={14} />
+                      {label}
+                    </span>
+                    {roleView === role && <Check size={13} className="text-amber-400" />}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* Preview as User — admin only */}
             {isAdmin && (
