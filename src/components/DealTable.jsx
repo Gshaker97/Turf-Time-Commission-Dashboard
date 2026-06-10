@@ -13,173 +13,23 @@ export const DATE_FIELDS = [
   { value: 'pay_date',     label: 'Pay date' },
 ]
 
-// New-deal "is it clean?" checklist. Checked items are stored as an array of
-// these keys in deals.checklist (jsonb).
-const CHECKLIST_ITEMS = [
-  { key: 'contract_signed',  label: 'Contract Signed' },
-  { key: 'detailed_drawing', label: 'Detailed Drawing' },
-  { key: 'payment_method',   label: 'Payment Method' },
-  { key: 'scheduled',        label: 'Scheduled' },
-  { key: 'no_issues',        label: 'No Issues' },
-]
+// A deal sits in the "Needs review" staging area until its commission gets the
+// gold check (commission_verified). Canceled deals are never in review. Change
+// orders clear the gold check, so re-signed deals fall back into staging.
+export const dealNeedsReview = (deal) =>
+  !isCanceled(deal) && deal.commission_verified !== true
 
-// Pre-install staging statuses. A deal here auto-advances to CHECKLIST_TO_STATUS
-// once every checklist box is ticked. "Change Order" (a re-signed deal) is
-// treated like a fresh "Deal Review" so it flows back through staging.
-const CHECKLIST_FROM_STATUSES = ['Deal Review', 'Change Order']
-const CHECKLIST_FROM_STATUS   = 'Deal Review'   // where an un-completed deal sits
-const CHECKLIST_TO_STATUS     = 'Pending Install'
-
-// True once every checklist item is ticked. `items` is the live list from
-// settings (falls back to the built-in CHECKLIST_ITEMS before settings load).
-export const checklistComplete = (deal, items) => {
-  const list = items?.length ? items : CHECKLIST_ITEMS
-  const checked = Array.isArray(deal.checklist) ? deal.checklist : []
-  return list.length > 0 && list.every(i => checked.includes(i.key))
-}
-
-// A deal sits in the "Needs review" staging area until it's fully vetted:
-// every checklist box ticked AND the commission gold-checked. Canceled deals
-// are never in review. Used to split the Deals page into staging vs. the rest.
-export const dealNeedsReview = (deal, items) =>
-  !isCanceled(deal) && !(checklistComplete(deal, items) && deal.commission_verified === true)
-
-
-// Compact indicator (progress ring → green check) that opens an inline popover
-// of checkboxes. Saves each toggle straight to the deal — no full edit needed.
-function DealChecklist({ deal, canEdit, onUpdate, items }) {
-  const list = items?.length ? items : CHECKLIST_ITEMS
-  const [open, setOpen] = useState(false)
-  const [pos, setPos]   = useState({ left: 0 })
-  const btnRef = useRef(null)
-  const popRef = useRef(null)
-
-  const checked    = Array.isArray(deal.checklist) ? deal.checklist : []
-  const checkedSet = new Set(checked)
-  const total = list.length
-  const done  = list.filter(i => checkedSet.has(i.key)).length
-  const complete = done === total
-  const pct = total ? done / total : 0
-  const R = 9, C = 2 * Math.PI * R
-
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e) => {
-      if (btnRef.current?.contains(e.target) || popRef.current?.contains(e.target)) return
-      setOpen(false)
-    }
-    const onScroll = (e) => { if (!popRef.current?.contains(e.target)) setOpen(false) }
-    const onResize = () => setOpen(false)
-    document.addEventListener('mousedown', onDown)
-    window.addEventListener('scroll', onScroll, true)
-    window.addEventListener('resize', onResize)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      window.removeEventListener('scroll', onScroll, true)
-      window.removeEventListener('resize', onResize)
-    }
-  }, [open])
-
-  const canceled = isCanceled(deal)
-  const indicator = canceled ? (
+// Red ✕ next to the name of a canceled deal (pairs with the dimmed row).
+function CanceledMark() {
+  return (
     <span className="w-[22px] h-[22px] rounded-full flex items-center justify-center flex-shrink-0"
       style={{ background: '#ef444418', border: '1px solid #ef444455' }} title="Canceled">
       <X size={13} strokeWidth={3} className="text-red-400" />
     </span>
-  ) : complete ? (
-    <span className="w-[22px] h-[22px] rounded-full flex items-center justify-center flex-shrink-0" style={{ background: '#00b894' }}>
-      <Check size={13} strokeWidth={3} className="text-dark" />
-    </span>
-  ) : (
-    <span className="relative w-[22px] h-[22px] inline-flex items-center justify-center flex-shrink-0">
-      <svg width="22" height="22" viewBox="0 0 22 22">
-        <circle cx="11" cy="11" r={R} fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="2.5" />
-        {done > 0 && (
-          <circle cx="11" cy="11" r={R} fill="none" stroke="#2dd4bf" strokeWidth="2.5" strokeLinecap="round"
-            strokeDasharray={C} strokeDashoffset={(1 - pct) * C} transform="rotate(-90 11 11)" />
-        )}
-      </svg>
-      {done > 0 && <span className="absolute text-[8px] font-bold text-white leading-none">{done}</span>}
-    </span>
-  )
-
-  if (!canEdit) return <span title={`Checklist ${done}/${total}`} className="inline-flex">{indicator}</span>
-
-  function openMenu() {
-    if (!open) {
-      const r = btnRef.current.getBoundingClientRect()
-      const width = 236
-      let left = r.left
-      if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8)
-      if (left < 8) left = 8
-      // Open downward by default; flip upward when the row is near the bottom of
-      // the viewport so the popover never spills off-screen. Cap its height to
-      // the available space and let it scroll.
-      const spaceBelow = window.innerHeight - r.bottom - 12
-      const spaceAbove = r.top - 12
-      const openUp = spaceBelow < 280 && spaceAbove > spaceBelow
-      const maxH = Math.max(180, Math.min(420, openUp ? spaceAbove : spaceBelow))
-      setPos(openUp
-        ? { left, bottom: window.innerHeight - r.top + 6, maxH }
-        : { left, top: r.bottom + 6, maxH })
-    }
-    setOpen(o => !o)
-  }
-  // Write the new checklist and keep status in sync with completeness:
-  //  • fully complete + in Deal Review / Change Order → advance to Pending Install
-  //  • no longer complete + in Pending Install → drop back to Deal Review
-  // (Only flips between those; never disturbs Paid/Canceled/etc.)
-  const applyChecklist = (next) => {
-    const payload = { checklist: next }
-    const complete = list.every(i => next.includes(i.key))
-    if (complete && CHECKLIST_FROM_STATUSES.includes(deal.status))  payload.status = CHECKLIST_TO_STATUS
-    else if (!complete && deal.status === CHECKLIST_TO_STATUS)      payload.status = CHECKLIST_FROM_STATUS
-    onUpdate(deal.id, payload)
-  }
-  const toggle = (key) => applyChecklist(checkedSet.has(key) ? checked.filter(k => k !== key) : [...checked, key])
-  const setAll = (all) => applyChecklist(all ? list.map(i => i.key) : [])
-
-  return (
-    <>
-      <button ref={btnRef} type="button" onClick={openMenu}
-        title={`New-deal checklist · ${done}/${total}`}
-        className="flex-shrink-0 hover:opacity-80 transition-opacity">
-        {indicator}
-      </button>
-      {open && createPortal(
-        <div ref={popRef} className="fixed z-[60] w-[236px] rounded-xl shadow-2xl p-1.5 overflow-y-auto"
-          style={{ left: pos.left, ...(pos.top != null ? { top: pos.top } : { bottom: pos.bottom }),
-                   maxHeight: pos.maxH, background: '#242424', border: '1px solid #3a3a3a' }}>
-          <div className="px-2 py-1.5 flex items-center justify-between">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-white/40">New-deal checklist</span>
-            <span className="text-[11px] font-semibold" style={{ color: complete ? '#00b894' : '#fff' }}>{done}/{total}</span>
-          </div>
-          <div className="h-1 rounded-full mx-2 mb-1.5 overflow-hidden" style={{ background: '#ffffff15' }}>
-            <div className="h-full rounded-full transition-all" style={{ width: `${pct * 100}%`, background: complete ? '#00b894' : '#2dd4bf' }} />
-          </div>
-          {list.map(item => {
-            const on = checkedSet.has(item.key)
-            return (
-              <button key={item.key} type="button" onClick={() => toggle(item.key)}
-                className="w-full flex items-center gap-2.5 px-2 py-2 rounded-lg text-left hover:bg-white/[0.04] transition-colors">
-                <span className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0"
-                  style={on ? { background: '#00b894' } : { border: '1.5px solid rgba(255,255,255,0.3)' }}>
-                  {on && <Check size={11} strokeWidth={3} className="text-dark" />}
-                </span>
-                <span className={`text-[12px] ${on ? 'text-white/45 line-through' : 'text-white/85'}`}>{item.label}</span>
-              </button>
-            )
-          })}
-          <div className="flex gap-1 px-1 pt-1 mt-1 border-t border-white/5">
-            <button type="button" onClick={() => setAll(true)} className="flex-1 text-[11px] py-1.5 rounded-lg text-teal hover:bg-teal/10 transition-colors">Mark all</button>
-            <button type="button" onClick={() => setAll(false)} className="flex-1 text-[11px] py-1.5 rounded-lg text-white/40 hover:bg-white/5 transition-colors">Clear</button>
-          </div>
-        </div>,
-        document.body
-      )}
-    </>
   )
 }
+
+
 
 // Consolidated columns — related fields are stacked inside one cell so the
 // whole table fits on screen without horizontal scrolling.
@@ -573,7 +423,7 @@ function NotesEditor({ deal, canEdit, onUpdate }) {
 const subline = (deal) => [deal.office, deal.payment_method].filter(Boolean).join(' · ') || '—'
 
 // ── Mobile card (below lg) ────────────────────────────────────
-function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onUpdate, statusColor, statusLabels, checklistItems }) {
+function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onUpdate, statusColor, statusLabels }) {
   const baseline = parseFloat(deal.baseline_revenue) || 0
   const jobPrice = parseFloat(deal.job_price)        || 0
   const [showNotes, setShowNotes] = useState(false)
@@ -584,7 +434,7 @@ function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onUpdate, status
           <div className="flex items-center gap-2">
             <button onClick={() => setShowNotes(s => !s)} className="text-[14px] font-semibold text-white truncate text-left">{deal.deal_name}</button>
             {deal.notes && <MessageSquare size={12} className="text-teal/70 flex-shrink-0" />}
-            <DealChecklist deal={deal} canEdit={canEdit} onUpdate={onUpdate} items={checklistItems} />
+            {isCanceled(deal) && <CanceledMark />}
           </div>
           <p className="text-[11px] text-white/40 truncate">{subline(deal)}</p>
         </div>
@@ -635,7 +485,7 @@ export default function DealTable({
   dateFrom, dateTo, datePreset, setDateRange,
   onEdit, onDelete, onUpdate, loading,
 }) {
-  const { statusColor, statusLabels, offices, paymentMethods, checklistItems } = useSettings()
+  const { statusColor, statusLabels, offices, paymentMethods } = useSettings()
   const canEdit = ['admin', 'manager', 'director', 'vp'].includes(profile?.role) || profile?.is_admin === true
   // Commission sign-off is a leadership action (VP/admin).
   const canVerify = ['vp', 'admin'].includes(profile?.role) || profile?.is_admin === true
@@ -724,7 +574,7 @@ export default function DealTable({
                       {deal.deal_name}
                     </button>
                     {deal.notes && <MessageSquare size={12} className="text-teal/70 flex-shrink-0" />}
-                    <DealChecklist deal={deal} canEdit={canEdit} onUpdate={onUpdate} items={checklistItems} />
+                    {canceled && <CanceledMark />}
                   </div>
                   {deal.project_id && <p className="text-[11px] text-white/40 truncate max-w-[260px]">{deal.project_id}</p>}
                 </td>
@@ -776,7 +626,7 @@ export default function DealTable({
         {deals.map(deal => (
           <DealCard key={deal.id} deal={deal} canEdit={canEdit} canVerify={canVerify}
             onEdit={onEdit} onDelete={onDelete} onUpdate={onUpdate}
-            statusColor={statusColor} statusLabels={statusLabels} checklistItems={checklistItems} />
+            statusColor={statusColor} statusLabels={statusLabels}/>
         ))}
       </div>
     </div>
