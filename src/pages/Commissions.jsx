@@ -6,8 +6,7 @@ import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import { dealAmounts, getUserCommission, fmt, activeDeals } from '../utils/commission'
-import DateRangeFilter from '../components/DateRangeFilter'
-import { getPresetRange, matchPreset, rangeMatches, presetLabel } from '../utils/dateRanges'
+import { getPresetRange, matchPreset, rangeMatches, presetLabel, PRESETS, PRESETS_BY_KEY } from '../utils/dateRanges'
 
 const todayISO = () => new Date().toISOString().slice(0, 10)
 const inRange = (date, from, to) => !!date && (!from || date >= from) && (!to || date <= to)
@@ -278,10 +277,7 @@ export default function Commissions() {
             </select>
           )}
         </div>
-        <DateRangeFilter from={from} to={to} preset={preset}
-          onChange={({ from, to, preset }) => { setFrom(from); setTo(to); setPreset(preset) }} />
-
-        {/* Week scroller + sale/pay basis */}
+        {/* One date control: week scroller (primary) + presets tucked into a dropdown */}
         <div className="flex items-center gap-2 flex-wrap">
           <div className="flex items-center rounded-lg overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
             <button onClick={() => stepWeek(-1)} className="px-2 py-1.5 text-white/50 hover:text-white" title="Previous week"><ChevronLeft size={15} /></button>
@@ -290,6 +286,15 @@ export default function Commissions() {
             </button>
             <button onClick={() => stepWeek(1)} className="px-2 py-1.5 text-white/50 hover:text-white" title="Next week"><ChevronRight size={15} /></button>
           </div>
+          <select
+            value={rangeMatches(preset, from, to) ? preset : matchPreset(from, to)}
+            onChange={e => { const p = PRESETS_BY_KEY[e.target.value]; if (!p) return; const r = p.range(); setFrom(r.from); setTo(r.to); setPreset(p.key) }}
+            className="text-[12px] px-2.5 py-1.5 rounded-lg text-white/80 focus:outline-none"
+            style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}
+            title="Jump to a period">
+            <option value="custom" disabled style={{ background: '#2a2a2a' }}>Custom range</option>
+            {PRESETS.map(p => <option key={p.key} value={p.key} style={{ background: '#2a2a2a' }}>{p.label}</option>)}
+          </select>
           <div className="flex rounded-lg overflow-hidden text-[11px] font-semibold" style={{ border: '1px solid #2a2a2a' }}>
             {[['sale', 'By sale date'], ['pay', 'By pay date']].map(([k, label]) => (
               <button key={k} onClick={() => setBasis(k)}
@@ -349,7 +354,7 @@ export default function Commissions() {
       {/* Paid / Upcoming */}
       <div className="grid grid-cols-2 gap-2 md:gap-3 mb-3">
         <Card label="Paid"     value={fmt(totals.paid)}     color="#74b9ff" sub="status = Paid" />
-        <Card label="Upcoming" value={fmt(totals.upcoming)} color="#fdcb6e" sub="not yet paid" />
+        <Card label="Upcoming" value={fmt(totals.upcoming)} color="#fdcb6e" sub="not yet paid · incl. unfinalized deals" />
       </div>
 
       {/* Per-status strip */}
