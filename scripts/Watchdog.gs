@@ -75,7 +75,9 @@ function watchdogRun() {
   // ── 4–6. Data hygiene ─────────────────────────────────────
   try {
     const soon = wdISO_(7), today = wdISO_(0);
-    const active = 'status=not.in.("Canceled","Cancelled","Sales Issue")';
+    // UrlFetchApp rejects raw quotes/spaces in URLs — every quoted PostgREST
+    // list value must be percent-encoded (wdList_).
+    const active = 'status=not.in.(' + wdList_(['Canceled', 'Cancelled', 'Sales Issue']) + ')';
     const sel = 'select=deal_name,status,office,payment_method,install_date,pay_date,commission_verified,baseline_revenue,job_price';
 
     // Deals paying within 7 days
@@ -89,7 +91,7 @@ function watchdogRun() {
 
     // Overdue: pay date passed, never finalized
     const overdue = wdGet_(url, key, '/rest/v1/deals?' + sel + '&pay_date=lt.' + today +
-      '&status=not.in.("Paid","Pay Finalized","Canceled","Cancelled","Sales Issue")');
+      '&status=not.in.(' + wdList_(['Paid', 'Pay Finalized', 'Canceled', 'Cancelled', 'Sales Issue']) + ')');
     if (overdue.length) add('WARN', overdue.length + ' deal(s) past their pay date but never finalized: ' + wdNames_(overdue));
 
     // Negative rep pool (price below baseline) on active deals
@@ -141,6 +143,10 @@ function wdGet_(url, key, path) {
   });
   if (r.getResponseCode() >= 300) throw new Error('HTTP ' + r.getResponseCode() + ' ' + r.getContentText().slice(0, 120));
   return JSON.parse(r.getContentText());
+}
+// '"A","B C"' percent-encoded for a PostgREST in.() list (quotes + spaces).
+function wdList_(values) {
+  return values.map(function (v) { return '%22' + encodeURIComponent(v) + '%22'; }).join(',');
 }
 function wdISO_(daysAhead) {
   const d = new Date(); d.setDate(d.getDate() + daysAhead);
