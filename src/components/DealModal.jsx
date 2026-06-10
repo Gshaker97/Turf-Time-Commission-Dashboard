@@ -1,5 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
-import { X, AlertTriangle } from 'lucide-react'
+import { X, AlertTriangle, History, ChevronDown } from 'lucide-react'
+import { format } from 'date-fns'
+import { fetchDealHistory } from '../lib/db'
 import { calcDealCommissions, fmt, fmtPct } from '../utils/commission'
 import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
@@ -38,6 +40,87 @@ const overrideDefaults = (office) => ({
   director_override_pct: dirVpDefault(office),
   vp_override_pct: dirVpDefault(office),
 })
+
+// ── Edit history (written by the 019 DB trigger) ────────────────
+const H_LABELS = {
+  deal_name: 'Name', status: 'Status', office: 'Office', payment_method: 'Payment',
+  project_id: 'Project ID', sale_date: 'Sale date', install_date: 'Install date',
+  pay_date: 'Pay date', setter_id: 'Setter', closer_id: 'Closer',
+  manager_id: 'Manager', director_id: 'Director', vp_id: 'VP',
+  baseline_revenue: 'Baseline', job_price: 'Job price', setter_split_pct: 'Setter split',
+  manager_override_pct: 'Manager %', director_override_pct: 'Director %', vp_override_pct: 'VP %',
+  setter_amount: 'Setter $', closer_amount: 'Closer $', manager_amount: 'Manager $',
+  director_amount: 'Director $', vp_amount: 'VP $',
+  deduction_amount: 'Deduction', deduction_note: 'Deduction note',
+  deduction_paid_by: 'Deduction paid by', deduction_split_pct: 'Deduction split',
+  financed_amount: 'Financed', dealer_fee_pct: 'Dealer fee %',
+  commission_verified: 'Gold check', notes: 'Notes',
+}
+const H_MONEY  = new Set(['baseline_revenue','job_price','setter_amount','closer_amount','manager_amount','director_amount','vp_amount','deduction_amount','financed_amount'])
+const H_PCT    = new Set(['setter_split_pct','manager_override_pct','director_override_pct','vp_override_pct','dealer_fee_pct','deduction_split_pct'])
+const H_PEOPLE = new Set(['setter_id','closer_id','manager_id','director_id','vp_id'])
+
+function DealHistory({ dealId, users }) {
+  const [open, setOpen]       = useState(false)
+  const [rows, setRows]       = useState(null)   // null = not loaded yet
+  useEffect(() => {
+    if (!open || rows !== null) return
+    fetchDealHistory(dealId).then(({ data }) => setRows(data || []))
+  }, [open, rows, dealId])
+
+  const who = (id) => users.find(u => u.id === id)?.name ?? (id ? '—' : 'Sync / system')
+  const val = (k, v) => {
+    if (v === null || v === undefined || v === '') return '—'
+    if (H_PEOPLE.has(k)) return users.find(u => u.id === v)?.name ?? '—'
+    if (H_MONEY.has(k))  return fmt(v)
+    if (H_PCT.has(k))    { const p = (Number(v) || 0) * 100; return (Number.isInteger(p) ? p : p.toFixed(2)) + '%' }
+    if (k === 'commission_verified') return v ? 'verified' : 'not verified'
+    const s = String(v)
+    return s.length > 40 ? s.slice(0, 40) + '…' : s
+  }
+
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+      <button type="button" onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-white/[0.02] transition-colors">
+        <span className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-white/40 font-semibold">
+          <History size={13} /> Edit history
+        </span>
+        <ChevronDown size={14} className={`text-white/30 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="px-3 pb-3 max-h-56 overflow-y-auto">
+          {rows === null ? (
+            <p className="text-[12px] text-white/30 py-2">Loading…</p>
+          ) : rows.length === 0 ? (
+            <p className="text-[12px] text-white/30 py-2">No history yet. (Changes are recorded once migration 019 is run.)</p>
+          ) : rows.map(r => (
+            <div key={r.id} className="py-2 border-t border-white/5 first:border-0">
+              <p className="text-[11px] text-white/40">
+                {format(new Date(r.changed_at), 'MMM d, yyyy · h:mm a')}
+                <span className="text-white/60 font-semibold"> · {who(r.changed_by)}</span>
+              </p>
+              {r.changes?._event === 'created' ? (
+                <p className="text-[12px] text-white/60 mt-0.5">Deal created</p>
+              ) : (
+                <div className="mt-0.5 space-y-0.5">
+                  {Object.entries(r.changes || {}).map(([k, c]) => (
+                    <p key={k} className="text-[12px] text-white/60">
+                      <span className="text-white/40">{H_LABELS[k] || k}:</span>{' '}
+                      <span className="text-white/45 line-through">{val(k, c?.from)}</span>
+                      <span className="text-white/30"> → </span>
+                      <span className="text-white/85">{val(k, c?.to)}</span>
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function DealModal({ deal, users = [], existingDeals = [], onSave, onClose }) {
   const { statusLabels, offices, paymentMethods } = useSettings()
@@ -438,6 +521,8 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
               ))}
             </div>
           </div>
+
+          {deal?.id && <DealHistory dealId={deal.id} users={users} />}
 
           {/* Actions */}
           <div className="flex gap-3 pt-2">
