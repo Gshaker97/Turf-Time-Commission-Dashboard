@@ -87,7 +87,7 @@ function ListEditor({ title, hint, settingKey, placeholder }) {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved]   = useState(false)
   const [error, setError]   = useState('')
-  useEffect(() => { setRows(current) }, [JSON.stringify(current)]) // eslint-disable-line
+  useEffect(() => { setRows(current) }, [JSON.stringify(current)])
 
   const dirty = JSON.stringify(rows) !== JSON.stringify(current)
   const update = (i, v) => setRows(rs => rs.map((r, j) => j === i ? v : r))

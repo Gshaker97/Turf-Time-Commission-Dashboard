@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
-import { LogOut, ChevronDown, Eye, ChevronRight } from 'lucide-react'
+import { LogOut, ChevronDown, Eye, ChevronRight, KeyRound, Check } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchUsers } from '../lib/db'
 
@@ -23,11 +23,28 @@ const ROLE_COLOR = {
 
 export default function NavBar() {
   const { pathname } = useLocation()
-  const { realProfile, signOut, isPreviewMode, previewAs } = useAuth()
+  const { realProfile, signOut, isPreviewMode, previewAs, changePassword, demoMode } = useAuth()
   const [open,        setOpen]        = useState(false)
   const [showPicker,  setShowPicker]  = useState(false)
   const [users,       setUsers]       = useState([])
+  const [pwOpen,      setPwOpen]      = useState(false)
+  const [pw,          setPw]          = useState('')
+  const [pw2,         setPw2]         = useState('')
+  const [pwMsg,       setPwMsg]       = useState(null)   // {type, text}
+  const [pwSaving,    setPwSaving]    = useState(false)
   const ref = useRef(null)
+
+  async function submitPassword() {
+    if (pw.length < 8)  return setPwMsg({ type: 'err', text: 'At least 8 characters.' })
+    if (pw !== pw2)     return setPwMsg({ type: 'err', text: 'Passwords don\u2019t match.' })
+    setPwSaving(true); setPwMsg(null)
+    const { error } = await changePassword(pw)
+    setPwSaving(false)
+    if (error) return setPwMsg({ type: 'err', text: error.message })
+    setPwMsg({ type: 'ok', text: 'Password updated.' })
+    setPw(''); setPw2('')
+    setTimeout(() => { setPwOpen(false); setPwMsg(null) }, 1400)
+  }
 
   useEffect(() => {
     const h = (e) => {
@@ -192,10 +209,43 @@ export default function NavBar() {
               </div>
             )}
 
+            {/* Change password */}
+            {!demoMode && (
+              <div className="border-t border-white/5">
+                <button
+                  onClick={() => { setPwOpen(o => !o); setPwMsg(null) }}
+                  className="w-full flex items-center justify-between px-4 py-2 text-[13px] text-white/60 hover:text-white hover:bg-white/5 transition-colors"
+                >
+                  <span className="flex items-center gap-2.5"><KeyRound size={14} /> Change Password</span>
+                  <ChevronRight size={12} className={`text-white/30 transition-transform ${pwOpen ? 'rotate-90' : ''}`} />
+                </button>
+                {pwOpen && (
+                  <div className="px-4 pb-3 pt-1 space-y-2">
+                    <input type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="New password"
+                      className="w-full px-2.5 py-1.5 rounded-lg text-[12px] text-white focus:outline-none"
+                      style={{ background: '#1a1a1a', border: '1px solid #333' }} />
+                    <input type="password" value={pw2} onChange={e => setPw2(e.target.value)} placeholder="Confirm new password"
+                      onKeyDown={e => { if (e.key === 'Enter') submitPassword() }}
+                      className="w-full px-2.5 py-1.5 rounded-lg text-[12px] text-white focus:outline-none"
+                      style={{ background: '#1a1a1a', border: '1px solid #333' }} />
+                    {pwMsg && (
+                      <p className="text-[11px] flex items-center gap-1" style={{ color: pwMsg.type === 'ok' ? '#34d399' : '#f87171' }}>
+                        {pwMsg.type === 'ok' && <Check size={12} />}{pwMsg.text}
+                      </p>
+                    )}
+                    <button onClick={submitPassword} disabled={pwSaving}
+                      className="w-full py-1.5 rounded-lg text-[12px] font-bold text-dark bg-teal disabled:opacity-50 transition-colors">
+                      {pwSaving ? 'Saving…' : 'Update password'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Sign out */}
             <button
               onClick={() => { signOut(); setOpen(false) }}
-              className="w-full flex items-center gap-2.5 px-4 py-2 text-[13px] text-white/60 hover:text-white hover:bg-white/5 transition-colors"
+              className="w-full flex items-center gap-2.5 px-4 py-2 text-[13px] text-white/60 hover:text-white hover:bg-white/5 transition-colors border-t border-white/5"
             >
               <LogOut size={14} />
               Sign Out
