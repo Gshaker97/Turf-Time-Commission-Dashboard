@@ -12,7 +12,6 @@ const Dashboard   = lazy(() => import('./pages/Dashboard'))
 const Commissions = lazy(() => import('./pages/Commissions'))
 const Team        = lazy(() => import('./pages/Team'))
 const Admin       = lazy(() => import('./pages/Admin'))
-const NewDeal     = lazy(() => import('./pages/NewDeal'))
 const Home        = lazy(() => import('./pages/Home'))
 const Payroll     = lazy(() => import('./pages/Payroll'))
 const Competitions = lazy(() => import('./pages/Competitions'))
@@ -53,7 +52,6 @@ function AppRoutes() {
         <Route path="commissions" element={<Commissions />} />
         <Route path="competitions" element={<Competitions />} />
         <Route path="home"        element={<Home />} />
-        <Route path="new-deal"    element={<Guard roles={['vp','admin']}><NewDeal /></Guard>} />
         <Route path="payroll"     element={<Guard roles={['vp','admin']}><Payroll /></Guard>} />
         <Route path="import"      element={<Guard roles={['vp','admin']}><ImportDeals /></Guard>} />
         <Route path="team"  element={

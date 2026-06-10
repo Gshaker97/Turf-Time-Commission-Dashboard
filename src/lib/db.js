@@ -81,6 +81,20 @@ export async function insertDeal(data, profileId) {
   )
 }
 
+// Edit history for one deal (written by the 019 DB trigger, newest first).
+// Returns [] in demo mode or before the migration has run, so callers can
+// render unconditionally.
+export async function fetchDealHistory(dealId) {
+  if (DEMO_MODE) return { data: [], error: null }
+  const { data, error } = await supabase
+    .from('deal_history')
+    .select('*')
+    .eq('deal_id', dealId)
+    .order('changed_at', { ascending: false })
+    .limit(50)
+  return { data: error ? [] : (data ?? []), error }
+}
+
 export async function updateDeal(id, data) {
   if (DEMO_MODE) {
     _deals = _deals.map(d =>
