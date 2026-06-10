@@ -193,10 +193,13 @@ function DateFilterPanel({ dateField, setDateField, dateFrom, dateTo, datePreset
   )
 }
 
-function DateField({ label, value, field, dealId, canEdit, onUpdate, deriveExtra }) {
+function DateField({ label, value, field, dealId, canEdit, onUpdate, deriveExtra, flagMissing }) {
+  // flagMissing → an empty date for a field we expect (install / pay) is shown
+  // amber so it's obvious it still needs filling in.
+  const missing = flagMissing && !value
   return (
     <div className="flex items-center gap-1.5">
-      <span className="text-white/30 text-[10px] uppercase tracking-wide w-8 flex-shrink-0">{label}</span>
+      <span className={`text-[10px] uppercase tracking-wide w-8 flex-shrink-0 ${missing ? 'text-amber-400' : 'text-white/30'}`}>{label}</span>
       {canEdit ? (
         <input
           type="date"
@@ -205,11 +208,11 @@ function DateField({ label, value, field, dealId, canEdit, onUpdate, deriveExtra
             const v = e.target.value || null
             onUpdate(dealId, { [field]: v, ...(deriveExtra ? deriveExtra(v) : null) })
           }}
-          className="bg-transparent text-white/55 text-[12px] border-0 outline-none cursor-pointer hover:text-white focus:text-white transition-colors w-[104px]"
-          style={{ colorScheme: 'dark' }}
+          className={`text-[12px] border-0 outline-none cursor-pointer hover:text-white focus:text-white transition-colors w-[104px] rounded ${missing ? 'text-amber-400' : 'bg-transparent text-white/55'}`}
+          style={missing ? { colorScheme: 'dark', background: '#f59e0b18' } : { colorScheme: 'dark' }}
         />
       ) : (
-        <span className="text-white/55 text-[12px]">{value ?? '—'}</span>
+        <span className={`text-[12px] ${missing ? 'text-amber-400' : 'text-white/55'}`}>{value ?? '— missing'}</span>
       )}
     </div>
   )
@@ -339,16 +342,18 @@ const officeColor = (name) => OFFICE_COLORS[name] || '#94a3b8'
 // reliably on change — mirroring the DateField pattern. The visible value is
 // driven by the `value` prop, which refreshes after the row reloads. Pass
 // `colorFor` to render the value as a colored badge instead of plain text.
-function InlineSelectCell({ value, options, field, canEdit, dealId, onUpdate, colorFor, deriveExtra }) {
+function InlineSelectCell({ value, options, field, canEdit, dealId, onUpdate, colorFor, deriveExtra, missingLabel }) {
+  // An empty value is flagged amber so a missing office/payment is obvious.
   const display = colorFor
     ? (value
         ? <StatusBadge status={value} color={colorFor(value)} />
         : <span className="text-[12px] text-white/30">—</span>)
-    : <span className={`text-[12px] whitespace-nowrap transition-colors ${
-        value ? 'text-white/70' : 'text-white/30'
-      } ${canEdit ? 'hover:text-white cursor-pointer' : ''}`}>
-        {value || '—'}
-      </span>
+    : value
+      ? <span className={`text-[12px] whitespace-nowrap transition-colors text-white/70 ${canEdit ? 'hover:text-white cursor-pointer' : ''}`}>{value}</span>
+      : <span className="text-[12px] whitespace-nowrap font-semibold px-1.5 py-0.5 rounded"
+          style={{ color: '#f59e0b', background: '#f59e0b18', border: '1px dashed #f59e0b66' }}>
+          + {missingLabel || 'set'}
+        </span>
 
   if (!canEdit) return display
 
@@ -464,9 +469,9 @@ function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onUpdate, status
         </div>
         <div className="flex flex-col gap-0.5">
           <DateField label="Sale" value={deal.sale_date}    field="sale_date"    dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
-          <DateField label="Inst" value={deal.install_date} field="install_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate}
+          <DateField label="Inst" value={deal.install_date} field="install_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} flagMissing
             deriveExtra={v => ({ pay_date: v ? payDateFromInstall(v) : null })} />
-          <DateField key={`pay-${deal.pay_date ?? ''}`} label="Pay" value={deal.pay_date} field="pay_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
+          <DateField key={`pay-${deal.pay_date ?? ''}`} label="Pay" value={deal.pay_date} field="pay_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} flagMissing />
         </div>
         <div className="flex items-end justify-end">
           <CommissionCell deal={deal} canVerify={canVerify} onUpdate={onUpdate} />
@@ -595,12 +600,12 @@ export default function DealTable({
                 </td>
                 <td className="px-3 py-3">
                   <InlineSelectCell value={deal.office} options={offices} colorFor={officeColor}
-                    field="office" canEdit={canEdit} dealId={deal.id} onUpdate={onUpdate}
+                    field="office" canEdit={canEdit} dealId={deal.id} onUpdate={onUpdate} missingLabel="office"
                     deriveExtra={v => officeChangePatch(deal, v)} />
                 </td>
                 <td className="px-3 py-3">
                   <InlineSelectCell value={deal.payment_method} options={paymentMethods}
-                    field="payment_method" canEdit={canEdit} dealId={deal.id} onUpdate={onUpdate} />
+                    field="payment_method" canEdit={canEdit} dealId={deal.id} onUpdate={onUpdate} missingLabel="payment" />
                 </td>
                 <td className="px-3 py-3">
                   <StatusCell status={deal.status} color={statusColor(deal.status)} options={statusLabels}
@@ -610,9 +615,9 @@ export default function DealTable({
                 <td className="px-3 py-3">
                   <div className="flex flex-col gap-0.5">
                     <DateField label="Sale" value={deal.sale_date}    field="sale_date"    dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
-                    <DateField label="Inst" value={deal.install_date} field="install_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate}
+                    <DateField label="Inst" value={deal.install_date} field="install_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} flagMissing
                       deriveExtra={v => ({ pay_date: v ? payDateFromInstall(v) : null })} />
-                    <DateField key={`pay-${deal.pay_date ?? ''}`} label="Pay" value={deal.pay_date} field="pay_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
+                    <DateField key={`pay-${deal.pay_date ?? ''}`} label="Pay" value={deal.pay_date} field="pay_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} flagMissing />
                   </div>
                 </td>
                 <td className="px-3 py-3"><RevenueCell baseline={baseline} jobPrice={jobPrice} /></td>
