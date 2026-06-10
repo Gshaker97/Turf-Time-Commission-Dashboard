@@ -102,8 +102,15 @@ setup + deploy steps.
   `019` adds the `deal_history` table + a SECURITY DEFINER trigger on `deals`
   logging every INSERT/UPDATE diff (any path — app, sync, SQL) with the editor's
   profile id (null = service role); append-only, no client write policies; shown
-  in the edit modal's collapsible "Edit history" panel.
-  Do not re-run `001`/`002` against a populated database.
+  in the edit modal's collapsible "Edit history" panel; `020` adds
+  `client_errors` (frontend crash reports — ErrorBoundary + global handlers via
+  `logClientError`, read by the Watchdog); `021` adds `deal_notes` (append-only
+  per-deal comment threads, replaces the single `deals.notes` text which now
+  displays as a legacy "Original note") and `notifications` (the NavBar bell —
+  posting a note fans out to the deal's setter/closer/manager + admins + prior
+  commenters, minus the author; users read/mark-read only their own rows;
+  clicking a bell item deep-links to `/deals?note=<dealId>` which opens the
+  thread). Do not re-run `001`/`002` against a populated database.
 
 ## User management (Admin page)
 

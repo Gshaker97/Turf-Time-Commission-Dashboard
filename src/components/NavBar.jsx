@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
-import { useLocation } from 'react-router-dom'
-import { LogOut, ChevronDown, Eye, ChevronRight, KeyRound, Check, Glasses } from 'lucide-react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { LogOut, ChevronDown, Eye, ChevronRight, KeyRound, Check, Glasses, Bell } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import Logo from './Logo'
-import { fetchUsers } from '../lib/db'
+import { fetchUsers, fetchNotifications, markNotificationsRead } from '../lib/db'
 
 const TITLES = {
   '/deals':       'Deals Pipeline',
@@ -21,6 +21,86 @@ const ROLE_COLOR = {
   manager:  '#fbbf24',
   rep:      '#60a5fa',
   admin:    '#00b894',
+}
+
+// Bell: in-app notifications (new deal-note replies, etc). Polls every 60s
+// and on tab focus; clicking an item jumps to that deal's thread on the Deals
+// page. Opening the panel marks everything read.
+function NotificationBell() {
+  const { realProfile } = useAuth()
+  const navigate = useNavigate()
+  const [items, setItems] = useState([])
+  const [open, setOpen]   = useState(false)
+  const ref = useRef(null)
+
+  const load = () => {
+    if (!realProfile?.id) return
+    fetchNotifications(realProfile.id).then(({ data }) => setItems(data || []))
+  }
+  useEffect(() => {
+    load()
+    const t = setInterval(load, 60000)
+    const onFocus = () => load()
+    window.addEventListener('focus', onFocus)
+    return () => { clearInterval(t); window.removeEventListener('focus', onFocus) }
+  }, [realProfile?.id])
+
+  useEffect(() => {
+    if (!open) return
+    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [open])
+
+  const unread = items.filter(n => !n.read).length
+
+  function toggle() {
+    const next = !open
+    setOpen(next)
+    if (next && unread > 0) {
+      markNotificationsRead(realProfile.id)
+      setTimeout(() => setItems(xs => xs.map(n => ({ ...n, read: true }))), 1200)
+    }
+  }
+
+  const fmtWhen = (iso) => {
+    const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
+    if (mins < 1) return 'now'
+    if (mins < 60) return `${mins}m`
+    if (mins < 48 * 60) return `${Math.floor(mins / 60)}h`
+    return `${Math.floor(mins / 1440)}d`
+  }
+
+  return (
+    <div className="relative" ref={ref}>
+      <button onClick={toggle} title="Notifications"
+        className="relative p-2 rounded-lg text-white/45 hover:text-white hover:bg-white/5 transition-colors">
+        <Bell size={16} />
+        {unread > 0 && (
+          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full text-[9px] font-bold text-dark flex items-center justify-center"
+            style={{ background: '#f59e0b' }}>
+            {unread > 9 ? '9+' : unread}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="absolute top-10 right-0 w-72 rounded-xl shadow-2xl py-1.5 z-50 max-h-[360px] overflow-y-auto"
+          style={{ background: '#2a2a2a', border: '1px solid #3a3a3a' }}>
+          <p className="px-4 py-1.5 text-[10px] font-bold uppercase tracking-widest text-white/30">Notifications</p>
+          {items.length === 0 ? (
+            <p className="px-4 py-4 text-[12px] text-white/30">Nothing yet — you'll see deal-note replies here.</p>
+          ) : items.map(n => (
+            <button key={n.id}
+              onClick={() => { setOpen(false); if (n.deal_id) navigate(`/deals?note=${n.deal_id}`) }}
+              className="w-full text-left px-4 py-2.5 hover:bg-white/5 transition-colors border-t border-white/5">
+              <p className={`text-[12px] ${n.read ? 'text-white/55' : 'text-white/90 font-semibold'}`}>{n.body}</p>
+              <p className="text-[10px] text-white/25 mt-0.5">{fmtWhen(n.created_at)} ago · tap to open the thread</p>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function NavBar() {
@@ -121,7 +201,8 @@ export default function NavBar() {
       </h1>
 
       {/* User menu — always shows real (admin) profile info */}
-      <div className="w-48 flex justify-end" ref={ref}>
+      <div className="w-48 flex items-center justify-end gap-1" ref={ref}>
+        <NotificationBell />
         <button
           onClick={() => setOpen(v => !v)}
           className="flex items-center gap-2.5 text-white/70 hover:text-white transition-colors"

@@ -186,6 +186,70 @@ export async function insertUser(data) {
   return writeWithSchemaFallback(p => supabase.from('profiles').insert([p]), rest)
 }
 
+// ── Deal notes (threads) + notifications ─────────────────────
+let _dealNotes = []      // demo-mode thread store
+let _notifications = []  // demo-mode bell store
+
+export async function fetchDealNotes(dealId) {
+  if (DEMO_MODE) return { data: _dealNotes.filter(n => n.deal_id === dealId), error: null }
+  const { data, error } = await supabase
+    .from('deal_notes')
+    .select('*, author:author_id(id,name)')
+    .eq('deal_id', dealId)
+    .order('created_at', { ascending: true })
+  return { data: error ? [] : (data ?? []), error }
+}
+
+// Count of thread notes per deal (one query) — drives the 💬 badge on rows.
+export async function fetchDealNoteCounts() {
+  if (DEMO_MODE) {
+    const m = {}
+    _dealNotes.forEach(n => { m[n.deal_id] = (m[n.deal_id] || 0) + 1 })
+    return { data: m, error: null }
+  }
+  const { data, error } = await supabase.from('deal_notes').select('deal_id')
+  if (error) return { data: {}, error }
+  const m = {}
+  for (const r of data ?? []) m[r.deal_id] = (m[r.deal_id] || 0) + 1
+  return { data: m, error: null }
+}
+
+// Post a note and fan out bell notifications to everyone on the deal except
+// the author. Notification failure never fails the note itself.
+export async function addDealNote({ dealId, dealName, body, author, recipientIds }) {
+  const uniq = [...new Set((recipientIds || []).filter(id => id && id !== author.id))]
+  if (DEMO_MODE) {
+    _dealNotes.push({ id: 'n-' + Math.random().toString(36).slice(2, 9), deal_id: dealId, author_id: author.id, author: { id: author.id, name: author.name }, body, created_at: new Date().toISOString() })
+    uniq.forEach(uid => _notifications.push({ id: 'nf-' + Math.random().toString(36).slice(2, 9), user_id: uid, deal_id: dealId, body: `${author.name} commented on ${dealName}`, read: false, created_at: new Date().toISOString() }))
+    return { error: null }
+  }
+  const { error } = await supabase.from('deal_notes').insert([{ deal_id: dealId, author_id: author.id, body }])
+  if (error) return { error }
+  if (uniq.length) {
+    try {
+      await supabase.from('notifications').insert(
+        uniq.map(uid => ({ user_id: uid, deal_id: dealId, body: `${author.name} commented on ${dealName}` }))
+      )
+    } catch { /* bell is best-effort */ }
+  }
+  return { error: null }
+}
+
+export async function fetchNotifications(profileId) {
+  if (DEMO_MODE) return { data: _notifications.filter(n => n.user_id === profileId).slice().reverse().slice(0, 20), error: null }
+  const { data, error } = await supabase
+    .from('notifications').select('*')
+    .eq('user_id', profileId)
+    .order('created_at', { ascending: false })
+    .limit(20)
+  return { data: error ? [] : (data ?? []), error }
+}
+
+export async function markNotificationsRead(profileId) {
+  if (DEMO_MODE) { _notifications = _notifications.map(n => n.user_id === profileId ? { ...n, read: true } : n); return { error: null } }
+  return supabase.from('notifications').update({ read: true }).eq('user_id', profileId).eq('read', false)
+}
+
 // ── Client error reporting (Watchdog feed) ───────────────────
 // Best-effort: must NEVER throw or recurse (an error logger that errors is a
 // crash loop). Dedupes per session so a render-loop crash logs once, not 1000x.
