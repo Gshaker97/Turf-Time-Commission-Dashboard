@@ -135,12 +135,40 @@ function ListEditor({ title, hint, settingKey, placeholder }) {
 // component renders everywhere inside the app. (The login screen loads before
 // sign-in, so it can't read settings — it uses public/logo.png or the
 // built-in mark.)
+// Erase the white background around a logo: flood-fill from the canvas edges,
+// turning connected near-white pixels transparent. White INSIDE the artwork
+// (letters, highlights) isn't touched because it isn't connected to the edge.
+function stripWhiteBackground(canvas) {
+  const ctx = canvas.getContext('2d')
+  const w = canvas.width, h = canvas.height
+  const img = ctx.getImageData(0, 0, w, h)
+  const d = img.data
+  const nearWhite = (i) => d[i] > 232 && d[i + 1] > 232 && d[i + 2] > 232
+  const seen = new Uint8Array(w * h)
+  const stack = []
+  for (let x = 0; x < w; x++) { stack.push(x, 0, x, h - 1) }
+  for (let y = 0; y < h; y++) { stack.push(0, y, w - 1, y) }
+  while (stack.length) {
+    const y = stack.pop(), x = stack.pop()
+    if (x < 0 || y < 0 || x >= w || y >= h) continue
+    const p = y * w + x
+    if (seen[p]) continue
+    seen[p] = 1
+    const i4 = p * 4
+    if (d[i4 + 3] === 0 || !nearWhite(i4)) continue
+    d[i4 + 3] = 0
+    stack.push(x + 1, y, x - 1, y, x, y + 1, x, y - 1)
+  }
+  ctx.putImageData(img, 0, 0)
+}
+
 function LogoEditor() {
   const { settings, save } = useSettings()
   const current = settings?.site_logo || null
   const [saving, setSaving] = useState(false)
   const [saved, setSaved]   = useState(false)
   const [error, setError]   = useState('')
+  const [stripBg, setStripBg] = useState(true)
 
   async function apply(value) {
     setError(''); setSaving(true)
@@ -166,6 +194,7 @@ function LogoEditor() {
       canvas.width = Math.round(img.width * scale)
       canvas.height = Math.round(img.height * scale)
       canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
+      if (stripBg) stripWhiteBackground(canvas)
       const dataUrl = canvas.toDataURL('image/png')
       if (dataUrl.length > 400000) return setError('That image is too complex even after resizing — try a simpler PNG.')
       apply(dataUrl)
@@ -190,18 +219,26 @@ function LogoEditor() {
             ? <img src={current} alt="Logo" className="max-w-full max-h-full object-contain" />
             : <span className="text-[10px] text-white/25 text-center px-1">default mark</span>}
         </div>
-        <div className="flex items-center gap-2">
-          <label className="px-3 py-2 rounded-xl text-[12px] font-bold text-dark bg-teal cursor-pointer">
-            {current ? 'Replace logo' : 'Upload logo'}
-            <input type="file" accept="image/*" onChange={onPick} className="hidden" />
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <label className="px-3 py-2 rounded-xl text-[12px] font-bold text-dark bg-teal cursor-pointer">
+              {current ? 'Replace logo' : 'Upload logo'}
+              <input type="file" accept="image/*" onChange={onPick} className="hidden" />
+            </label>
+            {current && (
+              <button onClick={() => apply(null)} disabled={saving}
+                className="px-3 py-2 rounded-xl text-[12px] font-semibold text-white/50 hover:text-white transition-colors"
+                style={{ border: '1px solid #3a3a3a' }}>
+                Remove
+              </button>
+            )}
+          </div>
+          <label className="flex items-center gap-2 text-[12px] text-white/55 cursor-pointer select-none">
+            <input type="checkbox" checked={stripBg} onChange={e => setStripBg(e.target.checked)}
+              className="accent-teal w-3.5 h-3.5" />
+            Make white background transparent
+            <span className="text-white/25">(applied on upload — re-upload to change)</span>
           </label>
-          {current && (
-            <button onClick={() => apply(null)} disabled={saving}
-              className="px-3 py-2 rounded-xl text-[12px] font-semibold text-white/50 hover:text-white transition-colors"
-              style={{ border: '1px solid #3a3a3a' }}>
-              Remove
-            </button>
-          )}
         </div>
       </div>
       {saving && <p className="text-[11px] text-white/30">Saving…</p>}
