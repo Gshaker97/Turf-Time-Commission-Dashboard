@@ -107,6 +107,22 @@ function schSync() {
         baseline: c('Baseline Cost'), sale: c('Pre-Tax Sale'),
         project: c('Project ID'), proposal: c('Proposal ID'), status: c('Status'),
       };
+      // A re-signed job leaves its OLD row on the tab next to the new one, and
+      // both stay APPROVED. If both rows drive the deal, they fight: the old
+      // row keeps flagging "Change Order" with the old numbers every time you
+      // move the deal forward. So per customer, only the NEWEST row (latest
+      // Approved Date; later sheet row wins ties) is allowed to touch the deal.
+      const newestRow = {};
+      for (let r = 1; r < rows.length; r++) {
+        const cust = String(rows[r][ix.customer] || '').trim().toLowerCase();
+        if (!cust) continue;
+        const st = String(ix.status >= 0 ? rows[r][ix.status] : '').trim().toUpperCase();
+        if (SCH_ONLY_STATUS && st && st !== SCH_ONLY_STATUS) continue;
+        const when = schDate_(rows[r][ix.approved]) || '';
+        const prev = newestRow[cust];
+        if (!prev || when >= prev.when) newestRow[cust] = { r: r, when: when };
+      }
+
       for (let r = 1; r < rows.length; r++) {
         const row = rows[r];
         const customer = String(row[ix.customer] || '').trim();
@@ -115,6 +131,10 @@ function schSync() {
 
         const status = String(ix.status >= 0 ? row[ix.status] : '').trim().toUpperCase();
         if (SCH_ONLY_STATUS && status && status !== SCH_ONLY_STATUS) { out.skipped++; continue; }
+
+        // Stale duplicate (older re-sign row) — the newest row owns this deal.
+        const newest = newestRow[customer.toLowerCase()];
+        if (newest && newest.r !== r) { out.skipped++; continue; }
 
         const projectId = String(row[ix.project] || '').trim() || String(ix.proposal >= 0 ? row[ix.proposal] : '').trim();
         if (!projectId) { out.skipped++; continue; }
