@@ -8,6 +8,8 @@
   },
   "scripts": {
     "dev": "vite",
+    "lint": "eslint src/",
+    "prebuild": "eslint src/",
     "build": "vite build",
     "preview": "vite preview",
     "start": "serve -s dist -l ${PORT:-3000}"
@@ -25,6 +27,8 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.19",
+    "eslint": "^10.4.1",
+    "globals": "^17.6.0",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.4",
     "vite": "^5.3.1"

@@ -1,6 +1,13 @@
 /**
  * Turf Time — Google Sheet → Supabase Sync
  *
+ * ⚠️ LEGACY — DO NOT PUT THIS ON A TRIGGER.
+ * The dashboard now computes ALL commission in-site (baseline × override %,
+ * rep-pool splits) — see src/utils/commission.js. This script writes stored
+ * *_amount fields that OVERRIDE the in-site math, and it would stomp manually
+ * corrected per-deal rates (Tucson 3.75%, special VP rates, etc.) every run.
+ * ScheduleSync.gs (schSync) is the only sync that should be running.
+ *
  * Reads the configured monthly tabs and upserts each row to the deals table.
  * Match key: lower(trim(deal_name))
  *

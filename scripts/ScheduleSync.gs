@@ -43,7 +43,6 @@ const SCH_EXCLUDE_REPS    = ['rhett', 'ronnie'];   // never import these reps
 const SCH_SKIP_NAME_CONTAINS = ['test', 'cute'];   // junk/test customers
 const SCH_NEW_STATUS      = 'Deal Review';      // status for a freshly imported deal
 const SCH_CHANGE_STATUS   = 'Change Order';     // a re-signed / changed deal
-const SCH_CANCEL_STATUS   = 'Canceled';         // CANCELLED schedule row → this status
 // Statuses the sync never touches — finalized pay + manual triage. A deal you
 // mark Sales Issue / Canceled (or that's already paid) won't get schedule info
 // re-applied or its status changed by the sync.
@@ -85,7 +84,7 @@ function schSync() {
   });
 
   const ignoreCreate = new Set((props.getProperty(SCH_BASELINE_PROP) || '').split(',').filter(Boolean));
-  const out = { created: 0, changed: 0, updated: 0, canceled: 0, paid: 0, skipped: 0, errors: 0, details: [] };
+  const out = { created: 0, changed: 0, updated: 0, paid: 0, skipped: 0, errors: 0, details: [] };
 
   // ── PAID PASS — Pay Finalized → Paid once the pay date has arrived ──
   const todayISO = new Date().toISOString().slice(0, 10);
@@ -261,7 +260,7 @@ function schSync() {
 
   Logger.log((SCH_DRY_RUN ? '[DRY RUN — nothing written] ' : '') +
     'Sync — created ' + out.created + ', change-orders ' + out.changed + ', updated ' + out.updated +
-    ', canceled ' + out.canceled + ', paid ' + out.paid + ', skipped ' + out.skipped + ', errors ' + out.errors);
+    ', paid ' + out.paid + ', skipped ' + out.skipped + ', errors ' + out.errors);
   if (out.details.length) Logger.log(out.details.join('\n'));
   return out;
 }

@@ -99,11 +99,6 @@ export default function Payroll() {
     () => deals.filter(d => d.pay_date && d.pay_date < today && d.status !== PAID && d.status !== ISSUE),
     [deals, today]
   )
-  const overdueTotal = useMemo(
-    () => overdueDeals.reduce((s, d) => s + dealAmounts(d).totalCommission, 0),
-    [overdueDeals]
-  )
-
   const runDeals = useMemo(() => {
     // Sales-Issue deals are pulled from the run (they're flagged, not payable).
     const list = view === 'overdue' ? overdueDeals : deals.filter(d => d.pay_date === view && d.status !== ISSUE)
@@ -118,16 +113,6 @@ export default function Payroll() {
     () => runDeals.filter(d => !d.office || !String(d.office).trim()),
     [runDeals]
   )
-
-  const totals = useMemo(() => {
-    let total = 0, paid = 0
-    for (const d of runDeals) {
-      const c = dealAmounts(d).totalCommission
-      total += c
-      if (d.status === PAID) paid += c
-    }
-    return { total, paid, remaining: total - paid, count: runDeals.length, paidCount: runDeals.filter(d => d.status === PAID).length }
-  }, [runDeals])
 
   const payees = useMemo(() => {
     const m = {}

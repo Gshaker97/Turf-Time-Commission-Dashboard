@@ -7,7 +7,7 @@ import FilterBar from '../components/FilterBar'
 import KpiCard from '../components/KpiCard'
 import DealTable, { dealNeedsReview } from '../components/DealTable'
 import DealModal from '../components/DealModal'
-import { calcDealCommissions, fmt, isCanceled } from '../utils/commission'
+import { calcDealCommissions, dealAmounts, fmt, isCanceled } from '../utils/commission'
 import { getPresetRange } from '../utils/dateRanges'
 
 function sortValue(d, key) {
@@ -112,11 +112,10 @@ export default function Deals() {
     // they can be moved out of Canceled).
     const counted = filtered.filter(d => !isCanceled(d))
     for (const d of counted) {
-      const bl = parseFloat(d.baseline_revenue) || 0
-      const jp = parseFloat(d.job_price) || 0
-      const gross = jp - bl
-      baseline += bl; totalComm += gross; totalJobPrice += jp
-      if (bl > 0) totalMarkupPct += (gross / bl) * 100
+      // Engine-derived so deductions and stored amounts are respected.
+      const a = dealAmounts(d)
+      baseline += a.baseline; totalComm += a.repCommission; totalJobPrice += a.job
+      if (a.baseline > 0) totalMarkupPct += ((a.job - a.baseline) / a.baseline) * 100
     }
     const count = counted.length
     return { baseline, totalComm, count, avgDeal: count ? totalJobPrice/count : 0, avgComm: count ? totalComm/count : 0, avgMarkupPct: count ? totalMarkupPct/count : 0 }
