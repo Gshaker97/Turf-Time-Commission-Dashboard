@@ -40,7 +40,7 @@ export const DEMO_USERS = [
 
   // Admin
   { id: 'u-admin',    name: 'Turf Time Admin', email: 'admin@turftime.com',    role: 'admin', company_name: CO, manager_id: null, director_id: null, vp_id: null, active: true },
-]
+].map(u => ({ is_admin: false, ghost: false, ...u }))   // columns from migrations 013/016
 
 // Demo passwords (offline preview only — live mode uses Supabase Auth)
 const PW = 'TurfTime2026!'
@@ -75,6 +75,9 @@ function makeDeal(o) {
     setter_amount: null, closer_amount: null,
     manager_amount: null, director_amount: null, vp_amount: null,
     deduction_amount: null, deduction_note: null,
+    deduction_paid_by: 'closer', deduction_split_pct: null,   // 011/012
+    financed_amount: null, dealer_fee_pct: null,              // 010
+    checklist: [], commission_verified: false, notes: null,   // 008/017/014
     payment_method: o.payment_method ?? null,
     created_by: 'u-admin',
     created_at: new Date().toISOString(),
@@ -146,12 +149,21 @@ export const DEMO_SETTINGS = {
   deal_statuses: [
     { label: 'Deal Review',     color: '#94a3b8' },
     { label: 'Pending Install', color: '#2dd4bf' },
+    { label: 'Change Order',    color: '#f59e0b' },
     { label: 'Pay Finalized',   color: '#22d3ee' },
     { label: 'Paid',            color: '#4ade80' },
     { label: 'Sales Issue',     color: '#f87171' },
+    { label: 'Canceled',        color: '#6b7280' },
   ],
   payment_methods: ['Self-Pay', 'Goodleap', 'Sunlight', 'Self-Pay + Sunlight', 'Self-Pay + Goodleap'],
   offices: ['Phoenix', 'Tucson'],
+  checklist_items: [
+    { key: 'contract_signed',  label: 'Contract Signed' },
+    { key: 'detailed_drawing', label: 'Detailed Drawing' },
+    { key: 'payment_method',   label: 'Payment Method' },
+    { key: 'scheduled',        label: 'Scheduled' },
+    { key: 'no_issues',        label: 'No Issues' },
+  ],
 }
 
 // Weekly estimate counts per rep, for the Weekly Stats tracker. Closed deals
@@ -170,7 +182,9 @@ export const DEMO_WEEKLY_STATS = (() => {
   repIds.forEach((id, idx) => {
     const base = baseByRep[idx % baseByRep.length]
     for (let w = 0; w <= 3; w++) {
-      rows.push({ rep_id: id, week_start: monday(w), estimates: Math.max(2, base - w) })
+      const sg = Math.max(1, Math.ceil((base - w) * 0.6))
+      const ld = Math.max(1, (base - w) - sg)
+      rows.push({ rep_id: id, week_start: monday(w), estimates: sg + ld, self_gen_estimates: sg, lead_estimates: ld })
     }
   })
   return rows
@@ -212,5 +226,6 @@ export const DEMO_COMPETITIONS = (() => {
       start_date: start, end_date: end,
       participant_ids: [], manual_scores: {}, active: true, created_by: 'u-keaton',
     },
-  ]
+    // Goal/credit params from migration 015 — same defaults the DB seeds.
+  ].map(c => ({ goal_mode: 'race', goal_target: null, credit_mode: 'both', credit_split_pct: 0.5, ...c }))
 })()

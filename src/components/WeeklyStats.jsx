@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Percent, AlertTriangle } from 'lucide-react'
+import { AlertTriangle } from 'lucide-react'
 import { fetchWeeklyStats, upsertWeeklyStat } from '../lib/db'
 import { isCanceled } from '../utils/commission'
 import DateRangeFilter from './DateRangeFilter'

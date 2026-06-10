@@ -3,7 +3,7 @@ import { format, subMonths, startOfWeek, endOfWeek, addDays } from 'date-fns'
 import { fetchDeals, fetchUsers } from '../lib/db'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { useAuth } from '../contexts/AuthContext'
-import { getUserCommission, calcDealCommissions, fmt, activeDeals } from '../utils/commission'
+import { getUserCommission, fmt, activeDeals } from '../utils/commission'
 import { getPresetRange, presetLabel } from '../utils/dateRanges'
 import DateRangeFilter from '../components/DateRangeFilter'
 import WeeklyStats from '../components/WeeklyStats'
@@ -299,10 +299,9 @@ export default function Team() {
         return inPeriod && (repIds.has(d.setter_id)||repIds.has(d.closer_id))
       })
       const revenue    = teamDeals.reduce((s,d) => s+(parseFloat(d.baseline_revenue)||0), 0)
-      const commission = teamDeals.reduce((s,d) => {
-        const a = calcDealCommissions(d)
-        return s + a.setterAmt + a.closerAmt + a.managerAmt + a.directorAmt + a.vpAmt
-      }, 0)
+      // Only what this team's members actually earn on these deals — not the
+      // director/VP overrides or an outside setter/closer's share.
+      const commission = [...repIds].reduce((s, id) => s + getUserCommission(teamDeals, id), 0)
       return { id: mgr.id, name: mgr.name, reps: teamReps.length, deals: teamDeals.length, revenue, commission, revenuePerRep: teamReps.length>0?revenue/teamReps.length:0, isMyTeam: role==='manager'&&mgr.id===profile.id }
     }).sort((a,b) => b.revenue-a.revenue)
   }, [users, deals, dateFrom, dateTo, role, profile])
@@ -334,10 +333,9 @@ export default function Team() {
       const inPeriod=(!dateFrom||(d.sale_date??'')>=dateFrom)&&(!dateTo||(d.sale_date??'')<=dateTo)
       return inPeriod&&(repIds.has(d.setter_id)||repIds.has(d.closer_id))
     }).map(d=>[d.id,d])).values()]
-    const commission = periodDeals.reduce((s,d) => {
-      const a = calcDealCommissions(d)
-      return s + a.setterAmt + a.closerAmt + a.managerAmt + a.directorAmt + a.vpAmt
-    }, 0)
+    // Sum what the visible reps personally earn — not every role on the deal
+    // (which would lump in director/VP overrides and outsiders' shares).
+    const commission = [...repIds].reduce((s, id) => s + getUserCommission(periodDeals, id), 0)
     return { reps: repStats.length, deals: repStats.reduce((s,r)=>s+r.deals,0), revenue: repStats.reduce((s,r)=>s+r.revenue,0), commission }
   }, [repStats, visibleReps, deals, dateFrom, dateTo])
 

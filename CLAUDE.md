@@ -14,8 +14,10 @@ see their teams.
 
 - Frontend: Vite + React + Tailwind, React Router, Recharts.
 - Backend: self-hosted Supabase (Postgres + GoTrue + PostgREST) on Railway.
-- A Google Apps Script (`scripts/Sync.gs`) syncs a commission spreadsheet into
-  the `deals` table. Stored `*_amount` fields originate there.
+- A Google Apps Script (`scripts/ScheduleSync.gs`, entry `schSync`, 1-min
+  trigger) imports deals from the ArcSite Jobs/Schedule spreadsheet.
+  `scripts/Backup.gs` does daily Drive backups. `scripts/Sync.gs` is legacy —
+  see the sync section below.
 
 ## Roles (hierarchy, low → high)
 
@@ -132,22 +134,51 @@ statuses are configurable, there is no longer a DB CHECK on `deals.status` (see
 
 **Status lifecycle automation:** new deals (manual or scheduler-imported)
 default to `Deal Review`. When all items in a deal's inline checklist are ticked,
-a deal in `Deal Review` auto-advances to `Pending Install`; unchecking an item on
-a `Pending Install` deal drops it back to `Deal Review` (`DealChecklist` in
-`src/components/DealTable.jsx`, the `CHECKLIST_FROM_STATUS` ↔
-`CHECKLIST_TO_STATUS` transition — only flips between those two, never disturbs
-Paid/Canceled/etc.).
+a deal in `Deal Review` **or** `Change Order` auto-advances to `Pending Install`;
+unchecking an item on a `Pending Install` deal drops it back to `Deal Review`
+(`DealChecklist` in `src/components/DealTable.jsx`, `CHECKLIST_FROM_STATUSES` →
+`CHECKLIST_TO_STATUS` — never disturbs Paid/Canceled/etc.). The sync's PAID PASS
+auto-moves `Pay Finalized` → `Paid` once the deal's `pay_date` arrives.
+
+**Staging ("Needs review").** The Deals page gives VP/admin two tabs: **Needs
+review** (deals not yet fully vetted) and **All deals**. A deal graduates out of
+staging only when its checklist is complete AND `commission_verified` is true
+(`dealNeedsReview` / `checklistComplete`, exported from
+`src/components/DealTable.jsx`). Change orders clear `commission_verified`, so
+re-signed deals automatically fall back into staging.
+
+**Payroll totals are finalized-only.** The pay-run headline (`Total payout`,
+Remaining, per-payee totals) counts only `Pay Finalized` + `Paid` deals
+(`isFinalized` in `src/pages/Payroll.jsx`); other deals on the run show in a
+separate "not yet finalized" line. The run also flags deals missing an `office`
+(their override % likely defaulted to 5% instead of the office rate).
 
 **Spreadsheet sync (`scripts/ScheduleSync.gs`, entry `schSync`).** One Apps
-Script trigger drives everything: the **Jobs** tab (ArcSite "sold" feed) is the
-source of truth — every APPROVED job becomes a deal as soon as it lands (status
-`Deal Review`; Rhett/Ronnie excluded; hand-entered deals protected by name). The
-**Schedule** tab then layers on install date (+pay date), payment, office, and
-the real setter from Lead Source. A **change order** (the sheet's baseline or
-sale price changed for an existing deal) updates the deal, sets status
-`Change Order`, and clears its `checklist` + `commission_verified` so it gets
-re-verified. A CANCELLED schedule row moves the deal to `Canceled`. The sync
-never overrides `Pay Finalized`/`Paid`.
+Script trigger (every minute) drives everything: the **Jobs** tab (ArcSite
+"sold" feed) is the source of truth — every APPROVED job becomes a deal as soon
+as it lands (status `Deal Review`; Rhett/Ronnie excluded; hand-entered deals
+protected by name). The **Schedule** tab then layers on install date (+pay
+date), payment, office (detected by VALUE — Tucson/Phoenix/Mesa — since the
+column header is blank; office sets the 3.75%/5% dir+VP rate), and the real
+setter from Lead Source (names resolved leniently: "JC" → "JC Correa" via
+`schResolvePerson_`). A **change order** (baseline or sale price changed;
+matched by project_id with a deal-name fallback for re-signs under a new ID)
+updates the deal, sets status `Change Order`, and clears `checklist` +
+`commission_verified` + stored amounts so everything recomputes and re-verifies.
+**CANCELLED schedule rows are IGNORED** — the sync never cancels a deal;
+cancellation is manual in the site. The sync never overrides
+`Pay Finalized`/`Paid`/`Sales Issue`/`Canceled` with schedule info.
+⚠️ After pasting any script update into Apps Script, confirm
+`SCH_DRY_RUN = false` — a re-paste resets it to preview mode and the sync
+silently stops writing.
+
+**`scripts/Sync.gs` is LEGACY — never re-enable its trigger.** It writes stored
+`*_amount` fields that override the in-site math and would stomp manually
+corrected per-deal rates. All commission is computed in-site now.
+
+**`scripts/Backup.gs` (`backupNow`, daily trigger).** Dumps every table to a
+dated Google Sheet in the "Turf Time Backups" Drive folder, one tab per table,
+keeping the most recent 30.
 
 ## Known low-severity items (not yet addressed)
 
