@@ -107,8 +107,8 @@ setup + deploy steps.
   `logClientError`, read by the Watchdog); `021` adds `deal_notes` (append-only
   per-deal comment threads, replaces the single `deals.notes` text which now
   displays as a legacy "Original note") and `notifications` (the NavBar bell —
-  posting a note fans out to the deal's setter/closer/manager + admins + prior
-  commenters, minus the author; users read/mark-read only their own rows;
+  posting a note notifies the deal's CLOSER + admins only, minus the author
+  (setters/managers read threads but aren't pinged); users read/mark-read only their own rows;
   clicking a bell item deep-links to `/deals?note=<dealId>` which opens the
   thread). Do not re-run `001`/`002` against a populated database.
 
