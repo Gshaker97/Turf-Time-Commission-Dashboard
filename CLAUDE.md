@@ -132,20 +132,19 @@ The default seed is `Deal Review`, `Pending Install`, `Change Order`,
 statuses are configurable, there is no longer a DB CHECK on `deals.status` (see
 `006_settings.sql`).
 
-**Status lifecycle automation:** new deals (manual or scheduler-imported)
-default to `Deal Review`. When all items in a deal's inline checklist are ticked,
-a deal in `Deal Review` **or** `Change Order` auto-advances to `Pending Install`;
-unchecking an item on a `Pending Install` deal drops it back to `Deal Review`
-(`DealChecklist` in `src/components/DealTable.jsx`, `CHECKLIST_FROM_STATUSES` →
-`CHECKLIST_TO_STATUS` — never disturbs Paid/Canceled/etc.). The sync's PAID PASS
-auto-moves `Pay Finalized` → `Paid` once the deal's `pay_date` arrives.
+**Status lifecycle:** new deals (manual or scheduler-imported) default to
+`Deal Review`; statuses are changed manually via the inline dropdown. The
+sync's PAID PASS auto-moves `Pay Finalized` → `Paid` once the deal's `pay_date`
+arrives. (The old per-deal checklist UI and its checklist-driven status
+automation were removed — the `deals.checklist` column and the Admin →
+Settings checklist editor still exist but drive nothing.)
 
 **Staging ("Needs review").** The Deals page gives VP/admin two tabs: **Needs
-review** (deals not yet fully vetted) and **All deals**. A deal graduates out of
-staging only when its checklist is complete AND `commission_verified` is true
-(`dealNeedsReview` / `checklistComplete`, exported from
-`src/components/DealTable.jsx`). Change orders clear `commission_verified`, so
-re-signed deals automatically fall back into staging.
+review** (deals not yet vetted) and **All deals**. A deal graduates out of
+staging when its commission gets the gold check (`commission_verified` —
+`dealNeedsReview`, exported from `src/components/DealTable.jsx`). Change
+orders clear `commission_verified`, so re-signed deals automatically fall back
+into staging.
 
 **Payroll totals are finalized-only.** The pay-run headline (`Total payout`,
 Remaining, per-payee totals) counts only `Pay Finalized` + `Paid` deals

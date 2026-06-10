@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { Plus } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
-import { useSettings } from '../contexts/SettingsContext'
 import { fetchDeals, fetchUsers, fetchPayments, insertDeal, updateDeal, deleteDeal } from '../lib/db'
 import FilterBar from '../components/FilterBar'
 import KpiCard from '../components/KpiCard'
@@ -21,7 +20,7 @@ function sortValue(d, key) {
 
 export default function Deals() {
   const { profile, isAdmin } = useAuth()
-  const { checklistItems } = useSettings()
+
   const [deals,    setDeals]    = useState([])
   const [payments, setPayments] = useState([])
   const [users,    setUsers]    = useState([])
@@ -89,12 +88,12 @@ export default function Deals() {
   }, [deals, profile, role, repFilter, search, statusFilter, officeFilter, paymentFilter, dateField, dateFrom, dateTo, sortKey, sortDir])
 
   // Staging workflow: VP/admin (who graduate deals) get a "Needs review" view —
-  // new/re-signed deals that aren't yet fully vetted (checklist complete + gold
-  // commission check). Everyone else just sees the normal list.
+  // new/re-signed deals whose commission hasn't been gold-checked yet.
+  // Everyone else just sees the normal list.
   const canStage = isAdmin || profile?.role === 'vp'
   const needsReview = useMemo(
-    () => canStage ? filtered.filter(d => dealNeedsReview(d, checklistItems)) : [],
-    [filtered, canStage, checklistItems]
+    () => canStage ? filtered.filter(dealNeedsReview) : [],
+    [filtered, canStage]
   )
   const [reviewTab, setReviewTab] = useState('all')   // 'review' | 'all'
   const didInitTab = useRef(false)
@@ -215,7 +214,7 @@ export default function Deals() {
           {reviewTab === 'review' && (
             <span className="text-[11px] text-white/40">
               {needsReview.length
-                ? 'Tick every checklist box and gold-check the commission to move a deal into All deals.'
+                ? 'Gold-check a deal’s commission to move it into All deals.'
                 : '🎉 Nothing to review — every deal is checklisted and verified.'}
             </span>
           )}
