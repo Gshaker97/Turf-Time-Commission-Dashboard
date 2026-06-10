@@ -38,7 +38,7 @@ export default function Layout() {
           style={{ background: '#f59e0b', color: '#1a1a1a' }}>
           <div className="flex items-center gap-2">
             <Eye size={14} strokeWidth={2.5} />
-            <span className="text-[13px] font-semibold">Viewing as {profile?.name}</span>
+            <span className="text-[13px] font-semibold">Viewing as {profile?.name} · {profile?.role} permissions</span>
             <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
               style={{ background: 'rgba(0,0,0,0.15)', color: '#1a1a1a' }}>{role}</span>
           </div>
