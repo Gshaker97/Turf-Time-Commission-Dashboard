@@ -130,12 +130,100 @@ function ListEditor({ title, hint, settingKey, placeholder }) {
 }
 
 
+// Upload a site logo without touching code: the image is downscaled to 256px
+// and stored as a data URL in app_settings ('site_logo'), which the Logo
+// component renders everywhere inside the app. (The login screen loads before
+// sign-in, so it can't read settings — it uses public/logo.png or the
+// built-in mark.)
+function LogoEditor() {
+  const { settings, save } = useSettings()
+  const current = settings?.site_logo || null
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
+  const [error, setError]   = useState('')
+
+  async function apply(value) {
+    setError(''); setSaving(true)
+    const { error: err } = (await save('site_logo', value)) || {}
+    setSaving(false)
+    if (err) { setError(err.message || 'Could not save.'); return }
+    setSaved(true); setTimeout(() => setSaved(false), 1800)
+  }
+
+  function onPick(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    if (!file.type.startsWith('image/')) return setError('Pick an image file (PNG with transparency works best).')
+    const img = new Image()
+    const url = URL.createObjectURL(file)
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      // Downscale so the stored data URL stays small (~20–60KB).
+      const max = 256
+      const scale = Math.min(1, max / Math.max(img.width, img.height))
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(img.width * scale)
+      canvas.height = Math.round(img.height * scale)
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
+      const dataUrl = canvas.toDataURL('image/png')
+      if (dataUrl.length > 400000) return setError('That image is too complex even after resizing — try a simpler PNG.')
+      apply(dataUrl)
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); setError('Could not read that image.') }
+    img.src = url
+  }
+
+  return (
+    <div className="rounded-xl p-4 md:p-5 space-y-3" style={card}>
+      <div>
+        <h3 className="text-[13px] font-bold text-white">Logo</h3>
+        <p className="text-[11px] text-white/40 mt-0.5">
+          Shown in the header across the site. PNG with a transparent background looks best.
+          (The login screen is pre-sign-in, so it keeps the default unless a logo file is added to the code.)
+        </p>
+      </div>
+      <div className="flex items-center gap-4">
+        <div className="w-14 h-14 rounded-xl flex items-center justify-center overflow-hidden"
+          style={{ background: '#1a1a1a', border: '1px solid #333' }}>
+          {current
+            ? <img src={current} alt="Logo" className="max-w-full max-h-full object-contain" />
+            : <span className="text-[10px] text-white/25 text-center px-1">default mark</span>}
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="px-3 py-2 rounded-xl text-[12px] font-bold text-dark bg-teal cursor-pointer">
+            {current ? 'Replace logo' : 'Upload logo'}
+            <input type="file" accept="image/*" onChange={onPick} className="hidden" />
+          </label>
+          {current && (
+            <button onClick={() => apply(null)} disabled={saving}
+              className="px-3 py-2 rounded-xl text-[12px] font-semibold text-white/50 hover:text-white transition-colors"
+              style={{ border: '1px solid #3a3a3a' }}>
+              Remove
+            </button>
+          )}
+        </div>
+      </div>
+      {saving && <p className="text-[11px] text-white/30">Saving…</p>}
+      {saved && <p className="text-[11px] text-emerald-400 flex items-center gap-1"><Check size={12} /> Saved — live everywhere now</p>}
+      {error && (
+        <div className="rounded-lg px-3 py-2 flex items-start gap-2 text-[12px] text-red-300"
+          style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)' }}>
+          <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function SettingsPanel() {
   return (
     <div className="space-y-4">
       <p className="text-[12px] text-white/40">
         Changes here apply across the site immediately for everyone — no redeploy needed.
       </p>
+      <LogoEditor />
       <StatusEditor />
       <ListEditor title="Payment Methods" settingKey="payment_methods"
         hint="Shown on every deal and in the create/edit form."

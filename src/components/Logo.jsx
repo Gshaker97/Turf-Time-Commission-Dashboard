@@ -1,15 +1,23 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useSettings } from '../contexts/SettingsContext'
 
-// Site logo. Renders /logo.png from the public/ folder when it exists (drop
-// the real Turf Time AZ logo there — exact filename "logo.png"); until then it
-// falls back to the built-in turf-blades mark so nothing ever shows broken.
+// Site logo, in priority order:
+//   1. The logo uploaded in Admin → Settings (app_settings.site_logo data URL)
+//   2. /logo.png from the public/ folder, if someone added one to the repo
+//   3. The built-in turf-blades mark (never shows broken)
+// The login screen renders pre-sign-in, so it can't read settings — there it
+// goes straight to #2/#3.
 export default function Logo({ size = 28 }) {
+  const { settings } = useSettings()
+  const uploaded = settings?.site_logo || null
+  const src = uploaded || '/logo.png'
   const [missing, setMissing] = useState(false)
+  useEffect(() => { setMissing(false) }, [src])   // re-try when the logo changes
 
   if (!missing) {
     return (
       <img
-        src="/logo.png"
+        src={src}
         alt="Turf Time"
         width={size}
         height={size}
