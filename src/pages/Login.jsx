@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import Logo from '../components/Logo'
 
 export default function Login() {
   const { signIn, demoMode, deactivated } = useAuth()
@@ -30,12 +31,8 @@ export default function Login() {
       >
         {/* Logo */}
         <div className="flex flex-col items-center mb-8">
-          <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-4 shadow-lg shadow-teal/30"
-            style={{ background: '#0f1a0f', border: '1px solid #2a4a2a' }}>
-            <svg viewBox="0 0 20 20" fill="none" width="26" height="26">
-              <path d="M10 18 C10 14 7 9 8 3 C8.5 1.5 10 2 10.5 3.5 C10 8 10 13 10 18Z" fill="#4ade80"/>
-              <path d="M10 18 C10 14 13 9 12.5 4 C12 2 10.5 2 10.5 3.5 C11 8 10.5 13 10 18Z" fill="#22c55e"/>
-            </svg>
+          <div className="mb-4">
+            <Logo size={56} />
           </div>
           <h1 className="text-xl font-bold text-white">Turf Time Dashboard</h1>
           <p className="text-[12px] text-white/30 mt-1 text-center">
