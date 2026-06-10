@@ -14,10 +14,25 @@ export const DATE_FIELDS = [
 ]
 
 // A deal sits in the "Needs review" staging area until its commission gets the
-// gold check (commission_verified). Canceled deals are never in review. Change
-// orders clear the gold check, so re-signed deals fall back into staging.
+// gold check (commission_verified). Canceled and already-Paid deals are never
+// in review (old paid history shouldn't flood staging). Change orders clear
+// the gold check, so re-signed deals fall back into staging.
 export const dealNeedsReview = (deal) =>
-  !isCanceled(deal) && deal.commission_verified !== true
+  !isCanceled(deal) && deal.status !== 'Paid' && deal.commission_verified !== true
+
+// Changing a deal's office anywhere re-applies the office-driven Director/VP
+// rate (Tucson 3.75%, else 5%) and clears stored sheet amounts so the engine
+// recomputes from current numbers — same behavior as the edit modal. Without
+// this, an old imported deal kept its uploaded amounts no matter what changed.
+export const officeChangePatch = (deal, office) => {
+  const rate = String(office || '').toLowerCase() === 'tucson' ? 0.0375 : 0.05
+  return {
+    ...(deal.director_id ? { director_override_pct: rate } : null),
+    ...(deal.vp_id       ? { vp_override_pct: rate }       : null),
+    setter_amount: null, closer_amount: null,
+    manager_amount: null, director_amount: null, vp_amount: null,
+  }
+}
 
 // Red ✕ next to the name of a canceled deal (pairs with the dimmed row).
 function CanceledMark() {
@@ -324,7 +339,7 @@ const officeColor = (name) => OFFICE_COLORS[name] || '#94a3b8'
 // reliably on change — mirroring the DateField pattern. The visible value is
 // driven by the `value` prop, which refreshes after the row reloads. Pass
 // `colorFor` to render the value as a colored badge instead of plain text.
-function InlineSelectCell({ value, options, field, canEdit, dealId, onUpdate, colorFor }) {
+function InlineSelectCell({ value, options, field, canEdit, dealId, onUpdate, colorFor, deriveExtra }) {
   const display = colorFor
     ? (value
         ? <StatusBadge status={value} color={colorFor(value)} />
@@ -343,7 +358,7 @@ function InlineSelectCell({ value, options, field, canEdit, dealId, onUpdate, co
       <select
         key={value ?? ''}
         defaultValue={value ?? ''}
-        onChange={e => onUpdate(dealId, { [field]: e.target.value || null })}
+        onChange={e => { const v = e.target.value || null; onUpdate(dealId, { [field]: v, ...(deriveExtra ? deriveExtra(v) : null) }) }}
         className="absolute inset-0 opacity-0 cursor-pointer w-full"
         title="Click to edit"
       >
@@ -580,7 +595,8 @@ export default function DealTable({
                 </td>
                 <td className="px-3 py-3">
                   <InlineSelectCell value={deal.office} options={offices} colorFor={officeColor}
-                    field="office" canEdit={canEdit} dealId={deal.id} onUpdate={onUpdate} />
+                    field="office" canEdit={canEdit} dealId={deal.id} onUpdate={onUpdate}
+                    deriveExtra={v => officeChangePatch(deal, v)} />
                 </td>
                 <td className="px-3 py-3">
                   <InlineSelectCell value={deal.payment_method} options={paymentMethods}
