@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
 import { LogOut, ChevronDown, Eye, ChevronRight, KeyRound, Check, Glasses } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { useSettings } from '../contexts/SettingsContext'
 import Logo from './Logo'
 import { fetchUsers } from '../lib/db'
 
@@ -25,6 +26,8 @@ const ROLE_COLOR = {
 export default function NavBar() {
   const { pathname } = useLocation()
   const { realProfile, profile: effProfile, signOut, isPreviewMode, previewAs, clearPreview, changePassword, demoMode } = useAuth()
+  const { siteName } = useSettings()
+  useEffect(() => { document.title = siteName }, [siteName])
   const [open,        setOpen]        = useState(false)
   const [showPicker,  setShowPicker]  = useState(false)
   const [users,       setUsers]       = useState([])
@@ -109,7 +112,7 @@ export default function NavBar() {
       {/* Logo */}
       <div className="flex items-center gap-2.5 w-48 flex-shrink-0">
         <Logo size={28} />
-        <span className="font-bold text-white text-[13px] tracking-tight">Turf Time Dashboard</span>
+        <span className="font-bold text-white text-[13px] tracking-tight">{siteName}</span>
       </div>
 
       {/* Page title */}
