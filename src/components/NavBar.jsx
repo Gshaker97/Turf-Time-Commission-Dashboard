@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
 import { LogOut, ChevronDown, Eye, ChevronRight, KeyRound, Check, Glasses } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import Logo from './Logo'
 import { fetchUsers } from '../lib/db'
 
 const TITLES = {
@@ -107,15 +108,7 @@ export default function NavBar() {
     >
       {/* Logo */}
       <div className="flex items-center gap-2.5 w-48 flex-shrink-0">
-        <div className="w-7 h-7 rounded-lg flex items-center justify-center shadow-lg"
-          style={{ background: '#0f1a0f', border: '1px solid #2a4a2a' }}>
-          <svg viewBox="0 0 20 20" fill="none" width="16" height="16">
-            {/* Left blade */}
-            <path d="M10 18 C10 14 7 9 8 3 C8.5 1.5 10 2 10.5 3.5 C10 8 10 13 10 18Z" fill="#4ade80"/>
-            {/* Right blade */}
-            <path d="M10 18 C10 14 13 9 12.5 4 C12 2 10.5 2 10.5 3.5 C11 8 10.5 13 10 18Z" fill="#22c55e"/>
-          </svg>
-        </div>
+        <Logo size={28} />
         <span className="font-bold text-white text-[13px] tracking-tight">Turf Time Dashboard</span>
       </div>
 
