@@ -254,6 +254,38 @@ function LogoEditor() {
   )
 }
 
+// One-line text setting (e.g. the site name in the header + browser tab).
+function TextSetting({ title, hint, settingKey, placeholder }) {
+  const { settings, save } = useSettings()
+  const current = settings[settingKey] ?? ''
+  const [value, setValue]   = useState(current)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
+  const [error, setError]   = useState('')
+  useEffect(() => { setValue(current) }, [current])
+
+  const dirty = value !== current
+  async function onSave() {
+    setError(''); setSaving(true)
+    const { error: err } = (await save(settingKey, value.trim() || null)) || {}
+    setSaving(false)
+    if (err) { setError(err.message || 'Could not save.'); return }
+    setSaved(true); setTimeout(() => setSaved(false), 1800)
+  }
+
+  return (
+    <div className="rounded-xl p-4 md:p-5 space-y-3" style={card}>
+      <div>
+        <h3 className="text-[13px] font-bold text-white">{title}</h3>
+        {hint && <p className="text-[11px] text-white/40 mt-0.5">{hint}</p>}
+      </div>
+      <input value={value} onChange={e => setValue(e.target.value)} placeholder={placeholder}
+        style={inputStyle} className={`${inputCls} w-full max-w-sm`} />
+      <SaveBar dirty={dirty} saving={saving} saved={saved} error={error} onSave={onSave} />
+    </div>
+  )
+}
+
 export default function SettingsPanel() {
   return (
     <div className="space-y-4">
@@ -261,6 +293,9 @@ export default function SettingsPanel() {
         Changes here apply across the site immediately for everyone — no redeploy needed.
       </p>
       <LogoEditor />
+      <TextSetting title="Site Name" settingKey="site_name"
+        hint="Shown in the header next to the logo and as the browser-tab title."
+        placeholder="Turf Time Dashboard" />
       <StatusEditor />
       <ListEditor title="Payment Methods" settingKey="payment_methods"
         hint="Shown on every deal and in the create/edit form."

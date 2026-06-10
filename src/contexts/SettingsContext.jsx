@@ -50,6 +50,7 @@ export function SettingsProvider({ children }) {
 
   const value = {
     settings, loaded, refresh, save,
+    siteName: settings.site_name || 'Turf Time Dashboard',
     statuses, statusLabels, statusColor,
     paymentMethods: settings.payment_methods ?? [],
     offices: settings.offices ?? [],
@@ -61,4 +62,5 @@ export const useSettings = () => useContext(SettingsContext) ?? {
   settings: DEFAULTS, loaded: false, refresh: () => {}, save: async () => ({}),
   statuses: DEFAULTS.deal_statuses, statusLabels: DEFAULTS.deal_statuses.map(s => s.label),
   statusColor: () => '#94a3b8', paymentMethods: DEFAULTS.payment_methods, offices: DEFAULTS.offices,
+  siteName: 'Turf Time Dashboard',
 }
