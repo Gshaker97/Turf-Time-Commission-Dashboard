@@ -207,36 +207,43 @@ function schSync() {
 
         const status = String(row[ix.status] || '').trim().toUpperCase();
         // A CANCELLED schedule row no longer changes the deal — the site status
-        // is left alone and you cancel manually if needed. Only BOOKED rows
-        // layer on schedule info below.
-        if (status && status !== 'BOOKED') { out.skipped++; continue; }
+        // is left alone and you cancel manually if needed.
+        if (status === 'CANCELLED') { out.skipped++; continue; }
 
         // Don't re-apply schedule info to finalized/triaged deals (Paid, Pay
         // Finalized, Sales Issue, Canceled) — respects manual changes.
         if (SCH_LOCKED_STATUSES.indexOf(existing.status) !== -1) { out.skipped++; continue; }
 
-        const installDate = schDate_(row[ix.install]);
-        const payDate = installDate ? schPayDate_(installDate) : null;
-        const payment = schPayment_(row[ix.payment]);
-        const office  = officeIx >= 0 ? schTitle_(row[officeIx]) : null;
+        // Dates/payment/office only come from active (BOOKED/blank) rows. The
+        // SETTER applies from any non-cancelled row — Lead Source is often
+        // filled in after the row has already moved past BOOKED (e.g.
+        // COMPLETED), and skipping those rows silently dropped the setter.
+        const layerAll = !status || status === 'BOOKED';
 
         const patch = {};
-        if (installDate && existing.install_date   !== installDate) patch.install_date   = installDate;
-        if (payDate     && existing.pay_date       !== payDate)     patch.pay_date       = payDate;
-        if (payment     && existing.payment_method !== payment)     patch.payment_method = payment;
-        const officeChanged = office && existing.office !== office;
-        if (officeChanged) patch.office = office;
+        if (layerAll) {
+          const installDate = schDate_(row[ix.install]);
+          const payDate = installDate ? schPayDate_(installDate) : null;
+          const payment = schPayment_(row[ix.payment]);
+          const office  = officeIx >= 0 ? schTitle_(row[officeIx]) : null;
 
-        // Override % by office (Tucson 3.75%, else 5%; manager 3%). Backfill any
-        // nulls and recompute Director/VP when the office is first set/changed.
-        const rate = schOfficeRate_(office);
-        if (existing.manager_override_pct  == null) patch.manager_override_pct  = 0.03;
-        if (existing.director_override_pct == null || officeChanged) patch.director_override_pct = rate;
-        if (existing.vp_override_pct       == null || officeChanged) patch.vp_override_pct       = rate;
+          if (installDate && existing.install_date   !== installDate) patch.install_date   = installDate;
+          if (payDate     && existing.pay_date       !== payDate)     patch.pay_date       = payDate;
+          if (payment     && existing.payment_method !== payment)     patch.payment_method = payment;
+          const officeChanged = office && existing.office !== office;
+          if (officeChanged) patch.office = office;
 
-        // Real setter from Lead Source ("Setter: Name"); the Sales Rep closes.
-        // Resolve names leniently (e.g. "JC" → "JC Correa") so a first-name-only
-        // setter on the schedule still updates the deal.
+          // Override % by office (Tucson 3.75%, else 5%; manager 3%). Backfill any
+          // nulls and recompute Director/VP when the office is first set/changed.
+          const rate = schOfficeRate_(office);
+          if (existing.manager_override_pct  == null) patch.manager_override_pct  = 0.03;
+          if (existing.director_override_pct == null || officeChanged) patch.director_override_pct = rate;
+          if (existing.vp_override_pct       == null || officeChanged) patch.vp_override_pct       = rate;
+        }
+
+        // Real setter from Lead Source; the Sales Rep closes. Resolve names
+        // leniently ("JC" → "JC Correa") so a first-name-only setter still
+        // updates the deal.
         const setterName = schParseSetter_(row[ix.lead]);
         if (setterName) {
           const sp = schResolvePerson_(setterName, profiles);
@@ -249,6 +256,10 @@ function schSync() {
           } else {
             out.details.push('Setter "' + setterName + '" on ' + (existing.deal_name || projectId) + ' — no roster match');
           }
+        } else if (/setter/i.test(String(row[ix.lead] || ''))) {
+          // The cell clearly names a setter but the parser couldn't read it —
+          // surface the raw text so format drift is visible instead of silent.
+          out.details.push('Could not parse setter from Lead Source "' + row[ix.lead] + '" — ' + (existing.deal_name || projectId));
         }
 
         if (!Object.keys(patch).length) { out.skipped++; continue; }
@@ -348,8 +359,12 @@ function schChanged_(stored, sheetVal) {
   if (sheetVal == null) return false;                     // missing sheet value → don't wipe
   return Math.abs((Number(stored) || 0) - (Number(sheetVal) || 0)) > 0.5;
 }
+// Pull the setter's name out of a Lead Source cell. The marker can appear
+// anywhere, with ":", "-", "–", "—" or "=" after it: "Setter: JC",
+// "Self Gen - Setter- JC", "SETTER = JC Correa (referral)". The name capture
+// stops at a trailing delimiter so notes after the name don't break matching.
 function schParseSetter_(v) {
-  const m = String(v || '').trim().match(/^setter\s*:\s*(.+)$/i);
+  const m = String(v || '').match(/setter\s*[:\-–—=]\s*([^,;|/()\[\]]+)/i);
   return m ? m[1].trim() : null;
 }
 function schCleanRep_(v) { return String(v || '').replace(/\s*\(.*$/, '').trim(); }
