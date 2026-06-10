@@ -1,11 +1,12 @@
 import { Suspense } from 'react'
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, BarChart2, DollarSign,
   Users2, ShieldCheck, Eye, X,
   Home, Wallet, Trophy, Upload,
 } from 'lucide-react'
 import NavBar from './NavBar'
+import ErrorBoundary from './ErrorBoundary'
 import { useAuth } from '../contexts/AuthContext'
 
 const NAV = [
@@ -22,6 +23,7 @@ const NAV = [
 
 export default function Layout() {
   const { profile, isPreviewMode, clearPreview, isAdmin } = useAuth()
+  const { pathname } = useLocation()
   const role  = profile?.role ?? 'rep'
   // Admin-flag users see admin-gated nav items in addition to their title's.
   const effectiveRoles = isAdmin ? [role, 'admin'] : [role]
@@ -104,7 +106,9 @@ export default function Layout() {
               <div className="w-6 h-6 border-2 border-teal/30 border-t-teal rounded-full animate-spin" />
             </div>
           }>
-            <Outlet />
+            <ErrorBoundary key={pathname}>
+              <Outlet />
+            </ErrorBoundary>
           </Suspense>
         </main>
       </div>

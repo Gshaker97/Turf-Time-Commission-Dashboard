@@ -186,6 +186,32 @@ export async function insertUser(data) {
   return writeWithSchemaFallback(p => supabase.from('profiles').insert([p]), rest)
 }
 
+// ── Client error reporting (Watchdog feed) ───────────────────
+// Best-effort: must NEVER throw or recurse (an error logger that errors is a
+// crash loop). Dedupes per session so a render-loop crash logs once, not 1000x.
+const _seenErrors = new Set()
+export async function logClientError({ message, stack }) {
+  try {
+    if (DEMO_MODE) return
+    const key = String(message).slice(0, 120)
+    if (_seenErrors.has(key) || _seenErrors.size > 20) return
+    _seenErrors.add(key)
+    const { data: { session } } = await supabase.auth.getSession()
+    let profileId = null
+    if (session?.user?.id) {
+      const { data } = await supabase.from('profiles').select('id').eq('auth_id', session.user.id).single()
+      profileId = data?.id ?? null
+    }
+    await supabase.from('client_errors').insert([{
+      path: window.location?.pathname ?? null,
+      message: String(message).slice(0, 500),
+      stack: String(stack || '').slice(0, 4000),
+      user_agent: navigator.userAgent?.slice(0, 200) ?? null,
+      profile_id: profileId,
+    }])
+  } catch { /* swallow — never let the logger crash the app */ }
+}
+
 // ── Privileged user-admin actions (create login / reset password / enable
 // /disable login). These need the service-role key, so they go through the
 // Apps Script web app (VITE_USER_ADMIN_URL), authorized by the caller's own

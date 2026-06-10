@@ -196,6 +196,16 @@ corrected per-deal rates. All commission is computed in-site now.
 dated Google Sheet in the "Turf Time Backups" Drive folder, one tab per table,
 keeping the most recent 30.
 
+**`scripts/Watchdog.gs` (`watchdogRun`, hourly trigger).** The sentry: pings
+the site, checks sync/backup heartbeats (incl. the DRY_RUN trap), scans for
+payday hygiene problems (deals paying soon missing office/payment/install or
+not gold-checked, overdue unfinalized deals, negative rep pools) and recent
+`client_errors` rows, writes `watchdog_heartbeat` to app_settings (shown on
+Admin → System Health), and emails ALERT_EMAIL a digest — only when findings
+CHANGE. Detect-and-notify only; it never edits data. Frontend side: an
+ErrorBoundary in Layout + global error/unhandledrejection handlers report
+crashes to `client_errors` (migration 020) via `logClientError` in db.js.
+
 ## Known low-severity items (not yet addressed)
 
 - `getMonths` / `monthRange` slice dates in UTC, which can be off-by-one at

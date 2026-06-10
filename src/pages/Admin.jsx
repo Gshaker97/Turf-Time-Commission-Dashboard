@@ -88,6 +88,7 @@ function SystemHealth() {
 
   const hb = settings?.sync_heartbeat
   const bk = settings?.backup_heartbeat
+  const wd = settings?.watchdog_heartbeat
 
   let sync
   if (!hb?.at) sync = { ok: false, color: '#6b7280', text: 'no heartbeat yet — paste the latest ScheduleSync.gs' }
@@ -116,6 +117,29 @@ function SystemHealth() {
       </div>
       <HealthRow label="Scheduler sync" {...sync} />
       <HealthRow label="Nightly backup" {...backup} />
+      {(() => {
+        let dog
+        if (!wd?.at) dog = { ok: false, color: '#6b7280', text: 'not running yet — set up Watchdog.gs' }
+        else {
+          const hrs = (Date.now() - new Date(wd.at).getTime()) / 3600000
+          const n = wd.issues?.length || 0
+          if (hrs > 2)       dog = { ok: false, color: '#ef4444', text: `stalled — last ran ${agoText(wd.at)}` }
+          else if (n > 0)    dog = { ok: false, color: wd.issues.some(i => i.startsWith('[CRIT]')) ? '#ef4444' : '#f59e0b', text: `${n} issue${n === 1 ? '' : 's'} found · ${agoText(wd.at)}` }
+          else               dog = { ok: true, color: '#00b894', text: `all clear · ${agoText(wd.at)}` }
+        }
+        return (
+          <>
+            <HealthRow label="Watchdog" {...dog} />
+            {wd?.issues?.length > 0 && (
+              <div className="ml-[126px] -mt-0.5 pb-1 space-y-0.5">
+                {wd.issues.map((t, i) => (
+                  <p key={i} className="text-[11px]" style={{ color: t.startsWith('[CRIT]') ? '#f87171' : '#fbbf24' }}>{t}</p>
+                ))}
+              </div>
+            )}
+          </>
+        )
+      })()}
     </div>
   )
 }
