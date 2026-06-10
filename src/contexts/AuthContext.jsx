@@ -95,6 +95,14 @@ export function AuthProvider({ children }) {
     await supabase.auth.signOut()
   }
 
+  // A logged-in user changing their OWN password — uses their session, so no
+  // service key / backend needed. Demo mode has no real auth, so it no-ops.
+  async function changePassword(newPassword) {
+    if (DEMO_MODE) return { error: { message: 'Password changes are disabled in demo mode.' } }
+    const { error } = await supabase.auth.updateUser({ password: newPassword })
+    return { error }
+  }
+
   const loading = user === undefined
 
   // Effective profile: preview overrides the real profile for all consumers
@@ -114,6 +122,7 @@ export function AuthProvider({ children }) {
     demoMode: DEMO_MODE,
     signIn,
     signOut,
+    changePassword,
     refreshProfile: () => {
       if (DEMO_MODE) {
         setProfile(demoGetProfile())
