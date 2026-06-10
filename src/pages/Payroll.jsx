@@ -67,6 +67,7 @@ export default function Payroll() {
   const [modal, setModal]     = useState(false)
   const [showPayees, setShowPayees] = useState(true)
   const [tab, setTab] = useState('run')   // 'run' | 'deductions'
+  const [runStyle, setRunStyle] = useState('list')   // 'list' (compact) | 'cards' (full payouts)
   const [repFilter, setRepFilter] = useState('')
   const today = todayISO()
 
@@ -173,21 +174,13 @@ export default function Payroll() {
     return { total, applied, pending, count: deductions.length, pendingCount: deductions.filter(x => !x.applied).length }
   }, [deductions])
 
-  // Deals still awaiting a commission sign-off (soonest pay date first).
-  const unverified = useMemo(() =>
-    deals
-      .filter(d => d.commission_verified !== true && dealAmounts(d).totalCommission > 0)
-      .sort((a, b) => (a.pay_date || '9999').localeCompare(b.pay_date || '9999')),
-    [deals]
+  // Deals on this run whose commission hasn't been gold-checked yet. The
+  // Deals page's "Needs review" tab is the verification inbox; this is just
+  // the pre-payout safety net.
+  const runUnverified = useMemo(
+    () => runDeals.filter(d => d.commission_verified !== true && dealAmounts(d).totalCommission > 0),
+    [runDeals]
   )
-  const unverifiedTotal = useMemo(() => unverified.reduce((s, d) => s + dealAmounts(d).totalCommission, 0), [unverified])
-  const verifiedCount   = useMemo(() => deals.filter(d => d.commission_verified === true).length, [deals])
-
-  async function verifyDeal(id, value = true) {
-    setDeals(ds => ds.map(d => d.id === id ? { ...d, commission_verified: value } : d))
-    const res = await updateDeal(id, { commission_verified: value })
-    if (res?.error) load()
-  }
 
   const canApprove = statusLabels?.includes(APPROVED)
   const canPay     = statusLabels?.includes(PAID)
@@ -304,7 +297,7 @@ export default function Payroll() {
 
       {/* Tabs */}
       <div className="flex gap-1 mb-4 p-1 rounded-xl w-fit" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-        {[['run', 'Pay run'], ['verify', `To verify${unverified.length ? ` (${unverified.length})` : ''}`], ['deductions', `Deductions${deductionTotals.count ? ` (${deductionTotals.count})` : ''}`]].map(([k, label]) => (
+        {[['run', 'Pay run'], ['deductions', `Deductions${deductionTotals.count ? ` (${deductionTotals.count})` : ''}`]].map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors ${tab === k ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
             {label}
@@ -388,6 +381,32 @@ export default function Payroll() {
             </div>
           )}
 
+          {/* Pre-payout safety net: every deal should carry the gold check
+              before money goes out. Verify from Deals → Needs review, or click
+              a deal here to open it. */}
+          {runUnverified.length > 0 && (
+            <div className="mb-3 rounded-xl p-3" style={{ background: '#fbbf2414', border: '1px solid #fbbf2455' }}>
+              <div className="flex items-center gap-2 mb-1">
+                <BadgeCheck size={14} style={{ color: '#fbbf24' }} />
+                <span className="text-[12px] font-semibold" style={{ color: '#fbbf24' }}>
+                  {runUnverified.length} deal{runUnverified.length === 1 ? '' : 's'} on this run {runUnverified.length === 1 ? 'isn\u2019t' : 'aren\u2019t'} gold-checked yet
+                </span>
+              </div>
+              <p className="text-[11px] text-white/40 mb-2">
+                Verify commissions in Deals → Needs review, or click a deal to review it here.
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {runUnverified.map(d => (
+                  <button key={d.id} onClick={() => { setEditDeal(d); setModal(true) }}
+                    className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-white/80 hover:text-white transition-colors"
+                    style={{ background: '#1e1e1e', border: '1px solid #fbbf2440' }}>
+                    {d.deal_name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Filter by rep */}
           {payees.length > 0 && (
             <div className="flex items-center gap-2 mb-3 flex-wrap">
@@ -461,11 +480,69 @@ export default function Payroll() {
             </div>
           )}
 
-          {/* Deals in this run — each card shows its own payouts inline */}
+          {/* Deals in this run — compact list by default; cards show payouts inline */}
           <div className="flex items-center justify-between mb-2">
             <p className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">Deals in this run</p>
-            <span className="text-[11px] text-white/30">{shownDeals.length} deal{shownDeals.length === 1 ? '' : 's'}</span>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-white/30">{shownDeals.length} deal{shownDeals.length === 1 ? '' : 's'}</span>
+              <div className="flex rounded-lg overflow-hidden text-[10px] font-semibold" style={{ border: '1px solid #2a2a2a' }}>
+                {[['list', 'List'], ['cards', 'Cards']].map(([k, label]) => (
+                  <button key={k} onClick={() => setRunStyle(k)} className="px-2 py-1 transition-colors"
+                    style={runStyle === k ? { background: '#00b894', color: '#0b0b0b' } : { background: '#1e1e1e', color: 'rgba(255,255,255,0.5)' }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
+
+          {/* Compact list — one row per deal, everything actionable inline */}
+          {runStyle === 'list' && (
+            <div className="rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+              {shownDeals.map(d => {
+                const a = dealAmounts(d)
+                const color = statusColor(d.status)
+                const isPaid = d.status === PAID
+                return (
+                  <div key={d.id} className="flex items-center gap-2.5 px-3 md:px-4 py-2 border-b border-white/5 last:border-0 hover:bg-white/[0.02] transition-colors">
+                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} title={d.status} />
+                    <button onClick={() => { setEditDeal(d); setModal(true) }}
+                      className="text-[13px] font-semibold text-white truncate text-left hover:text-teal transition-colors min-w-0 flex-1"
+                      title="Click to edit this deal">
+                      {d.deal_name}
+                    </button>
+                    {d.commission_verified === true && <BadgeCheck size={13} className="flex-shrink-0" style={{ color: '#fbbf24' }} title="Commission verified" />}
+                    <span className="hidden sm:block text-[11px] flex-shrink-0" style={{ color }}>{d.status}</span>
+                    <span className="text-[13px] font-bold text-teal flex-shrink-0 w-[88px] text-right">{fmt(a.totalCommission)}</span>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {canApprove && !isPaid && d.status !== APPROVED && (
+                        <button onClick={() => setStatus(d.id, APPROVED)} title={`Move to ${APPROVED}`}
+                          className="px-2 py-1 rounded-lg text-[10px] font-semibold text-white/60 hover:text-white transition-colors"
+                          style={{ border: '1px solid #3a3a3a' }}>
+                          Approve
+                        </button>
+                      )}
+                      {canPay && (isPaid ? (
+                        <span className="flex items-center text-teal px-1" title="Paid"><CheckCircle2 size={14} /></span>
+                      ) : (
+                        <button onClick={() => setStatus(d.id, PAID)} title="Mark paid"
+                          className="px-2 py-1 rounded-lg text-[10px] font-bold text-dark transition-colors" style={{ background: '#00b894' }}>
+                          Paid
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+              {shownDeals.length === 0 && (
+                <div className="px-4 py-6 text-white/30 text-sm text-center">
+                  {effFilter ? 'No deals for this rep in this run.' : 'No deals in this run.'}
+                </div>
+              )}
+            </div>
+          )}
+
+          {runStyle === 'cards' && (
           <div className="space-y-2">
             {shownDeals.map(d => {
               const a = dealAmounts(d)
@@ -550,83 +627,10 @@ export default function Payroll() {
               </div>
             )}
           </div>
+          )}
         </>
       )}
       </>)}
-
-      {tab === 'verify' && (
-        <>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 md:gap-3 mb-4">
-            <Card label="Deals to verify" value={unverified.length} color="#fbbf24" />
-            <Card label="Commission pending review" value={fmt(unverifiedTotal)} color="#fbbf24" />
-            <Card label="Verified" value={verifiedCount} sub="all-time" />
-          </div>
-
-          <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12, overflow: 'hidden' }}>
-            <div className="px-4 py-3 border-b border-white/5">
-              <span className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">Awaiting commission sign-off</span>
-            </div>
-            {loading ? (
-              <div className="px-4 py-8 text-center text-white/30 text-sm">Loading…</div>
-            ) : unverified.length === 0 ? (
-              <div className="px-4 py-8 text-center text-white/40 text-sm">🎉 Every deal's commission has been verified.</div>
-            ) : unverified.map(d => {
-              const a = dealAmounts(d)
-              const payouts = dealPayouts(d)
-              const color = statusColor(d.status)
-              return (
-                <div key={d.id} className="px-4 py-3 border-b border-white/5 last:border-0">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <button onClick={() => { setEditDeal(d); setModal(true) }}
-                        className="text-[13px] font-semibold text-white/90 truncate text-left hover:text-teal transition-colors" title="Click to edit this deal">
-                        {d.deal_name}
-                      </button>
-                      <p className="text-[11px] text-white/40 mt-0.5">
-                        {[d.office, d.payment_method].filter(Boolean).join(' · ') || '—'}
-                        {d.pay_date ? ` · pays ${fmtDay(d.pay_date)}` : ' · pay date TBD'}
-                        <span className="ml-1.5" style={{ color }}>· {d.status}</span>
-                      </p>
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      <span className="text-[15px] font-bold text-teal">{fmt(a.totalCommission)}</span>
-                    </div>
-                  </div>
-
-                  {/* Who earns what — eyeball before signing off */}
-                  <div className="mt-2 rounded-lg overflow-hidden" style={{ background: '#171717', border: '1px solid #262626' }}>
-                    {payouts.map((p, i) => (
-                      <div key={i} className="flex items-center justify-between px-3 py-1.5 text-[12px] border-b border-white/5 last:border-0">
-                        <span className="text-white/70 truncate mr-2">{p.name} <span className="text-white/30">· {p.role}</span></span>
-                        <span className="font-semibold text-white whitespace-nowrap">{fmt(p.amount)}</span>
-                      </div>
-                    ))}
-                  </div>
-
-                  {a.deduction > 0 && (
-                    <p className="text-[11px] text-red-400/90 mt-2 flex items-center gap-1.5">
-                      <AlertTriangle size={12} /> {fmt(a.deduction)} deduction{d.deduction_note ? ` — ${d.deduction_note}` : ''}
-                    </p>
-                  )}
-
-                  <div className="flex items-center justify-end gap-2 mt-2.5">
-                    <button onClick={() => { setEditDeal(d); setModal(true) }}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-white/60 hover:text-white transition-colors"
-                      style={{ border: '1px solid #3a3a3a' }}>
-                      <Pencil size={12} /> Adjust
-                    </button>
-                    <button onClick={() => verifyDeal(d.id, true)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold text-dark transition-colors"
-                      style={{ background: '#fbbf24' }}>
-                      <BadgeCheck size={13} /> Looks good
-                    </button>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </>
-      )}
 
       {tab === 'deductions' && (
         <>
