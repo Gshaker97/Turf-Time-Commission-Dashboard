@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Pencil, Trash2, RefreshCw } from 'lucide-react'
+import { Plus, Pencil, Trash2, RefreshCw, Activity } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import {
   fetchDeals, fetchUsers, fetchPayments,
@@ -9,6 +9,7 @@ import {
 import UserModal from '../components/UserModal'
 import DealModal from '../components/DealModal'
 import SettingsPanel from '../components/SettingsPanel'
+import { useSettings } from '../contexts/SettingsContext'
 import { DEMO_MODE } from '../lib/supabase'
 
 const TABS = ['Users', 'Deals', 'Payments', 'Settings']
@@ -51,6 +52,73 @@ function EditableSelect({ value, options, onChange, children }) {
         className="absolute inset-0 opacity-0 cursor-pointer w-full">
         {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
+    </div>
+  )
+}
+
+// ── System health — heartbeats written by the Apps Scripts into app_settings.
+// Catches the two silent failure modes that have actually happened: the sync
+// stuck in DRY_RUN (preview) after a re-paste, and the sync/backup not running
+// at all.
+const agoText = (iso) => {
+  if (!iso) return null
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins} min ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 48) return `${hrs}h ago`
+  return `${Math.floor(hrs / 24)}d ago`
+}
+
+function HealthRow({ label, ok, color, text }) {
+  return (
+    <div className="flex items-center gap-2.5 py-1.5">
+      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} />
+      <span className="text-[12px] text-white/60 w-[110px] flex-shrink-0">{label}</span>
+      <span className="text-[12px] font-semibold" style={{ color: ok ? 'rgba(255,255,255,0.85)' : color }}>{text}</span>
+    </div>
+  )
+}
+
+function SystemHealth() {
+  const { settings, refresh } = useSettings()
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    refresh()
+    const t = setInterval(() => { refresh(); setTick(x => x + 1) }, 60000)
+    return () => clearInterval(t)
+  }, [])
+
+  const hb = settings?.sync_heartbeat
+  const bk = settings?.backup_heartbeat
+
+  let sync
+  if (!hb?.at) sync = { ok: false, color: '#6b7280', text: 'no heartbeat yet — paste the latest ScheduleSync.gs' }
+  else {
+    const mins = (Date.now() - new Date(hb.at).getTime()) / 60000
+    if (hb.dry_run)      sync = { ok: false, color: '#f59e0b', text: `PREVIEW MODE — running but writing nothing (SCH_DRY_RUN=true) · ${agoText(hb.at)}` }
+    else if (mins > 10)  sync = { ok: false, color: '#ef4444', text: `stalled — last ran ${agoText(hb.at)}` }
+    else if (hb.errors > 0) sync = { ok: false, color: '#f59e0b', text: `ran ${agoText(hb.at)} with ${hb.errors} error${hb.errors === 1 ? '' : 's'} — check the Apps Script execution log` }
+    else sync = { ok: true, color: '#00b894', text: `ran ${agoText(hb.at)}` }
+  }
+
+  let backup
+  if (!bk?.at) backup = { ok: false, color: '#6b7280', text: 'no heartbeat yet — runs after the next nightly backup' }
+  else {
+    const hrs = (Date.now() - new Date(bk.at).getTime()) / 3600000
+    if (hrs > 26)           backup = { ok: false, color: '#ef4444', text: `overdue — last backup ${agoText(bk.at)}` }
+    else if (bk.errors > 0) backup = { ok: false, color: '#f59e0b', text: `ran ${agoText(bk.at)} with ${bk.errors} table error${bk.errors === 1 ? '' : 's'}` }
+    else backup = { ok: true, color: '#00b894', text: `ran ${agoText(bk.at)}` }
+  }
+
+  return (
+    <div className="rounded-xl px-4 py-2.5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
+      <div className="flex items-center gap-2 mb-1">
+        <Activity size={13} className="text-teal" />
+        <span className="text-[10px] uppercase tracking-wider text-white/30 font-semibold">System health</span>
+      </div>
+      <HealthRow label="Scheduler sync" {...sync} />
+      <HealthRow label="Nightly backup" {...backup} />
     </div>
   )
 }
@@ -136,6 +204,8 @@ export default function Admin() {
 
   return (
     <div className="space-y-4 pb-8">
+
+      <SystemHealth />
 
       {/* Tab bar */}
       <div className="flex items-center gap-2 flex-wrap">

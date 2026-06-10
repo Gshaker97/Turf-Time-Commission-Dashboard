@@ -66,8 +66,26 @@ function backupNow() {
   DriveApp.getFileById(ss.getId()).moveTo(folder);
   bkPrune_(folder);
 
+  bkHeartbeat_(url, key, summary);
   Logger.log('Backup complete → ' + name + '\n' + summary.join('\n'));
   return summary;
+}
+
+// Stamp app_settings so the Admin page can show backup health.
+// Best-effort: a heartbeat failure must never break the backup itself.
+function bkHeartbeat_(url, key, summary) {
+  try {
+    UrlFetchApp.fetch(url + '/rest/v1/app_settings?on_conflict=key', {
+      method: 'post', contentType: 'application/json',
+      headers: { apikey: key, Authorization: 'Bearer ' + key, Prefer: 'resolution=merge-duplicates,return=minimal' },
+      payload: JSON.stringify({ key: 'backup_heartbeat', value: {
+        at: new Date().toISOString(),
+        errors: summary.filter(s => s.indexOf('ERROR') !== -1).length,
+        summary: summary.join(', ').slice(0, 500),
+      } }),
+      muteHttpExceptions: true,
+    });
+  } catch (e) { Logger.log('Heartbeat failed: ' + e.message); }
 }
 
 // ── FETCH (paginated so large tables come through whole) ─────

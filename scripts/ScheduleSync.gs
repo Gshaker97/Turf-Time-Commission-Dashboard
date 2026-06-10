@@ -273,6 +273,7 @@ function schSync() {
     'Sync — created ' + out.created + ', change-orders ' + out.changed + ', updated ' + out.updated +
     ', paid ' + out.paid + ', skipped ' + out.skipped + ', errors ' + out.errors);
   if (out.details.length) Logger.log(out.details.join('\n'));
+  schHeartbeat_(url, key, out);
   return out;
 }
 
@@ -351,6 +352,24 @@ function schFindOfficeCol_(headers, rows, paymentIx) {
   if (best >= 0) return best;
   if (paymentIx >= 0 && paymentIx + 1 < headers.length) return paymentIx + 1;
   return -1;
+}
+
+// Stamp app_settings with this run's outcome so the Admin page can show sync
+// health — including whether the script is stuck in DRY_RUN (preview) mode.
+// Best-effort: a heartbeat failure must never break the sync itself.
+function schHeartbeat_(url, key, out) {
+  try {
+    UrlFetchApp.fetch(url + '/rest/v1/app_settings?on_conflict=key', {
+      method: 'post', contentType: 'application/json',
+      headers: { apikey: key, Authorization: 'Bearer ' + key, Prefer: 'resolution=merge-duplicates,return=minimal' },
+      payload: JSON.stringify({ key: 'sync_heartbeat', value: {
+        at: new Date().toISOString(), dry_run: SCH_DRY_RUN,
+        created: out.created, changed: out.changed, updated: out.updated,
+        paid: out.paid, errors: out.errors,
+      } }),
+      muteHttpExceptions: true,
+    });
+  } catch (e) { Logger.log('Heartbeat failed: ' + e.message); }
 }
 
 // ── PARSERS ─────────────────────────────────────────────────
