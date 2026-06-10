@@ -3,7 +3,7 @@ import { Eye, EyeOff } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
 export default function Login() {
-  const { signIn, demoMode } = useAuth()
+  const { signIn, demoMode, deactivated } = useAuth()
   const [email, setEmail]       = useState('')
   const [password, setPassword] = useState('')
   const [showPwd, setShowPwd]   = useState(false)
@@ -43,12 +43,12 @@ export default function Login() {
           </p>
         </div>
 
-        {error && (
+        {(error || deactivated) && (
           <div
             className="rounded-xl px-4 py-3 mb-5 text-[13px] text-red-400"
             style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)' }}
           >
-            {error}
+            {deactivated ? 'This account has been deactivated. Contact an administrator.' : error}
           </div>
         )}
 

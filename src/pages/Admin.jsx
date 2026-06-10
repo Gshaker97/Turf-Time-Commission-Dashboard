@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
-import { Plus, Pencil, Trash2, RefreshCw, Activity } from 'lucide-react'
+import { Plus, Pencil, Trash2, RefreshCw, Activity, KeyRound, UserPlus, UserCheck, UserX } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import {
   fetchDeals, fetchUsers, fetchPayments,
   insertDeal, updateDeal, deleteDeal,
   insertUser, updateUser, deleteUser, deletePayment,
+  userAdmin, userAdminConfigured,
 } from '../lib/db'
 import UserModal from '../components/UserModal'
 import DealModal from '../components/DealModal'
@@ -177,6 +178,43 @@ export default function Admin() {
     patchUser(u.id, { ghost: !u.ghost })
   }
 
+  const [busyUser, setBusyUser] = useState('')   // user id mid-action
+  const hasUserAdmin = userAdminConfigured()
+
+  // Create the Supabase login for a roster member (no more Studio).
+  async function createLogin(u) {
+    if (!confirm(`Create a login for ${u.name} (${u.email})? They'll get a temporary password to change on first sign-in.`)) return
+    setBusyUser(u.id)
+    const r = await userAdmin('create_login', { email: u.email })
+    setBusyUser('')
+    if (!r.ok) return alert('Could not create login: ' + (r.error || 'unknown error'))
+    loadAll()
+    window.prompt(`Login created for ${u.name}. Copy their temporary password and share it securely:`, r.password || '')
+  }
+
+  // Set a new temporary password for a user.
+  async function resetLogin(u) {
+    if (!confirm(`Reset ${u.name}'s password to a new temporary one?`)) return
+    setBusyUser(u.id)
+    const r = await userAdmin('reset_password', { email: u.email })
+    setBusyUser('')
+    if (!r.ok) return alert('Could not reset password: ' + (r.error || 'unknown error'))
+    window.prompt(`New temporary password for ${u.name} — copy and share securely:`, r.password || '')
+  }
+
+  // Activate / deactivate: flips profiles.active (blocks site access while all
+  // their deals & stats stay intact), and disables the login at the auth layer
+  // when the endpoint is configured.
+  async function toggleActive(u) {
+    const next = u.active === false   // becoming active?
+    if (!next && !confirm(`Deactivate ${u.name}? They lose access to the site immediately. All their deals and stats stay exactly as they are.`)) return
+    patchUser(u.id, { active: next })
+    if (hasUserAdmin && u.auth_id) {
+      const r = await userAdmin('set_active', { email: u.email, active: next })
+      if (!r.ok) alert('Profile updated, but the login toggle failed: ' + (r.error || '') + '\nThey may still be able to sign in until fixed.')
+    }
+  }
+
   async function saveDeal(data) {
     if (editDeal) await updateDeal(editDeal.id, data)
     else await insertDeal(data, profile?.id)
@@ -233,7 +271,7 @@ export default function Admin() {
               {users.map(u => {
                 const mgr = users.find(x => x.id === u.manager_id)
                 return (
-                  <div key={u.id} className="px-4 py-3 flex items-center gap-3">
+                  <div key={u.id} className="px-4 py-3 flex items-center gap-3" style={{ opacity: u.active === false ? 0.55 : 1 }}>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="text-[13px] font-semibold text-white">{u.name}</p>
@@ -242,6 +280,20 @@ export default function Admin() {
                       </div>
                       <p className="text-[11px] text-white/40 mt-0.5 truncate">{u.email}</p>
                       {mgr && <p className="text-[11px] text-white/30 mt-0.5">Mgr: {mgr.name}</p>}
+                      <div className="flex items-center gap-3 mt-1.5">
+                        {u.auth_id ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400/90"><UserCheck size={11} /> login</span>
+                        ) : hasUserAdmin ? (
+                          <button onClick={() => createLogin(u)} disabled={busyUser === u.id}
+                            className="inline-flex items-center gap-1 text-[10px] font-semibold text-teal disabled:opacity-40"><UserPlus size={11} /> create login</button>
+                        ) : null}
+                        {u.auth_id && hasUserAdmin && (
+                          <button onClick={() => resetLogin(u)} disabled={busyUser === u.id} className="inline-flex items-center gap-1 text-[10px] text-amber-400"><KeyRound size={11} /> reset</button>
+                        )}
+                        <button onClick={() => toggleActive(u)} className="inline-flex items-center gap-1 text-[10px]" style={{ color: u.active === false ? '#f87171' : '#34d399' }}>
+                          {u.active === false ? <><UserX size={11} /> deactivated</> : <><UserCheck size={11} /> active</>}
+                        </button>
+                      </div>
                     </div>
                     <div className="flex gap-1 flex-shrink-0">
                       <button onClick={() => { setEditUser(u); setUserModal(true) }}
@@ -264,7 +316,7 @@ export default function Admin() {
             <table className="w-full">
               <thead>
                 <tr style={thead}>
-                  {['Name','Email','Role','Company','Manager','Ghost','Actions'].map(h => (
+                  {['Name','Email','Role','Company','Manager','Ghost','Login','Active','Actions'].map(h => (
                     <th key={h} className="px-4 py-3 text-left text-[10px] font-bold text-dark uppercase tracking-wider">{h}</th>
                   ))}
                 </tr>
@@ -273,7 +325,7 @@ export default function Admin() {
                 {users.map((u, i) => {
                   const mgr = users.find(x => x.id === u.manager_id)
                   return (
-                    <tr key={u.id} style={{ background: i%2===0?'#242424':'#262626' }} className="hover:bg-white/[0.03]">
+                    <tr key={u.id} style={{ background: i%2===0?'#242424':'#262626', opacity: u.active === false ? 0.55 : 1 }} className="hover:bg-white/[0.03]">
                       <td className="px-4 py-3 text-[13px] font-semibold text-white">
                         <EditableText value={u.name} onSave={v => patchUser(u.id, { name: v })} placeholder="Name" />
                       </td>
@@ -304,7 +356,30 @@ export default function Admin() {
                         </button>
                       </td>
                       <td className="px-4 py-3">
+                        {u.auth_id ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400/90"><UserCheck size={13} /> Has login</span>
+                        ) : hasUserAdmin ? (
+                          <button onClick={() => createLogin(u)} disabled={busyUser === u.id}
+                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-teal hover:text-teal-light disabled:opacity-40">
+                            <UserPlus size={13} /> {busyUser === u.id ? 'Creating…' : 'Create login'}
+                          </button>
+                        ) : (
+                          <span className="text-[11px] text-white/25" title="Set VITE_USER_ADMIN_URL to enable">No login</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <button onClick={() => toggleActive(u)} title={u.active === false ? 'Deactivated — click to reactivate' : 'Active — click to deactivate'}
+                          className="w-9 h-5 rounded-full flex items-center px-0.5 transition-colors"
+                          style={{ background: u.active === false ? '#3a3a3a' : '#00b894', justifyContent: u.active === false ? 'flex-start' : 'flex-end' }}>
+                          <span className="w-4 h-4 rounded-full bg-white block" />
+                        </button>
+                      </td>
+                      <td className="px-4 py-3">
                         <div className="flex gap-1.5">
+                          {u.auth_id && hasUserAdmin && (
+                            <button onClick={() => resetLogin(u)} disabled={busyUser === u.id} title="Reset password"
+                              className="p-1.5 rounded text-white/30 hover:text-amber-400 hover:bg-amber-500/10 transition-colors"><KeyRound size={13} /></button>
+                          )}
                           <button onClick={() => { setEditUser(u); setUserModal(true) }}
                             className="p-1.5 rounded text-white/30 hover:text-teal hover:bg-teal/10 transition-colors"><Pencil size={13} /></button>
                           <button onClick={() => handleDeleteUser(u.id)}

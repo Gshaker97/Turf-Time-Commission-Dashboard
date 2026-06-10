@@ -32,6 +32,7 @@ export function AuthProvider({ children }) {
   const [user,           setUser]           = useState(undefined) // undefined = loading
   const [profile,        setProfile]        = useState(null)
   const [previewProfile, setPreviewProfile] = useState(null)
+  const [deactivated,    setDeactivated]    = useState(false)
 
   // ── Demo mode ──────────────────────────────────────────────
   useEffect(() => {
@@ -67,6 +68,14 @@ export function AuthProvider({ children }) {
       .select('*')
       .eq('auth_id', authId)
       .single()
+    // Deactivated accounts lose site access — sign them out immediately. Their
+    // deals/stats stay intact in the DB; this only blocks the login.
+    if (data && data.active === false) {
+      await supabase.auth.signOut()
+      setProfile(null); setUser(null)
+      setDeactivated(true)
+      return
+    }
     setProfile(data ?? null)
   }
 
@@ -81,6 +90,7 @@ export function AuthProvider({ children }) {
       }
       return result
     }
+    setDeactivated(false)
     return supabase.auth.signInWithPassword({ email, password })
   }
 
@@ -120,6 +130,7 @@ export function AuthProvider({ children }) {
     clearPreview:   () => setPreviewProfile(null),
     loading,
     demoMode: DEMO_MODE,
+    deactivated,
     signIn,
     signOut,
     changePassword,
