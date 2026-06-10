@@ -192,8 +192,8 @@ export default function Deals() {
       </div>
 
       {/* Staging tabs — VP/admin only. New & re-signed deals wait in "Needs
-          review" until their checklist is complete AND the gold commission
-          check is on, then they join All deals. */}
+          review" until the commission gets its gold check, then they join
+          All deals. */}
       {canStage && (
         <div className="flex items-center gap-2 flex-wrap">
           <div className="flex gap-1 p-1 rounded-xl w-fit" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
@@ -215,7 +215,7 @@ export default function Deals() {
             <span className="text-[11px] text-white/40">
               {needsReview.length
                 ? 'Gold-check a deal’s commission to move it into All deals.'
-                : '🎉 Nothing to review — every deal is checklisted and verified.'}
+                : '🎉 Nothing to review — every deal\u2019s commission is verified.'}
             </span>
           )}
         </div>

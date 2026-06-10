@@ -157,13 +157,6 @@ export const DEMO_SETTINGS = {
   ],
   payment_methods: ['Self-Pay', 'Goodleap', 'Sunlight', 'Self-Pay + Sunlight', 'Self-Pay + Goodleap'],
   offices: ['Phoenix', 'Tucson'],
-  checklist_items: [
-    { key: 'contract_signed',  label: 'Contract Signed' },
-    { key: 'detailed_drawing', label: 'Detailed Drawing' },
-    { key: 'payment_method',   label: 'Payment Method' },
-    { key: 'scheduled',        label: 'Scheduled' },
-    { key: 'no_issues',        label: 'No Issues' },
-  ],
 }
 
 // Weekly estimate counts per rep, for the Weekly Stats tracker. Closed deals
