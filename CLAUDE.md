@@ -105,6 +105,21 @@ setup + deploy steps.
   in the edit modal's collapsible "Edit history" panel.
   Do not re-run `001`/`002` against a populated database.
 
+## User management (Admin page)
+
+- **Create login / reset password** for roster members happens on Admin → Users,
+  powered by `scripts/UserAdmin.gs` (an Apps Script web app holding the service
+  key). The frontend (`userAdmin()` in `db.js`) calls it with the admin's own
+  Supabase access token — the endpoint verifies the caller is an admin, so
+  there's NO secret in the browser. Set `VITE_USER_ADMIN_URL` to the web-app URL
+  to enable; unset = those buttons hide and you create logins in Studio.
+  Already-linked users are untouched.
+- **Deactivation:** the Active toggle flips `profiles.active`. A deactivated
+  user is signed out and blocked at login (`AuthContext.fetchProfile` checks
+  `active`), but **all their deals/stats stay and still count** — never filter
+  aggregates by `active`. When `VITE_USER_ADMIN_URL` is set, deactivating also
+  bans their auth login so a live token can't keep them in.
+
 ## Security notes (already fixed — keep them fixed)
 
 - `profiles_update_self` has a `WITH CHECK` plus a `guard_profile_columns()`

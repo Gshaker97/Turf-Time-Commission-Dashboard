@@ -186,6 +186,31 @@ export async function insertUser(data) {
   return writeWithSchemaFallback(p => supabase.from('profiles').insert([p]), rest)
 }
 
+// ── Privileged user-admin actions (create login / reset password / enable
+// /disable login). These need the service-role key, so they go through the
+// Apps Script web app (VITE_USER_ADMIN_URL), authorized by the caller's own
+// Supabase session token — the endpoint verifies they're an admin. Returns
+// { ok, ... } or { ok:false, error }.
+const USER_ADMIN_URL = import.meta.env.VITE_USER_ADMIN_URL
+export function userAdminConfigured() { return !!USER_ADMIN_URL }
+export async function userAdmin(action, payload = {}) {
+  if (DEMO_MODE) return { ok: false, error: 'Disabled in demo mode.' }
+  if (!USER_ADMIN_URL) return { ok: false, error: 'User-admin endpoint not configured (set VITE_USER_ADMIN_URL).' }
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session?.access_token) return { ok: false, error: 'Not signed in.' }
+  try {
+    // text/plain keeps it a "simple" CORS request (no preflight) for Apps Script.
+    const resp = await fetch(USER_ADMIN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action, token: session.access_token, ...payload }),
+    })
+    return await resp.json()
+  } catch (e) {
+    return { ok: false, error: e.message || 'Request failed.' }
+  }
+}
+
 export async function updateUser(id, data) {
   if (DEMO_MODE) {
     _users = _users.map(u => u.id === id ? { ...u, ...data } : u)
