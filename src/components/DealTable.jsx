@@ -408,9 +408,9 @@ function ActionButtons({ deal, onEdit, onDelete }) {
 }
 
 // Threaded per-deal notes: anyone on the deal can read and reply; every post
-// notifies the rest of the deal's people (setter/closer/manager + admins +
-// prior commenters) via the bell. The old single deals.notes text shows as a
-// legacy first entry so nothing is lost.
+// notifies the deal's CLOSER + admins (minus the author) via the bell —
+// setters/managers can read but aren't pinged. The old single deals.notes
+// text shows as a legacy first entry so nothing is lost.
 function NotesThread({ deal, profile, users, onCountChange }) {
   const [notes, setNotes]   = useState(null)   // null = loading
   const [draft, setDraft]   = useState('')
@@ -432,9 +432,10 @@ function NotesThread({ deal, profile, users, onCountChange }) {
     const body = draft.trim()
     if (!body || !profile?.id) return
     setPosting(true)
+    // Notify the CLOSER + admins only (minus the author). Setters/managers can
+    // read the thread but don't get pinged — per Keaton's call.
     const admins = (users || []).filter(u => u.role === 'admin' || u.is_admin === true).map(u => u.id)
-    const commenters = (notes || []).map(n => n.author_id)
-    const recipientIds = [deal.setter_id, deal.closer_id, deal.manager_id, ...admins, ...commenters]
+    const recipientIds = [deal.closer_id, ...admins]
     const { error } = await addDealNote({
       dealId: deal.id, dealName: deal.deal_name, body,
       author: { id: profile.id, name: profile.name },
