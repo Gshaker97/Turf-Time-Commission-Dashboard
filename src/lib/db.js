@@ -214,6 +214,26 @@ export async function fetchDealNoteCounts() {
   return { data: m, error: null }
 }
 
+// Edit your own note (RLS enforces author-only). The DB trigger snapshots the
+// previous text into `edits` and stamps `edited_at` — the trail can't be faked.
+export async function updateDealNote(id, body) {
+  if (DEMO_MODE) {
+    _dealNotes = _dealNotes.map(n => {
+      if (n.id !== id) return n
+      const edits = [...(n.edits || []), { at: new Date().toISOString(), body: n.body }]
+      return { ...n, body, edited_at: new Date().toISOString(), edits }
+    })
+    return { error: null }
+  }
+  return supabase.from('deal_notes').update({ body }).eq('id', id)
+}
+
+// Delete a note (RLS enforces admin-only).
+export async function deleteDealNote(id) {
+  if (DEMO_MODE) { _dealNotes = _dealNotes.filter(n => n.id !== id); return { error: null, data: [{ id }] } }
+  return supabase.from('deal_notes').delete().eq('id', id).select('id')
+}
+
 // Post a note and fan out bell notifications to everyone on the deal except
 // the author. Notification failure never fails the note itself.
 export async function addDealNote({ dealId, dealName, body, author, recipientIds }) {

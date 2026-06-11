@@ -4,7 +4,7 @@ import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, X, Messa
 import { calcDealCommissions, fmt, fmtPct, isCanceled } from '../utils/commission'
 import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
-import { fetchDealNotes, fetchDealNoteCounts, addDealNote } from '../lib/db'
+import { fetchDealNotes, fetchDealNoteCounts, addDealNote, updateDealNote, deleteDealNote } from '../lib/db'
 import DateRangeFilter from './DateRangeFilter'
 
 // Date columns the Dates header can filter on.
@@ -415,12 +415,35 @@ function NotesThread({ deal, profile, users, onCountChange }) {
   const [notes, setNotes]   = useState(null)   // null = loading
   const [draft, setDraft]   = useState('')
   const [posting, setPosting] = useState(false)
+  const [editId, setEditId]   = useState(null) // note being edited
+  const [editText, setEditText] = useState('')
+  const [showLog, setShowLog] = useState(null) // note whose edit history is open
+  const isAdmin = profile?.role === 'admin' || profile?.is_admin === true
 
+  const reload = async () => {
+    const { data } = await fetchDealNotes(deal.id)
+    setNotes(data || [])
+    onCountChange?.(deal.id, (data || []).length)
+  }
   useEffect(() => {
     let on = true
     fetchDealNotes(deal.id).then(({ data }) => { if (on) setNotes(data || []) })
     return () => { on = false }
   }, [deal.id])
+
+  async function saveEdit(id) {
+    const body = editText.trim()
+    if (!body) return
+    const { error } = await updateDealNote(id, body)
+    if (error) { alert('Could not save edit: ' + (error.message || '')); return }
+    setEditId(null); setEditText(''); reload()
+  }
+  async function removeNote(id) {
+    if (!confirm('Delete this comment? This cannot be undone.')) return
+    const { error } = await deleteDealNote(id)
+    if (error) { alert('Could not delete: ' + (error.message || '')); return }
+    reload()
+  }
 
   const fmtWhen = (iso) => {
     const d = new Date(iso)
@@ -444,9 +467,7 @@ function NotesThread({ deal, profile, users, onCountChange }) {
     setPosting(false)
     if (error) { alert('Could not post: ' + (error.message || '')); return }
     setDraft('')
-    const { data } = await fetchDealNotes(deal.id)
-    setNotes(data || [])
-    onCountChange?.(deal.id, (data || []).length)
+    reload()
   }
 
   return (
@@ -466,16 +487,63 @@ function NotesThread({ deal, profile, users, onCountChange }) {
       ) : (
         notes.map(n => {
           const mine = n.author_id === profile?.id
+          const editCount = (n.edits || []).length
           return (
             <div key={n.id} className="rounded-lg px-3 py-2"
               style={{ background: mine ? '#0e3b3555' : '#171717', border: `1px solid ${mine ? '#1c5a50' : '#2a2a2a'}` }}>
-              <p className="text-[11px] mb-0.5">
-                <span className="font-semibold" style={{ color: mine ? '#2dd4bf' : 'rgba(255,255,255,0.75)' }}>
-                  {n.author?.name || users?.find(u => u.id === n.author_id)?.name || '—'}
-                </span>
-                <span className="text-white/25"> · {fmtWhen(n.created_at)}</span>
-              </p>
-              <p className="text-[12px] text-white/80 whitespace-pre-wrap">{n.body}</p>
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-[11px] mb-0.5">
+                  <span className="font-semibold" style={{ color: mine ? '#2dd4bf' : 'rgba(255,255,255,0.75)' }}>
+                    {n.author?.name || users?.find(u => u.id === n.author_id)?.name || '—'}
+                  </span>
+                  <span className="text-white/25"> · {fmtWhen(n.created_at)}</span>
+                  {editCount > 0 && (
+                    <button onClick={() => setShowLog(showLog === n.id ? null : n.id)}
+                      className="text-white/30 hover:text-white/60 italic ml-1">
+                      · edited{editCount > 1 ? ` ×${editCount}` : ''}
+                    </button>
+                  )}
+                </p>
+                {editId !== n.id && (
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {mine && (
+                      <button onClick={() => { setEditId(n.id); setEditText(n.body) }} title="Edit"
+                        className="p-1 rounded text-white/25 hover:text-teal hover:bg-teal/10 transition-colors"><Pencil size={12} /></button>
+                    )}
+                    {isAdmin && (
+                      <button onClick={() => removeNote(n.id)} title="Delete (admin)"
+                        className="p-1 rounded text-white/25 hover:text-red-400 hover:bg-red-500/10 transition-colors"><Trash2 size={12} /></button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {editId === n.id ? (
+                <div className="space-y-1.5 mt-1">
+                  <textarea value={editText} onChange={e => setEditText(e.target.value)} rows={2}
+                    className="w-full px-2.5 py-1.5 rounded-lg text-[12px] text-white focus:outline-none resize-y"
+                    style={{ background: '#0f0f0f', border: '1px solid #2a2a2a' }} />
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => saveEdit(n.id)} disabled={!editText.trim() || editText.trim() === n.body}
+                      className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-dark bg-teal disabled:opacity-40 transition-colors">Save</button>
+                    <button onClick={() => { setEditId(null); setEditText('') }}
+                      className="text-[11px] text-white/40 hover:text-white">Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-[12px] text-white/80 whitespace-pre-wrap">{n.body}</p>
+              )}
+
+              {showLog === n.id && editCount > 0 && (
+                <div className="mt-2 pt-2 border-t border-white/5 space-y-1">
+                  <p className="text-[10px] uppercase tracking-wide text-white/25">Edit history</p>
+                  {(n.edits || []).slice().reverse().map((e, i) => (
+                    <p key={i} className="text-[11px] text-white/40">
+                      <span className="text-white/25">{fmtWhen(e.at)} — previously:</span> <span className="line-through">{e.body}</span>
+                    </p>
+                  ))}
+                </div>
+              )}
             </div>
           )
         })
