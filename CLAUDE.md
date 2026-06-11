@@ -110,7 +110,10 @@ setup + deploy steps.
   posting a note notifies the deal's CLOSER + admins only, minus the author
   (setters/managers read threads but aren't pinged); users read/mark-read only their own rows;
   clicking a bell item deep-links to `/deals?note=<dealId>` which opens the
-  thread). Do not re-run `001`/`002` against a populated database.
+  thread); `022` adds note editing + admin delete: authors edit their own
+  notes (RLS), a BEFORE UPDATE trigger snapshots the prior text into
+  `deal_notes.edits` + stamps `edited_at` (tamper-proof, and author/deal/
+  created_at are frozen), and only admins (`my_role()='admin'`) may delete. Do not re-run `001`/`002` against a populated database.
 
 ## User management (Admin page)
 
