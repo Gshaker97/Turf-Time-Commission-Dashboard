@@ -150,6 +150,7 @@ export default function Commissions() {
   const [to,     setTo]     = useState(getPresetRange('mtd').to)
   const [preset, setPreset] = useState('mtd')
   const [basis,  setBasis]  = useState('sale')      // filter by 'sale' date or 'pay' date
+  const [paydayIdx, setPaydayIdx] = useState(0)     // which upcoming payday the hero is showing
 
   const stepWeek = (dir) => {
     const anchor = new Date((from || todayISO()) + 'T12:00:00')
@@ -194,23 +195,28 @@ export default function Commissions() {
 
   const take = (d) => getUserCommission(d, id)
 
-  // ── Forward-looking next payday (global) ──────────────────────
-  const payday = useMemo(() => {
+  // ── Forward-looking paydays (global) ──────────────────────────
+  // The next up-to-6 scheduled paydays so the hero can step week-by-week
+  // through what each upcoming paycheck will be. Overdue pay dates are summed
+  // separately as a standing reminder.
+  const { paydays, overdue } = useMemo(() => {
     const today = todayISO()
     const unpaid = allMine.filter(d => d.status !== PAID && d.status !== ISSUE && d.pay_date)
     const byDate = {}
     for (const d of unpaid) (byDate[d.pay_date] ||= []).push(d)
-    const dates = Object.keys(byDate).sort()
-    const nextDate = dates.find(dt => dt >= today) || null
     const sum = (arr) => arr.reduce((s, d) => s + take(d), 0)
+    const dates = Object.keys(byDate).sort()
     const overdue = dates.filter(dt => dt < today).reduce((s, dt) => s + sum(byDate[dt]), 0)
-    return {
-      nextDate,
-      nextTotal: nextDate ? sum(byDate[nextDate]) : 0,
-      nextCount: nextDate ? byDate[nextDate].length : 0,
-      overdue,
-    }
+    const paydays = dates.filter(dt => dt >= today).slice(0, 6)
+      .map(dt => ({ date: dt, total: sum(byDate[dt]), count: byDate[dt].length }))
+    return { paydays, overdue }
   }, [allMine, id])
+
+  // Clamp the selected payday into range, and reset to the next one whenever the
+  // viewed user changes.
+  const payIdx = Math.min(paydayIdx, Math.max(paydays.length - 1, 0))
+  const selPayday = paydays[payIdx] || null
+  useEffect(() => { setPaydayIdx(0) }, [id])
 
   // ── Period totals ─────────────────────────────────────────────
   const totals = useMemo(() => {
@@ -315,21 +321,49 @@ export default function Commissions() {
           <CalendarClock size={20} className="text-teal" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-[10px] uppercase tracking-widest text-white/40 font-semibold">Next payday</p>
-          {payday.nextDate ? (
+          <div className="flex items-center gap-2">
+            <p className="text-[10px] uppercase tracking-widest text-white/40 font-semibold">
+              {payIdx === 0 ? 'Next payday' : 'Upcoming payday'}
+            </p>
+            {paydays.length > 1 && (
+              <span className="text-[9px] font-semibold text-white/45 px-1.5 py-0.5 rounded-full" style={{ background: '#ffffff14' }}>
+                {payIdx + 1} / {paydays.length}
+              </span>
+            )}
+          </div>
+          {selPayday ? (
             <p className="text-[13px] text-white/70">
-              <span className="text-white font-semibold">{fmtDay(payday.nextDate)}</span>
-              {' · '}{payday.nextCount} deal{payday.nextCount === 1 ? '' : 's'}
+              <span className="text-white font-semibold">{fmtDay(selPayday.date)}</span>
+              {' · '}{selPayday.count} deal{selPayday.count === 1 ? '' : 's'}
             </p>
           ) : (
             <p className="text-[13px] text-white/50">No scheduled paydays coming up.</p>
           )}
-          {payday.overdue > 0 && (
-            <p className="text-[11px] text-amber-400/90 mt-0.5">{fmt(payday.overdue)} pending from past pay dates</p>
+          {payIdx === 0 && overdue > 0 && (
+            <p className="text-[11px] text-amber-400/90 mt-0.5">{fmt(overdue)} pending from past pay dates</p>
           )}
         </div>
-        <div className="text-right flex-shrink-0">
-          <p className="text-2xl md:text-3xl font-bold text-teal">{fmt(payday.nextTotal)}</p>
+        {/* Step through the next 6 paydays */}
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {paydays.length > 1 && (
+            <button onClick={() => setPaydayIdx(i => Math.max(0, Math.min(i, paydays.length - 1) - 1))}
+              disabled={payIdx === 0}
+              title="Earlier payday"
+              className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/10 disabled:opacity-25 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors">
+              <ChevronLeft size={18} />
+            </button>
+          )}
+          <div className="text-right min-w-[92px]">
+            <p className="text-2xl md:text-3xl font-bold text-teal">{fmt(selPayday ? selPayday.total : 0)}</p>
+          </div>
+          {paydays.length > 1 && (
+            <button onClick={() => setPaydayIdx(i => Math.min(paydays.length - 1, Math.min(i, paydays.length - 1) + 1))}
+              disabled={payIdx >= paydays.length - 1}
+              title="Later payday"
+              className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/10 disabled:opacity-25 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors">
+              <ChevronRight size={18} />
+            </button>
+          )}
         </div>
       </div>
 
