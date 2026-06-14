@@ -286,6 +286,38 @@ function TextSetting({ title, hint, settingKey, placeholder }) {
   )
 }
 
+// A single date value (stored as YYYY-MM-DD in app_settings).
+function DateSetting({ title, hint, settingKey, fallback }) {
+  const { settings, save } = useSettings()
+  const current = settings[settingKey] ?? fallback ?? ''
+  const [value, setValue]   = useState(current)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
+  const [error, setError]   = useState('')
+  useEffect(() => { setValue(current) }, [current])
+
+  const dirty = value !== current
+  async function onSave() {
+    setError(''); setSaving(true)
+    const { error: err } = (await save(settingKey, value || null)) || {}
+    setSaving(false)
+    if (err) { setError(err.message || 'Could not save.'); return }
+    setSaved(true); setTimeout(() => setSaved(false), 1800)
+  }
+
+  return (
+    <div className="rounded-xl p-4 md:p-5 space-y-3" style={card}>
+      <div>
+        <h3 className="text-[13px] font-bold text-white">{title}</h3>
+        {hint && <p className="text-[11px] text-white/40 mt-0.5">{hint}</p>}
+      </div>
+      <input type="date" value={value} onChange={e => setValue(e.target.value)}
+        style={inputStyle} className={`${inputCls} w-full max-w-[12rem]`} />
+      <SaveBar dirty={dirty} saving={saving} saved={saved} error={error} onSave={onSave} />
+    </div>
+  )
+}
+
 export default function SettingsPanel() {
   return (
     <div className="space-y-4">
@@ -303,6 +335,8 @@ export default function SettingsPanel() {
       <ListEditor title="Offices" settingKey="offices"
         hint="Selectable office locations on deals."
         placeholder="e.g. Phoenix" />
+      <DateSetting title="Data Start Date" settingKey="data_start_date" fallback="2026-06-01"
+        hint="Deals closed before this date are treated as legacy: they still count in historical totals, but they're left out of the Needs-review staging list, the payroll overdue nag, and the Watchdog's background alerts. You'll still be prompted as they reach their pay-date run." />
     </div>
   )
 }

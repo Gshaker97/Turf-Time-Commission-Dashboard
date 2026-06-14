@@ -57,7 +57,7 @@ function dealPayouts(d) {
 
 export default function Payroll() {
   const { isAdmin } = useAuth()
-  const { statusColor, statusLabels } = useSettings()
+  const { statusColor, statusLabels, dataStartDate } = useSettings()
   const [copiedId, setCopiedId] = useState('')
   const [deals, setDeals]     = useState([])
   const [users, setUsers]     = useState([])
@@ -96,9 +96,13 @@ export default function Payroll() {
   const payDates = useMemo(() => distinctPayDates(deals), [deals])
   const idx = payDates.indexOf(view)
 
+  // Legacy deals (sale_date before the data-start cutoff) predate our atomized
+  // data; they're excluded from the overdue nag so old history doesn't pile up
+  // as tasks. They still show on their own pay-date run when one rolls around.
   const overdueDeals = useMemo(
-    () => deals.filter(d => d.pay_date && d.pay_date < today && d.status !== PAID && d.status !== ISSUE),
-    [deals, today]
+    () => deals.filter(d => d.pay_date && d.pay_date < today && d.status !== PAID && d.status !== ISSUE &&
+                            !(dataStartDate && d.sale_date && d.sale_date < dataStartDate)),
+    [deals, today, dataStartDate]
   )
   const runDeals = useMemo(() => {
     // Sales-Issue deals are pulled from the run (they're flagged, not payable).

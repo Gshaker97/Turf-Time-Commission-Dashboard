@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { useSettings } from '../contexts/SettingsContext'
 import { fetchDeals, fetchUsers, fetchPayments, insertDeal, updateDeal, deleteDeal } from '../lib/db'
 import FilterBar from '../components/FilterBar'
 import KpiCard from '../components/KpiCard'
@@ -21,6 +22,7 @@ function sortValue(d, key) {
 
 export default function Deals() {
   const { profile, isAdmin } = useAuth()
+  const { dataStartDate } = useSettings()
 
   const [deals,    setDeals]    = useState([])
   const [payments, setPayments] = useState([])
@@ -108,8 +110,8 @@ export default function Deals() {
   // Everyone else just sees the normal list.
   const canStage = isAdmin || profile?.role === 'vp'
   const needsReview = useMemo(
-    () => canStage ? filtered.filter(dealNeedsReview) : [],
-    [filtered, canStage]
+    () => canStage ? filtered.filter(d => dealNeedsReview(d, dataStartDate)) : [],
+    [filtered, canStage, dataStartDate]
   )
   const [reviewTab, setReviewTab] = useState('all')   // 'review' | 'all'
   const didInitTab = useRef(false)

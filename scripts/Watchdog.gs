@@ -80,7 +80,14 @@ function watchdogRun() {
     const active = 'status=not.in.(' + wdList_(['Canceled', 'Cancelled', 'Sales Issue']) + ')';
     const sel = 'select=deal_name,status,office,payment_method,install_date,pay_date,commission_verified,baseline_revenue,job_price';
 
-    // Deals paying within 7 days
+    // Legacy cutoff: deals closed before data_start_date predate our atomized
+    // data and are intentionally NOT nagged about in the background (overdue /
+    // negative-pool). They still surface in the "paying within 7 days" checks
+    // below, so they're flagged once they actually approach payout.
+    const dataStart = wdDataStart_(url, key);
+    const notLegacy = dataStart ? '&sale_date=gte.' + dataStart : '';
+
+    // Deals paying within 7 days (kept unfiltered — these ARE the pay-time prompts)
     const paying = wdGet_(url, key, '/rest/v1/deals?' + sel + '&pay_date=lte.' + soon + '&pay_date=gte.' + today + '&' + active);
     const missing = paying.filter(d => !d.office || !d.payment_method || !d.install_date);
     if (missing.length) add('WARN', missing.length + ' deal(s) paying within 7 days missing office/payment/install: ' +
@@ -89,13 +96,13 @@ function watchdogRun() {
     if (unverified.length) add('WARN', unverified.length + ' deal(s) paying within 7 days not gold-checked: ' +
       wdNames_(unverified));
 
-    // Overdue: pay date passed, never finalized
-    const overdue = wdGet_(url, key, '/rest/v1/deals?' + sel + '&pay_date=lt.' + today +
+    // Overdue: pay date passed, never finalized (legacy deals excluded)
+    const overdue = wdGet_(url, key, '/rest/v1/deals?' + sel + '&pay_date=lt.' + today + notLegacy +
       '&status=not.in.(' + wdList_(['Paid', 'Pay Finalized', 'Canceled', 'Cancelled', 'Sales Issue']) + ')');
     if (overdue.length) add('WARN', overdue.length + ' deal(s) past their pay date but never finalized: ' + wdNames_(overdue));
 
-    // Negative rep pool (price below baseline) on active deals
-    const all = wdGet_(url, key, '/rest/v1/deals?select=deal_name,baseline_revenue,job_price&' + active);
+    // Negative rep pool (price below baseline) on active deals (legacy excluded)
+    const all = wdGet_(url, key, '/rest/v1/deals?select=deal_name,baseline_revenue,job_price&' + active + notLegacy);
     const negative = all.filter(d => Number(d.job_price) > 0 && Number(d.job_price) < Number(d.baseline_revenue) - 0.5);
     if (negative.length) add('WARN', negative.length + ' deal(s) priced BELOW baseline (negative rep pool): ' + wdNames_(negative));
   } catch (e) { add('WARN', 'Data checks failed: ' + e.message); }
@@ -147,6 +154,15 @@ function wdGet_(url, key, path) {
 // '"A","B C"' percent-encoded for a PostgREST in.() list (quotes + spaces).
 function wdList_(values) {
   return values.map(function (v) { return '%22' + encodeURIComponent(v) + '%22'; }).join(',');
+}
+// The admin-set legacy cutoff (app_settings.data_start_date, a JSON string
+// like "2026-06-01"). Returns '' if unset so callers skip the filter.
+function wdDataStart_(url, key) {
+  try {
+    const rows = wdGet_(url, key, '/rest/v1/app_settings?select=value&key=eq.data_start_date');
+    const v = rows && rows[0] ? rows[0].value : null;
+    return (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) ? v : '';
+  } catch (e) { return ''; }
 }
 function wdISO_(daysAhead) {
   const d = new Date(); d.setDate(d.getDate() + daysAhead);
