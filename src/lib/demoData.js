@@ -166,7 +166,7 @@ export const DEMO_WEEKLY_STATS = (() => {
   // Same week-start logic as the Weekly Stats component (Monday, local time)
   // so seeded estimates line up with the derived weekly buckets.
   const monday = (weeksAgo) =>
-    format(startOfWeek(subWeeks(new Date(), weeksAgo), { weekStartsOn: 1 }), 'yyyy-MM-dd')
+    format(startOfWeek(subWeeks(new Date(), weeksAgo), { weekStartsOn: 0 }), 'yyyy-MM-dd')
   const repIds = DEMO_USERS.filter(u => u.role === 'rep').map(u => u.id)
   // Kept small so close rates (closed ÷ estimates) read realistically against
   // the sparse demo deal set.

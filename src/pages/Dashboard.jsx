@@ -303,9 +303,9 @@ export default function Dashboard() {
     const maxFrom = addDays(toDate, -(8*7-1))
     if (fromDate < maxFrom) fromDate = maxFrom
     const weeks = []
-    let ptr = startOfWeek(fromDate, { weekStartsOn: 1 })
+    let ptr = startOfWeek(fromDate, { weekStartsOn: 0 })
     while (ptr <= toDate) {
-      const wEnd  = endOfWeek(ptr, { weekStartsOn: 1 })
+      const wEnd  = endOfWeek(ptr, { weekStartsOn: 0 })
       const wFrom = format(ptr  < fromDate ? fromDate : ptr,  'yyyy-MM-dd')
       const wTo   = format(wEnd > toDate   ? toDate   : wEnd, 'yyyy-MM-dd')
       const wDls  = filtered.filter(d => d.sale_date >= wFrom && d.sale_date <= wTo)

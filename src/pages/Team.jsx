@@ -275,11 +275,11 @@ export default function Team() {
       const lastDate       = sortedDates[0] ?? null
       const daysSinceLast  = lastDate ? Math.max(0, Math.floor((now.getTime()-new Date(lastDate+'T12:00:00').getTime())/86400000)) : null
       let streak  = 0
-      let weekPtr = startOfWeek(now, { weekStartsOn: 1 })
-      const thisWs = format(weekPtr,'yyyy-MM-dd'), thisWe = format(endOfWeek(weekPtr,{weekStartsOn:1}),'yyyy-MM-dd')
+      let weekPtr = startOfWeek(now, { weekStartsOn: 0 })
+      const thisWs = format(weekPtr,'yyyy-MM-dd'), thisWe = format(endOfWeek(weekPtr,{weekStartsOn: 0}),'yyyy-MM-dd')
       if (!allRepDeals.some(d => d.sale_date >= thisWs && d.sale_date <= thisWe)) weekPtr = addDays(weekPtr,-7)
       for (let i=0; i<52; i++) {
-        const ws = format(weekPtr,'yyyy-MM-dd'), we = format(endOfWeek(weekPtr,{weekStartsOn:1}),'yyyy-MM-dd')
+        const ws = format(weekPtr,'yyyy-MM-dd'), we = format(endOfWeek(weekPtr,{weekStartsOn: 0}),'yyyy-MM-dd')
         if (!allRepDeals.some(d => d.sale_date >= ws && d.sale_date <= we)) break
         streak++; weekPtr = addDays(weekPtr,-7)
       }
