@@ -233,8 +233,11 @@ function schSync() {
         if (status === 'CANCELLED') { out.skipped++; continue; }
 
         // Don't re-apply schedule info to finalized/triaged deals (Paid, Pay
-        // Finalized, Sales Issue, Canceled) — respects manual changes.
-        if (SCH_LOCKED_STATUSES.indexOf(existing.status) !== -1) { out.skipped++; continue; }
+        // Finalized, Sales Issue, Canceled) OR to a gold-checked deal — once you
+        // verify a deal, ALL of its fields (install/pay dates, payment, office,
+        // override %s, setter/closer) are locked from the sheet. Un-check the
+        // gold seal to let the sync manage it again.
+        if (SCH_LOCKED_STATUSES.indexOf(existing.status) !== -1 || existing.commission_verified === true) { out.skipped++; continue; }
 
         // Dates/payment/office only come from active (BOOKED/blank) rows. The
         // SETTER applies from any non-cancelled row — Lead Source is often
