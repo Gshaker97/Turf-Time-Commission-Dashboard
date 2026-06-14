@@ -152,10 +152,12 @@ function schSync() {
 
         if (existing) {
           // Change order: the sheet's financials differ from what we stored.
-          // This OVERRIDES any current status (even Paid / Sales Issue) so a
-          // re-signed deal always surfaces as "Change Order" for re-verification.
+          // Surfaces a re-signed deal as "Change Order" for re-verification —
+          // BUT a gold-checked deal (commission_verified) is LOCKED: once you've
+          // manually set + verified its numbers, the sync never overwrites them.
+          // To let the sync manage a verified deal again, un-check the gold seal.
           const changed = schChanged_(existing.baseline_revenue, baselineVal) || schChanged_(existing.job_price, saleVal);
-          if (changed && existing.status !== SCH_CHANGE_STATUS) {
+          if (changed && existing.status !== SCH_CHANGE_STATUS && existing.commission_verified !== true) {
             // Clear stored commission amounts so everything recomputes off the new
             // baseline/price + override %s (overrides won't go stale).
             const patch = { baseline_revenue: baselineVal, job_price: saleVal, status: SCH_CHANGE_STATUS, commission_verified: false, checklist: [],
