@@ -144,14 +144,21 @@ data-mutation affordance is gated on `isAdmin`, NOT on sales title:
 - Payroll: advancing status (`canApprove`/`canPay` require `isAdmin`) and the
   edit-modal openers. Non-admins (a future non-admin VP) get a read-only run.
 - Competitions: create/edit/delete (`canManage = isAdmin`); everyone can VIEW.
-- Team: coach notes, monthly goals, weekly stats, team-goal (`canEditNotes`/
-  `canEditGoal = isAdmin`); managers+ can VIEW.
-- Dashboard monthly revenue goal (`canEditGoal = isAdmin`).
+- Team: coach notes + weekly stats are admin-only (`canEditNotes = isAdmin`).
+- Dashboard **company** monthly revenue goal (`canEditGoal = isAdmin`).
 When adding a new edit/mutate control, gate it on `isAdmin` — never on `role`.
+
+**GOALS are the one carve-out** (they're personal/team targets in localStorage,
+not commission data): reps set their OWN personal goal, managers set their
+team's reps' goals AND their own team goal, admins set any. On `Team.jsx` the
+per-rep card uses `canEditGoal = isAdmin || profile.id===rep.id ||
+rep.manager_id===profile.id`, and the team-goal pencil shows for `role==='manager'`.
+The Dashboard's goal is the company-wide revenue goal (separate, admin-only).
 
 **Visibility (view scoping, NOT edit) by sales title:**
 - **Rep:** their own deals only (`role === 'rep'` filter in `Deals.jsx`); NEVER
-  any override amounts. No Team page (removed from nav + route guard).
+  any override amounts. Reps DO have Team-page access (to set their personal
+  goal and view the team), consistent with the company-wide Dashboard.
 - **Manager/Director/VP:** their deals + their team's deals, and their OWN
   override on the Commissions page. The Commissions page is siloed by identity
   (`myParts(deal, id)` only emits roles the viewer personally holds), so nobody

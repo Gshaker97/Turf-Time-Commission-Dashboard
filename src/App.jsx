@@ -59,7 +59,7 @@ function AppRoutes() {
             (Keaton is a VP, not an admin), so no role-based Guard here. */}
         <Route path="audit"       element={<RequiresAudit />} />
         <Route path="team"  element={
-          <Guard roles={['manager','director','vp','admin']}><Team /></Guard>
+          <Guard roles={['rep','manager','director','vp','admin']}><Team /></Guard>
         } />
         <Route path="admin" element={
           <Guard roles={['admin']}><Admin /></Guard>
