@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Trophy, Plus, Pencil, Trash2, ChevronDown, Download } from 'lucide-react'
+import { Trophy, Plus, Pencil, Trash2, ChevronDown, Download, Copy, Check } from 'lucide-react'
 import { format } from 'date-fns'
-import { toPng } from 'html-to-image'
+import { toPng, toBlob } from 'html-to-image'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchCompetitions, fetchDeals, fetchUsers, insertCompetition, updateCompetition, deleteCompetition } from '../lib/db'
 import { competitionStandings, competitionStatus, competitionEntryDeals, typeLabel, metricLabel, creditLabel, fmtScore } from '../utils/competition'
@@ -94,7 +94,7 @@ function StandRow({ e, comp, deals, users, canManage, mine }) {
   )
 }
 
-function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, onEdit, onDelete, onExport, exporting }) {
+function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, onEdit, onDelete, onExport, onCopy, copied, exporting }) {
   const [open, setOpen] = useState(false)
   const ghostIds = useMemo(() => new Set(users.filter(u => u.ghost).map(u => u.id)), [users])
   const standings = useMemo(
@@ -127,7 +127,8 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, on
           </div>
           {canManage && (
             <div className="flex items-center gap-1 flex-shrink-0">
-              <button onClick={() => onExport(comp)} disabled={exporting} className="p-1.5 rounded text-white/30 hover:text-teal hover:bg-teal/10 transition-colors disabled:opacity-40" title="Export standings as an image (for Canva, slides, etc.)"><Download size={13} /></button>
+              <button onClick={() => onCopy(comp)} disabled={exporting} className={`p-1.5 rounded transition-colors disabled:opacity-40 ${copied ? 'text-emerald-400' : 'text-white/30 hover:text-teal hover:bg-teal/10'}`} title="Copy standings image to clipboard (paste into Canva)">{copied ? <Check size={13} /> : <Copy size={13} />}</button>
+              <button onClick={() => onExport(comp)} disabled={exporting} className="p-1.5 rounded text-white/30 hover:text-teal hover:bg-teal/10 transition-colors disabled:opacity-40" title="Download standings as an image (PNG)"><Download size={13} /></button>
               <button onClick={() => onEdit(comp)} className="p-1.5 rounded text-white/30 hover:text-teal hover:bg-teal/10 transition-colors" title="Edit"><Pencil size={13} /></button>
               <button onClick={() => onDelete(comp)} className="p-1.5 rounded text-white/30 hover:text-red-400 hover:bg-red-500/10 transition-colors" title="Delete"><Trash2 size={13} /></button>
             </div>
@@ -251,37 +252,64 @@ export default function Competitions() {
   const [editComp, setEditComp] = useState(null)
   const [exportComp, setExportComp] = useState(null)   // comp currently being captured
   const [exporting,  setExporting]  = useState(false)
+  const [copiedId,   setCopiedId]   = useState('')     // comp id just copied
   const exportRef = useRef(null)
 
   const ghostIds = useMemo(() => new Set(users.filter(u => u.ghost).map(u => u.id)), [users])
 
-  // Render the hidden export card for `comp`, snapshot it to a PNG, download it.
-  async function captureComp(comp) {
+  // Render the hidden export card for `comp`, let it paint, then run `fn` on the
+  // node (snapshot to PNG / blob). Always tears the node back down afterward.
+  async function withExportNode(comp, fn) {
     setExportComp(comp)
-    // Let the off-screen node paint before snapshotting.
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
     await new Promise(r => setTimeout(r, 60))
-    if (exportRef.current) {
-      const dataUrl = await toPng(exportRef.current, { pixelRatio: 2, cacheBust: true })
+    try { if (exportRef.current) await fn(exportRef.current) }
+    finally { setExportComp(null) }
+  }
+
+  async function downloadComp(comp) {
+    await withExportNode(comp, async (node) => {
+      const dataUrl = await toPng(node, { pixelRatio: 2, cacheBust: true })
       const a = document.createElement('a')
       a.href = dataUrl
       a.download = `${slugName(comp.name)}_standings.png`
       a.click()
-    }
-    setExportComp(null)
+    })
+  }
+
+  async function copyComp(comp) {
+    await withExportNode(comp, async (node) => {
+      const blob = await toBlob(node, { pixelRatio: 2, cacheBust: true })
+      if (!blob) return
+      if (navigator.clipboard && window.ClipboardItem) {
+        await navigator.clipboard.write([new window.ClipboardItem({ 'image/png': blob })])
+        setCopiedId(comp.id); setTimeout(() => setCopiedId(''), 1800)
+      } else {
+        // Clipboard images unsupported — fall back to a download.
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url; a.download = `${slugName(comp.name)}_standings.png`; a.click()
+        URL.revokeObjectURL(url)
+      }
+    })
   }
 
   async function exportOne(comp) {
     if (exporting) return
     setExporting(true)
-    try { await captureComp(comp) } finally { setExporting(false) }
+    try { await downloadComp(comp) } finally { setExporting(false) }
+  }
+  async function copyOne(comp) {
+    if (exporting) return
+    setExporting(true)
+    try { await copyComp(comp) } catch { /* clipboard blocked */ } finally { setExporting(false) }
   }
   async function exportAll() {
     if (exporting) return
     setExporting(true)
     try {
       for (const comp of sorted) {
-        await captureComp(comp)
+        await downloadComp(comp)
         await new Promise(r => setTimeout(r, 200))   // stagger downloads
       }
     } finally { setExporting(false) }
@@ -351,7 +379,7 @@ export default function Competitions() {
             <CompetitionCard key={comp.id} comp={comp} deals={deals} users={users}
               profileId={profile?.id} canManage={canManage} isAdmin={isAdmin}
               onEdit={(c) => { setEditComp(c); setModal(true) }} onDelete={handleDelete}
-              onExport={exportOne} exporting={exporting} />
+              onExport={exportOne} onCopy={copyOne} copied={copiedId === comp.id} exporting={exporting} />
           ))}
         </div>
       )}
