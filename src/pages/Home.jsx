@@ -147,10 +147,10 @@ export default function Home() {
     const now = new Date();
     const daysSince = last ? Math.max(0, Math.floor((now - new Date(last + "T12:00:00")) / 86400000)) : null;
     const hasWeek = (p) => {
-      const ws = dfFormat(p, "yyyy-MM-dd"), we = dfFormat(endOfWeek(p, { weekStartsOn: 1 }), "yyyy-MM-dd");
+      const ws = dfFormat(p, "yyyy-MM-dd"), we = dfFormat(endOfWeek(p, { weekStartsOn: 0 }), "yyyy-MM-dd");
       return mine.some(d => d >= ws && d <= we);
     };
-    let streak = 0, ptr = startOfWeek(now, { weekStartsOn: 1 });
+    let streak = 0, ptr = startOfWeek(now, { weekStartsOn: 0 });
     if (!hasWeek(ptr)) ptr = addDays(ptr, -7);       // current week may be incomplete
     for (let i = 0; i < 52; i++) { if (!hasWeek(ptr)) break; streak++; ptr = addDays(ptr, -7); }
     return { last, daysSince, streak };
