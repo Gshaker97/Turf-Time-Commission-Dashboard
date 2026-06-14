@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { format, subMonths, startOfWeek, endOfWeek, addDays } from 'date-fns'
-import { fetchDeals, fetchUsers } from '../lib/db'
+import { fetchDeals, fetchUsers, fetchRepGoals, saveRepGoal, deleteRepGoal } from '../lib/db'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserCommission, fmt, activeDeals } from '../utils/commission'
@@ -18,32 +18,33 @@ const isSeller = (u) => u.role === 'rep' || u.role === 'manager'
 function getNoteKey(repId)   { return `turf_note_${repId}` }
 function getNote(repId)      { return localStorage.getItem(getNoteKey(repId)) ?? '' }
 function saveNote(repId, t)  { localStorage.setItem(getNoteKey(repId), t) }
-function repGoalKey(repId)   { return `turf_repgoal_${repId}_${format(new Date(), 'yyyy-MM')}` }
-function teamGoalKey(mgrId)  { return `turf_teamgoal_${mgrId}_${format(new Date(), 'yyyy-MM')}` }
+
+// Goals are scoped to the current calendar month (they reset each month).
+const GOAL_NOW   = new Date()
+const GOAL_YEAR  = GOAL_NOW.getFullYear()
+const GOAL_MONTH = GOAL_NOW.getMonth() + 1
 
 const TIER_COLOR = { green: '#4ade80', yellow: '#fbbf24', orange: '#fb923c' }
 
-function RepCard({ rep, healthTier, canEdit, canEditGoal }) {
+function RepCard({ rep, healthTier, canEdit, canEditGoal, savedGoal, onSaveGoal, onResetGoal }) {
   const { statusColor } = useSettings()
   const [note,        setNote]        = useState(() => getNote(rep.id))
   const [editingNote, setEditingNote] = useState(false)
   const [noteInput,   setNoteInput]   = useState(note)
 
-  const gKey = repGoalKey(rep.id)
-  const [goal,        setGoal]        = useState(() => {
-    const s = localStorage.getItem(gKey)
-    return s ? parseFloat(s) : rep.autoGoal
-  })
+  // Goal is DB-backed (shared across devices): savedGoal comes from the parent;
+  // fall back to the rep's auto goal when none is set.
+  const goal = savedGoal != null ? savedGoal : rep.autoGoal
   const [editingGoal, setEditingGoal] = useState(false)
   const [goalInput,   setGoalInput]   = useState('')
 
   function submitNote() { saveNote(rep.id, noteInput); setNote(noteInput); setEditingNote(false) }
   function submitGoal() {
     const v = parseFloat(goalInput)
-    if (v > 0) { localStorage.setItem(gKey, v.toString()); setGoal(v) }
+    if (v > 0) onSaveGoal?.(v)
     setEditingGoal(false)
   }
-  function resetGoal() { localStorage.removeItem(gKey); setGoal(rep.autoGoal); setEditingGoal(false) }
+  function resetGoal() { onResetGoal?.(); setEditingGoal(false) }
 
   const initials    = rep.name?.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase() || '?'
   const healthColor = TIER_COLOR[healthTier ?? 'green']
@@ -203,26 +204,41 @@ export default function Team() {
   const [dateFrom,        setDateFrom]        = useState(getPresetRange('mtd').from)
   const [dateTo,          setDateTo]          = useState(getPresetRange('mtd').to)
   const [activePreset,    setActivePreset]    = useState('mtd')
-  const [teamGoalVersion, setTeamGoalVersion] = useState(0)
+  const [goalMap,         setGoalMap]         = useState({})   // 'rep:<id>' | 'team:<id>' -> target
   const [editingTeamGoal, setEditingTeamGoal] = useState(false)
   const [teamGoalInput,   setTeamGoalInput]   = useState('')
 
-  const tGoalKey = profile?.role === 'manager' ? teamGoalKey(profile.id) : null
+  // Persisted goals (migration 024) replace the old per-browser localStorage.
+  const teamSubject  = profile?.role === 'manager' ? profile.id : null
+  const teamSavedGoal = teamSubject != null ? goalMap['team:' + teamSubject] : null
+
+  async function persistGoal(subjectId, scope, value) {
+    setGoalMap(m => ({ ...m, [`${scope}:${subjectId}`]: value }))   // optimistic
+    await saveRepGoal(subjectId, scope, GOAL_YEAR, GOAL_MONTH, value)
+  }
+  async function clearGoal(subjectId, scope) {
+    setGoalMap(m => { const n = { ...m }; delete n[`${scope}:${subjectId}`]; return n })
+    await deleteRepGoal(subjectId, scope, GOAL_YEAR, GOAL_MONTH)
+  }
 
   function saveTeamGoal() {
     const v = parseFloat(teamGoalInput)
-    if (v > 0 && tGoalKey) { localStorage.setItem(tGoalKey, v.toString()); setTeamGoalVersion(n => n + 1) }
+    if (v > 0 && teamSubject) persistGoal(teamSubject, 'team', v)
     setEditingTeamGoal(false)
   }
   function resetTeamGoal() {
-    if (tGoalKey) localStorage.removeItem(tGoalKey)
-    setTeamGoalVersion(n => n + 1); setEditingTeamGoal(false)
+    if (teamSubject) clearGoal(teamSubject, 'team')
+    setEditingTeamGoal(false)
   }
 
   const loadData = () =>
-    Promise.all([fetchDeals(), fetchUsers()]).then(([{ data: d }, { data: u }]) => {
-      setDeals(activeDeals(d ?? [])); setUsers(u ?? [])   // exclude canceled jobs
-    })
+    Promise.all([fetchDeals(), fetchUsers(), fetchRepGoals(GOAL_YEAR, GOAL_MONTH)])
+      .then(([{ data: d }, { data: u }, { data: g }]) => {
+        setDeals(activeDeals(d ?? [])); setUsers(u ?? [])   // exclude canceled jobs
+        const m = {}
+        for (const row of g ?? []) if (row.target != null) m[`${row.scope}:${row.subject_id}`] = row.target
+        setGoalMap(m)
+      })
   useEffect(() => { loadData().finally(() => setLoading(false)) }, [])
   useRefreshOnFocus(loadData)
 
@@ -352,15 +368,14 @@ export default function Team() {
     const mtdRevenue       = monthTotal(curKey)
     const trailing         = [1,2,3].map(i=>monthTotal(format(subMonths(now,i),'yyyy-MM')))
     const autoGoal         = Math.max((trailing.reduce((s,v)=>s+v,0)/3)*1.1,10000)
-    const savedGoal        = tGoalKey?localStorage.getItem(tGoalKey):null
-    const goal             = savedGoal?parseFloat(savedGoal):autoGoal
+    const goal             = teamSavedGoal!=null?teamSavedGoal:autoGoal
     const dailyRate        = dayOfMonth>0?mtdRevenue/dayOfMonth:0
     const projectedRevenue = dailyRate*daysInMonth
     const expectedByNow    = goal*(dayOfMonth/daysInMonth)
     const paceVsGoal       = expectedByNow>0?(mtdRevenue/expectedByNow)*100:0
     const pctOfGoal        = Math.min((mtdRevenue/goal)*100,100)
     return { mtdRevenue, projectedRevenue, goal, autoGoal, paceVsGoal, pctOfGoal, dayOfMonth, daysInMonth }
-  }, [deals, visibleReps, tGoalKey, teamGoalVersion])
+  }, [deals, visibleReps, teamSavedGoal])
 
   const recentWins = useMemo(() => {
     const repIds = new Set(visibleReps.map(r=>r.id))
@@ -563,7 +578,10 @@ export default function Team() {
             <RepCard key={rep.id} rep={rep}
               healthTier={companyRepTiers?(companyRepTiers[rep.id]??'green'):'green'}
               canEdit={canEditNotes}
-              canEditGoal={isAdmin || profile?.id===rep.id || rep.manager_id===profile?.id} />
+              canEditGoal={isAdmin || profile?.id===rep.id || rep.manager_id===profile?.id}
+              savedGoal={goalMap['rep:'+rep.id] ?? null}
+              onSaveGoal={(v) => persistGoal(rep.id, 'rep', v)}
+              onResetGoal={() => clearGoal(rep.id, 'rep')} />
           ))}
           {repStats.length===0&&<p className="col-span-3 py-8 text-center text-white/30 text-[13px]">No reps found for your role.</p>}
         </div>

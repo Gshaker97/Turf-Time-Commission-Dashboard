@@ -426,6 +426,43 @@ export async function deleteGoal(year, month) {
   return supabase.from('monthly_goals').delete().eq('year', year).eq('month', month)
 }
 
+// ── Per-rep + per-team goals (shared, see migration 024) ──────
+// scope 'rep' → subject is a rep (personal goal); 'team' → subject is a manager
+// (their team goal). Returns all goals for a month so the Team page can map them.
+let _repGoals = []   // demo store: { subject_id, scope, year, month, target }
+
+export async function fetchRepGoals(year, month) {
+  if (DEMO_MODE) {
+    return { data: _repGoals.filter(g => g.year === year && g.month === month), error: null }
+  }
+  const { data, error } = await supabase
+    .from('rep_goals').select('subject_id,scope,target')
+    .eq('year', year).eq('month', month)
+  return {
+    data: (data ?? []).map(g => ({ ...g, target: g.target != null ? parseFloat(g.target) : null })),
+    error,
+  }
+}
+
+export async function saveRepGoal(subjectId, scope, year, month, target) {
+  if (DEMO_MODE) {
+    _repGoals = _repGoals.filter(g => !(g.subject_id === subjectId && g.scope === scope && g.year === year && g.month === month))
+    _repGoals.push({ subject_id: subjectId, scope, year, month, target })
+    return { error: null }
+  }
+  return supabase.from('rep_goals')
+    .upsert({ subject_id: subjectId, scope, year, month, target }, { onConflict: 'subject_id,scope,year,month' })
+}
+
+export async function deleteRepGoal(subjectId, scope, year, month) {
+  if (DEMO_MODE) {
+    _repGoals = _repGoals.filter(g => !(g.subject_id === subjectId && g.scope === scope && g.year === year && g.month === month))
+    return { error: null }
+  }
+  return supabase.from('rep_goals').delete()
+    .eq('subject_id', subjectId).eq('scope', scope).eq('year', year).eq('month', month)
+}
+
 // ── Weekly stats (rep estimates → close rate) ─────────────────
 export async function fetchWeeklyStats() {
   if (DEMO_MODE) return { data: _weeklyStats, error: null }

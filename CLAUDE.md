@@ -113,7 +113,12 @@ setup + deploy steps.
   thread); `022` adds note editing + admin delete: authors edit their own
   notes (RLS), a BEFORE UPDATE trigger snapshots the prior text into
   `deal_notes.edits` + stamps `edited_at` (tamper-proof, and author/deal/
-  created_at are frozen), and only admins (`my_role()='admin'`) may delete. Do not re-run `001`/`002` against a populated database.
+  created_at are frozen), and only admins (`my_role()='admin'`) may delete;
+  `024` adds the `rep_goals` table (per-rep + per-team monthly goals, shared
+  across devices — replaces the old per-browser localStorage goals; `scope='rep'`
+  → subject is the rep, `scope='team'` → subject is the manager; company-wide
+  goal stays in `monthly_goals`). RLS: anyone reads; writes allowed for admins,
+  the subject themselves, or the subject's direct manager. Do not re-run `001`/`002` against a populated database.
 
 ## User management (Admin page)
 
@@ -148,12 +153,16 @@ data-mutation affordance is gated on `isAdmin`, NOT on sales title:
 - Dashboard **company** monthly revenue goal (`canEditGoal = isAdmin`).
 When adding a new edit/mutate control, gate it on `isAdmin` — never on `role`.
 
-**GOALS are the one carve-out** (they're personal/team targets in localStorage,
-not commission data): reps set their OWN personal goal, managers set their
-team's reps' goals AND their own team goal, admins set any. On `Team.jsx` the
-per-rep card uses `canEditGoal = isAdmin || profile.id===rep.id ||
-rep.manager_id===profile.id`, and the team-goal pencil shows for `role==='manager'`.
-The Dashboard's goal is the company-wide revenue goal (separate, admin-only).
+**GOALS are the one carve-out** (they're personal/team targets, not commission
+data): reps set their OWN personal goal, managers set their team's reps' goals
+AND their own team goal, admins set any. Goals are DB-backed in `rep_goals`
+(migration 024) and shared across devices/users — `fetchRepGoals`/`saveRepGoal`/
+`deleteRepGoal` in `db.js`, scoped to the current calendar month. On `Team.jsx`
+the per-rep card uses `canEditGoal = isAdmin || profile.id===rep.id ||
+rep.manager_id===profile.id`, and the team-goal pencil shows for `role==='manager'`;
+RLS in 024 enforces the same on the server. The Dashboard's goal is the
+company-wide revenue goal (separate `monthly_goals` table, admin-only).
+(Coach notes on the Team page are still per-browser localStorage — not yet shared.)
 
 **Visibility (view scoping, NOT edit) by sales title:**
 - **Rep:** their own deals only (`role === 'rep'` filter in `Deals.jsx`); NEVER
