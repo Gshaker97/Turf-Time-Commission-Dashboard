@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Trophy, Plus, Pencil, Trash2, ChevronDown } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Trophy, Plus, Pencil, Trash2, ChevronDown, Download } from 'lucide-react'
 import { format } from 'date-fns'
+import { toPng } from 'html-to-image'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchCompetitions, fetchDeals, fetchUsers, insertCompetition, updateCompetition, deleteCompetition } from '../lib/db'
 import { competitionStandings, competitionStatus, competitionEntryDeals, typeLabel, metricLabel, creditLabel, fmtScore } from '../utils/competition'
@@ -93,7 +94,7 @@ function StandRow({ e, comp, deals, users, canManage, mine }) {
   )
 }
 
-function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, onEdit, onDelete }) {
+function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, onEdit, onDelete, onExport, exporting }) {
   const [open, setOpen] = useState(false)
   const ghostIds = useMemo(() => new Set(users.filter(u => u.ghost).map(u => u.id)), [users])
   const standings = useMemo(
@@ -126,6 +127,7 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, on
           </div>
           {canManage && (
             <div className="flex items-center gap-1 flex-shrink-0">
+              <button onClick={() => onExport(comp)} disabled={exporting} className="p-1.5 rounded text-white/30 hover:text-teal hover:bg-teal/10 transition-colors disabled:opacity-40" title="Export standings as an image (for Canva, slides, etc.)"><Download size={13} /></button>
               <button onClick={() => onEdit(comp)} className="p-1.5 rounded text-white/30 hover:text-teal hover:bg-teal/10 transition-colors" title="Edit"><Pencil size={13} /></button>
               <button onClick={() => onDelete(comp)} className="p-1.5 rounded text-white/30 hover:text-red-400 hover:bg-red-500/10 transition-colors" title="Delete"><Trash2 size={13} /></button>
             </div>
@@ -167,6 +169,76 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, on
   )
 }
 
+// A clean, share-ready render of one competition's standings — same look as the
+// live card, minus the admin buttons / drill-downs — captured to a PNG for
+// dropping into Canva, slides, etc. Rendered off-screen only while exporting.
+const exHeadCol  = 'rgba(255,255,255,0.3)'
+function CompetitionExportCard({ comp, deals, users, ghostIds }) {
+  // Hide ghost names (this image is a team-facing artifact, like what non-admins see).
+  const standings = competitionStandings(comp, deals, users, { hiddenIds: ghostIds })
+  const status = competitionStatus(comp, todayISO())
+  const st = STATUS[status]
+  return (
+    <div style={{ width: 880, background: '#1a1a1a', padding: 28, fontFamily: 'Inter, Arial, sans-serif' }}>
+      <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 16, padding: 24 }}>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
+          <span style={{ fontSize: 22 }}>🏆</span>
+          <h3 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>{comp.name}</h3>
+          <span style={{ fontSize: 11, fontWeight: 600, color: st.color, border: `1px solid ${st.color}40`, borderRadius: 999, padding: '2px 10px' }}>{st.label}</span>
+        </div>
+        <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', margin: '2px 0 0' }}>
+          {typeLabel(comp.type)} · {metricLabel(comp.metric)} · {fmtRange(comp.start_date, comp.end_date)}
+        </p>
+        <p style={{ fontSize: 11, color: exHeadCol, margin: '2px 0 0' }}>
+          {creditLabel(comp.credit_mode)}
+          {comp.goal_mode === 'target' && comp.goal_target ? ` · Goal ${fmtScore(Number(comp.goal_target), comp.metric)}` : ''}
+        </p>
+        {comp.description && <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.55)', margin: '8px 0 0' }}>{comp.description}</p>}
+
+        {/* Standings (full) */}
+        <div style={{ marginTop: 16 }}>
+          {standings.length === 0 ? (
+            <p style={{ fontSize: 13, color: exHeadCol, padding: '8px 0' }}>No participants yet.</p>
+          ) : standings.map(e => {
+            const rc = RANK_COLOR[e.rank]
+            const hasTarget = e.target > 0
+            return (
+              <div key={e.id} style={{ marginBottom: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 12px', borderRadius: 8, background: e.rank <= 3 && rc ? rc + '14' : '#181818' }}>
+                  <span style={{ width: 28, textAlign: 'center', fontSize: 15, fontWeight: 700, color: rc || 'rgba(255,255,255,0.45)' }}>
+                    {e.rank <= 3 ? ['🥇', '🥈', '🥉'][e.rank - 1] : e.rank}
+                  </span>
+                  <span style={{ flex: 1, fontSize: 14, color: 'rgba(255,255,255,0.9)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.name}</span>
+                  {e.earned && <span style={{ fontSize: 10, fontWeight: 700, color: '#00b894', border: '1px solid #00b89455', borderRadius: 999, padding: '2px 8px' }}>🎉 Earned</span>}
+                  <span style={{ fontSize: 14, fontWeight: 700, color: '#fff', whiteSpace: 'nowrap' }}>{fmtScore(e.score, comp.metric)}</span>
+                </div>
+                {hasTarget && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 12px 6px' }}>
+                    <span style={{ width: 28, flexShrink: 0 }} />
+                    <div style={{ flex: 1, height: 6, borderRadius: 999, background: '#ffffff12', overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${Math.min((e.progress || 0) * 100, 100)}%`, background: e.earned ? '#00b894' : '#2dd4bf', borderRadius: 999 }} />
+                    </div>
+                    <span style={{ fontSize: 10, color: exHeadCol, whiteSpace: 'nowrap' }}>of {fmtScore(e.target, comp.metric)}</span>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Footer / branding */}
+        <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid #262626', display: 'flex', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#00b894', letterSpacing: 0.5 }}>TURF TIME</span>
+          <span style={{ fontSize: 11, color: exHeadCol }}>{format(new Date(), 'MMM d, yyyy')}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const slugName = (s) => String(s || 'competition').replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '') || 'competition'
+
 export default function Competitions() {
   const { profile, isAdmin } = useAuth()
   // Everyone can VIEW competitions/standings; only admins create/edit/delete.
@@ -177,6 +249,43 @@ export default function Competitions() {
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(false)
   const [editComp, setEditComp] = useState(null)
+  const [exportComp, setExportComp] = useState(null)   // comp currently being captured
+  const [exporting,  setExporting]  = useState(false)
+  const exportRef = useRef(null)
+
+  const ghostIds = useMemo(() => new Set(users.filter(u => u.ghost).map(u => u.id)), [users])
+
+  // Render the hidden export card for `comp`, snapshot it to a PNG, download it.
+  async function captureComp(comp) {
+    setExportComp(comp)
+    // Let the off-screen node paint before snapshotting.
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+    await new Promise(r => setTimeout(r, 60))
+    if (exportRef.current) {
+      const dataUrl = await toPng(exportRef.current, { pixelRatio: 2, cacheBust: true })
+      const a = document.createElement('a')
+      a.href = dataUrl
+      a.download = `${slugName(comp.name)}_standings.png`
+      a.click()
+    }
+    setExportComp(null)
+  }
+
+  async function exportOne(comp) {
+    if (exporting) return
+    setExporting(true)
+    try { await captureComp(comp) } finally { setExporting(false) }
+  }
+  async function exportAll() {
+    if (exporting) return
+    setExporting(true)
+    try {
+      for (const comp of sorted) {
+        await captureComp(comp)
+        await new Promise(r => setTimeout(r, 200))   // stagger downloads
+      }
+    } finally { setExporting(false) }
+  }
 
   useEffect(() => { load() }, [])
   async function load() {
@@ -213,10 +322,20 @@ export default function Competitions() {
           <p className="text-[12px] text-white/40 mt-0.5">See how you stack up in the contests we're running.</p>
         </div>
         {canManage && (
-          <button onClick={() => { setEditComp(null); setModal(true) }}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-bold text-dark bg-teal hover:bg-teal-dark transition-colors">
-            <Plus size={15} /> New
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {sorted.length > 0 && (
+              <button onClick={exportAll} disabled={exporting}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-bold text-white/70 hover:text-white transition-colors disabled:opacity-50"
+                style={{ background: '#1e1e1e', border: '1px solid #2e2e2e' }}
+                title="Download a PNG of every competition's standings (one per slide)">
+                <Download size={15} /> {exporting ? 'Exporting…' : 'Export all'}
+              </button>
+            )}
+            <button onClick={() => { setEditComp(null); setModal(true) }}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-bold text-dark bg-teal hover:bg-teal-dark transition-colors">
+              <Plus size={15} /> New
+            </button>
+          </div>
         )}
       </div>
 
@@ -231,8 +350,18 @@ export default function Competitions() {
           {sorted.map(comp => (
             <CompetitionCard key={comp.id} comp={comp} deals={deals} users={users}
               profileId={profile?.id} canManage={canManage} isAdmin={isAdmin}
-              onEdit={(c) => { setEditComp(c); setModal(true) }} onDelete={handleDelete} />
+              onEdit={(c) => { setEditComp(c); setModal(true) }} onDelete={handleDelete}
+              onExport={exportOne} exporting={exporting} />
           ))}
+        </div>
+      )}
+
+      {/* Off-screen render used only to snapshot a competition to a PNG. */}
+      {exportComp && (
+        <div style={{ position: 'fixed', left: -99999, top: 0, pointerEvents: 'none', zIndex: -1 }} aria-hidden>
+          <div ref={exportRef}>
+            <CompetitionExportCard comp={exportComp} deals={deals} users={users} ghostIds={ghostIds} />
+          </div>
         </div>
       )}
 
