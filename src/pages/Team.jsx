@@ -1,19 +1,29 @@
 import { useState, useEffect, useMemo } from 'react'
 import { format, subMonths, startOfWeek, endOfWeek, addDays } from 'date-fns'
-import { fetchDeals, fetchUsers, fetchRepGoals, saveRepGoal, deleteRepGoal } from '../lib/db'
+import { fetchDeals, fetchUsers, fetchRepGoals, saveRepGoal, deleteRepGoal, fetchWeeklyStats } from '../lib/db'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { useAuth } from '../contexts/AuthContext'
-import { getUserCommission, fmt, activeDeals } from '../utils/commission'
-import { getPresetRange, presetLabel } from '../utils/dateRanges'
+import { getUserCommission, fmt, activeDeals, isCanceled } from '../utils/commission'
+import { getPresetRange, presetLabel, weeksInRange, weekStartOf } from '../utils/dateRanges'
 import DateRangeFilter from '../components/DateRangeFilter'
 import WeeklyStats from '../components/WeeklyStats'
 import { useSettings } from '../contexts/SettingsContext'
-import { MessageSquare, Flame, Snowflake, TrendingUp, TrendingDown, Trophy, Pencil, Check, X } from 'lucide-react'
+import { MessageSquare, Flame, Snowflake, TrendingUp, TrendingDown, Trophy, Pencil, Check, X, Target } from 'lucide-react'
 
 // Individual sellers = reps AND managers. Managers carry their own sales, so
 // they show up as individuals on the Team page and their production rolls into
 // their own team's totals.
 const isSeller = (u) => u.role === 'rep' || u.role === 'manager'
+
+// Close-rate helpers (mirror the Weekly Stats tab so the numbers match).
+const closeRate  = (closed, est) => (est > 0 ? (closed / est) * 100 : null)
+const ratePct    = (r) => (r == null ? '—' : `${r.toFixed(0)}%`)
+function rateColor(r) {
+  if (r == null)  return '#6b7280'
+  if (r >= 40)    return '#4ade80'
+  if (r >= 25)    return '#fbbf24'
+  return '#fb923c'
+}
 
 function getNoteKey(repId)   { return `turf_note_${repId}` }
 function getNote(repId)      { return localStorage.getItem(getNoteKey(repId)) ?? '' }
@@ -95,7 +105,7 @@ function RepCard({ rep, healthTier, canEdit, canEditGoal, savedGoal, onSaveGoal,
         </div>
       </div>
 
-      {/* Stats grid */}
+      {/* Production stats */}
       <div className="grid grid-cols-3 gap-2">
         {[
           { label: 'Deals',   value: rep.deals.toString() },
@@ -107,6 +117,36 @@ function RepCard({ rep, healthTier, canEdit, canEditGoal, savedGoal, onSaveGoal,
             <p className="text-[11px] font-bold text-white mt-0.5 truncate">{value}</p>
           </div>
         ))}
+      </div>
+
+      {/* Activity stats — estimates, closes, close rate */}
+      <div className="grid grid-cols-3 gap-2">
+        <div className="rounded-lg p-2 text-center" style={{ background: '#1e1e1e' }}>
+          <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest">Estimates</p>
+          <p className="text-[11px] font-bold text-white mt-0.5">{rep.totEst}</p>
+        </div>
+        <div className="rounded-lg p-2 text-center" style={{ background: '#1e1e1e' }}>
+          <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest">Closes</p>
+          <p className="text-[11px] font-bold text-white mt-0.5">{rep.totCl}</p>
+        </div>
+        <div className="rounded-lg p-2 text-center" style={{ background: '#1e1e1e' }}>
+          <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest">Close %</p>
+          <p className="text-[11px] font-bold mt-0.5" style={{ color: rateColor(rep.totRate) }}>{ratePct(rep.totRate)}</p>
+        </div>
+      </div>
+
+      {/* Self-gen vs lead close-rate split */}
+      <div className="flex items-center gap-3 text-[10px] -mt-1">
+        <span className="inline-flex items-center gap-1 text-white/40">
+          <Target size={10} className="text-[#74b9ff]" /> Self-gen
+          <span className="font-bold" style={{ color: rateColor(rep.sgRate) }}>{ratePct(rep.sgRate)}</span>
+          <span className="text-white/25">({rep.sgCl}/{rep.sgEst})</span>
+        </span>
+        <span className="inline-flex items-center gap-1 text-white/40">
+          <Target size={10} className="text-[#fbbf24]" /> Lead
+          <span className="font-bold" style={{ color: rateColor(rep.ldRate) }}>{ratePct(rep.ldRate)}</span>
+          <span className="text-white/25">({rep.ldCl}/{rep.ldEst})</span>
+        </span>
       </div>
 
       {/* Monthly goal progress */}
@@ -199,6 +239,7 @@ export default function Team() {
   const { statusColor } = useSettings()
   const [deals,           setDeals]           = useState([])
   const [users,           setUsers]           = useState([])
+  const [weeklyStats,     setWeeklyStats]     = useState([])
   const [loading,         setLoading]         = useState(true)
   const [tab,             setTab]             = useState('overview')
   const [dateFrom,        setDateFrom]        = useState(getPresetRange('mtd').from)
@@ -232,9 +273,10 @@ export default function Team() {
   }
 
   const loadData = () =>
-    Promise.all([fetchDeals(), fetchUsers(), fetchRepGoals(GOAL_YEAR, GOAL_MONTH)])
-      .then(([{ data: d }, { data: u }, { data: g }]) => {
+    Promise.all([fetchDeals(), fetchUsers(), fetchRepGoals(GOAL_YEAR, GOAL_MONTH), fetchWeeklyStats()])
+      .then(([{ data: d }, { data: u }, { data: g }, { data: ws }]) => {
         setDeals(activeDeals(d ?? [])); setUsers(u ?? [])   // exclude canceled jobs
+        setWeeklyStats(ws ?? [])
         const m = {}
         for (const row of g ?? []) if (row.target != null) m[`${row.scope}:${row.subject_id}`] = row.target
         setGoalMap(m)
@@ -268,9 +310,42 @@ export default function Team() {
     return []
   }, [users, profile, role])
 
+  // Estimates (manual, from weekly_stats) + closes (from deals) bucketed by the
+  // weeks overlapping the selected range — same definitions as the Weekly Stats
+  // tab, so the close rate on a card matches that tab.
+  const activityByRep = useMemo(() => {
+    const weeks   = weeksInRange(dateFrom, dateTo)
+    const weekSet = new Set(weeks.map(w => w.weekStart))
+    const sgEst = {}, ldEst = {}, sgCl = {}, ldCl = {}
+    for (const s of weeklyStats) {
+      if (!weekSet.has(s.week_start)) continue
+      sgEst[s.rep_id] = (sgEst[s.rep_id] || 0) + (Number(s.self_gen_estimates) || 0)
+      ldEst[s.rep_id] = (ldEst[s.rep_id] || 0) + (Number(s.lead_estimates) || 0)
+    }
+    for (const d of deals) {
+      if (!d.sale_date || isCanceled(d)) continue
+      const ws = weekStartOf(d.sale_date)
+      if (!weekSet.has(ws)) continue
+      if (d.setter_id) sgCl[d.setter_id] = (sgCl[d.setter_id] || 0) + 1
+      if (d.closer_id && d.closer_id !== d.setter_id) ldCl[d.closer_id] = (ldCl[d.closer_id] || 0) + 1
+    }
+    const out = {}
+    const ids = new Set([...Object.keys(sgEst), ...Object.keys(ldEst), ...Object.keys(sgCl), ...Object.keys(ldCl)])
+    for (const id of ids) {
+      const se = sgEst[id] || 0, le = ldEst[id] || 0, sc = sgCl[id] || 0, lc = ldCl[id] || 0
+      out[id] = {
+        sgEst: se, ldEst: le, sgCl: sc, ldCl: lc,
+        sgRate: closeRate(sc, se), ldRate: closeRate(lc, le),
+        totEst: se + le, totCl: sc + lc, totRate: closeRate(sc + lc, se + le),
+      }
+    }
+    return out
+  }, [weeklyStats, deals, dateFrom, dateTo])
+
   const repStats = useMemo(() => {
     const now    = new Date()
     const curKey = format(now, 'yyyy-MM')
+    const blankAct = { sgEst: 0, ldEst: 0, sgCl: 0, ldCl: 0, sgRate: null, ldRate: null, totEst: 0, totCl: 0, totRate: null }
     const rows = visibleReps.map(rep => {
       const allRepDeals  = deals.filter(d => d.setter_id === rep.id || d.closer_id === rep.id)
       const periodDeals  = allRepDeals.filter(d => {
@@ -299,11 +374,11 @@ export default function Team() {
         if (!allRepDeals.some(d => d.sale_date >= ws && d.sale_date <= we)) break
         streak++; weekPtr = addDays(weekPtr,-7)
       }
-      return { ...rep, deals: periodDeals.length, revenue, commission, mtdRev, autoGoal: goal, activePipeline, daysSinceLast, streak }
+      return { ...rep, deals: periodDeals.length, revenue, commission, mtdRev, autoGoal: goal, activePipeline, daysSinceLast, streak, ...(activityByRep[rep.id] || blankAct) }
     })
     rows.sort((a,b) => b.revenue-a.revenue)
     return rows.map((r,i) => ({...r, rank: i+1}))
-  }, [visibleReps, deals, dateFrom, dateTo])
+  }, [visibleReps, deals, dateFrom, dateTo, activityByRep])
 
   const teamStats = useMemo(() => {
     if (!profile) return []
@@ -387,6 +462,35 @@ export default function Team() {
       .map(d=>({ ...d, repName: users.find(u=>u.id===(d.closer_id||d.setter_id))?.name??'—', daysAgo: d.sale_date?Math.max(0,Math.floor((now.getTime()-new Date(d.sale_date+'T12:00:00').getTime())/86400000)):0 }))
   }, [deals, visibleReps, users])
 
+  // Reps shown as cards (ghost reps hidden from non-admins).
+  const displayReps = useMemo(
+    () => repStats.filter(rep => isAdmin || !rep.ghost),
+    [repStats, isAdmin]
+  )
+
+  // Group the cards by team (a manager heads their own team; reps group under
+  // their manager) with per-team subtotals. Used when more than one team is in
+  // view (e.g. admin/VP/director) so cards aren't a random flat list.
+  const teamGroups = useMemo(() => {
+    const nameOf = (id) => users.find(u => u.id === id)?.name
+    const groups = {}
+    for (const rep of displayReps) {
+      const mid = rep.role === 'manager' ? rep.id : (rep.manager_id || 'unassigned')
+      if (!groups[mid]) groups[mid] = { id: mid, name: mid === 'unassigned' ? 'Unassigned' : (nameOf(mid) ? `${nameOf(mid)}'s Team` : 'Team'), rows: [] }
+      groups[mid].rows.push(rep)
+    }
+    const list = Object.values(groups).map(g => {
+      const revenue = g.rows.reduce((s, r) => s + r.revenue, 0)
+      const dealCnt = g.rows.reduce((s, r) => s + r.deals, 0)
+      const est     = g.rows.reduce((s, r) => s + r.totEst, 0)
+      const cl      = g.rows.reduce((s, r) => s + r.totCl, 0)
+      return { ...g, revenue, deals: dealCnt, rate: closeRate(cl, est) }
+    })
+    list.sort((a, b) => b.revenue - a.revenue)
+    return list
+  }, [displayReps, users])
+  const groupView = teamGroups.length > 1
+
   const topPerformer   = repStats[0]
   // Coach notes + weekly stats are admin-only edits. Goals are a carve-out:
   // reps set their own personal goal, managers set their team's goals + their
@@ -394,6 +498,16 @@ export default function Team() {
   const canEditNotes   = isAdmin
 
   if (loading) return <div className="flex items-center justify-center py-24 text-white/30 text-[13px]">Loading…</div>
+
+  const renderCard = (rep) => (
+    <RepCard key={rep.id} rep={rep}
+      healthTier={companyRepTiers ? (companyRepTiers[rep.id] ?? 'green') : 'green'}
+      canEdit={canEditNotes}
+      canEditGoal={isAdmin || profile?.id === rep.id || rep.manager_id === profile?.id}
+      savedGoal={goalMap['rep:' + rep.id] ?? null}
+      onSaveGoal={(v) => persistGoal(rep.id, 'rep', v)}
+      onResetGoal={() => clearGoal(rep.id, 'rep')} />
+  )
 
   const TABS = [
     { key: 'overview', label: 'Overview' },
@@ -567,24 +681,40 @@ export default function Team() {
         </div>
       )}
 
-      {/* Rep cards — 1-col mobile, 2-col tablet, 3-col desktop */}
+      {/* Rep cards — grouped by team when more than one team is in view */}
       <div>
         <div className="flex items-baseline gap-3 mb-3">
           <h2 className="text-[13px] md:text-[14px] font-bold text-white">Rep Performance</h2>
-          <p className="text-[11px] text-white/30 hidden sm:block">Ranked by revenue</p>
+          <p className="text-[11px] text-white/30 hidden sm:block">{groupView ? 'Grouped by team' : 'Ranked by revenue'}</p>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 md:gap-4">
-          {repStats.filter(rep => isAdmin || !rep.ghost).map(rep => (
-            <RepCard key={rep.id} rep={rep}
-              healthTier={companyRepTiers?(companyRepTiers[rep.id]??'green'):'green'}
-              canEdit={canEditNotes}
-              canEditGoal={isAdmin || profile?.id===rep.id || rep.manager_id===profile?.id}
-              savedGoal={goalMap['rep:'+rep.id] ?? null}
-              onSaveGoal={(v) => persistGoal(rep.id, 'rep', v)}
-              onResetGoal={() => clearGoal(rep.id, 'rep')} />
-          ))}
-          {repStats.length===0&&<p className="col-span-3 py-8 text-center text-white/30 text-[13px]">No reps found for your role.</p>}
-        </div>
+        {displayReps.length === 0 ? (
+          <p className="py-8 text-center text-white/30 text-[13px]">No reps found for your role.</p>
+        ) : groupView ? (
+          <div className="space-y-5">
+            {teamGroups.map(group => (
+              <div key={group.id}>
+                <div className="flex items-center justify-between gap-3 mb-2.5 px-0.5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <h3 className="text-[13px] font-bold text-white truncate">{group.name}</h3>
+                    <span className="text-[11px] text-white/30 flex-shrink-0">{group.rows.length} rep{group.rows.length !== 1 ? 's' : ''}</span>
+                  </div>
+                  <div className="flex items-center gap-3 md:gap-4 text-right flex-shrink-0">
+                    <div><p className="text-[9px] uppercase tracking-wider text-white/30">Deals</p><p className="text-[12px] font-bold text-white">{group.deals}</p></div>
+                    <div><p className="text-[9px] uppercase tracking-wider text-white/30">Revenue</p><p className="text-[12px] font-bold text-teal">{fmt(group.revenue)}</p></div>
+                    <div><p className="text-[9px] uppercase tracking-wider text-white/30">Close %</p><p className="text-[12px] font-bold" style={{ color: rateColor(group.rate) }}>{ratePct(group.rate)}</p></div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 md:gap-4">
+                  {group.rows.map(renderCard)}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 md:gap-4">
+            {displayReps.map(renderCard)}
+          </div>
+        )}
       </div>
 
       {/* Recent Wins */}
