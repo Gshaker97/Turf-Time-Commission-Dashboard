@@ -191,9 +191,11 @@ setter from Lead Source (names resolved leniently: "JC" → "JC Correa" via
 matched by project_id with a deal-name fallback for re-signs under a new ID)
 updates the deal, sets status `Change Order`, and clears `checklist` +
 `commission_verified` + stored amounts so everything recomputes and re-verifies.
-**A gold-checked deal (`commission_verified=true`) is LOCKED — the change-order
-pass skips it entirely, so manual baseline/price edits stick. Un-check the gold
-seal to let the sync manage it again.**
+**A gold-checked deal (`commission_verified=true`) is fully LOCKED — both the
+change-order pass AND the schedule pass skip it, so every manual edit (baseline,
+price, install/pay dates, payment, office, override %s, setter/closer) sticks.
+Un-check the gold seal to let the sync manage it again. (The PAID pass that
+advances Pay Finalized → Paid on the pay date still runs.)**
 **CANCELLED schedule rows are IGNORED** — the sync never cancels a deal;
 cancellation is manual in the site. The sync never overrides
 `Pay Finalized`/`Paid`/`Sales Issue`/`Canceled` with schedule info.
