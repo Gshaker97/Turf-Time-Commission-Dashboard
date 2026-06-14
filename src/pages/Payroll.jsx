@@ -186,8 +186,12 @@ export default function Payroll() {
     [runDeals]
   )
 
-  const canApprove = statusLabels?.includes(APPROVED)
-  const canPay     = statusLabels?.includes(PAID)
+  // Viewing payroll is leadership (route guard: vp/admin), but CHANGING data
+  // (advancing status, editing a deal) is admin-only — non-admins get a
+  // read-only run.
+  const canApprove = isAdmin && statusLabels?.includes(APPROVED)
+  const canPay     = isAdmin && statusLabels?.includes(PAID)
+  const openEdit   = (deal) => { if (!isAdmin) return; setEditDeal(deal); setModal(true) }
   const viewLabel  = view === 'overdue' ? 'Overdue (unpaid)' : (fmtDay(view) || '—')
 
   // Optional filter: scope the run to a single payee/rep. Auto-clears if that
@@ -375,7 +379,7 @@ export default function Payroll() {
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {noOfficeDeals.map(d => (
-                  <button key={d.id} onClick={() => { setEditDeal(d); setModal(true) }}
+                  <button key={d.id} onClick={() => openEdit(d)}
                     className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-white/80 hover:text-white transition-colors"
                     style={{ background: '#1e1e1e', border: '1px solid #f59e0b40' }}>
                     {d.deal_name}
@@ -401,7 +405,7 @@ export default function Payroll() {
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {runUnverified.map(d => (
-                  <button key={d.id} onClick={() => { setEditDeal(d); setModal(true) }}
+                  <button key={d.id} onClick={() => openEdit(d)}
                     className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-white/80 hover:text-white transition-colors"
                     style={{ background: '#1e1e1e', border: '1px solid #fbbf2440' }}>
                     {d.deal_name}
@@ -510,7 +514,7 @@ export default function Payroll() {
                 return (
                   <div key={d.id} className="flex items-center gap-2.5 px-3 md:px-4 py-2 border-b border-white/5 last:border-0 hover:bg-white/[0.02] transition-colors">
                     <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} title={d.status} />
-                    <button onClick={() => { setEditDeal(d); setModal(true) }}
+                    <button onClick={() => openEdit(d)}
                       className="text-[13px] font-semibold text-white truncate text-left hover:text-teal transition-colors min-w-0 flex-1"
                       title="Click to edit this deal">
                       {d.deal_name}
@@ -557,7 +561,7 @@ export default function Payroll() {
                 <div key={d.id} className="rounded-xl p-3 md:p-4" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <button onClick={() => { setEditDeal(d); setModal(true) }}
+                      <button onClick={() => openEdit(d)}
                         className="text-[14px] font-semibold text-white truncate text-left hover:text-teal transition-colors" title="Click to edit this deal">
                         {d.deal_name}
                       </button>
@@ -599,7 +603,7 @@ export default function Payroll() {
                       <span className="ml-2 text-[15px] font-bold text-teal">{fmt(a.totalCommission)}</span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <button onClick={() => { setEditDeal(d); setModal(true) }}
+                      <button onClick={() => openEdit(d)}
                         className="p-2 rounded-lg text-white/40 hover:text-teal hover:bg-teal/10 transition-colors" title="Edit deal">
                         <Pencil size={14} />
                       </button>
@@ -656,7 +660,7 @@ export default function Payroll() {
             ) : deductions.map(x => (
               <div key={x.id} className="flex items-start justify-between gap-3 px-4 py-3 border-b border-white/5 last:border-0">
                 <div className="min-w-0">
-                  <button onClick={() => { setEditDeal(x.deal); setModal(true) }}
+                  <button onClick={() => openEdit(x.deal)}
                     className="text-[13px] font-semibold text-white/90 truncate text-left hover:text-teal transition-colors" title="Click to edit this deal">
                     {x.name}
                   </button>
@@ -680,7 +684,7 @@ export default function Payroll() {
                       : { color: '#fdcb6e', border: '1px solid #fdcb6e40' }}>
                     {x.applied ? 'Applied' : 'Pending'}
                   </span>
-                  <button onClick={() => { setEditDeal(x.deal); setModal(true) }}
+                  <button onClick={() => openEdit(x.deal)}
                     className="text-[11px] text-white/40 hover:text-teal transition-colors flex items-center gap-1">
                     <Pencil size={11} /> Edit
                   </button>

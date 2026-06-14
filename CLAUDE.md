@@ -130,6 +130,38 @@ setup + deploy steps.
   aggregates by `active`. When `VITE_USER_ADMIN_URL` is set, deactivating also
   bans their auth login so a live token can't keep them in.
 
+## Permissions model — who can SEE vs CHANGE
+
+**Editing data anywhere is admin-only** (`isAdmin` from `useAuth()` = the `admin`
+title OR the `is_admin` flag). Everyone else gets a read-only view; they can
+still filter, sort, and read/post/edit-their-own notes. Concretely, every
+data-mutation affordance is gated on `isAdmin`, NOT on sales title:
+- Deals page: inline cell edits, status/office/payment dropdowns, date fields,
+  the edit (pencil) + delete buttons, the gold-check seal, and the "+" create
+  FAB (`canEdit`/`canVerify` in `DealTable.jsx`, the FAB in `Deals.jsx`).
+- `DealModal` is only ever opened by admins (Deals via `canEdit`, Payroll via
+  `openEdit` which no-ops for non-admins).
+- Payroll: advancing status (`canApprove`/`canPay` require `isAdmin`) and the
+  edit-modal openers. Non-admins (a future non-admin VP) get a read-only run.
+- Competitions: create/edit/delete (`canManage = isAdmin`); everyone can VIEW.
+- Team: coach notes, monthly goals, weekly stats, team-goal (`canEditNotes`/
+  `canEditGoal = isAdmin`); managers+ can VIEW.
+- Dashboard monthly revenue goal (`canEditGoal = isAdmin`).
+When adding a new edit/mutate control, gate it on `isAdmin` — never on `role`.
+
+**Visibility (view scoping, NOT edit) by sales title:**
+- **Rep:** their own deals only (`role === 'rep'` filter in `Deals.jsx`); NEVER
+  any override amounts. No Team page (removed from nav + route guard).
+- **Manager/Director/VP:** their deals + their team's deals, and their OWN
+  override on the Commissions page. The Commissions page is siloed by identity
+  (`myParts(deal, id)` only emits roles the viewer personally holds), so nobody
+  sees anyone else's commission/override there.
+- **Admin:** sees and adjusts everything.
+- **Dashboard + Competitions are company-wide for everyone** (full leaderboards
+  / standings), by design — ghost names still hidden from non-admins.
+- Payroll/Import are route-guarded to `vp`/admin; Admin page to `admin`;
+  Requires-Audit self-guards to `isAdmin || isKeaton`.
+
 ## Security notes (already fixed — keep them fixed)
 
 - `profiles_update_self` has a `WITH CHECK` plus a `guard_profile_columns()`

@@ -373,7 +373,9 @@ export default function Team() {
   }, [deals, visibleReps, users])
 
   const topPerformer   = repStats[0]
-  const canEditNotes   = ['manager','director','vp','admin'].includes(role)
+  // Managers+ can VIEW the team; only admins can change anything (coach notes,
+  // goals, weekly stats). Editing data anywhere is admin-only.
+  const canEditNotes   = isAdmin
 
   if (loading) return <div className="flex items-center justify-center py-24 text-white/30 text-[13px]">Loading…</div>
 
@@ -446,7 +448,7 @@ export default function Team() {
             </div>
             <div className="ml-auto text-right">
               <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mb-0.5">
-                Goal {role==='manager'&&!editingTeamGoal&&(
+                Goal {isAdmin&&role==='manager'&&!editingTeamGoal&&(
                   <button onClick={()=>{setTeamGoalInput(paceData.goal.toFixed(0));setEditingTeamGoal(true)}}
                     className="ml-1 text-white/20 hover:text-teal/60 align-middle"><Pencil size={10}/></button>
                 )}
@@ -560,7 +562,7 @@ export default function Team() {
             <RepCard key={rep.id} rep={rep}
               healthTier={companyRepTiers?(companyRepTiers[rep.id]??'green'):'green'}
               canEdit={canEditNotes}
-              canEditGoal={canEditNotes||profile?.id===rep.id} />
+              canEditGoal={canEditNotes} />
           ))}
           {repStats.length===0&&<p className="col-span-3 py-8 text-center text-white/30 text-[13px]">No reps found for your role.</p>}
         </div>

@@ -639,9 +639,12 @@ export default function DealTable({
   onEdit, onDelete, onUpdate, loading, openNotesId,
 }) {
   const { statusColor, statusLabels, offices, paymentMethods } = useSettings()
-  const canEdit = ['admin', 'manager', 'director', 'vp'].includes(profile?.role) || profile?.is_admin === true
-  // Commission sign-off is a leadership action (VP/admin).
-  const canVerify = ['vp', 'admin'].includes(profile?.role) || profile?.is_admin === true
+  // Editing deal data anywhere is an admin-only action. Everyone else gets a
+  // read-only view (they can still filter, sort, and read/post notes). Admin =
+  // the 'admin' title OR the is_admin flag (same rule as useAuth().isAdmin).
+  const canEdit = profile?.role === 'admin' || profile?.is_admin === true
+  // Commission sign-off (gold check) is likewise admin-only.
+  const canVerify = canEdit
   const [notesOpen, setNotesOpen] = useState(() => new Set(openNotesId ? [openNotesId] : []))
   const toggleNotes = (id) => setNotesOpen(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
   useEffect(() => { if (openNotesId) setNotesOpen(s => new Set([...s, openNotesId])) }, [openNotesId])
