@@ -12,6 +12,7 @@ import {
   DEMO_WEEKLY_STATS,
   DEMO_SETTINGS,
   DEMO_COMPETITIONS,
+  DEMO_AUDIT_OVERRIDES,
 } from './demoData'
 
 // Local mutable copies for demo CRUD
@@ -22,6 +23,7 @@ let _goals       = { ...DEMO_GOALS } // keyed "YYYY-M" -> baseline_target
 let _weeklyStats = DEMO_WEEKLY_STATS.map(s => ({ ...s }))
 let _settings    = JSON.parse(JSON.stringify(DEMO_SETTINGS))
 let _competitions = (DEMO_COMPETITIONS || []).map(c => ({ ...c }))
+let _auditOverrides = (DEMO_AUDIT_OVERRIDES || []).map(o => ({ ...o }))
 
 const goalKey = (y, m) => `${y}-${m}`
 
@@ -165,6 +167,45 @@ export async function deleteCompetition(id) {
     return { error: null, data: [{ id }] }
   }
   return supabase.from('competitions').delete().eq('id', id).select('id')
+}
+
+// ── Requires-Audit overrides (append-only correction log) ─────
+// History of manual commission corrections from the Requires-Audit panel.
+// Newest first. Joins the corrector's name for display.
+export async function fetchAuditOverrides() {
+  if (DEMO_MODE) {
+    const rows = _auditOverrides
+      .map(o => ({
+        ...o,
+        corrected_by_profile: _users.find(u => u.id === o.corrected_by) ?? null,
+      }))
+      .sort((a, b) => (b.corrected_at || '').localeCompare(a.corrected_at || ''))
+    return { data: rows, error: null }
+  }
+  const { data, error } = await supabase
+    .from('audit_overrides')
+    .select('*, corrected_by_profile:corrected_by(id,name)')
+    .order('corrected_at', { ascending: false })
+    .limit(500)
+  if (error) return { data: [], error }
+  return { data: data ?? [], error: null }
+}
+
+// Append correction rows (one per corrected field). Append-only: never updates
+// or deletes. The caller writes the corrected amounts back onto the deal via
+// updateDeal separately.
+export async function insertAuditOverrides(rows) {
+  if (!rows || !rows.length) return { data: [], error: null }
+  if (DEMO_MODE) {
+    const stamped = rows.map(r => ({
+      ...r,
+      id: 'ao-' + Math.random().toString(36).slice(2, 9),
+      corrected_at: new Date().toISOString(),
+    }))
+    _auditOverrides = [..._auditOverrides, ...stamped]
+    return { data: stamped, error: null }
+  }
+  return supabase.from('audit_overrides').insert(rows).select()
 }
 
 // ── Users / Profiles ──────────────────────────────────────────

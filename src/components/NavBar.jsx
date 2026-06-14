@@ -12,6 +12,7 @@ const TITLES = {
   '/commissions': 'Commissions',
   '/team':        'Team',
   '/admin':       'Admin Panel',
+  '/audit':       'Requires Audit',
 }
 
 const ROLE_ORDER = ['vp', 'director', 'manager', 'rep', 'admin']

@@ -16,6 +16,7 @@ const Home        = lazy(() => import('./pages/Home'))
 const Payroll     = lazy(() => import('./pages/Payroll'))
 const Competitions = lazy(() => import('./pages/Competitions'))
 const ImportDeals = lazy(() => import('./pages/ImportDeals'))
+const RequiresAudit = lazy(() => import('./pages/RequiresAudit'))
 
 function Spinner() {
   return (
@@ -54,6 +55,9 @@ function AppRoutes() {
         <Route path="home"        element={<Home />} />
         <Route path="payroll"     element={<Guard roles={['vp','admin']}><Payroll /></Guard>} />
         <Route path="import"      element={<Guard roles={['vp','admin']}><ImportDeals /></Guard>} />
+        {/* Requires Audit: Keaton or admin only — the page self-guards by identity
+            (Keaton is a VP, not an admin), so no role-based Guard here. */}
+        <Route path="audit"       element={<RequiresAudit />} />
         <Route path="team"  element={
           <Guard roles={['rep','manager','director','vp','admin']}><Team /></Guard>
         } />
