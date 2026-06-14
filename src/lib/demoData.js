@@ -121,6 +121,32 @@ export const DEMO_DEALS_JOINED = [
   makeDeal({ deal_name: 'Torres — 5 Acacia Ln',      project_id: 'TT-1020', sale_date: daysAgo(78),  setter_id: 'u-mattj',    closer_id: 'u-jeremy',   baseline_revenue: 5900, job_price: 11400, status: 'Paid', install_date: daysAgo(64), pay_date: daysAgo(52) }),
   makeDeal({ deal_name: 'Underwood — 88 Sage Dr',    project_id: 'TT-1021', sale_date: daysAgo(86),  setter_id: 'u-stephen',  closer_id: 'u-stephen',  baseline_revenue: 5000, job_price: 9400,  status: 'Paid', install_date: daysAgo(72), pay_date: daysAgo(60) }),
   makeDeal({ deal_name: 'Vance — 240 Olive St',      project_id: 'TT-1022', sale_date: daysAgo(95),  setter_id: 'u-marc',     closer_id: 'u-marc',     baseline_revenue: 6200, job_price: 11900, status: 'Paid', install_date: daysAgo(80), pay_date: daysAgo(68) }),
+
+  // ── Requires-Audit demo cases — stored sheet amounts that disagree with the
+  //    rules engine, so Keaton/admin see a populated audit panel offline. ──
+  // (A) Stored amounts off vs computed: solo setter pool = 11000-6000 = 5000 (so
+  //     setter_amount 4600 is $400 light) and director @5% = 300 (stored 520).
+  makeDeal({ id: 'deal-aud-a', deal_name: 'Whitfield — 12 Mesa Verde',  project_id: 'TT-1090', sale_date: daysAgo(3),  setter_id: 'u-marc', closer_id: 'u-marc', baseline_revenue: 6000, job_price: 11000, status: 'Pay Finalized', install_date: daysAgo(1), office: 'Phoenix', setter_amount: 4600, director_amount: 520 }),
+  // (B) Tucson deal billed at the 5% rate instead of 3.75%: dir/VP @3.75% of
+  //     8000 = 300, but both stored at 400 (=5%). Flagged by the Tucson check.
+  makeDeal({ id: 'deal-aud-b', deal_name: 'Ochoa — 455 Saguaro (Tucson)', project_id: 'TT-1091', sale_date: daysAgo(5), setter_id: 'u-caleb', closer_id: 'u-jc', baseline_revenue: 8000, job_price: 15000, status: 'Pending Install', office: 'Tucson', director_override_pct: 0.05, vp_override_pct: 0.05, director_amount: 400, vp_amount: 400 }),
+  // (C) Already-clean deal that carries a PAST correction in the history log.
+  makeDeal({ id: 'deal-aud-c', deal_name: 'Pruitt — 7 Sandstone Loop', project_id: 'TT-1092', sale_date: daysAgo(40), setter_id: 'u-stephen', closer_id: 'u-stephen', baseline_revenue: 5000, job_price: 9000, status: 'Paid', install_date: daysAgo(28), pay_date: daysAgo(16), office: 'Phoenix', setter_amount: 4000, director_amount: 250 }),
+]
+
+// Seed one historical correction (against the clean deal-aud-c) so the audit
+// panel's bottom "history" section isn't empty in demo mode.
+export const DEMO_AUDIT_OVERRIDES = [
+  {
+    id: 'ao-demo-1',
+    deal_id: 'deal-aud-c',
+    field_name: 'director_amount',
+    original_value: 999,
+    corrected_value: 250,
+    correction_note: 'Sheet had a stray override figure; reset to 5% of baseline ($250).',
+    corrected_by: 'u-keaton',
+    corrected_at: daysAgo(14) + 'T17:20:00.000Z',
+  },
 ]
 
 // A few payment records (against Paid deals) so the Commissions/Admin pages have data.

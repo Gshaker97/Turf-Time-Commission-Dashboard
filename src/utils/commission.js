@@ -13,6 +13,16 @@
 
 const num = (v) => (v == null ? 0 : Number(v) || 0)
 
+// Director & VP override rate defaults BY OFFICE. Used only as a FALLBACK when a
+// deal carries no explicit per-deal override % (e.g. a manual deal the sync
+// hasn't stamped yet). Tucson books at 3.75%, every other office at 5%. A stored
+// *_amount or an explicit per-deal pct always wins over this default, so this
+// never overrides a manually-corrected rate.
+export const TUCSON_OVERRIDE_RATE  = 0.0375
+export const DEFAULT_OVERRIDE_RATE = 0.05
+export const isTucson = (deal) => String(deal?.office || '').trim().toLowerCase() === 'tucson'
+export const officeOverrideRate = (deal) => (isTucson(deal) ? TUCSON_OVERRIDE_RATE : DEFAULT_OVERRIDE_RATE)
+
 export function dealAmounts(deal) {
   const baseline = num(deal.baseline_revenue)
   const job      = num(deal.job_price)
@@ -42,11 +52,27 @@ export function dealAmounts(deal) {
     closerDed = deduction * (1 - dsp)
   }
   else                          closerDed = deduction          // 'closer' (default)
-  const setter   = deal.setter_amount   != null ? num(deal.setter_amount)   : Math.max(rawSetter - setterDed, 0)
-  const closer   = deal.closer_amount   != null ? num(deal.closer_amount)   : Math.max(rawCloser - closerDed, 0)
-  const manager  = deal.manager_amount  != null ? num(deal.manager_amount)  : baseline * num(deal.manager_override_pct)
-  const director = deal.director_amount != null ? num(deal.director_amount) : baseline * num(deal.director_override_pct)
-  const vp       = deal.vp_amount       != null ? num(deal.vp_amount)       : baseline * num(deal.vp_override_pct)
+  // Computed-from-rules amounts — what each role SHOULD earn given the split and
+  // the override %s, independent of any stored value. The Requires-Audit panel
+  // reconciles these against the stored sheet amounts. Director/VP fall back to
+  // the office rate (Tucson 3.75% / else 5%) only when the per-deal pct is
+  // missing; manager has no such default (sync stamps 0.03 at deal creation).
+  const dirVpRate = officeOverrideRate(deal)
+  const computed = {
+    setter:   Math.max(rawSetter - setterDed, 0),
+    closer:   Math.max(rawCloser - closerDed, 0),
+    manager:  baseline * num(deal.manager_override_pct),
+    director: baseline * (deal.director_override_pct != null ? num(deal.director_override_pct) : dirVpRate),
+    vp:       baseline * (deal.vp_override_pct       != null ? num(deal.vp_override_pct)       : dirVpRate),
+  }
+
+  // Stored *_amount (sheet sync / manual entry — already NET of deductions) wins
+  // when present; otherwise use the computed value.
+  const setter   = deal.setter_amount   != null ? num(deal.setter_amount)   : computed.setter
+  const closer   = deal.closer_amount   != null ? num(deal.closer_amount)   : computed.closer
+  const manager  = deal.manager_amount  != null ? num(deal.manager_amount)  : computed.manager
+  const director = deal.director_amount != null ? num(deal.director_amount) : computed.director
+  const vp       = deal.vp_amount       != null ? num(deal.vp_amount)       : computed.vp
 
   const repCommission = setter + closer
   const overrides     = manager + director + vp
@@ -56,6 +82,7 @@ export function dealAmounts(deal) {
     baseline, job, revenue: baseline, deduction, manualDeduction, dealerFee, financed,
     setter, closer, manager, director, vp,
     repCommission, overrides, totalCommission,
+    computed,
   }
 }
 
@@ -126,3 +153,63 @@ export const isCanceled = (deal) => {
   return s === 'canceled' || s === 'cancelled'
 }
 export const activeDeals = (deals = []) => deals.filter(d => !isCanceled(d))
+
+// ── Requires-Audit reconciliation ────────────────────────────
+// Compare the dollar amounts STORED on a deal (synced from the Google Sheet)
+// against what the commission rules compute. Any field off by more than $1 is
+// flagged so leadership can catch errors in EITHER the sheet or the dashboard
+// math. Stored amounts that match the rules — and fields with no stored value at
+// all (the engine just computes those) — are never flagged. Canceled deals are
+// excluded, consistent with every other aggregate.
+export const AUDIT_TOLERANCE = 1
+
+// [stored-column, human label, key into the `computed` object]
+const AUDIT_FIELDS = [
+  ['setter_amount',   'Setter',   'setter'],
+  ['closer_amount',   'Closer',   'closer'],
+  ['manager_amount',  'Manager',  'manager'],
+  ['director_amount', 'Director', 'director'],
+  ['vp_amount',       'VP',       'vp'],
+]
+
+// Returns null when the deal is clean (or canceled), otherwise
+// { deal, mismatches: [{ field, label, stored, calculated, diff, kind }] }.
+export function dealAudit(deal) {
+  if (!deal || isCanceled(deal)) return null
+  const { computed } = dealAmounts(deal)
+  const baseline = num(deal.baseline_revenue)
+  const mismatches = []
+
+  // 1) Stored amount vs computed amount, per role.
+  for (const [field, label, key] of AUDIT_FIELDS) {
+    if (deal[field] == null) continue          // nothing stored → nothing to reconcile
+    const stored = num(deal[field])
+    const calculated = computed[key]
+    if (Math.abs(stored - calculated) > AUDIT_TOLERANCE) {
+      mismatches.push({ field, label, stored, calculated, diff: stored - calculated, kind: 'amount' })
+    }
+  }
+
+  // 2) Tucson rate check: a Tucson deal whose stored Director/VP amount reflects
+  //    the 5% default instead of the 3.75% Tucson office rate. Catches a wrong
+  //    RATE even when the stored amount is internally consistent with a wrong %.
+  if (isTucson(deal)) {
+    const at5   = baseline * DEFAULT_OVERRIDE_RATE
+    const at375 = baseline * TUCSON_OVERRIDE_RATE
+    for (const [field, label] of [['director_amount', 'Director'], ['vp_amount', 'VP']]) {
+      if (deal[field] == null) continue
+      const stored = num(deal[field])
+      const looksLike5 =
+        Math.abs(stored - at5) <= AUDIT_TOLERANCE && Math.abs(stored - at375) > AUDIT_TOLERANCE
+      if (looksLike5 && !mismatches.some(m => m.field === field)) {
+        mismatches.push({ field, label, stored, calculated: at375, diff: stored - at375, kind: 'tucson-rate' })
+      }
+    }
+  }
+
+  return mismatches.length ? { deal, mismatches } : null
+}
+
+// Map a list of deals to the subset that need review (each as a dealAudit result).
+export const dealsRequiringAudit = (deals = []) =>
+  (deals || []).map(dealAudit).filter(Boolean)

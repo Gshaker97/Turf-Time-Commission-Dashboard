@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, BarChart2, DollarSign,
   Users2, ShieldCheck, Eye, X,
-  Home, Wallet, Trophy, Upload,
+  Home, Wallet, Trophy, Upload, ScanSearch,
 } from 'lucide-react'
 import NavBar from './NavBar'
 import ErrorBoundary from './ErrorBoundary'
@@ -21,6 +21,11 @@ const NAV = [
   { to: '/admin',       icon: ShieldCheck,     label: 'Admin',       short: 'Admin',   roles: ['admin'] },
 ]
 
+// Keaton (by identity) or any admin sees the Requires-Audit tab. Keaton is a VP,
+// not an admin, so this can't be expressed as a plain role on NAV above.
+const AUDIT_NAV = { to: '/audit', icon: ScanSearch, label: 'Requires Audit', short: 'Audit' }
+const isKeaton = (p) => p?.email?.toLowerCase() === 'keaton@turftime.com' || p?.name === 'Keaton Shaker'
+
 export default function Layout() {
   const { profile, isPreviewMode, clearPreview, isAdmin } = useAuth()
   const { pathname } = useLocation()
@@ -28,6 +33,7 @@ export default function Layout() {
   // Admin-flag users see admin-gated nav items in addition to their title's.
   const effectiveRoles = isAdmin ? [role, 'admin'] : [role]
   const items = NAV.filter(n => n.roles.some(r => effectiveRoles.includes(r)))
+  if (isAdmin || isKeaton(profile)) items.push(AUDIT_NAV)
 
   return (
     <div className="flex flex-col h-screen" style={{ background: '#1a1a1a' }}>
