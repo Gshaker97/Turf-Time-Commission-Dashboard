@@ -72,7 +72,7 @@ function schSync() {
   // Existing deals, keyed by project_id; plus the set of customer names (to
   // protect hand-entered deals from being duplicated).
   const deals = schGet_(url, key,
-    '/rest/v1/deals?select=id,project_id,deal_name,status,baseline_revenue,job_price,install_date,pay_date,payment_method,office,setter_id,closer_id,manager_override_pct,director_override_pct,vp_override_pct,commission_verified,checklist');
+    '/rest/v1/deals?select=id,project_id,deal_name,status,baseline_revenue,job_price,install_date,pay_date,payment_method,office,setter_id,closer_id,manager_override_pct,director_override_pct,vp_override_pct,commission_verified,checklist,synced_baseline,synced_job_price');
   const byProject = {}, namesSeen = new Set(), dealByName = {};
   deals.forEach(d => {
     if (d.project_id) byProject[String(d.project_id)] = d;
@@ -151,16 +151,32 @@ function schSync() {
         const existing    = byProject[projectId] || dealByName[customer.toLowerCase()];
 
         if (existing) {
-          // Change order: the sheet's financials differ from what we stored.
-          // Surfaces a re-signed deal as "Change Order" for re-verification —
-          // BUT a gold-checked deal (commission_verified) is LOCKED: once you've
-          // manually set + verified its numbers, the sync never overwrites them.
-          // To let the sync manage a verified deal again, un-check the gold seal.
-          const changed = schChanged_(existing.baseline_revenue, baselineVal) || schChanged_(existing.job_price, saleVal);
-          if (changed && existing.status !== SCH_CHANGE_STATUS && existing.commission_verified !== true) {
+          // A real CHANGE ORDER = the SHEET's numbers changed since we last
+          // synced this deal (synced_baseline/synced_job_price) — i.e. a new
+          // version of the sale. That fires regardless of the gold check, takes
+          // the new numbers, and UN-gold-checks for re-review. A manual in-app
+          // edit (sheet unchanged) or a duplicate row with the same numbers does
+          // NOT — your edits / verification stay put.
+          const snapMissing  = existing.synced_baseline == null && existing.synced_job_price == null;
+          const sheetChanged = !snapMissing &&
+            (schChanged_(existing.synced_baseline, baselineVal) || schChanged_(existing.synced_job_price, saleVal));
+
+          if (snapMissing) {
+            // First time we've tracked this deal's sheet figures — adopt them
+            // silently as the comparison baseline (no change order, no unchecking).
+            if (!SCH_DRY_RUN) {
+              try { schPatch_(url, key, '/rest/v1/deals?id=eq.' + existing.id, { synced_baseline: baselineVal, synced_job_price: saleVal });
+                    Object.assign(existing, { synced_baseline: baselineVal, synced_job_price: saleVal }); }
+              catch (e) { out.errors++; out.details.push(customer + ': ' + e.message); }
+            }
+            continue;
+          }
+          if (sheetChanged) {
             // Clear stored commission amounts so everything recomputes off the new
             // baseline/price + override %s (overrides won't go stale).
-            const patch = { baseline_revenue: baselineVal, job_price: saleVal, status: SCH_CHANGE_STATUS, commission_verified: false, checklist: [],
+            const patch = { baseline_revenue: baselineVal, job_price: saleVal,
+              synced_baseline: baselineVal, synced_job_price: saleVal,
+              status: SCH_CHANGE_STATUS, commission_verified: false, checklist: [],
               setter_amount: null, closer_amount: null, manager_amount: null, director_amount: null, vp_amount: null };
             if (customer && existing.deal_name !== customer) patch.deal_name = customer;
             // Re-point project_id when the re-sign came in under a new ID, so
@@ -168,7 +184,7 @@ function schSync() {
             if (projectId && existing.project_id !== projectId) patch.project_id = projectId;
             if (SCH_DRY_RUN) {
               out.changed++;
-              out.details.push('WOULD CHANGE-ORDER — ' + customer + ' (base ' + existing.baseline_revenue + '→' + baselineVal + ', sale ' + existing.job_price + '→' + saleVal + ')');
+              out.details.push('WOULD CHANGE-ORDER — ' + customer + ' (base ' + existing.synced_baseline + '→' + baselineVal + ', sale ' + existing.synced_job_price + '→' + saleVal + ')');
             } else {
               try { schPatch_(url, key, '/rest/v1/deals?id=eq.' + existing.id, patch); Object.assign(existing, patch); out.changed++; }
               catch (e) { out.errors++; out.details.push(customer + ': ' + e.message); }
@@ -188,6 +204,9 @@ function schSync() {
           setter_id: rep.id, closer_id: rep.id, setter_split_pct: 1,
           manager_id: rep.manager_id || null, director_id: directorId, vp_id: vpId,
           baseline_revenue: baselineVal, job_price: saleVal, project_id: projectId,
+          // Snapshot of the sheet figures, so a later sheet change is detected
+          // as a change order (vs. a manual edit).
+          synced_baseline: baselineVal, synced_job_price: saleVal,
           // Office-based override defaults (office unknown at sold-time → 5%;
           // the Schedule pass corrects Director/VP to the office rate).
           manager_override_pct: 0.03, director_override_pct: 0.05, vp_override_pct: 0.05,
