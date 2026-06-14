@@ -69,8 +69,9 @@ function StatCard({ label, value, sub, trend }) {
 }
 
 export default function Dashboard() {
-  const { profile, isAdmin } = useAuth()
-  const canEditGoal = ['admin', 'vp', 'director'].includes(profile?.role)
+  const { isAdmin } = useAuth()
+  // Setting the monthly revenue goal is a data change — admin-only.
+  const canEditGoal = isAdmin
 
   const [deals,        setDeals]        = useState([])
   const [users,        setUsers]        = useState([])

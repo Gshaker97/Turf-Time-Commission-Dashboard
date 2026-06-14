@@ -265,8 +265,8 @@ export default function Deals() {
         loading={loading}
       />
 
-      {/* FAB — above bottom nav on mobile */}
-      {role !== 'rep' && (
+      {/* FAB — creating deals is admin-only */}
+      {isAdmin && (
         <button
           onClick={() => { setEditDeal(null); setModal(true) }}
           className="fixed bottom-20 right-4 md:bottom-8 md:right-8 w-12 h-12 md:w-14 md:h-14 rounded-full bg-teal hover:bg-teal-dark flex items-center justify-center shadow-xl shadow-teal/30 hover:scale-105 transition-all z-40"

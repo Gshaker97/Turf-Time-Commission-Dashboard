@@ -169,7 +169,8 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, on
 
 export default function Competitions() {
   const { profile, isAdmin } = useAuth()
-  const canManage = ['vp', 'admin'].includes(profile?.role) || isAdmin
+  // Everyone can VIEW competitions/standings; only admins create/edit/delete.
+  const canManage = isAdmin
   const [comps, setComps] = useState([])
   const [deals, setDeals] = useState([])
   const [users, setUsers] = useState([])
