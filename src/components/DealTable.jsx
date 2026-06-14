@@ -18,8 +18,12 @@ export const DATE_FIELDS = [
 // gold check (commission_verified). Canceled and already-Paid deals are never
 // in review (old paid history shouldn't flood staging). Change orders clear
 // the gold check, so re-signed deals fall back into staging.
-export const dealNeedsReview = (deal) =>
-  !isCanceled(deal) && deal.status !== 'Paid' && deal.commission_verified !== true
+// Legacy deals (sale_date before the data-start cutoff) predate our atomized
+// data and are intentionally left out of staging — they're "it is what it is"
+// until they reach payout, when they'll be corrected by hand.
+export const dealNeedsReview = (deal, dataStartDate) =>
+  !isCanceled(deal) && deal.status !== 'Paid' && deal.commission_verified !== true &&
+  !(dataStartDate && deal.sale_date && deal.sale_date < dataStartDate)
 
 // Changing a deal's office anywhere re-applies the office-driven Director/VP
 // rate (Tucson 3.75%, else 5%) and clears stored sheet amounts so the engine

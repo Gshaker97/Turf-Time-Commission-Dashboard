@@ -3,6 +3,7 @@ import { Navigate } from 'react-router-dom'
 import { format, parseISO } from 'date-fns'
 import { AlertTriangle, ShieldCheck, History, X, Check, MapPin } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { useSettings } from '../contexts/SettingsContext'
 import { fetchDeals, fetchAuditOverrides, insertAuditOverrides, updateDeal } from '../lib/db'
 import { dealsRequiringAudit, fmt, isTucson } from '../utils/commission'
 
@@ -26,6 +27,7 @@ const fmtStamp = (d) => {
 
 export default function RequiresAudit() {
   const { profile, isAdmin } = useAuth()
+  const { dataStartDate } = useSettings()
   const allowed = isAdmin || isKeaton(profile)
 
   const [deals,     setDeals]     = useState([])
@@ -42,7 +44,7 @@ export default function RequiresAudit() {
 
   useEffect(() => { if (allowed) load() }, [allowed, load])
 
-  const flagged = useMemo(() => dealsRequiringAudit(deals), [deals])
+  const flagged = useMemo(() => dealsRequiringAudit(deals, dataStartDate), [deals, dataStartDate])
   const dealName = useMemo(() => {
     const m = {}
     for (const d of deals) m[d.id] = d.deal_name

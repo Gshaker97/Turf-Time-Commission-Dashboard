@@ -211,5 +211,10 @@ export function dealAudit(deal) {
 }
 
 // Map a list of deals to the subset that need review (each as a dealAudit result).
-export const dealsRequiringAudit = (deals = []) =>
-  (deals || []).map(dealAudit).filter(Boolean)
+// Legacy deals (closed before dataStartDate) predate our atomized data and are
+// left out so old imports don't permanently flag the audit panel.
+export const dealsRequiringAudit = (deals = [], dataStartDate = null) =>
+  (deals || [])
+    .filter(d => !(dataStartDate && d.sale_date && d.sale_date < dataStartDate))
+    .map(dealAudit)
+    .filter(Boolean)

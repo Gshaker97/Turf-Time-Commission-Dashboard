@@ -159,6 +159,22 @@ The default seed is `Deal Review`, `Pending Install`, `Change Order`,
 statuses are configurable, there is no longer a DB CHECK on `deals.status` (see
 `006_settings.sql`).
 
+**Legacy data cutoff (`data_start_date`).** Admin → Settings has a "Data Start
+Date" (an `app_settings` value, default `2026-06-01`, read as
+`dataStartDate` from `useSettings()`). Deals closed before it (`sale_date <
+dataStartDate`) predate our atomized data (office/pay date/payment weren't
+captured until June 1), so they're treated as "it is what it is": they STILL
+count in every historical total, but background nags leave them alone —
+excluded from the Deals "Needs review" staging (`dealNeedsReview(deal,
+dataStartDate)`), the Payroll overdue list (`overdueDeals`), the Requires-Audit
+panel (`dealsRequiringAudit(deals, dataStartDate)`), and the Watchdog's
+"overdue" + "negative pool" checks (`wdDataStart_`). What's deliberately KEPT
+(pay-time prompts, so old deals get corrected as they approach payout): the
+Payroll current-run banners, the amber missing-field flags, and the Watchdog's
+"paying within 7 days" missing-info/unverified checks. When changing the
+cutoff, never filter it through `activeDeals`/aggregate roll-ups — legacy deals
+must keep counting; the cutoff ONLY gates alert/task surfaces.
+
 **Status lifecycle:** new deals (manual or scheduler-imported) default to
 `Deal Review`; statuses are changed manually via the inline dropdown. The
 sync's PAID PASS auto-moves `Pay Finalized` → `Paid` once the deal's `pay_date`

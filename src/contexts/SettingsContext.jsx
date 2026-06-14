@@ -51,6 +51,10 @@ export function SettingsProvider({ children }) {
   const value = {
     settings, loaded, refresh, save,
     siteName: settings.site_name || 'Turf Time Dashboard',
+    // Deals whose sale_date is before this cutoff are "legacy" — they predate
+    // our atomized data (office/pay date/payment), so background alerts and
+    // staging leave them alone. They still count in historical totals.
+    dataStartDate: settings.data_start_date || '2026-06-01',
     statuses, statusLabels, statusColor,
     paymentMethods: settings.payment_methods ?? [],
     offices: settings.offices ?? [],
@@ -62,5 +66,5 @@ export const useSettings = () => useContext(SettingsContext) ?? {
   settings: DEFAULTS, loaded: false, refresh: () => {}, save: async () => ({}),
   statuses: DEFAULTS.deal_statuses, statusLabels: DEFAULTS.deal_statuses.map(s => s.label),
   statusColor: () => '#94a3b8', paymentMethods: DEFAULTS.payment_methods, offices: DEFAULTS.offices,
-  siteName: 'Turf Time Dashboard',
+  siteName: 'Turf Time Dashboard', dataStartDate: '2026-06-01',
 }
