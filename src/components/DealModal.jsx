@@ -30,6 +30,7 @@ const BLANK = {
   deduction_amount: '', deduction_note: '',
   financed_amount: '', dealer_fee_pct: '',
   deduction_paid_by: 'closer', deduction_split_pct: '50',
+  bonus_mode: 'amount', bonus_value: '', bonus_source: 'company', bonus_recipient: 'setter',
 }
 // Director/VP override % defaults are driven by the office: Phoenix → 5%,
 // Tucson → 3.75% (any other/unknown office falls back to 5%). Manager always
@@ -154,6 +155,10 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
         dealer_fee_pct:   deal.dealer_fee_pct   != null ? (deal.dealer_fee_pct * 100).toString() : '',
         deduction_paid_by: deal.deduction_paid_by ?? 'closer',
         deduction_split_pct: deal.deduction_split_pct != null ? (deal.deduction_split_pct * 100).toString() : '50',
+        bonus_mode:      deal.bonus_amount != null ? 'amount' : (deal.bonus_pct != null ? 'pct' : 'amount'),
+        bonus_value:     deal.bonus_amount != null ? String(deal.bonus_amount) : (deal.bonus_pct != null ? (deal.bonus_pct * 100).toString() : ''),
+        bonus_source:    deal.bonus_source    ?? 'company',
+        bonus_recipient: deal.bonus_recipient ?? 'setter',
       })
     } else {
       setForm(BLANK)
@@ -200,16 +205,27 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
     // cent — rounding to 2 dropped custom splits off by a few dollars.
     set('setter_split_pct', Math.min(100, Math.max(0, sp)).toFixed(4))
   }
+  const bonusValNum = parseFloat(form.bonus_value) || 0
   const preview  = calcDealCommissions({
     job_price:             parseFloat(form.job_price)        || 0,
     baseline_revenue:      parseFloat(form.baseline_revenue) || 0,
     setter_id:             form.setter_id,
     closer_id:             form.closer_id,
     setter_split_pct:      splitPct / 100,
+    // Override amounts only count when their person is assigned, so the preview
+    // must carry the ids too (not just the %s).
+    manager_id:            form.manager_id  || null,
+    director_id:           form.director_id || null,
+    vp_id:                 form.vp_id       || null,
     manager_override_pct:  parseFloat(form.manager_override_pct)  / 100 || 0,
     director_override_pct: parseFloat(form.director_override_pct) / 100 || 0,
     vp_override_pct:       parseFloat(form.vp_override_pct)       / 100 || 0,
+    bonus_amount:          form.bonus_mode === 'amount' && bonusValNum > 0 ? bonusValNum : null,
+    bonus_pct:             form.bonus_mode === 'pct'    && bonusValNum > 0 ? bonusValNum / 100 : null,
+    bonus_source:          form.bonus_source,
+    bonus_recipient:       form.bonus_recipient,
   })
+  const bonusDollars = preview.bonus || 0
 
   // Financing dealer fee = financed amount × fee%. Counts as a deduction.
   const financed = parseFloat(form.financed_amount) || 0
@@ -219,6 +235,9 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
   const setterName = users.find(u => u.id === form.setter_id)?.name || 'Setter'
   const closerName = users.find(u => u.id === form.closer_id)?.name || 'Closer'
   const dedSplit = Math.min(100, Math.max(0, parseFloat(form.deduction_split_pct) || 50))  // setter's %
+  const recipName = form.bonus_recipient === 'closer' ? closerName : setterName
+  // How much of the bonus the chosen override couldn't cover (rest is company-funded).
+  const bonusShortfall = form.bonus_source !== 'company' ? Math.max(0, bonusDollars - (preview.bonusFromOverride || 0)) : 0
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -243,6 +262,10 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
       dealer_fee_pct:   form.dealer_fee_pct ? parseFloat(form.dealer_fee_pct) / 100 : null,
       deduction_paid_by: form.deduction_paid_by || 'closer',
       deduction_split_pct: Math.min(1, Math.max(0, (parseFloat(form.deduction_split_pct) || 50) / 100)),
+      bonus_amount:    (parseFloat(form.bonus_value) > 0 && form.bonus_mode === 'amount') ? parseFloat(form.bonus_value)       : null,
+      bonus_pct:       (parseFloat(form.bonus_value) > 0 && form.bonus_mode === 'pct')    ? parseFloat(form.bonus_value) / 100 : null,
+      bonus_source:    parseFloat(form.bonus_value) > 0 ? form.bonus_source    : null,
+      bonus_recipient: parseFloat(form.bonus_value) > 0 ? form.bonus_recipient : null,
       // Any edit recomputes from the current numbers — clear stored sheet amounts
       // so the engine uses baseline/job + the splits/%s above, not stale values.
       setter_amount: null, closer_amount: null,
@@ -522,6 +545,48 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                 </div>
               ))}
             </div>
+          </div>
+
+          {/* Rep bonus — flat $ or % of baseline, optionally pulled from an override */}
+          <div>
+            <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-3">Rep Bonus <span className="text-white/20 normal-case font-medium">· optional</span></p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
+              <Field label="Type">
+                <Sel value={form.bonus_mode} onChange={e => set('bonus_mode', e.target.value)}>
+                  <option value="amount">Amount ($)</option>
+                  <option value="pct">% of baseline</option>
+                </Sel>
+              </Field>
+              <Field label={form.bonus_mode === 'pct' ? 'Bonus %' : 'Bonus $'}>
+                <Inp type="number" min="0" step="0.01" value={form.bonus_value}
+                  onChange={e => set('bonus_value', e.target.value)} placeholder="0" />
+              </Field>
+              <Field label="To">
+                <Sel value={form.bonus_recipient} onChange={e => set('bonus_recipient', e.target.value)}>
+                  <option value="setter">{setterName}</option>
+                  <option value="closer">{closerName}</option>
+                </Sel>
+              </Field>
+              <Field label="From">
+                <Sel value={form.bonus_source} onChange={e => set('bonus_source', e.target.value)}>
+                  <option value="company">Company (extra)</option>
+                  <option value="manager">Manager override</option>
+                  <option value="director">Director override</option>
+                  <option value="vp">VP override</option>
+                </Sel>
+              </Field>
+            </div>
+            {bonusDollars > 0 && (
+              <p className="text-[11px] text-white/45 mt-2">
+                {recipName} gets <span className="font-bold text-teal">+{fmt(bonusDollars)}</span>
+                {form.bonus_source === 'company'
+                  ? ' as an extra (company-funded)'
+                  : ` from the ${form.bonus_source} override`}
+                {bonusShortfall > 0.005 && (
+                  <span className="text-amber-400"> — that override only has {fmt(bonusDollars - bonusShortfall)}; the remaining {fmt(bonusShortfall)} is company-funded.</span>
+                )}
+              </p>
+            )}
           </div>
 
           {deal?.id && <DealHistory dealId={deal.id} users={users} />}

@@ -70,11 +70,30 @@ export function dealAmounts(deal) {
   // when present; otherwise use the computed value. An override only counts when
   // its person is actually assigned — a stranded override % / amount with no
   // manager/director/vp pays nobody, so it must not inflate any total.
-  const setter   = deal.setter_amount   != null ? num(deal.setter_amount)   : computed.setter
-  const closer   = deal.closer_amount   != null ? num(deal.closer_amount)   : computed.closer
-  const manager  = deal.manager_id  ? (deal.manager_amount  != null ? num(deal.manager_amount)  : computed.manager)  : 0
-  const director = deal.director_id ? (deal.director_amount != null ? num(deal.director_amount) : computed.director) : 0
-  const vp       = deal.vp_id       ? (deal.vp_amount       != null ? num(deal.vp_amount)       : computed.vp)       : 0
+  let setter   = deal.setter_amount   != null ? num(deal.setter_amount)   : computed.setter
+  let closer   = deal.closer_amount   != null ? num(deal.closer_amount)   : computed.closer
+  let manager  = deal.manager_id  ? (deal.manager_amount  != null ? num(deal.manager_amount)  : computed.manager)  : 0
+  let director = deal.director_id ? (deal.director_amount != null ? num(deal.director_amount) : computed.director) : 0
+  let vp       = deal.vp_id       ? (deal.vp_amount       != null ? num(deal.vp_amount)       : computed.vp)       : 0
+
+  // Optional rep bonus: a flat $ or % of baseline given to the setter (default)
+  // or closer. It can be FUNDED from a management override (manager/director/vp)
+  // — that role's payout is reduced by what's pulled (capped at what they have)
+  // — or 'company' (an extra on top, reduced from nobody). Baked into the per-
+  // role amounts here so every roll-up (payroll, leaderboards, getUserCommission)
+  // reflects it automatically.
+  const bonus = num(deal.bonus_amount) > 0
+    ? num(deal.bonus_amount)
+    : (deal.bonus_pct != null ? baseline * num(deal.bonus_pct) : 0)
+  let bonusFromOverride = 0
+  if (bonus > 0) {
+    const src = deal.bonus_source || 'company'
+    if      (src === 'manager'  && deal.manager_id)  { bonusFromOverride = Math.min(manager,  bonus); manager  -= bonusFromOverride }
+    else if (src === 'director' && deal.director_id) { bonusFromOverride = Math.min(director, bonus); director -= bonusFromOverride }
+    else if (src === 'vp'       && deal.vp_id)       { bonusFromOverride = Math.min(vp,       bonus); vp       -= bonusFromOverride }
+    if ((deal.bonus_recipient || 'setter') === 'closer' && deal.closer_id && deal.closer_id !== deal.setter_id) closer += bonus
+    else setter += bonus
+  }
 
   const repCommission = setter + closer
   const overrides     = manager + director + vp
@@ -84,6 +103,7 @@ export function dealAmounts(deal) {
     baseline, job, revenue: baseline, deduction, manualDeduction, dealerFee, financed,
     setter, closer, manager, director, vp,
     repCommission, overrides, totalCommission,
+    bonus, bonusSource: bonus > 0 ? (deal.bonus_source || 'company') : null, bonusFromOverride,
     computed,
   }
 }

@@ -46,6 +46,12 @@ setup + deploy steps.
      id counts as 0 (it pays nobody, so it must never inflate a total). The
      DealModal clears the % when its person is set to None and saves it null.
    - When a stored `*_amount` field is present, it WINS over the computed value.
+   - **Rep bonus** (migration 025): a flat $ (`bonus_amount`) or % of baseline
+     (`bonus_pct`) added to the setter or closer (`bonus_recipient`). It can be
+     FUNDED from a management override (`bonus_source` = manager/director/vp) —
+     that role's payout is reduced by what's pulled (capped at what they have) —
+     or `company` (extra, reduced from nobody). Baked into the per-role amounts
+     in `dealAmounts`, so every roll-up reflects it automatically.
    - `getUserCommission` sums every role a user holds on a deal and must not
      double-count when the same person is both setter and closer.
    - `getSetterCommission(deal)` returns ONLY the setter's own share (never the
@@ -121,7 +127,10 @@ setup + deploy steps.
   across devices — replaces the old per-browser localStorage goals; `scope='rep'`
   → subject is the rep, `scope='team'` → subject is the manager; company-wide
   goal stays in `monthly_goals`). RLS: anyone reads; writes allowed for admins,
-  the subject themselves, or the subject's direct manager. Do not re-run `001`/`002` against a populated database.
+  the subject themselves, or the subject's direct manager; `025` adds the rep
+  bonus columns (`bonus_amount` flat $ OR `bonus_pct` fraction of baseline,
+  `bonus_source` = `company`|`manager`|`director`|`vp`, `bonus_recipient` =
+  `setter`|`closer`) — applied in `commission.js`. Do not re-run `001`/`002` against a populated database.
 
 ## User management (Admin page)
 
