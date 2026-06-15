@@ -270,7 +270,11 @@ export default function Dashboard() {
   // tab-separated fallback — pastes cleanly into Canva, Sheets, Docs, etc.
   async function copyLeaderboard() {
     const cols = ['#', 'Rep', 'Deals', 'Revenue', 'Leads', 'Lead Rev', 'Comm']
-    const rows = rankedReps.map((r, i) => [i + 1, r.name, r.deals, fmt(r.revenue), r.leads, fmt(r.leadRevenue), fmt(r.commission)])
+    // The export is a shareable artifact, so ghost reps are always dropped —
+    // even for an admin, who sees them on-screen. (Re-rank after filtering.)
+    const rows = rankedReps
+      .filter(r => !ghostIds.has(r.id))
+      .map((r, i) => [i + 1, r.name, r.deals, fmt(r.revenue), r.leads, fmt(r.leadRevenue), fmt(r.commission)])
     const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     const tsv = [cols, ...rows].map(r => r.join('\t')).join('\n')
     const html =
