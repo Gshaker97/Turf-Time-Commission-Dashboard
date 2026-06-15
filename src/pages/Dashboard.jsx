@@ -211,7 +211,7 @@ export default function Dashboard() {
           revenue: md.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0),
         }
       }).sort((a, b) => b.revenue - a.revenue)
-      return { id: mgr.id, name: mgr.name, repCount: members.length - 1, deals: mDeals.length, revenue, prevRev, reps, pct: (revenue / companyTotalRev) * 100 }
+      return { id: mgr.id, name: mgr.name, ghost: mgr.ghost === true, repCount: members.length - 1, deals: mDeals.length, revenue, prevRev, reps, pct: (revenue / companyTotalRev) * 100 }
     }).sort((a, b) => b.revenue - a.revenue)
   }, [users, filtered, prevFiltered, companyTotalRev, teamFilter])
 
@@ -536,7 +536,7 @@ export default function Dashboard() {
                       <RankBadge n={i + 1} />
                       <ChevronDown size={13} className={`text-white/30 flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
                       <div className="min-w-0">
-                        <span className="text-[12px] md:text-[13px] font-semibold text-white">{team.name}'s Team</span>
+                        <span className="text-[12px] md:text-[13px] font-semibold text-white">{(isAdmin || !team.ghost) ? `${team.name}'s Team` : 'Team'}</span>
                         <span className="text-[10px] text-white/30 ml-2 hidden sm:inline">{team.repCount} reps · {team.deals} deals</span>
                       </div>
                     </div>

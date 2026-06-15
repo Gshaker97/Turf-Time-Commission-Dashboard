@@ -290,6 +290,11 @@ export default function Team() {
 
   const role = profile?.role
 
+  // Ghost users: their deals still count in every total, but their NAME is
+  // hidden from non-admins on leaderboards / MVP / recent wins / team headers.
+  const ghostIds = useMemo(() => new Set(users.filter(u => u.ghost).map(u => u.id)), [users])
+  const hideGhost = (id) => !isAdmin && ghostIds.has(id)
+
   const visibleReps = useMemo(() => {
     if (!profile) return []
     if (role === 'admin' || role === 'vp') return users.filter(isSeller)
@@ -382,7 +387,7 @@ export default function Team() {
 
   const teamStats = useMemo(() => {
     if (!profile) return []
-    return users.filter(u => u.role === 'manager').map(mgr => {
+    return users.filter(u => u.role === 'manager' && (isAdmin || !u.ghost)).map(mgr => {
       const teamReps  = users.filter(u => u.role === 'rep' && u.manager_id === mgr.id)
       const repIds    = new Set([...teamReps.map(r => r.id), mgr.id])  // include the manager's own sales
       const teamDeals = deals.filter(d => {
@@ -395,7 +400,7 @@ export default function Team() {
       const commission = [...repIds].reduce((s, id) => s + getUserCommission(teamDeals, id), 0)
       return { id: mgr.id, name: mgr.name, reps: teamReps.length, deals: teamDeals.length, revenue, commission, revenuePerRep: teamReps.length>0?revenue/teamReps.length:0, isMyTeam: role==='manager'&&mgr.id===profile.id }
     }).sort((a,b) => b.revenue-a.revenue)
-  }, [users, deals, dateFrom, dateTo, role, profile])
+  }, [users, deals, dateFrom, dateTo, role, profile, isAdmin])
 
   const maxRevenue = teamStats.reduce((m,t) => Math.max(m,t.revenue), 0)
 
@@ -456,11 +461,13 @@ export default function Team() {
     const repIds = new Set(visibleReps.map(r=>r.id))
     const now    = new Date()
     return deals
-      .filter(d=>(repIds.has(d.setter_id)||repIds.has(d.closer_id))&&d.sale_date&&d.status!=='Sales Issue')
+      // Hide wins credited to a ghost rep from non-admins (the deal still counts
+      // in the KPI/revenue totals above — this is just the named feed).
+      .filter(d=>(repIds.has(d.setter_id)||repIds.has(d.closer_id))&&d.sale_date&&d.status!=='Sales Issue'&&!hideGhost(d.closer_id||d.setter_id))
       .sort((a,b)=>(b.sale_date??'').localeCompare(a.sale_date??''))
       .slice(0,8)
       .map(d=>({ ...d, repName: users.find(u=>u.id===(d.closer_id||d.setter_id))?.name??'—', daysAgo: d.sale_date?Math.max(0,Math.floor((now.getTime()-new Date(d.sale_date+'T12:00:00').getTime())/86400000)):0 }))
-  }, [deals, visibleReps, users])
+  }, [deals, visibleReps, users, isAdmin, ghostIds])
 
   // Reps shown as cards (ghost reps hidden from non-admins).
   const displayReps = useMemo(
@@ -472,7 +479,8 @@ export default function Team() {
   // their manager) with per-team subtotals. Used when more than one team is in
   // view (e.g. admin/VP/director) so cards aren't a random flat list.
   const teamGroups = useMemo(() => {
-    const nameOf = (id) => users.find(u => u.id === id)?.name
+    // A ghost manager's name is hidden from non-admins even as a team header.
+    const nameOf = (id) => (hideGhost(id) ? null : users.find(u => u.id === id)?.name)
     const groups = {}
     for (const rep of displayReps) {
       const mid = rep.role === 'manager' ? rep.id : (rep.manager_id || 'unassigned')
@@ -488,10 +496,10 @@ export default function Team() {
     })
     list.sort((a, b) => b.revenue - a.revenue)
     return list
-  }, [displayReps, users])
+  }, [displayReps, users, isAdmin, ghostIds])
   const groupView = teamGroups.length > 1
 
-  const topPerformer   = repStats[0]
+  const topPerformer   = displayReps[0]   // ghost reps already excluded for non-admins
   // Coach notes + weekly stats are admin-only edits. Goals are a carve-out:
   // reps set their own personal goal, managers set their team's goals + their
   // own team goal (handled per-card via canEditGoal and the team-goal pencil).
