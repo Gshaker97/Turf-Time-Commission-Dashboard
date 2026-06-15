@@ -271,8 +271,10 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
     e.preventDefault()
     if (duplicate && !window.confirm(`A deal named "${duplicate.deal_name}" already exists${duplicate.sale_date ? ` (sold ${duplicate.sale_date})` : ''}. Create this one anyway?`)) return
     setSaving(true)
+    // bonus_mode is a UI-only toggle (not a column) — don't send it to the DB.
+    const { bonus_mode: _bonusMode, ...formCols } = form
     await onSave({
-      ...form,
+      ...formCols,
       baseline_revenue:      parseFloat(form.baseline_revenue) || 0,
       job_price:             parseFloat(form.job_price) || 0,
       setter_split_pct:      form.setter_id !== form.closer_id ? Math.min(1, Math.max(0, (parseFloat(form.setter_split_pct) || 50) / 100)) : null,
