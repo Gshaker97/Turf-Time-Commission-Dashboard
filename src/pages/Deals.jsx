@@ -161,6 +161,7 @@ export default function Deals() {
       setDeals(ds => ds.map(d => d.id === editDeal.id ? { ...d, ...withJoins(data) } : d))
       setModal(false); setEditDeal(null)
       const res = await updateDeal(editDeal.id, data)
+      if (res?.error) alert('Could not save this deal: ' + (res.error.message || 'unknown error'))
       load(true)
       return
     }
@@ -168,7 +169,8 @@ export default function Deals() {
     // real persisted row (real id, server-side defaults, etc.).
     setDeals(ds => [{ ...withJoins(data), id: 'temp-' + Date.now(), created_at: new Date().toISOString() }, ...ds])
     setModal(false); setEditDeal(null)
-    await insertDeal(data, profile?.id)
+    const res = await insertDeal(data, profile?.id)
+    if (res?.error) alert('Could not save this deal: ' + (res.error.message || 'unknown error'))
     load(true)
   }
 
