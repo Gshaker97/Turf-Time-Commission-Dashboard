@@ -171,7 +171,9 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
   }
 
   function handleOverrideId(idKey, pctKey, value) {
-    setForm(f => ({ ...f, [idKey]: value, [pctKey]: value && !f[pctKey] ? overrideDefaults(f.office)[pctKey] : f[pctKey] }))
+    // Picking a person fills the default % if blank; clearing to "None" zeroes
+    // the % out (a rep with no manager shouldn't carry a stranded 3%).
+    setForm(f => ({ ...f, [idKey]: value, [pctKey]: value ? (f[pctKey] || overrideDefaults(f.office)[pctKey]) : '' }))
   }
 
   // Changing the office re-applies the office-driven default to any director/VP
@@ -227,9 +229,9 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
       baseline_revenue:      parseFloat(form.baseline_revenue) || 0,
       job_price:             parseFloat(form.job_price) || 0,
       setter_split_pct:      form.setter_id !== form.closer_id ? Math.min(1, Math.max(0, (parseFloat(form.setter_split_pct) || 50) / 100)) : null,
-      manager_override_pct:  form.manager_override_pct  ? parseFloat(form.manager_override_pct)  / 100 : null,
-      director_override_pct: form.director_override_pct ? parseFloat(form.director_override_pct) / 100 : null,
-      vp_override_pct:       form.vp_override_pct       ? parseFloat(form.vp_override_pct)       / 100 : null,
+      manager_override_pct:  form.manager_id  && form.manager_override_pct  ? parseFloat(form.manager_override_pct)  / 100 : null,
+      director_override_pct: form.director_id && form.director_override_pct ? parseFloat(form.director_override_pct) / 100 : null,
+      vp_override_pct:       form.vp_id       && form.vp_override_pct       ? parseFloat(form.vp_override_pct)       / 100 : null,
       manager_id:  form.manager_id  || null,
       director_id: form.director_id || null,
       vp_id:       form.vp_id       || null,
@@ -514,7 +516,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                     <Field label="Override %">
                       <Inp type="number" min="0" max="100" step="0.01"
                         value={form[pctKey]} onChange={e => set(pctKey, e.target.value)}
-                        placeholder="0" disabled={!form[idKey]} />
+                        placeholder="0" />
                     </Field>
                   </div>
                 </div>

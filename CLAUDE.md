@@ -41,7 +41,10 @@ setup + deploy steps.
    component. That bypasses overrides and the stored `*_amount` values synced
    from the sheet. The engine is the single source of truth:
    - `repPool = job_price − baseline_revenue`, split between setter and closer.
-   - Overrides = `baseline × pct` for manager/director/vp.
+   - Overrides = `baseline × pct` for manager/director/vp, but ONLY when that
+     person is assigned — a stranded override %/amount with no manager/director/vp
+     id counts as 0 (it pays nobody, so it must never inflate a total). The
+     DealModal clears the % when its person is set to None and saves it null.
    - When a stored `*_amount` field is present, it WINS over the computed value.
    - `getUserCommission` sums every role a user holds on a deal and must not
      double-count when the same person is both setter and closer.

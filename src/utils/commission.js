@@ -67,12 +67,14 @@ export function dealAmounts(deal) {
   }
 
   // Stored *_amount (sheet sync / manual entry — already NET of deductions) wins
-  // when present; otherwise use the computed value.
+  // when present; otherwise use the computed value. An override only counts when
+  // its person is actually assigned — a stranded override % / amount with no
+  // manager/director/vp pays nobody, so it must not inflate any total.
   const setter   = deal.setter_amount   != null ? num(deal.setter_amount)   : computed.setter
   const closer   = deal.closer_amount   != null ? num(deal.closer_amount)   : computed.closer
-  const manager  = deal.manager_amount  != null ? num(deal.manager_amount)  : computed.manager
-  const director = deal.director_amount != null ? num(deal.director_amount) : computed.director
-  const vp       = deal.vp_amount       != null ? num(deal.vp_amount)       : computed.vp
+  const manager  = deal.manager_id  ? (deal.manager_amount  != null ? num(deal.manager_amount)  : computed.manager)  : 0
+  const director = deal.director_id ? (deal.director_amount != null ? num(deal.director_amount) : computed.director) : 0
+  const vp       = deal.vp_id       ? (deal.vp_amount       != null ? num(deal.vp_amount)       : computed.vp)       : 0
 
   const repCommission = setter + closer
   const overrides     = manager + director + vp
