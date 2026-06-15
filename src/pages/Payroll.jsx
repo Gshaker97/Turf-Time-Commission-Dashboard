@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronLeft, ChevronRight, ChevronDown, Download, Pencil, AlertTriangle, CheckCircle2, Wallet, BadgeCheck, Copy, Check } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronDown, Download, Pencil, AlertTriangle, CheckCircle2, Wallet, BadgeCheck, Copy, Check, Plus, X, Trash2 } from 'lucide-react'
 import { format } from 'date-fns'
-import { fetchDeals, fetchUsers, updateDeal } from '../lib/db'
+import { fetchDeals, fetchUsers, updateDeal, fetchPayrollAdjustments, addPayrollAdjustment, deletePayrollAdjustment } from '../lib/db'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import { dealAmounts, fmt, activeDeals } from '../utils/commission'
@@ -56,11 +56,12 @@ function dealPayouts(d) {
 }
 
 export default function Payroll() {
-  const { isAdmin } = useAuth()
+  const { isAdmin, profile } = useAuth()
   const { statusColor, statusLabels, dataStartDate } = useSettings()
   const [copiedId, setCopiedId] = useState('')
   const [deals, setDeals]     = useState([])
   const [users, setUsers]     = useState([])
+  const [adjustments, setAdjustments] = useState([])
   const [loading, setLoading] = useState(true)
   const [view, setView]       = useState(null)        // a pay_date string, or 'overdue'
   const [editDeal, setEditDeal] = useState(null)
@@ -69,19 +70,46 @@ export default function Payroll() {
   const [tab, setTab] = useState('run')   // 'run' | 'deductions'
   const [runStyle, setRunStyle] = useState('list')   // 'list' (compact) | 'cards' (full payouts)
   const [repFilter, setRepFilter] = useState('')
+  const [adjFor, setAdjFor] = useState('')            // payee id whose adjustment editor is open
+  const [adjAmt, setAdjAmt] = useState('')
+  const [adjNote, setAdjNote] = useState('')
   const today = todayISO()
 
   useEffect(() => { load() }, [])
   async function load() {
-    const [{ data: d }, { data: u }] = await Promise.all([fetchDeals(), fetchUsers()])
+    const [{ data: d }, { data: u }, { data: adj }] = await Promise.all([fetchDeals(), fetchUsers(), fetchPayrollAdjustments()])
     const dd = activeDeals(d || [])   // canceled jobs are never paid / counted
-    setDeals(dd); setUsers(u || [])
+    setDeals(dd); setUsers(u || []); setAdjustments(adj || [])
     setView(v => {
       if (v) return v
       const pds = distinctPayDates(dd)
       return pds.find(p => p >= today) || pds[pds.length - 1] || null
     })
     setLoading(false)
+  }
+  async function reloadAdjustments() {
+    const { data } = await fetchPayrollAdjustments()
+    setAdjustments(data || [])
+  }
+
+  // Adjustments on the current run (a real pay date, not the synthetic Overdue view).
+  const runAdjustments = useMemo(
+    () => (view && view !== 'overdue') ? adjustments.filter(a => a.pay_date === view) : [],
+    [adjustments, view]
+  )
+
+  async function saveAdjustment(payeeId) {
+    const amt = parseFloat(adjAmt)
+    if (!amt || view === 'overdue' || !view) { setAdjFor(''); return }
+    const res = await addPayrollAdjustment({ payeeId, payDate: view, amount: amt, note: adjNote.trim() || null }, profile?.id)
+    if (res?.error) { alert('Could not save adjustment: ' + (res.error.message || 'unknown error')); return }
+    setAdjFor(''); setAdjAmt(''); setAdjNote('')
+    reloadAdjustments()
+  }
+  async function removeAdjustment(id) {
+    setAdjustments(a => a.filter(x => x.id !== id))   // optimistic
+    const res = await deletePayrollAdjustment(id)
+    if (res?.error) reloadAdjustments()
   }
 
   const withJoins = (data) => ({
@@ -121,12 +149,13 @@ export default function Payroll() {
 
   const payees = useMemo(() => {
     const m = {}
+    const ensure = (id, name) => (m[id] ||= { id, name, total: 0, lines: [], dealIds: new Set(), adjustments: [] })
     const add = (person, role, amount, deal) => {
       if (!person || !person.id || !(amount > 0)) return
-      if (!m[person.id]) m[person.id] = { id: person.id, name: person.name, total: 0, lines: [], dealIds: new Set() }
-      m[person.id].total += amount
-      m[person.id].lines.push({ deal: deal.deal_name, role, amount })
-      m[person.id].dealIds.add(deal.id)
+      const p = ensure(person.id, person.name)
+      p.total += amount
+      p.lines.push({ deal: deal.deal_name, role, amount })
+      p.dealIds.add(deal.id)
     }
     for (const d of runDeals) {
       if (!isFinalized(d)) continue   // only finalized deals are being paid out
@@ -137,8 +166,16 @@ export default function Payroll() {
       add(d.director, 'Director', a.director, d)
       add(d.vp, 'VP', a.vp, d)
     }
+    // Manual adjustments for this run — folded into each payee's total (a payee
+    // can exist on adjustments alone, e.g. a clawback after their deal was paid).
+    for (const adj of runAdjustments) {
+      const person = users.find(u => u.id === adj.payee_id)
+      const p = ensure(adj.payee_id, person?.name || 'Unknown')
+      p.total += Number(adj.amount)
+      p.adjustments.push(adj)
+    }
     return Object.values(m).sort((a, b) => b.total - a.total)
-  }, [runDeals])
+  }, [runDeals, runAdjustments, users])
 
   // All deals that carry a deduction — across all time, for the Deductions tab.
   // A deduction is "applied" once its deal is Paid; otherwise it's still pending.
@@ -212,7 +249,11 @@ export default function Payroll() {
         pending += amt; pendingCount++
       }
     }
-    return { total, paid, remaining: total - paid, pending, pendingCount, finalizedCount,
+    // Manual adjustments count toward the payout total (and remaining — they're
+    // applied at pay time, not tied to a deal's paid status).
+    const adjTotal = shownPayees.reduce((s, p) => s + p.adjustments.reduce((t, a) => t + Number(a.amount), 0), 0)
+    total += adjTotal
+    return { total, paid, remaining: total - paid, pending, pendingCount, finalizedCount, adjTotal,
              count: shownDeals.length, paidCount, payees: shownPayees.length }
   })()
 
@@ -243,7 +284,10 @@ export default function Payroll() {
 
   function exportCsv() {
     const rows = [['Pay Date', 'Payee', 'Deal', 'Role', 'Amount']]
-    for (const p of shownPayees) for (const l of p.lines) rows.push([viewLabel, p.name, l.deal, l.role, l.amount.toFixed(2)])
+    for (const p of shownPayees) {
+      for (const l of p.lines) rows.push([viewLabel, p.name, l.deal, l.role, l.amount.toFixed(2)])
+      for (const a of p.adjustments) rows.push([viewLabel, p.name, a.note || 'Adjustment', 'Adjustment', Number(a.amount).toFixed(2)])
+    }
     rows.push([])
     rows.push(['', 'TOTAL', '', '', summary.total.toFixed(2)])
     downloadCsv(`payroll-${view === 'overdue' ? 'overdue' : view}.csv`, rows)
@@ -260,8 +304,11 @@ export default function Payroll() {
     const lines = p.lines
       .map(l => ({ ...l, label: EXPORT_LABEL[l.role] || l.role }))
       .sort((a, b) => (ORDER[a.label] ?? 9) - (ORDER[b.label] ?? 9) || b.amount - a.amount)
+    // Manual adjustments are listed after the deal lines.
+    const adjLines = p.adjustments.map(a => ({ deal: a.note || 'Adjustment', label: 'Adjustment', amount: Number(a.amount) }))
+    const allLines = [...lines, ...adjLines]
     const text = `Pay statement — ${p.name} — ${viewLabel}\n\n`
-      + lines.map(l => `• ${l.deal} — ${l.label}: ${fmt(l.amount)}`).join('\n')
+      + allLines.map(l => `• ${l.deal} — ${l.label}: ${fmt(l.amount)}`).join('\n')
       + `\n\nTotal: ${fmt(p.total)}`
     const cell = 'padding:6px 12px;border:1px solid #d1d5db'
     const html =
@@ -269,7 +316,7 @@ export default function Payroll() {
       `<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">` +
       `<thead><tr style="background:#00b894;color:#0b0b0b">` +
       `<th style="${cell};text-align:left">Deal</th><th style="${cell};text-align:left">Role</th><th style="${cell};text-align:right">Amount</th></tr></thead><tbody>` +
-      lines.map((l, i) => `<tr style="background:${i % 2 ? '#f3f4f6' : '#ffffff'};color:#111">` +
+      allLines.map((l, i) => `<tr style="background:${i % 2 ? '#f3f4f6' : '#ffffff'};color:#111">` +
         `<td style="${cell}">${esc(l.deal)}</td><td style="${cell}">${esc(l.label)}</td><td style="${cell};text-align:right">${fmt(l.amount)}</td></tr>`).join('') +
       `<tr style="font-weight:bold;color:#111"><td style="${cell}" colspan="2">Total</td><td style="${cell};text-align:right">${fmt(p.total)}</td></tr>` +
       `</tbody></table>`
@@ -350,7 +397,8 @@ export default function Payroll() {
         <>
           {/* Summary */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mb-3">
-            <Card label={effFilter ? "Rep payout" : "Total payout"} value={fmt(summary.total)} color="#00b894" sub={`${viewLabel} · finalized`} />
+            <Card label={effFilter ? "Rep payout" : "Total payout"} value={fmt(summary.total)} color="#00b894"
+              sub={summary.adjTotal ? `incl. ${summary.adjTotal < 0 ? '−' : '+'}${fmt(Math.abs(summary.adjTotal))} adjustments` : `${viewLabel} · finalized`} />
             <Card label="Remaining" value={fmt(summary.remaining)} color="#fdcb6e" sub="finalized, not yet paid" />
             <Card label="Deals" value={`${summary.paidCount}/${summary.finalizedCount}`} sub="paid / finalized" />
             <Card label="Payees" value={summary.payees} sub="people to pay" />
@@ -465,22 +513,57 @@ export default function Payroll() {
                 </span>
               </button>
               {showPayees && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 px-4 pb-3 pt-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 px-4 pb-3 pt-1 items-start">
                   {shownPayees.map(p => (
-                    <div key={p.id} className="flex items-center justify-between py-1 border-t border-white/5 gap-2">
-                      <span className="text-[13px] text-white/80 truncate mr-1">
-                        {p.name}
-                        <span className="text-white/30 text-[11px]"> · {p.dealIds.size} deal{p.dealIds.size === 1 ? '' : 's'}</span>
-                      </span>
-                      <span className="flex items-center gap-1.5 flex-shrink-0">
-                        <span className="text-[13px] font-semibold text-white whitespace-nowrap">{fmt(p.total)}</span>
-                        {isAdmin && (
-                          <button onClick={() => copyPayee(p)} title="Copy this rep's pay statement to email"
-                            className={`p-1 rounded transition-colors ${copiedId === p.id ? 'text-emerald-400' : 'text-white/30 hover:text-teal hover:bg-teal/10'}`}>
-                            {copiedId === p.id ? <Check size={13} /> : <Copy size={13} />}
-                          </button>
-                        )}
-                      </span>
+                    <div key={p.id} className="py-1 border-t border-white/5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[13px] text-white/80 truncate mr-1">
+                          {p.name}
+                          <span className="text-white/30 text-[11px]"> · {p.dealIds.size} deal{p.dealIds.size === 1 ? '' : 's'}</span>
+                        </span>
+                        <span className="flex items-center gap-1.5 flex-shrink-0">
+                          <span className="text-[13px] font-semibold text-white whitespace-nowrap">{fmt(p.total)}</span>
+                          {isAdmin && view !== 'overdue' && (
+                            <button onClick={() => { setAdjFor(adjFor === p.id ? '' : p.id); setAdjAmt(''); setAdjNote('') }}
+                              title="Add a payroll adjustment (+/−)"
+                              className="p-1 rounded text-white/30 hover:text-teal hover:bg-teal/10 transition-colors"><Plus size={13} /></button>
+                          )}
+                          {isAdmin && (
+                            <button onClick={() => copyPayee(p)} title="Copy this rep's pay statement to email"
+                              className={`p-1 rounded transition-colors ${copiedId === p.id ? 'text-emerald-400' : 'text-white/30 hover:text-teal hover:bg-teal/10'}`}>
+                              {copiedId === p.id ? <Check size={13} /> : <Copy size={13} />}
+                            </button>
+                          )}
+                        </span>
+                      </div>
+                      {p.adjustments.map(a => (
+                        <div key={a.id} className="flex items-center justify-between gap-2 pl-3 mt-0.5">
+                          <span className="text-[11px] text-white/40 truncate">↳ adjustment{a.note ? ` · ${a.note}` : ''}</span>
+                          <span className="flex items-center gap-1.5 flex-shrink-0">
+                            <span className={`text-[11px] font-semibold whitespace-nowrap ${Number(a.amount) < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                              {Number(a.amount) < 0 ? '−' : '+'}{fmt(Math.abs(Number(a.amount)))}
+                            </span>
+                            {isAdmin && (
+                              <button onClick={() => removeAdjustment(a.id)} title="Remove adjustment"
+                                className="p-0.5 rounded text-white/25 hover:text-red-400"><Trash2 size={11} /></button>
+                            )}
+                          </span>
+                        </div>
+                      ))}
+                      {isAdmin && adjFor === p.id && (
+                        <div className="flex items-center gap-1.5 pl-3 mt-1">
+                          <input autoFocus type="number" step="0.01" value={adjAmt} onChange={e => setAdjAmt(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') saveAdjustment(p.id); if (e.key === 'Escape') setAdjFor('') }}
+                            placeholder="± $" className="w-20 rounded px-2 py-1 text-[12px] text-white focus:outline-none"
+                            style={{ background: '#1a1a1a', border: '1px solid rgba(0,184,148,0.4)' }} />
+                          <input value={adjNote} onChange={e => setAdjNote(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') saveAdjustment(p.id); if (e.key === 'Escape') setAdjFor('') }}
+                            placeholder="note (e.g. missed deduction)" className="flex-1 min-w-0 rounded px-2 py-1 text-[12px] text-white focus:outline-none"
+                            style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }} />
+                          <button onClick={() => saveAdjustment(p.id)} className="p-1 rounded text-emerald-400 hover:bg-emerald-400/10"><Check size={14} /></button>
+                          <button onClick={() => setAdjFor('')} className="p-1 rounded text-white/30 hover:bg-white/5"><X size={14} /></button>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

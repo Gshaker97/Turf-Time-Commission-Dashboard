@@ -463,6 +463,32 @@ export async function deleteRepGoal(subjectId, scope, year, month) {
     .eq('subject_id', subjectId).eq('scope', scope).eq('year', year).eq('month', month)
 }
 
+// ── Payroll adjustments (per-rep, per-pay-date +/- $, see migration 027) ──
+let _payrollAdjustments = []   // demo store
+
+export async function fetchPayrollAdjustments() {
+  if (DEMO_MODE) return { data: _payrollAdjustments, error: null }
+  return supabase.from('payroll_adjustments').select('*').order('created_at', { ascending: true })
+}
+
+export async function addPayrollAdjustment({ payeeId, payDate, amount, note }, createdBy) {
+  if (DEMO_MODE) {
+    const row = { id: 'adj-' + Math.random().toString(36).slice(2, 9), payee_id: payeeId, pay_date: payDate, amount, note: note || null, created_at: new Date().toISOString() }
+    _payrollAdjustments = [..._payrollAdjustments, row]
+    return { data: [row], error: null }
+  }
+  return supabase.from('payroll_adjustments')
+    .insert([{ payee_id: payeeId, pay_date: payDate, amount, note: note || null, created_by: createdBy }]).select()
+}
+
+export async function deletePayrollAdjustment(id) {
+  if (DEMO_MODE) {
+    _payrollAdjustments = _payrollAdjustments.filter(a => a.id !== id)
+    return { error: null, data: [{ id }] }
+  }
+  return supabase.from('payroll_adjustments').delete().eq('id', id).select('id')
+}
+
 // ── Weekly stats (rep estimates → close rate) ─────────────────
 export async function fetchWeeklyStats() {
   if (DEMO_MODE) return { data: _weeklyStats, error: null }
