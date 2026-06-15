@@ -45,7 +45,7 @@ const DEAL_SELECT = `
 async function writeWithSchemaFallback(run, payload) {
   let res = await run(payload)
   let guard = 0
-  while (res?.error && guard++ < 6) {
+  while (res?.error && guard++ < 24) {
     const col = /Could not find the '([^']+)' column/.exec(res.error.message || '')?.[1]
     if (!col || !(col in payload)) break
     const { [col]: _omit, ...rest } = payload

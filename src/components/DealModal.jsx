@@ -292,14 +292,12 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
       dealer_fee_pct:   form.dealer_fee_pct ? parseFloat(form.dealer_fee_pct) / 100 : null,
       deduction_paid_by: form.deduction_paid_by || 'closer',
       deduction_split_pct: Math.min(1, Math.max(0, (parseFloat(form.deduction_split_pct) || 50) / 100)),
-      // Multi-source bonus, stored as resolved $ per source. Clear the legacy
-      // single-source columns (025) so they can't linger.
+      // Multi-source bonus, stored as resolved $ per source.
       bonus_company:   bonus$.company  > 0 ? bonus$.company  : null,
       bonus_manager:   bonus$.manager  > 0 ? bonus$.manager  : null,
       bonus_director:  bonus$.director > 0 ? bonus$.director : null,
       bonus_vp:        bonus$.vp       > 0 ? bonus$.vp       : null,
       bonus_recipient: bonusDollars > 0 ? form.bonus_recipient : null,
-      bonus_amount: null, bonus_pct: null, bonus_source: null,
       // Any edit recomputes from the current numbers — clear stored sheet amounts
       // so the engine uses baseline/job + the splits/%s above, not stale values.
       setter_amount: null, closer_amount: null,
