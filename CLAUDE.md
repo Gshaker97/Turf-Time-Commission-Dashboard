@@ -46,12 +46,13 @@ setup + deploy steps.
      id counts as 0 (it pays nobody, so it must never inflate a total). The
      DealModal clears the % when its person is set to None and saves it null.
    - When a stored `*_amount` field is present, it WINS over the computed value.
-   - **Rep bonus** (migration 025): a flat $ (`bonus_amount`) or % of baseline
-     (`bonus_pct`) added to the setter or closer (`bonus_recipient`). It can be
-     FUNDED from a management override (`bonus_source` = manager/director/vp) —
-     that role's payout is reduced by what's pulled (capped at what they have) —
-     or `company` (extra, reduced from nobody). Baked into the per-role amounts
-     in `dealAmounts`, so every roll-up reflects it automatically.
+   - **Rep bonus** (migrations 025→026): several roles can chip in toward a
+     bonus for the rep (`bonus_recipient` = setter|closer). Each contribution is
+     a resolved $ stored per source — `bonus_manager`/`bonus_director`/`bonus_vp`
+     (pulled from THAT role's override, capped at what they have) + `bonus_company`
+     (extra, from nobody). The editor lets you type a % of baseline or a $ and
+     stores the $. Baked into the per-role amounts in `dealAmounts`, so every
+     roll-up reflects it automatically. (025's single-source columns are unused.)
    - `getUserCommission` sums every role a user holds on a deal and must not
      double-count when the same person is both setter and closer.
    - `getSetterCommission(deal)` returns ONLY the setter's own share (never the
@@ -128,9 +129,11 @@ setup + deploy steps.
   → subject is the rep, `scope='team'` → subject is the manager; company-wide
   goal stays in `monthly_goals`). RLS: anyone reads; writes allowed for admins,
   the subject themselves, or the subject's direct manager; `025` adds the rep
-  bonus columns (`bonus_amount` flat $ OR `bonus_pct` fraction of baseline,
-  `bonus_source` = `company`|`manager`|`director`|`vp`, `bonus_recipient` =
-  `setter`|`closer`) — applied in `commission.js`. Do not re-run `001`/`002` against a populated database.
+  bonus columns (single-source: `bonus_amount`/`bonus_pct`/`bonus_source`,
+  `bonus_recipient` = `setter`|`closer`); `026` SUPERSEDES the single-source
+  bonus with multi-source `bonus_company`/`bonus_manager`/`bonus_director`/
+  `bonus_vp` (resolved $ each — several roles can chip in at once) — applied in
+  `commission.js` (the 025 single-source columns linger unused). Do not re-run `001`/`002` against a populated database.
 
 ## User management (Admin page)
 

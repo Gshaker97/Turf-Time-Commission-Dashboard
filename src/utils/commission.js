@@ -76,21 +76,21 @@ export function dealAmounts(deal) {
   let director = deal.director_id ? (deal.director_amount != null ? num(deal.director_amount) : computed.director) : 0
   let vp       = deal.vp_id       ? (deal.vp_amount       != null ? num(deal.vp_amount)       : computed.vp)       : 0
 
-  // Optional rep bonus: a flat $ or % of baseline given to the setter (default)
-  // or closer. It can be FUNDED from a management override (manager/director/vp)
-  // — that role's payout is reduced by what's pulled (capped at what they have)
-  // — or 'company' (an extra on top, reduced from nobody). Baked into the per-
-  // role amounts here so every roll-up (payroll, leaderboards, getUserCommission)
-  // reflects it automatically.
-  const bonus = num(deal.bonus_amount) > 0
-    ? num(deal.bonus_amount)
-    : (deal.bonus_pct != null ? baseline * num(deal.bonus_pct) : 0)
-  let bonusFromOverride = 0
+  // Optional rep bonus: several management roles and/or the company can each
+  // chip in a $ amount (the editor resolves % of baseline → $). Each management
+  // contribution is pulled from THAT role's payout, capped at what they have;
+  // 'company' is an extra on top, from nobody. The rep (setter by default, or
+  // closer) receives the total. Baked into the per-role amounts here so every
+  // roll-up (payroll, leaderboards, getUserCommission) reflects it.
+  const fromManager  = deal.manager_id  ? Math.min(manager,  Math.max(0, num(deal.bonus_manager)))  : 0
+  const fromDirector = deal.director_id ? Math.min(director, Math.max(0, num(deal.bonus_director))) : 0
+  const fromVp       = deal.vp_id       ? Math.min(vp,       Math.max(0, num(deal.bonus_vp)))       : 0
+  const fromCompany  = Math.max(0, num(deal.bonus_company))
+  manager  -= fromManager
+  director -= fromDirector
+  vp       -= fromVp
+  const bonus = fromManager + fromDirector + fromVp + fromCompany
   if (bonus > 0) {
-    const src = deal.bonus_source || 'company'
-    if      (src === 'manager'  && deal.manager_id)  { bonusFromOverride = Math.min(manager,  bonus); manager  -= bonusFromOverride }
-    else if (src === 'director' && deal.director_id) { bonusFromOverride = Math.min(director, bonus); director -= bonusFromOverride }
-    else if (src === 'vp'       && deal.vp_id)       { bonusFromOverride = Math.min(vp,       bonus); vp       -= bonusFromOverride }
     if ((deal.bonus_recipient || 'setter') === 'closer' && deal.closer_id && deal.closer_id !== deal.setter_id) closer += bonus
     else setter += bonus
   }
@@ -103,7 +103,7 @@ export function dealAmounts(deal) {
     baseline, job, revenue: baseline, deduction, manualDeduction, dealerFee, financed,
     setter, closer, manager, director, vp,
     repCommission, overrides, totalCommission,
-    bonus, bonusSource: bonus > 0 ? (deal.bonus_source || 'company') : null, bonusFromOverride,
+    bonus, bonusFrom: { company: fromCompany, manager: fromManager, director: fromDirector, vp: fromVp },
     computed,
   }
 }
