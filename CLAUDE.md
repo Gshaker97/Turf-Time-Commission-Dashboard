@@ -133,7 +133,12 @@ setup + deploy steps.
   `bonus_recipient` = `setter`|`closer`); `026` SUPERSEDES the single-source
   bonus with multi-source `bonus_company`/`bonus_manager`/`bonus_director`/
   `bonus_vp` (resolved $ each — several roles can chip in at once) — applied in
-  `commission.js` (the 025 single-source columns linger unused). Do not re-run `001`/`002` against a populated database.
+  `commission.js` (the 025 single-source columns linger unused); `027` adds
+  `payroll_adjustments` (per-rep, per-`pay_date` +/- $ with a note — manual
+  payroll corrections like a deduction discovered after a deal already paid out;
+  RLS: anyone reads, admins write). Folded into the Payroll run totals +
+  pay statements in `src/pages/Payroll.jsx` (a payee can appear on an
+  adjustment alone). Do not re-run `001`/`002` against a populated database.
 
 ## User management (Admin page)
 
