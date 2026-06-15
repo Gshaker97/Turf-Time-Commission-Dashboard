@@ -156,13 +156,21 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
         dealer_fee_pct:   deal.dealer_fee_pct   != null ? (deal.dealer_fee_pct * 100).toString() : '',
         deduction_paid_by: deal.deduction_paid_by ?? 'closer',
         deduction_split_pct: deal.deduction_split_pct != null ? (deal.deduction_split_pct * 100).toString() : '50',
-        // Stored as resolved $ per source; edited as $ (toggle to % to re-enter).
-        bonus_mode:      'amount',
-        bonus_recipient: deal.bonus_recipient ?? 'setter',
-        bonus_company:   deal.bonus_company  != null ? String(deal.bonus_company)  : '',
-        bonus_manager:   deal.bonus_manager  != null ? String(deal.bonus_manager)  : '',
-        bonus_director:  deal.bonus_director != null ? String(deal.bonus_director) : '',
-        bonus_vp:        deal.bonus_vp       != null ? String(deal.bonus_vp)       : '',
+        // Bonuses are stored as resolved $. Show them back in % of baseline when
+        // we can (most are entered as %); fall back to $ if baseline is unknown.
+        ...(() => {
+          const base = deal.baseline_revenue ? Number(deal.baseline_revenue) : 0
+          const usePct = base > 0
+          const show = (amt) => amt == null ? '' : String(usePct ? +(Number(amt) / base * 100).toFixed(4) : Number(amt))
+          return {
+            bonus_mode:      usePct ? 'pct' : 'amount',
+            bonus_recipient: deal.bonus_recipient ?? 'setter',
+            bonus_company:   show(deal.bonus_company),
+            bonus_manager:   show(deal.bonus_manager),
+            bonus_director:  show(deal.bonus_director),
+            bonus_vp:        show(deal.bonus_vp),
+          }
+        })(),
       })
     } else {
       setForm(BLANK)
@@ -170,6 +178,25 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
   }, [deal])
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  // Switching the bonus entry unit (% ↔ $) converts the typed values so the
+  // dollar effect stays the same.
+  function setBonusMode(newMode) {
+    setForm(f => {
+      if (newMode === f.bonus_mode) return f
+      const base = parseFloat(f.baseline_revenue) || 0
+      const conv = (raw) => {
+        const v = parseFloat(raw)
+        if (!(v > 0) || base <= 0) return raw
+        return newMode === 'pct' ? String(+(v / base * 100).toFixed(4)) : String(+(base * v / 100).toFixed(2))
+      }
+      return {
+        ...f, bonus_mode: newMode,
+        bonus_company: conv(f.bonus_company), bonus_manager: conv(f.bonus_manager),
+        bonus_director: conv(f.bonus_director), bonus_vp: conv(f.bonus_vp),
+      }
+    })
+  }
 
   // Setting/changing the install date auto-populates the pay date (Friday of
   // the following week). Clearing the install date leaves pay date untouched,
@@ -312,9 +339,9 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
   const showPreview = form.job_price && form.baseline_revenue
 
   const overrideRows = [
-    { label: 'Manager',  idKey: 'manager_id',  pctKey: 'manager_override_pct',  list: managers },
-    { label: 'Director', idKey: 'director_id', pctKey: 'director_override_pct', list: directors },
-    { label: 'VP',       idKey: 'vp_id',       pctKey: 'vp_override_pct',       list: vps },
+    { label: 'Manager',  idKey: 'manager_id',  pctKey: 'manager_override_pct',  list: managers,  role: 'manager' },
+    { label: 'Director', idKey: 'director_id', pctKey: 'director_override_pct', list: directors, role: 'director' },
+    { label: 'VP',       idKey: 'vp_id',       pctKey: 'vp_override_pct',       list: vps,       role: 'vp' },
   ]
 
   return (
@@ -557,7 +584,12 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
           <div>
             <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-3">Override Chain</p>
             <div className="space-y-3">
-              {overrideRows.map(({ label, idKey, pctKey, list }) => (
+              {overrideRows.map(({ label, idKey, pctKey, list, role }) => {
+                // When a bonus pulls from this role, show its net (post-bonus) take.
+                const give = form[idKey] ? Math.min(overrideGross[role], bonus$[role]) : 0
+                const netAmt = Math.max(0, overrideGross[role] - give)
+                const netPct = baseForBonus > 0 ? netAmt / baseForBonus * 100 : 0
+                return (
                 <div key={label} className="flex flex-col sm:flex-row gap-2 sm:gap-3 sm:items-end">
                   <div className="flex-1 min-w-0">
                     <Field label={label}>
@@ -573,9 +605,15 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                         value={form[pctKey]} onChange={e => set(pctKey, e.target.value)}
                         placeholder="0" />
                     </Field>
+                    {give > 0 && (
+                      <p className="text-[10px] text-amber-400 mt-1 leading-tight">
+                        −{fmt(give)} bonus → nets {fmt(netAmt)} ({netPct.toFixed(2)}%)
+                      </p>
+                    )}
                   </div>
                 </div>
-              ))}
+                )
+              })}
             </div>
           </div>
 
@@ -586,7 +624,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
               <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest">Rep Bonus <span className="text-white/20 normal-case font-medium">· optional, chip in from anyone</span></p>
               <div className="flex items-end gap-2">
                 <Field label="Enter as">
-                  <Sel value={form.bonus_mode} onChange={e => set('bonus_mode', e.target.value)}>
+                  <Sel value={form.bonus_mode} onChange={e => setBonusMode(e.target.value)}>
                     <option value="amount">$ amount</option>
                     <option value="pct">% of baseline</option>
                   </Sel>
@@ -623,9 +661,17 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
               })}
             </div>
             {bonusDollars > 0 && (
-              <p className="text-[12px] mt-2.5 pt-2.5 border-t border-white/5">
-                <span className="text-white/50">Total bonus to {recipName}:</span> <span className="font-bold text-teal">+{fmt(bonusDollars)}</span>
-              </p>
+              <div className="mt-2.5 pt-2.5 border-t border-white/5 space-y-1">
+                <p className="text-[12px]">
+                  <span className="text-white/50">Total bonus to {recipName}:</span> <span className="font-bold text-teal">+{fmt(bonusDollars)}</span>
+                </p>
+                <p className="text-[12px]">
+                  <span className="text-white/50">Total mgmt override:</span>{' '}
+                  <span className="text-white/40 line-through">{fmt(overrideGross.manager + overrideGross.director + overrideGross.vp)}</span>{' '}
+                  <span className="font-bold text-white/80">→ {fmt(preview.manager + preview.director + preview.vp)}</span>
+                  <span className="text-amber-400"> (−{fmt(preview.bonusFrom.manager + preview.bonusFrom.director + preview.bonusFrom.vp)})</span>
+                </p>
+              </div>
             )}
           </div>
 
