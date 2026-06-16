@@ -5,18 +5,39 @@ import { SettingsProvider } from './contexts/SettingsContext'
 import Layout from './components/Layout'
 import Login from './pages/Login'
 
+// A new deploy changes every code-split chunk's hashed filename, so a tab still
+// running the OLD build fails to fetch a route chunk ("Something broke"). When a
+// dynamic import fails, do a one-time hard reload to pick up the fresh
+// index.html + chunks. Time-boxed so a genuine error can't loop forever.
+function lazyWithReload(factory) {
+  return lazy(async () => {
+    try {
+      return await factory()
+    } catch (err) {
+      const KEY = 'tt_chunk_reload_at'
+      const last = Number(sessionStorage.getItem(KEY) || 0)
+      if (Date.now() - last > 10000) {
+        sessionStorage.setItem(KEY, String(Date.now()))
+        window.location.reload()
+        return new Promise(() => {})   // suspend until the reload takes over
+      }
+      throw err   // already reloaded recently — surface it to the ErrorBoundary
+    }
+  })
+}
+
 // Authenticated pages are code-split — each loads on demand (and the heavy
 // charting lib only ships with the Dashboard chunk), shrinking the initial load.
-const Deals       = lazy(() => import('./pages/Deals'))
-const Dashboard   = lazy(() => import('./pages/Dashboard'))
-const Commissions = lazy(() => import('./pages/Commissions'))
-const Team        = lazy(() => import('./pages/Team'))
-const Admin       = lazy(() => import('./pages/Admin'))
-const Home        = lazy(() => import('./pages/Home'))
-const Payroll     = lazy(() => import('./pages/Payroll'))
-const Competitions = lazy(() => import('./pages/Competitions'))
-const ImportDeals = lazy(() => import('./pages/ImportDeals'))
-const RequiresAudit = lazy(() => import('./pages/RequiresAudit'))
+const Deals       = lazyWithReload(() => import('./pages/Deals'))
+const Dashboard   = lazyWithReload(() => import('./pages/Dashboard'))
+const Commissions = lazyWithReload(() => import('./pages/Commissions'))
+const Team        = lazyWithReload(() => import('./pages/Team'))
+const Admin       = lazyWithReload(() => import('./pages/Admin'))
+const Home        = lazyWithReload(() => import('./pages/Home'))
+const Payroll     = lazyWithReload(() => import('./pages/Payroll'))
+const Competitions = lazyWithReload(() => import('./pages/Competitions'))
+const ImportDeals = lazyWithReload(() => import('./pages/ImportDeals'))
+const RequiresAudit = lazyWithReload(() => import('./pages/RequiresAudit'))
 
 function Spinner() {
   return (
