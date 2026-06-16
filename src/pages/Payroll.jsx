@@ -4,7 +4,7 @@ import { format } from 'date-fns'
 import { fetchDeals, fetchUsers, updateDeal, fetchPayrollAdjustments, addPayrollAdjustment, deletePayrollAdjustment } from '../lib/db'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
-import { dealAmounts, fmt, activeDeals } from '../utils/commission'
+import { dealAmounts, fmt, activeDeals, officeOverrideRate } from '../utils/commission'
 import DealModal from '../components/DealModal'
 
 const todayISO = () => new Date().toISOString().slice(0, 10)
@@ -53,6 +53,30 @@ function dealPayouts(d) {
   push(d.director, 'Director', a.director)
   push(d.vp, 'VP', a.vp)
   return out
+}
+
+// Ratio (e.g. 0.2 or 0.0375) → "20%" / "3.75%".
+const asPct = (ratio) => { const v = (Number(ratio) || 0) * 100; return (Number.isInteger(v) ? v : +v.toFixed(2)) + '%' }
+// The override % a role is paid (director/VP fall back to the office rate).
+const overridePctFor = (d, role) =>
+  role === 'Manager'  ? Number(d.manager_override_pct) || 0
+  : role === 'Director' ? (d.director_override_pct != null ? Number(d.director_override_pct) : officeOverrideRate(d))
+  : role === 'VP'       ? (d.vp_override_pct       != null ? Number(d.vp_override_pct)       : officeOverrideRate(d))
+  : 0
+// How much of a deal's deduction a setter/closer absorbed (mirrors the engine).
+function roleDeduction(d, role, a) {
+  if (role !== 'Setter' && role !== 'Closer') return 0
+  const deduction = a.deduction
+  if (deduction <= 0) return 0
+  const solo = !d.closer_id || d.setter_id === d.closer_id
+  const paidBy = d.deduction_paid_by || 'closer'
+  const dsp = d.deduction_split_pct == null ? 0.5 : Number(d.deduction_split_pct)
+  if (role === 'Setter') {
+    if (d.setter_amount != null) return 0
+    return solo ? deduction : paidBy === 'setter' ? deduction : paidBy === 'split' ? deduction * dsp : 0
+  }
+  if (d.closer_amount != null) return 0
+  return solo ? 0 : paidBy === 'closer' ? deduction : paidBy === 'split' ? deduction * (1 - dsp) : 0
 }
 
 export default function Payroll() {
@@ -150,21 +174,28 @@ export default function Payroll() {
   const payees = useMemo(() => {
     const m = {}
     const ensure = (id, name) => (m[id] ||= { id, name, total: 0, lines: [], dealIds: new Set(), adjustments: [] })
-    const add = (person, role, amount, deal) => {
+    const add = (person, role, amount, deal, a) => {
       if (!person || !person.id || !(amount > 0)) return
       const p = ensure(person.id, person.name)
       p.total += amount
-      p.lines.push({ deal: deal.deal_name, role, amount })
+      const isRep = role === 'Setter' || role === 'Closer'
+      const ded = roleDeduction(deal, role, a)
+      p.lines.push({
+        deal: deal.deal_name, role, amount,
+        // setter/closer: % of baseline they net; mgmt: their override %
+        pct: isRep ? (a.baseline > 0 ? amount / a.baseline : 0) : overridePctFor(deal, role),
+        ded, note: deal.deduction_note || '',
+      })
       p.dealIds.add(deal.id)
     }
     for (const d of runDeals) {
       if (!isFinalized(d)) continue   // only finalized deals are being paid out
       const a = dealAmounts(d)
-      add(d.setter, 'Setter', a.setter, d)
-      if (d.closer_id !== d.setter_id) add(d.closer, 'Closer', a.closer, d)
-      add(d.manager, 'Manager', a.manager, d)
-      add(d.director, 'Director', a.director, d)
-      add(d.vp, 'VP', a.vp, d)
+      add(d.setter, 'Setter', a.setter, d, a)
+      if (d.closer_id !== d.setter_id) add(d.closer, 'Closer', a.closer, d, a)
+      add(d.manager, 'Manager', a.manager, d, a)
+      add(d.director, 'Director', a.director, d, a)
+      add(d.vp, 'VP', a.vp, d, a)
     }
     // Manual adjustments for this run — folded into each payee's total (a payee
     // can exist on adjustments alone, e.g. a clawback after their deal was paid).
@@ -282,43 +313,76 @@ export default function Payroll() {
     }
   }
 
+  // Full run export — organized by deal, listing everyone paid on it with their
+  // % (override % for mgmt, % of baseline for setter/closer) and $, then any
+  // deduction, then the deal total. Manual adjustments and the grand total last.
   function exportCsv() {
-    const rows = [['Pay Date', 'Payee', 'Deal', 'Role', 'Amount']]
-    for (const p of shownPayees) {
-      for (const l of p.lines) rows.push([viewLabel, p.name, l.deal, l.role, l.amount.toFixed(2)])
-      for (const a of p.adjustments) rows.push([viewLabel, p.name, a.note || 'Adjustment', 'Adjustment', Number(a.amount).toFixed(2)])
+    const rows = [['Deal', 'Paid to', 'Role', '%', 'Commission $', 'Note']]
+    const repFilterId = effFilter || null
+    for (const d of shownDeals) {
+      if (!isFinalized(d)) continue
+      const a = dealAmounts(d)
+      let payouts = dealPayouts(d)
+      if (repFilterId) payouts = payouts.filter(p => p.id === repFilterId)   // rep-scoped export
+      if (!payouts.length) continue
+      rows.push([d.deal_name || '—', '', '', '', '', d.office || ''])
+      for (const p of payouts) {
+        const isRep = p.role === 'Setter' || p.role === 'Closer'
+        const pctRatio = isRep ? (a.baseline > 0 ? p.amount / a.baseline : 0) : overridePctFor(d, p.role)
+        rows.push(['', p.name, isRep ? p.role : 'Override', asPct(pctRatio), p.amount.toFixed(2), ''])
+      }
+      if (!repFilterId && a.deduction > 0)
+        rows.push(['', '', 'Deduction (already in takes)', '', (-a.deduction).toFixed(2), d.deduction_note || ''])
+      const dealTotal = repFilterId ? payouts.reduce((s, p) => s + p.amount, 0) : a.totalCommission
+      rows.push(['', '', 'Deal total', '', dealTotal.toFixed(2), ''])
     }
+    // Manual payroll adjustments for this run.
+    const adjList = repFilterId ? runAdjustments.filter(x => x.payee_id === repFilterId) : runAdjustments
+    if (adjList.length) {
+      rows.push([])
+      rows.push(['Manual adjustments', '', '', '', '', ''])
+      for (const adj of adjList) {
+        const person = users.find(u => u.id === adj.payee_id)
+        rows.push(['', person?.name || '—', 'Adjustment', '', Number(adj.amount).toFixed(2), adj.note || ''])
+      }
+    }
+    // Net total each rep is actually being paid this run (deal takes + adjustments).
     rows.push([])
-    rows.push(['', 'TOTAL', '', '', summary.total.toFixed(2)])
-    downloadCsv(`payroll-${view === 'overdue' ? 'overdue' : view}.csv`, rows)
+    rows.push(['Net totals per rep', '', '', '', '', ''])
+    for (const p of shownPayees) rows.push(['', p.name, '', '', p.total.toFixed(2), ''])
+    rows.push([])
+    rows.push(['TOTAL', '', '', '', summary.total.toFixed(2), ''])
+    downloadCsv(`payroll-${view === 'overdue' ? 'overdue' : view}${effFilter ? '-' + (users.find(u => u.id === effFilter)?.name || 'rep') : ''}.csv`, rows)
   }
 
   // Copy one rep's pay statement to the clipboard — a styled table (text/html,
   // pastes into email/Sheets/Docs) plus a plain-text version. Admin only.
   async function copyPayee(p) {
     const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    // Export-friendly labels: Setter → Self-gen, overrides → Override. Ordered
-    // self-gens, then closes, then overrides.
-    const EXPORT_LABEL = { Setter: 'Self-gen', Closer: 'Closer', Manager: 'Override', Director: 'Override', VP: 'Override' }
-    const ORDER = { 'Self-gen': 0, 'Closer': 1, 'Override': 2 }
-    const lines = p.lines
-      .map(l => ({ ...l, label: EXPORT_LABEL[l.role] || l.role }))
-      .sort((a, b) => (ORDER[a.label] ?? 9) - (ORDER[b.label] ?? 9) || b.amount - a.amount)
-    // Manual adjustments are listed after the deal lines.
-    const adjLines = p.adjustments.map(a => ({ deal: a.note || 'Adjustment', label: 'Adjustment', amount: Number(a.amount) }))
-    const allLines = [...lines, ...adjLines]
+    const roleLabel = (r) => (r === 'Setter' || r === 'Closer') ? r : 'Override'
+    const ORDER = { Setter: 0, Closer: 1, Override: 2 }
+    const sorted = [...p.lines].sort((a, b) =>
+      (ORDER[roleLabel(a.role)] ?? 9) - (ORDER[roleLabel(b.role)] ?? 9) || b.amount - a.amount)
+    // Flat rows: each pay line (with its % + $), a deduction sub-line where one
+    // applied, then any manual adjustments. Net total is authoritative (p.total).
+    const items = []
+    for (const l of sorted) {
+      items.push({ deal: l.deal, role: roleLabel(l.role), pct: asPct(l.pct), amount: l.amount })
+      if (l.ded > 0) items.push({ deal: '', role: `Deduction${l.note ? ` (${l.note})` : ''}`, pct: '', amount: -l.ded, dim: true })
+    }
+    for (const adj of p.adjustments) items.push({ deal: 'Adjustment', role: adj.note || '—', pct: '', amount: Number(adj.amount) })
     const text = `Pay statement — ${p.name} — ${viewLabel}\n\n`
-      + allLines.map(l => `• ${l.deal} — ${l.label}: ${fmt(l.amount)}`).join('\n')
-      + `\n\nTotal: ${fmt(p.total)}`
+      + items.map(l => `• ${l.deal ? l.deal + ' — ' : ''}${l.role}${l.pct ? ` (${l.pct})` : ''}: ${fmt(l.amount)}`).join('\n')
+      + `\n\nNet total: ${fmt(p.total)}`
     const cell = 'padding:6px 12px;border:1px solid #d1d5db'
     const html =
       `<p style="font-family:Arial,sans-serif;font-size:13px"><strong>${esc(p.name)}</strong> — pay for ${esc(viewLabel)}</p>` +
       `<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">` +
       `<thead><tr style="background:#00b894;color:#0b0b0b">` +
-      `<th style="${cell};text-align:left">Deal</th><th style="${cell};text-align:left">Role</th><th style="${cell};text-align:right">Amount</th></tr></thead><tbody>` +
-      allLines.map((l, i) => `<tr style="background:${i % 2 ? '#f3f4f6' : '#ffffff'};color:#111">` +
-        `<td style="${cell}">${esc(l.deal)}</td><td style="${cell}">${esc(l.label)}</td><td style="${cell};text-align:right">${fmt(l.amount)}</td></tr>`).join('') +
-      `<tr style="font-weight:bold;color:#111"><td style="${cell}" colspan="2">Total</td><td style="${cell};text-align:right">${fmt(p.total)}</td></tr>` +
+      `<th style="${cell};text-align:left">Deal</th><th style="${cell};text-align:left">Role</th><th style="${cell};text-align:right">%</th><th style="${cell};text-align:right">Commission</th></tr></thead><tbody>` +
+      items.map((l, i) => `<tr style="background:${i % 2 ? '#f3f4f6' : '#ffffff'};color:${l.dim ? '#b91c1c' : '#111'}">` +
+        `<td style="${cell}">${esc(l.deal)}</td><td style="${cell}">${esc(l.role)}</td><td style="${cell};text-align:right">${esc(l.pct)}</td><td style="${cell};text-align:right">${fmt(l.amount)}</td></tr>`).join('') +
+      `<tr style="font-weight:bold;color:#111"><td style="${cell}" colspan="3">Net total</td><td style="${cell};text-align:right">${fmt(p.total)}</td></tr>` +
       `</tbody></table>`
     try {
       if (navigator.clipboard && window.ClipboardItem) {
