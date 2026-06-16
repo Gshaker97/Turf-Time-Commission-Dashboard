@@ -181,7 +181,7 @@ export default function Payroll() {
       const isRep = role === 'Setter' || role === 'Closer'
       const ded = roleDeduction(deal, role, a)
       p.lines.push({
-        deal: deal.deal_name, role, amount,
+        deal: deal.deal_name, role, amount, baseline: a.baseline,
         // setter/closer: % of baseline they net; mgmt: their override %
         pct: isRep ? (a.baseline > 0 ? amount / a.baseline : 0) : overridePctFor(deal, role),
         ded, note: deal.deduction_note || '',
@@ -317,7 +317,7 @@ export default function Payroll() {
   // % (override % for mgmt, % of baseline for setter/closer) and $, then any
   // deduction, then the deal total. Manual adjustments and the grand total last.
   function exportCsv() {
-    const rows = [['Deal', 'Paid to', 'Role', '%', 'Commission $', 'Note']]
+    const rows = [['Deal', 'Baseline', 'Paid to', 'Role', '%', 'Commission $', 'Note']]
     const repFilterId = effFilter || null
     for (const d of shownDeals) {
       if (!isFinalized(d)) continue
@@ -325,33 +325,33 @@ export default function Payroll() {
       let payouts = dealPayouts(d)
       if (repFilterId) payouts = payouts.filter(p => p.id === repFilterId)   // rep-scoped export
       if (!payouts.length) continue
-      rows.push([d.deal_name || '—', '', '', '', '', d.office || ''])
+      rows.push([d.deal_name || '—', a.baseline.toFixed(2), '', '', '', '', d.office || ''])
       for (const p of payouts) {
         const isRep = p.role === 'Setter' || p.role === 'Closer'
         const pctRatio = isRep ? (a.baseline > 0 ? p.amount / a.baseline : 0) : overridePctFor(d, p.role)
-        rows.push(['', p.name, isRep ? p.role : 'Override', asPct(pctRatio), p.amount.toFixed(2), ''])
+        rows.push(['', '', p.name, isRep ? p.role : 'Override', asPct(pctRatio), p.amount.toFixed(2), ''])
       }
       if (!repFilterId && a.deduction > 0)
-        rows.push(['', '', 'Deduction (already in takes)', '', (-a.deduction).toFixed(2), d.deduction_note || ''])
+        rows.push(['', '', '', 'Deduction (already in takes)', '', (-a.deduction).toFixed(2), d.deduction_note || ''])
       const dealTotal = repFilterId ? payouts.reduce((s, p) => s + p.amount, 0) : a.totalCommission
-      rows.push(['', '', 'Deal total', '', dealTotal.toFixed(2), ''])
+      rows.push(['', '', '', 'Deal total', '', dealTotal.toFixed(2), ''])
     }
     // Manual payroll adjustments for this run.
     const adjList = repFilterId ? runAdjustments.filter(x => x.payee_id === repFilterId) : runAdjustments
     if (adjList.length) {
       rows.push([])
-      rows.push(['Manual adjustments', '', '', '', '', ''])
+      rows.push(['Manual adjustments', '', '', '', '', '', ''])
       for (const adj of adjList) {
         const person = users.find(u => u.id === adj.payee_id)
-        rows.push(['', person?.name || '—', 'Adjustment', '', Number(adj.amount).toFixed(2), adj.note || ''])
+        rows.push(['', '', person?.name || '—', 'Adjustment', '', Number(adj.amount).toFixed(2), adj.note || ''])
       }
     }
     // Net total each rep is actually being paid this run (deal takes + adjustments).
     rows.push([])
-    rows.push(['Net totals per rep', '', '', '', '', ''])
-    for (const p of shownPayees) rows.push(['', p.name, '', '', p.total.toFixed(2), ''])
+    rows.push(['Net totals per rep', '', '', '', '', '', ''])
+    for (const p of shownPayees) rows.push(['', '', p.name, '', '', p.total.toFixed(2), ''])
     rows.push([])
-    rows.push(['TOTAL', '', '', '', summary.total.toFixed(2), ''])
+    rows.push(['TOTAL', '', '', '', '', summary.total.toFixed(2), ''])
     downloadCsv(`payroll-${view === 'overdue' ? 'overdue' : view}${effFilter ? '-' + (users.find(u => u.id === effFilter)?.name || 'rep') : ''}.csv`, rows)
   }
 
@@ -367,22 +367,22 @@ export default function Payroll() {
     // applied, then any manual adjustments. Net total is authoritative (p.total).
     const items = []
     for (const l of sorted) {
-      items.push({ deal: l.deal, role: roleLabel(l.role), pct: asPct(l.pct), amount: l.amount })
-      if (l.ded > 0) items.push({ deal: '', role: `Deduction${l.note ? ` (${l.note})` : ''}`, pct: '', amount: -l.ded, dim: true })
+      items.push({ deal: l.deal, baseline: fmt(l.baseline || 0), role: roleLabel(l.role), pct: asPct(l.pct), amount: l.amount })
+      if (l.ded > 0) items.push({ deal: '', baseline: '', role: `Deduction${l.note ? ` (${l.note})` : ''}`, pct: '', amount: -l.ded, dim: true })
     }
-    for (const adj of p.adjustments) items.push({ deal: 'Adjustment', role: adj.note || '—', pct: '', amount: Number(adj.amount) })
+    for (const adj of p.adjustments) items.push({ deal: 'Adjustment', baseline: '', role: adj.note || '—', pct: '', amount: Number(adj.amount) })
     const text = `Pay statement — ${p.name} — ${viewLabel}\n\n`
-      + items.map(l => `• ${l.deal ? l.deal + ' — ' : ''}${l.role}${l.pct ? ` (${l.pct})` : ''}: ${fmt(l.amount)}`).join('\n')
+      + items.map(l => `• ${l.deal ? l.deal + (l.baseline ? ` (baseline ${l.baseline})` : '') + ' — ' : ''}${l.role}${l.pct ? ` (${l.pct})` : ''}: ${fmt(l.amount)}`).join('\n')
       + `\n\nNet total: ${fmt(p.total)}`
     const cell = 'padding:6px 12px;border:1px solid #d1d5db'
     const html =
       `<p style="font-family:Arial,sans-serif;font-size:13px"><strong>${esc(p.name)}</strong> — pay for ${esc(viewLabel)}</p>` +
       `<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">` +
       `<thead><tr style="background:#00b894;color:#0b0b0b">` +
-      `<th style="${cell};text-align:left">Deal</th><th style="${cell};text-align:left">Role</th><th style="${cell};text-align:right">%</th><th style="${cell};text-align:right">Commission</th></tr></thead><tbody>` +
+      `<th style="${cell};text-align:left">Deal</th><th style="${cell};text-align:right">Baseline</th><th style="${cell};text-align:left">Role</th><th style="${cell};text-align:right">%</th><th style="${cell};text-align:right">Commission</th></tr></thead><tbody>` +
       items.map((l, i) => `<tr style="background:${i % 2 ? '#f3f4f6' : '#ffffff'};color:${l.dim ? '#b91c1c' : '#111'}">` +
-        `<td style="${cell}">${esc(l.deal)}</td><td style="${cell}">${esc(l.role)}</td><td style="${cell};text-align:right">${esc(l.pct)}</td><td style="${cell};text-align:right">${fmt(l.amount)}</td></tr>`).join('') +
-      `<tr style="font-weight:bold;color:#111"><td style="${cell}" colspan="3">Net total</td><td style="${cell};text-align:right">${fmt(p.total)}</td></tr>` +
+        `<td style="${cell}">${esc(l.deal)}</td><td style="${cell};text-align:right">${esc(l.baseline)}</td><td style="${cell}">${esc(l.role)}</td><td style="${cell};text-align:right">${esc(l.pct)}</td><td style="${cell};text-align:right">${fmt(l.amount)}</td></tr>`).join('') +
+      `<tr style="font-weight:bold;color:#111"><td style="${cell}" colspan="4">Net total</td><td style="${cell};text-align:right">${fmt(p.total)}</td></tr>` +
       `</tbody></table>`
     try {
       if (navigator.clipboard && window.ClipboardItem) {
