@@ -15,7 +15,10 @@ function sortValue(d, key) {
   if (key === 'setter')         return d.setter?.name ?? ''
   if (key === 'closer')         return d.closer?.name ?? ''
   if (key === 'commission')     return calcDealCommissions(d).repCommission
-  if (key === 'commission_pct') return calcDealCommissions(d).commPct
+  if (key === 'commission_pct') {
+    const a = calcDealCommissions(d)
+    return a.baseline > 0 ? a.repCommission / a.baseline : 0   // rep comm as a % of baseline
+  }
   if (key === 'baseline_revenue' || key === 'job_price') return parseFloat(d[key]) || 0
   return d[key] ?? ''
 }
