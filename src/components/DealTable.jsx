@@ -282,11 +282,12 @@ function VerifySeal({ verified, canVerify, onToggle }) {
 }
 
 function CommissionCell({ deal, canVerify, onUpdate }) {
-  const { repCommission, commPct, setterAmt, closerAmt, deduction, job } = calcDealCommissions(deal)
+  const { repCommission, setterAmt, closerAmt, deduction, baseline } = calcDealCommissions(deal)
   const split = deal.setter_id && deal.closer_id && deal.setter_id !== deal.closer_id
   // Rep commission only (setter + closer, net of deductions) — overrides go to
-  // leadership and are tracked on the Payroll page, not in this column.
-  const repPct = job > 0 ? repCommission / job : 0
+  // leadership and are tracked on the Payroll page, not in this column. The % is
+  // the rep commission as a share of the deal's BASELINE.
+  const repPct = baseline > 0 ? repCommission / baseline : 0
 
   return (
     <div className="flex items-center justify-end gap-2">
