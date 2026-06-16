@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { X } from 'lucide-react'
+import { userAdmin, userAdminConfigured } from '../lib/db'
 
 const ROLES = ['rep', 'manager', 'director', 'vp', 'admin']
 
@@ -30,6 +31,11 @@ const BLANK = {
 export default function UserModal({ user, allUsers = [], onSave, onClose }) {
   const [form, setForm] = useState(BLANK)
   const [saving, setSaving] = useState(false)
+  const [pw, setPw] = useState('')
+  const [pwBusy, setPwBusy] = useState(false)
+  const [pwMsg, setPwMsg] = useState('')
+  const [pwErr, setPwErr] = useState(false)
+  const pwConfigured = userAdminConfigured()
 
   useEffect(() => {
     if (user) {
@@ -49,6 +55,18 @@ export default function UserModal({ user, allUsers = [], onSave, onClose }) {
   }, [user])
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  // Admin sets/resets this user's login password to one they choose. Uses the
+  // UserAdmin web app (holds the service key); creates the login if there's none.
+  async function setPassword() {
+    if (pw.length < 8) return
+    setPwBusy(true); setPwMsg(''); setPwErr(false)
+    const action = user?.auth_id ? 'reset_password' : 'create_login'
+    const r = await userAdmin(action, { email: form.email, password: pw })
+    setPwBusy(false)
+    if (!r?.ok) { setPwErr(true); setPwMsg(r?.error || 'Could not set password.'); return }
+    setPwMsg(`Saved — ${form.name || 'they'} can sign in with: ${pw}`)
+  }
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -157,9 +175,34 @@ export default function UserModal({ user, allUsers = [], onSave, onClose }) {
           </div>
 
           {user && (
-            <p className="text-[11px] text-white/30 bg-white/5 rounded-lg p-3">
-              To change this user's password, use the Supabase Dashboard → Authentication → Users.
-            </p>
+            <div className="rounded-lg p-3 space-y-2" style={{ background: '#1a1a1a', border: '1px solid #2e2e2e' }}>
+              <label className="block text-[10px] font-semibold text-white/30 uppercase tracking-widest">
+                Login Password
+              </label>
+              {pwConfigured ? (
+                <>
+                  <div className="flex gap-2">
+                    <Inp type="text" value={pw} onChange={e => { setPw(e.target.value); setPwMsg('') }}
+                      placeholder="Type a password (min 8 chars)" minLength={8} />
+                    <button type="button" onClick={setPassword} disabled={pwBusy || pw.length < 8}
+                      className="px-3 py-2 rounded-lg text-[12px] font-bold text-dark bg-teal hover:bg-teal-dark disabled:opacity-50 whitespace-nowrap">
+                      {pwBusy ? 'Saving…' : user.auth_id ? 'Set password' : 'Create login'}
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-white/30">
+                    {user.auth_id
+                      ? 'Sets a new password you choose — share it with them and reset it here anytime.'
+                      : 'No login yet — this creates one with the password you choose.'}
+                  </p>
+                  {pwMsg && <p className={`text-[11px] ${pwErr ? 'text-red-400' : 'text-emerald-400'}`}>{pwMsg}</p>}
+                </>
+              ) : (
+                <p className="text-[11px] text-white/40">
+                  Set <code className="text-white/60">VITE_USER_ADMIN_URL</code> to manage passwords here, or use
+                  Supabase Studio → Authentication → Users.
+                </p>
+              )}
+            </div>
           )}
 
           <div className="flex gap-3 pt-1">
