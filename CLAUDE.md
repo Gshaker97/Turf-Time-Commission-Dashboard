@@ -148,7 +148,10 @@ setup + deploy steps.
   Supabase access token — the endpoint verifies the caller is an admin, so
   there's NO secret in the browser. Set `VITE_USER_ADMIN_URL` to the web-app URL
   to enable; unset = those buttons hide and you create logins in Studio.
-  Already-linked users are untouched.
+  Already-linked users are untouched. The Edit User modal also has a **Login
+  Password** field — an admin types a password of their choice and it's set via
+  `userAdmin('reset_password'|'create_login', { email, password })` (creates the
+  login if none yet), so admins manage known passwords directly.
 - **Deactivation:** the Active toggle flips `profiles.active`. A deactivated
   user is signed out and blocked at login (`AuthContext.fetchProfile` checks
   `active`), but **all their deals/stats stay and still count** — never filter
