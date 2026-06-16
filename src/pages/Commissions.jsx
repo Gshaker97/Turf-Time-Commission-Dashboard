@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ChevronDown, ChevronLeft, ChevronRight, CalendarClock, AlertTriangle } from 'lucide-react'
 import { format } from 'date-fns'
-import { fetchDeals, fetchUsers } from '../lib/db'
+import { fetchDeals, fetchUsers, fetchPayrollAdjustments } from '../lib/db'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
@@ -151,6 +151,7 @@ export default function Commissions() {
   const [preset, setPreset] = useState('mtd')
   const [basis,  setBasis]  = useState('sale')      // filter by 'sale' date or 'pay' date
   const [paydayIdx, setPaydayIdx] = useState(0)     // which upcoming payday the hero is showing
+  const [payOpen, setPayOpen] = useState(false)     // hero expanded to show the paycheck breakdown
 
   const stepWeek = (dir) => {
     const anchor = new Date((from || todayISO()) + 'T12:00:00')
@@ -161,6 +162,7 @@ export default function Commissions() {
   const goThisWeek = () => { const r = isoWeek(todayISO()); setFrom(r.from); setTo(r.to); setPreset('custom') }
   const [allDeals, setAllDeals] = useState([])
   const [users, setUsers] = useState([])
+  const [adjustments, setAdjustments] = useState([])
   const [loading, setLoading] = useState(true)
 
   const periodLabel = presetLabel(rangeMatches(preset, from, to) ? preset : matchPreset(from, to))
@@ -169,11 +171,12 @@ export default function Commissions() {
   const [loadError, setLoadError] = useState('')
   useEffect(() => {
     setLoading(true); setLoadError('')
-    Promise.all([fetchDeals(), fetchUsers()])
-      .then(([dealsRes, usersRes]) => {
+    Promise.all([fetchDeals(), fetchUsers(), fetchPayrollAdjustments()])
+      .then(([dealsRes, usersRes, adjRes]) => {
         if (dealsRes?.error) throw dealsRes.error
         setAllDeals(activeDeals(dealsRes?.data || []))
         setUsers(usersRes?.data || [])
+        setAdjustments(adjRes?.data || [])   // table may not exist yet → []
       })
       .catch(e => { console.error('Commissions load failed:', e); setLoadError(e?.message || 'Could not load deals.') })
       .finally(() => setLoading(false))
@@ -204,13 +207,22 @@ export default function Commissions() {
     const unpaid = allMine.filter(d => d.status !== PAID && d.status !== ISSUE && d.pay_date)
     const byDate = {}
     for (const d of unpaid) (byDate[d.pay_date] ||= []).push(d)
-    const sum = (arr) => arr.reduce((s, d) => s + take(d), 0)
-    const dates = Object.keys(byDate).sort()
-    const overdue = dates.filter(dt => dt < today).reduce((s, dt) => s + sum(byDate[dt]), 0)
-    const paydays = dates.filter(dt => dt >= today).slice(0, 6)
-      .map(dt => ({ date: dt, total: sum(byDate[dt]), count: byDate[dt].length }))
+    // Manual payroll adjustments for this person, bucketed by pay date.
+    const adjByDate = {}
+    for (const adj of adjustments) if (adj.payee_id === id && adj.pay_date) (adjByDate[adj.pay_date] ||= []).push(adj)
+    const dealSum = (arr) => (arr || []).reduce((s, d) => s + take(d), 0)
+    const adjSum  = (arr) => (arr || []).reduce((s, a) => s + num(a.amount), 0)
+    const dates = [...new Set([...Object.keys(byDate), ...Object.keys(adjByDate)])].sort()
+    const overdue = dates.filter(dt => dt < today).reduce((s, dt) => s + dealSum(byDate[dt]) + adjSum(adjByDate[dt]), 0)
+    const paydays = dates.filter(dt => dt >= today).slice(0, 6).map(dt => ({
+      date: dt,
+      deals: byDate[dt] || [],
+      adjustments: adjByDate[dt] || [],
+      count: (byDate[dt] || []).length,
+      total: dealSum(byDate[dt]) + adjSum(adjByDate[dt]),
+    }))
     return { paydays, overdue }
-  }, [allMine, id])
+  }, [allMine, id, adjustments])
 
   // Clamp the selected payday into range, and reset to the next one whenever the
   // viewed user changes.
@@ -313,9 +325,11 @@ export default function Commissions() {
         </div>
       </div>
 
-      {/* Next payday hero */}
-      <div className="rounded-2xl p-4 md:p-5 mb-4 flex items-center gap-4"
-        style={{ background: 'linear-gradient(135deg,#143d34,#1e1e1e)', border: '1px solid #1f5a4d' }}>
+      {/* Next payday hero — click to see the deals + adjustments on this paycheck */}
+      <div onClick={() => selPayday && setPayOpen(o => !o)}
+        className={`rounded-2xl p-4 md:p-5 ${payOpen ? '' : 'mb-4'} flex items-center gap-4 ${selPayday ? 'cursor-pointer hover:brightness-110 transition-all' : ''}`}
+        style={{ background: 'linear-gradient(135deg,#143d34,#1e1e1e)', border: '1px solid #1f5a4d' }}
+        title={selPayday ? 'Click to see the deals on this paycheck' : undefined}>
         <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
           style={{ background: '#00b89422', border: '1px solid #00b89440' }}>
           <CalendarClock size={20} className="text-teal" />
@@ -346,7 +360,7 @@ export default function Commissions() {
         {/* Step through the next 6 paydays */}
         <div className="flex items-center gap-1 flex-shrink-0">
           {paydays.length > 1 && (
-            <button onClick={() => setPaydayIdx(i => Math.max(0, Math.min(i, paydays.length - 1) - 1))}
+            <button onClick={(e) => { e.stopPropagation(); setPaydayIdx(i => Math.max(0, Math.min(i, paydays.length - 1) - 1)) }}
               disabled={payIdx === 0}
               title="Earlier payday"
               className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/10 disabled:opacity-25 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors">
@@ -357,15 +371,50 @@ export default function Commissions() {
             <p className="text-2xl md:text-3xl font-bold text-teal">{fmt(selPayday ? selPayday.total : 0)}</p>
           </div>
           {paydays.length > 1 && (
-            <button onClick={() => setPaydayIdx(i => Math.min(paydays.length - 1, Math.min(i, paydays.length - 1) + 1))}
+            <button onClick={(e) => { e.stopPropagation(); setPaydayIdx(i => Math.min(paydays.length - 1, Math.min(i, paydays.length - 1) + 1)) }}
               disabled={payIdx >= paydays.length - 1}
               title="Later payday"
               className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/10 disabled:opacity-25 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors">
               <ChevronRight size={18} />
             </button>
           )}
+          {selPayday && <ChevronDown size={18} className={`text-white/40 transition-transform ${payOpen ? 'rotate-180' : ''}`} />}
         </div>
       </div>
+
+      {/* Expanded paycheck breakdown for the selected payday */}
+      {payOpen && selPayday && (
+        <div className="rounded-2xl mb-4 overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #1f5a4d' }}>
+          <div className="px-4 py-2.5 border-b border-white/5 flex items-center justify-between">
+            <span className="text-[11px] uppercase tracking-wider text-white/40 font-semibold">
+              Paycheck · {fmtDay(selPayday.date)}
+            </span>
+            <span className="text-[11px] text-white/30">{selPayday.count} deal{selPayday.count === 1 ? '' : 's'} · tap a deal for the breakdown</span>
+          </div>
+          {selPayday.deals.length === 0 && selPayday.adjustments.length === 0 ? (
+            <div className="px-4 py-6 text-white/30 text-sm text-center">Nothing on this paycheck.</div>
+          ) : (
+            <>
+              {selPayday.deals.map(d => <DealRow key={d.id} deal={d} id={id} statusColor={statusColor} />)}
+              {selPayday.adjustments.map(adj => (
+                <div key={adj.id} className="flex items-center justify-between px-4 py-3 border-b border-white/5 last:border-0">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[13px] font-semibold text-white/90">Manual adjustment</p>
+                    <p className="text-[11px] text-white/40 mt-0.5">{adj.note || 'Payroll adjustment'}</p>
+                  </div>
+                  <span className={`text-[14px] font-bold whitespace-nowrap ${num(adj.amount) < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                    {num(adj.amount) < 0 ? '−' : '+'}{fmt(Math.abs(num(adj.amount)))}
+                  </span>
+                </div>
+              ))}
+              <div className="flex items-center justify-between px-4 py-3 bg-white/[0.02]">
+                <span className="text-[12px] font-semibold text-white/50">Total this paycheck</span>
+                <span className="text-[15px] font-bold text-teal">{fmt(selPayday.total)}</span>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Earned — total with commissions vs overrides breakdown */}
       <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12 }} className="p-3 md:p-4 mb-2">
