@@ -26,7 +26,9 @@ export const officeOverrideRate = (deal) => (isTucson(deal) ? TUCSON_OVERRIDE_RA
 export function dealAmounts(deal) {
   const baseline = num(deal.baseline_revenue)
   const job      = num(deal.job_price)
-  const repPool  = Math.max(job - baseline, 0)
+  // Rep pool can go NEGATIVE when a deal is sold BELOW baseline — the rep eats
+  // the shortfall, so commission is allowed to be negative (shown red).
+  const repPool  = job - baseline
   const solo     = !deal.closer_id || deal.setter_id === deal.closer_id
   const split    = deal.setter_split_pct == null ? 0.5 : num(deal.setter_split_pct)
 
@@ -59,8 +61,8 @@ export function dealAmounts(deal) {
   // missing; manager has no such default (sync stamps 0.03 at deal creation).
   const dirVpRate = officeOverrideRate(deal)
   const computed = {
-    setter:   Math.max(rawSetter - setterDed, 0),
-    closer:   Math.max(rawCloser - closerDed, 0),
+    setter:   rawSetter - setterDed,
+    closer:   rawCloser - closerDed,
     manager:  baseline * num(deal.manager_override_pct),
     director: baseline * (deal.director_override_pct != null ? num(deal.director_override_pct) : dirVpRate),
     vp:       baseline * (deal.vp_override_pct       != null ? num(deal.vp_override_pct)       : dirVpRate),

@@ -32,7 +32,7 @@ const pct = (n) => { const v = (Number(n) || 0) * 100; return (Number.isInteger(
 // deduction is computed (not pre-stored), the gross + deduction so the take adds up.
 function myParts(deal, id) {
   const a = dealAmounts(deal)
-  const repPool = Math.max(num(deal.job_price) - num(deal.baseline_revenue), 0)
+  const repPool = num(deal.job_price) - num(deal.baseline_revenue)   // negative if sold below baseline
   const solo = !deal.closer_id || deal.setter_id === deal.closer_id
   const split = deal.setter_split_pct == null ? 0.5 : num(deal.setter_split_pct)
   const deduction = a.deduction   // manual deduction + dealer fee
@@ -80,7 +80,7 @@ function DealRow({ deal, id, statusColor }) {
   const a = dealAmounts(deal)
   const parts = myParts(deal, id)
   const take = parts.reduce((s, p) => s + p.amount, 0)
-  const repPool = Math.max(a.job - a.baseline, 0)
+  const repPool = a.job - a.baseline   // negative when sold below baseline
   const color = statusColor(deal.status)
   const isPaid = deal.status === PAID
 
@@ -95,7 +95,7 @@ function DealRow({ deal, id, statusColor }) {
         <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0"
           style={{ color, border: `1px solid ${color}40` }}>{deal.status}</span>
         <div className="text-right flex-shrink-0 w-[88px]">
-          <p className="text-[14px] font-bold" style={{ color: isPaid ? '#74b9ff' : '#fff' }}>{fmt(take)}</p>
+          <p className="text-[14px] font-bold" style={{ color: take < 0 ? '#f87171' : isPaid ? '#74b9ff' : '#fff' }}>{fmt(take)}</p>
         </div>
         <ChevronDown size={14} className={`text-white/30 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -132,7 +132,7 @@ function DealRow({ deal, id, statusColor }) {
             )}
             <div className="flex items-center justify-between pt-2 mt-1 border-t border-white/10">
               <span className="text-white/40">{isPaid ? 'Paid' : 'Expected'} {fmtDay(deal.pay_date) ? `· ${fmtDay(deal.pay_date)}` : '· pay date TBD'}</span>
-              <span className="text-[13px] font-bold text-teal">Your take {fmt(take)}</span>
+              <span className={`text-[13px] font-bold ${take < 0 ? 'text-red-400' : 'text-teal'}`}>Your take {fmt(take)}</span>
             </div>
           </div>
         </div>

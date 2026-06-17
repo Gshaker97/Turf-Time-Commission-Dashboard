@@ -296,7 +296,7 @@ function CommissionCell({ deal, canVerify, onUpdate }) {
       <div className="flex flex-col items-end gap-1 leading-tight">
       {!split ? (
         <div className="flex flex-col items-end">
-          <span className="text-[13px] font-bold text-teal">{fmt(repCommission)}</span>
+          <span className={`text-[13px] font-bold ${repCommission < 0 ? 'text-red-400' : 'text-teal'}`}>{fmt(repCommission)}</span>
           <span className="text-[11px] text-white/30">{fmtPct(repPct)}</span>
         </div>
       ) : (
@@ -304,12 +304,12 @@ function CommissionCell({ deal, canVerify, onUpdate }) {
           <div className="flex items-center gap-1.5">
             <span className="text-[10px] font-bold text-white/30 w-[11px] h-[11px] rounded-full bg-white/10 flex items-center justify-center leading-none"
               style={{ fontSize: 8 }}>{deal.setter?.name?.[0]?.toUpperCase() ?? 'S'}</span>
-            <span className="text-[12px] font-semibold text-teal/80">{fmt(setterAmt)}</span>
+            <span className={`text-[12px] font-semibold ${setterAmt < 0 ? 'text-red-400' : 'text-teal/80'}`}>{fmt(setterAmt)}</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="text-[10px] font-bold text-white/30 w-[11px] h-[11px] rounded-full bg-white/10 flex items-center justify-center leading-none"
               style={{ fontSize: 8 }}>{deal.closer?.name?.[0]?.toUpperCase() ?? 'C'}</span>
-            <span className="text-[12px] font-semibold text-teal">{fmt(closerAmt)}</span>
+            <span className={`text-[12px] font-semibold ${closerAmt < 0 ? 'text-red-400' : 'text-teal'}`}>{fmt(closerAmt)}</span>
           </div>
           <span className="text-[10px] text-white/20">{fmtPct(repPct)}</span>
         </div>
