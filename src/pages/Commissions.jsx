@@ -10,34 +10,28 @@ import { getPresetRange, matchPreset, rangeMatches, presetLabel, PRESETS, PRESET
 
 const todayISO = () => new Date().toISOString().slice(0, 10)
 const inRange = (date, from, to) => !!date && (!from || date >= from) && (!to || date <= to)
-// Sunday–Saturday week containing the given date (ISO strings).
 const isoWeek = (dateStr) => {
   const d = dateStr ? new Date(dateStr + 'T12:00:00') : new Date()
-  const dow = d.getDay()                                  // 0 = Sunday
+  const dow = d.getDay()
   const sun = new Date(d); sun.setDate(d.getDate() - dow)
   const sat = new Date(sun); sat.setDate(sun.getDate() + 6)
   const iso = (x) => x.toISOString().slice(0, 10)
   return { from: iso(sun), to: iso(sat) }
 }
-const PAID = 'Paid'                 // status that means the commission has been paid out
-const ISSUE = 'Sales Issue'         // status that means the deal is in trouble
+const PAID = 'Paid'
+const ISSUE = 'Sales Issue'
 const fmtDay = (iso) => iso ? format(new Date(iso + 'T12:00:00'), 'EEE, MMM d') : null
 const num = (v) => Number(v) || 0
 const pct = (n) => { const v = (Number(n) || 0) * 100; return (Number.isInteger(v) ? v : v.toFixed(2)) + '%' }
 
-// The roles the current user holds on a deal, with each role's dollar amount.
-// Only the user's OWN roles are ever returned, so a rep never sees overrides
-// and a manager only ever sees their own override (never the director/VP chain).
-// For setter/closer we also surface the split partner's name and, when the
-// deduction is computed (not pre-stored), the gross + deduction so the take adds up.
 function myParts(deal, id) {
   const a = dealAmounts(deal)
-  const repPool = num(deal.job_price) - num(deal.baseline_revenue)   // negative if sold below baseline
+  const repPool = num(deal.job_price) - num(deal.baseline_revenue)
   const solo = !deal.closer_id || deal.setter_id === deal.closer_id
   const split = deal.setter_split_pct == null ? 0.5 : num(deal.setter_split_pct)
-  const deduction = a.deduction   // manual deduction + dealer fee
+  const deduction = a.deduction
   const paidBy = deal.deduction_paid_by || 'closer'
-  const dsp = deal.deduction_split_pct == null ? 0.5 : num(deal.deduction_split_pct)  // setter's share when split
+  const dsp = deal.deduction_split_pct == null ? 0.5 : num(deal.deduction_split_pct)
   const setterDed = deal.setter_amount != null ? 0 : (solo ? deduction : paidBy === 'setter' ? deduction : paidBy === 'split' ? deduction * dsp : 0)
   const closerDed = deal.closer_amount != null ? 0 : (solo ? 0 : paidBy === 'closer' ? deduction : paidBy === 'split' ? deduction * (1 - dsp) : 0)
   const parts = []
@@ -80,7 +74,7 @@ function DealRow({ deal, id, statusColor }) {
   const a = dealAmounts(deal)
   const parts = myParts(deal, id)
   const take = parts.reduce((s, p) => s + p.amount, 0)
-  const repPool = a.job - a.baseline   // negative when sold below baseline
+  const repPool = a.job - a.baseline
   const color = statusColor(deal.status)
   const isPaid = deal.status === PAID
 
@@ -126,368 +120,4 @@ function DealRow({ deal, id, statusColor }) {
             ))}
             {a.deduction > 0 && !parts.some(p => p.ded > 0) && (
               <div className="flex items-start gap-1.5 pt-2 mt-1 border-t border-white/5 text-[11px] text-red-400/90">
-                <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
-                <span>This deal has a {fmt(a.deduction)} deduction{deal.deduction_note ? ` — ${deal.deduction_note}` : ''} (already reflected in your take).</span>
-              </div>
-            )}
-            <div className="flex items-center justify-between pt-2 mt-1 border-t border-white/10">
-              <span className="text-white/40">{isPaid ? 'Paid' : 'Expected'} {fmtDay(deal.pay_date) ? `· ${fmtDay(deal.pay_date)}` : '· pay date TBD'}</span>
-              <span className={`text-[13px] font-bold ${take < 0 ? 'text-red-400' : 'text-teal'}`}>Your take {fmt(take)}</span>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-export default function Commissions() {
-  const { profile, isAdmin } = useAuth()
-  const { statusColor, statusLabels } = useSettings()
-  const [viewId, setViewId] = useState(null)        // admins can view another rep's commissions
-  const id = viewId || profile?.id
-  const [from,   setFrom]   = useState(getPresetRange('mtd').from)
-  const [to,     setTo]     = useState(getPresetRange('mtd').to)
-  const [preset, setPreset] = useState('mtd')
-  const [basis,  setBasis]  = useState('sale')      // filter by 'sale' date or 'pay' date
-  const [paydayIdx, setPaydayIdx] = useState(0)     // which upcoming payday the hero is showing
-  const [payOpen, setPayOpen] = useState(false)     // hero expanded to show the paycheck breakdown
-
-  const stepWeek = (dir) => {
-    const anchor = new Date((from || todayISO()) + 'T12:00:00')
-    anchor.setDate(anchor.getDate() + dir * 7)
-    const r = isoWeek(anchor.toISOString().slice(0, 10))
-    setFrom(r.from); setTo(r.to); setPreset('custom')
-  }
-  const goThisWeek = () => { const r = isoWeek(todayISO()); setFrom(r.from); setTo(r.to); setPreset('custom') }
-  const [allDeals, setAllDeals] = useState([])
-  const [users, setUsers] = useState([])
-  const [adjustments, setAdjustments] = useState([])
-  const [loading, setLoading] = useState(true)
-
-  const periodLabel = presetLabel(rangeMatches(preset, from, to) ? preset : matchPreset(from, to))
-  const viewUser = useMemo(() => users.find(u => u.id === id) || profile, [users, id, profile])
-
-  const [loadError, setLoadError] = useState('')
-  useEffect(() => {
-    setLoading(true); setLoadError('')
-    Promise.all([fetchDeals(), fetchUsers(), fetchPayrollAdjustments()])
-      .then(([dealsRes, usersRes, adjRes]) => {
-        if (dealsRes?.error) throw dealsRes.error
-        setAllDeals(activeDeals(dealsRes?.data || []))
-        setUsers(usersRes?.data || [])
-        setAdjustments(adjRes?.data || [])   // table may not exist yet → []
-      })
-      .catch(e => { console.error('Commissions load failed:', e); setLoadError(e?.message || 'Could not load deals.') })
-      .finally(() => setLoading(false))
-  }, [])
-  useRefreshOnFocus(() => fetchDeals().then(({ data }) => setAllDeals(activeDeals(data || []))).catch(() => {}))
-
-  // Every deal this user has any stake in (unfiltered — for the forward-looking
-  // "next payday", which shouldn't disappear when you filter a past period).
-  const allMine = useMemo(
-    () => allDeals.filter(d => [d.setter_id, d.closer_id, d.manager_id, d.director_id, d.vp_id].includes(id)),
-    [allDeals, id]
-  )
-
-  // The period's deals (filtered by sale date) for the cards + grouped list.
-  const periodMine = useMemo(
-    () => allMine.filter(d => inRange(basis === 'pay' ? d.pay_date : d.sale_date, from, to)),
-    [allMine, from, to, basis]
-  )
-
-  const take = (d) => getUserCommission(d, id)
-
-  // ── Forward-looking paydays (global) ──────────────────────────
-  // The next up-to-6 scheduled paydays so the hero can step week-by-week
-  // through what each upcoming paycheck will be. Overdue pay dates are summed
-  // separately as a standing reminder.
-  const { paydays, overdue } = useMemo(() => {
-    const today = todayISO()
-    const unpaid = allMine.filter(d => d.status !== PAID && d.status !== ISSUE && d.pay_date)
-    const byDate = {}
-    for (const d of unpaid) (byDate[d.pay_date] ||= []).push(d)
-    // Manual payroll adjustments for this person, bucketed by pay date.
-    const adjByDate = {}
-    for (const adj of adjustments) if (adj.payee_id === id && adj.pay_date) (adjByDate[adj.pay_date] ||= []).push(adj)
-    const dealSum = (arr) => (arr || []).reduce((s, d) => s + take(d), 0)
-    const adjSum  = (arr) => (arr || []).reduce((s, a) => s + num(a.amount), 0)
-    const dates = [...new Set([...Object.keys(byDate), ...Object.keys(adjByDate)])].sort()
-    const overdue = dates.filter(dt => dt < today).reduce((s, dt) => s + dealSum(byDate[dt]) + adjSum(adjByDate[dt]), 0)
-    const paydays = dates.filter(dt => dt >= today).slice(0, 6).map(dt => ({
-      date: dt,
-      deals: byDate[dt] || [],
-      adjustments: adjByDate[dt] || [],
-      count: (byDate[dt] || []).length,
-      total: dealSum(byDate[dt]) + adjSum(adjByDate[dt]),
-    }))
-    return { paydays, overdue }
-  }, [allMine, id, adjustments])
-
-  // Clamp the selected payday into range, and reset to the next one whenever the
-  // viewed user changes.
-  const payIdx = Math.min(paydayIdx, Math.max(paydays.length - 1, 0))
-  const selPayday = paydays[payIdx] || null
-  useEffect(() => { setPaydayIdx(0) }, [id])
-
-  // ── Period totals ─────────────────────────────────────────────
-  const totals = useMemo(() => {
-    let earned = 0, paid = 0, commissions = 0, overrides = 0
-    for (const d of periodMine) {
-      let t = 0
-      for (const p of myParts(d, id)) {
-        t += p.amount
-        if (p.role === 'Setter' || p.role === 'Closer') commissions += p.amount
-        else overrides += p.amount
-      }
-      earned += t
-      if (d.status === PAID) paid += t
-    }
-    return { earned, paid, upcoming: Math.max(earned - paid, 0), commissions, overrides }
-  }, [periodMine, id])
-
-  // Per-status breakdown for the period (respects configurable statuses).
-  const byStatus = useMemo(() => {
-    const m = {}
-    for (const d of periodMine) {
-      const k = d.status || '—'
-      if (!m[k]) m[k] = { status: k, count: 0, amount: 0 }
-      m[k].count += 1; m[k].amount += take(d)
-    }
-    const order = statusLabels || []
-    return Object.values(m).sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status))
-  }, [periodMine, id, statusLabels])
-
-  // Period deals grouped by pay date (newest first; unscheduled last).
-  const groups = useMemo(() => {
-    const m = {}
-    for (const d of periodMine) {
-      const k = d.pay_date || 'unscheduled'
-      if (!m[k]) m[k] = { key: k, date: d.pay_date || null, deals: [], total: 0 }
-      m[k].deals.push(d); m[k].total += take(d)
-    }
-    return Object.values(m).sort((a, b) => {
-      if (!a.date) return 1
-      if (!b.date) return -1
-      return b.date.localeCompare(a.date)
-    })
-  }, [periodMine, id])
-
-  return (
-    <div style={{ background: '#1a1a1a', color: '#fff', minHeight: '100%' }}>
-      {/* Header */}
-      <div className="mb-4 space-y-3">
-        <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div className="min-w-0">
-            <h1 className="text-lg md:text-xl font-bold text-white">
-              {viewId && viewId !== profile?.id ? `${viewUser?.name}'s Commissions` : 'My Commissions'}
-            </h1>
-            <p className="text-[12px] text-white/40 mt-0.5">{viewUser?.name}</p>
-          </div>
-          {isAdmin && (
-            <select value={viewId || ''} onChange={e => setViewId(e.target.value || null)}
-              className="text-[12px] px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white max-w-[180px] flex-shrink-0"
-              title="View another person's commissions">
-              <option value="" style={{ background: '#2a2a2a' }}>My commissions</option>
-              {users.filter(u => ['rep','manager','director','vp'].includes(u.role)).slice()
-                .sort((a, b) => a.name.localeCompare(b.name))
-                .map(u => <option key={u.id} value={u.id} style={{ background: '#2a2a2a' }}>{u.name}{u.ghost ? ' (ghost)' : ''}</option>)}
-            </select>
-          )}
-        </div>
-        {/* One date control: week scroller (primary) + presets tucked into a dropdown */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex items-center rounded-lg overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-            <button onClick={() => stepWeek(-1)} className="px-2 py-1.5 text-white/50 hover:text-white" title="Previous week"><ChevronLeft size={15} /></button>
-            <button onClick={goThisWeek} className="px-3 py-1.5 text-[12px] font-semibold text-white/80 hover:text-white border-x border-white/10" title="Jump to this week">
-              {from && to ? `${format(new Date(from + 'T12:00:00'), 'MMM d')} – ${format(new Date(to + 'T12:00:00'), 'MMM d')}` : 'This week'}
-            </button>
-            <button onClick={() => stepWeek(1)} className="px-2 py-1.5 text-white/50 hover:text-white" title="Next week"><ChevronRight size={15} /></button>
-          </div>
-          <select
-            value={rangeMatches(preset, from, to) ? preset : matchPreset(from, to)}
-            onChange={e => { const p = PRESETS_BY_KEY[e.target.value]; if (!p) return; const r = p.range(); setFrom(r.from); setTo(r.to); setPreset(p.key) }}
-            className="text-[12px] px-2.5 py-1.5 rounded-lg text-white/80 focus:outline-none"
-            style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}
-            title="Jump to a period">
-            <option value="custom" disabled style={{ background: '#2a2a2a' }}>Custom range</option>
-            {PRESETS.map(p => <option key={p.key} value={p.key} style={{ background: '#2a2a2a' }}>{p.label}</option>)}
-          </select>
-          <div className="flex rounded-lg overflow-hidden text-[11px] font-semibold" style={{ border: '1px solid #2a2a2a' }}>
-            {[['sale', 'By sale date'], ['pay', 'By pay date']].map(([k, label]) => (
-              <button key={k} onClick={() => setBasis(k)}
-                className="px-3 py-1.5 transition-colors"
-                style={basis === k ? { background: '#00b894', color: '#0b0b0b' } : { background: '#1e1e1e', color: 'rgba(255,255,255,0.5)' }}>
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Next payday hero — click to see the deals + adjustments on this paycheck */}
-      <div onClick={() => selPayday && setPayOpen(o => !o)}
-        className={`rounded-2xl p-4 md:p-5 ${payOpen ? '' : 'mb-4'} flex items-center gap-4 ${selPayday ? 'cursor-pointer hover:brightness-110 transition-all' : ''}`}
-        style={{ background: 'linear-gradient(135deg,#143d34,#1e1e1e)', border: '1px solid #1f5a4d' }}
-        title={selPayday ? 'Click to see the deals on this paycheck' : undefined}>
-        <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
-          style={{ background: '#00b89422', border: '1px solid #00b89440' }}>
-          <CalendarClock size={20} className="text-teal" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <p className="text-[10px] uppercase tracking-widest text-white/40 font-semibold">
-              {payIdx === 0 ? 'Next payday' : 'Upcoming payday'}
-            </p>
-            {paydays.length > 1 && (
-              <span className="text-[9px] font-semibold text-white/45 px-1.5 py-0.5 rounded-full" style={{ background: '#ffffff14' }}>
-                {payIdx + 1} / {paydays.length}
-              </span>
-            )}
-          </div>
-          {selPayday ? (
-            <p className="text-[13px] text-white/70">
-              <span className="text-white font-semibold">{fmtDay(selPayday.date)}</span>
-              {' · '}{selPayday.count} deal{selPayday.count === 1 ? '' : 's'}
-            </p>
-          ) : (
-            <p className="text-[13px] text-white/50">No scheduled paydays coming up.</p>
-          )}
-          {payIdx === 0 && overdue > 0 && (
-            <p className="text-[11px] text-amber-400/90 mt-0.5">{fmt(overdue)} pending from past pay dates</p>
-          )}
-        </div>
-        {/* Step through the next 6 paydays */}
-        <div className="flex items-center gap-1 flex-shrink-0">
-          {paydays.length > 1 && (
-            <button onClick={(e) => { e.stopPropagation(); setPaydayIdx(i => Math.max(0, Math.min(i, paydays.length - 1) - 1)) }}
-              disabled={payIdx === 0}
-              title="Earlier payday"
-              className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/10 disabled:opacity-25 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors">
-              <ChevronLeft size={18} />
-            </button>
-          )}
-          <div className="text-right min-w-[92px]">
-            <p className="text-2xl md:text-3xl font-bold text-teal">{fmt(selPayday ? selPayday.total : 0)}</p>
-          </div>
-          {paydays.length > 1 && (
-            <button onClick={(e) => { e.stopPropagation(); setPaydayIdx(i => Math.min(paydays.length - 1, Math.min(i, paydays.length - 1) + 1)) }}
-              disabled={payIdx >= paydays.length - 1}
-              title="Later payday"
-              className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/10 disabled:opacity-25 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors">
-              <ChevronRight size={18} />
-            </button>
-          )}
-          {selPayday && <ChevronDown size={18} className={`text-white/40 transition-transform ${payOpen ? 'rotate-180' : ''}`} />}
-        </div>
-      </div>
-
-      {/* Expanded paycheck breakdown for the selected payday */}
-      {payOpen && selPayday && (
-        <div className="rounded-2xl mb-4 overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #1f5a4d' }}>
-          <div className="px-4 py-2.5 border-b border-white/5 flex items-center justify-between">
-            <span className="text-[11px] uppercase tracking-wider text-white/40 font-semibold">
-              Paycheck · {fmtDay(selPayday.date)}
-            </span>
-            <span className="text-[11px] text-white/30">{selPayday.count} deal{selPayday.count === 1 ? '' : 's'} · tap a deal for the breakdown</span>
-          </div>
-          {selPayday.deals.length === 0 && selPayday.adjustments.length === 0 ? (
-            <div className="px-4 py-6 text-white/30 text-sm text-center">Nothing on this paycheck.</div>
-          ) : (
-            <>
-              {selPayday.deals.map(d => <DealRow key={d.id} deal={d} id={id} statusColor={statusColor} />)}
-              {selPayday.adjustments.map(adj => (
-                <div key={adj.id} className="flex items-center justify-between px-4 py-3 border-b border-white/5 last:border-0">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[13px] font-semibold text-white/90">Manual adjustment</p>
-                    <p className="text-[11px] text-white/40 mt-0.5">{adj.note || 'Payroll adjustment'}</p>
-                  </div>
-                  <span className={`text-[14px] font-bold whitespace-nowrap ${num(adj.amount) < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
-                    {num(adj.amount) < 0 ? '−' : '+'}{fmt(Math.abs(num(adj.amount)))}
-                  </span>
-                </div>
-              ))}
-              <div className="flex items-center justify-between px-4 py-3 bg-white/[0.02]">
-                <span className="text-[12px] font-semibold text-white/50">Total this paycheck</span>
-                <span className="text-[15px] font-bold text-teal">{fmt(selPayday.total)}</span>
-              </div>
-            </>
-          )}
-        </div>
-      )}
-
-      {/* Earned — total with commissions vs overrides breakdown */}
-      <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12 }} className="p-3 md:p-4 mb-2">
-        <div className="text-[9px] md:text-[11px] uppercase tracking-wider text-white/30 font-semibold mb-1.5">Earned · {periodLabel}</div>
-        <div className="text-[18px] md:text-2xl font-bold text-teal">{fmt(totals.earned)}</div>
-        <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-white/5">
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-white/30 font-semibold mb-0.5">Commissions</div>
-            <div className="text-[15px] md:text-[17px] font-bold text-white">{fmt(totals.commissions)}</div>
-            <div className="text-[10px] text-white/30">setter / closer</div>
-          </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-white/30 font-semibold mb-0.5">Overrides</div>
-            <div className="text-[15px] md:text-[17px] font-bold text-white">{fmt(totals.overrides)}</div>
-            <div className="text-[10px] text-white/30">manager / director / VP</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Paid / Upcoming */}
-      <div className="grid grid-cols-2 gap-2 md:gap-3 mb-3">
-        <Card label="Paid"     value={fmt(totals.paid)}     color="#74b9ff" sub="status = Paid" />
-        <Card label="Upcoming" value={fmt(totals.upcoming)} color="#fdcb6e" sub="not yet paid · incl. unfinalized deals" />
-      </div>
-
-      {/* Per-status strip */}
-      {byStatus.length > 0 && (
-        <div className="flex flex-wrap gap-2 mb-4">
-          {byStatus.map(s => {
-            const c = statusColor(s.status)
-            return (
-              <div key={s.status} className="flex items-center gap-2 px-3 py-1.5 rounded-lg"
-                style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-                <span className="w-1.5 h-1.5 rounded-full" style={{ background: c }} />
-                <span className="text-[11px] text-white/60">{s.status}</span>
-                <span className="text-[11px] font-semibold text-white">{fmt(s.amount)}</span>
-                <span className="text-[10px] text-white/30">×{s.count}</span>
-              </div>
-            )
-          })}
-        </div>
-      )}
-
-      {/* Deals grouped by payday */}
-      <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12, overflow: 'hidden' }}>
-        <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
-          <span className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">Deals · {periodLabel}</span>
-          <span className="text-[11px] text-white/30">tap a deal for the breakdown</span>
-        </div>
-
-        {loading ? (
-          <div className="px-4 py-8 text-white/30 text-sm text-center">Loading…</div>
-        ) : loadError ? (
-          <div className="px-4 py-8 text-red-300 text-sm text-center">Couldn’t load deals: {loadError}</div>
-        ) : groups.length === 0 ? (
-          <div className="px-4 py-8 text-white/30 text-sm text-center">No deals in this period.</div>
-        ) : (
-          groups.map(g => (
-            <div key={g.key}>
-              <div className="flex items-center justify-between px-4 py-2 bg-white/[0.02] border-b border-white/5">
-                <span className="text-[11px] font-semibold text-white/50">
-                  {g.date ? `Pays ${fmtDay(g.date)}` : 'Pay date TBD'}
-                </span>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-white/30">{g.deals.length} deal{g.deals.length === 1 ? '' : 's'}</span>
-                  <span className="text-[12px] font-bold text-teal">{fmt(g.total)}</span>
-                </div>
-              </div>
-              {g.deals.map(d => <DealRow key={d.id} deal={d} id={id} statusColor={statusColor} />)}
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  )
-}
+                <AlertTriangle size={12} className="mt-0.5 
