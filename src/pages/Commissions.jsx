@@ -136,6 +136,36 @@ function DealRow({ deal, id, statusColor }) {
   )
 }
 
+// ── Pipeline Week Group — collapsible week header for pipeline tab ────────────
+function PipelineWeekGroup({ week, id, users, statusColor }) {
+  const [open, setOpen] = useState(false)
+  const weekLabel = week.weekStart
+    ? `${format(new Date(week.weekStart + 'T12:00:00'), 'MMM d')} – ${format(new Date(week.weekEnd + 'T12:00:00'), 'MMM d')}`
+    : 'Pay date TBD'
+
+  return (
+    <div className="border-b border-white/5 last:border-0">
+      <button onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/[0.02] transition-colors">
+        <div className="flex items-center gap-2">
+          {week.isOverdue && <span className="text-amber-400 text-[11px]">⚠</span>}
+          <span className="text-[13px] font-semibold" style={{ color: week.isOverdue ? '#fbbf24' : 'rgba(255,255,255,0.8)' }}>
+            {weekLabel}
+          </span>
+          <span className="text-[11px] text-white/30">{week.deals.length} deal{week.deals.length === 1 ? '' : 's'}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[14px] font-bold text-teal">{fmt(week.total)}</span>
+          <ChevronDown size={14} className={`text-white/30 transition-transform ${open ? 'rotate-180' : ''}`} />
+        </div>
+      </button>
+      {open && week.deals.map(d => (
+        <PipelineRow key={d.id} deal={d} id={id} users={users} statusColor={statusColor} />
+      ))}
+    </div>
+  )
+}
+
 // ── Pipeline Row — flat row used in the Total Pipeline tab ────────────────────
 function PipelineRow({ deal, id, users, statusColor }) {
   const a = dealAmounts(deal)
@@ -274,6 +304,36 @@ export default function Commissions() {
   const pipelineOverdue = useMemo(() => {
     const today = todayISO()
     return pipelineDeals.filter(d => d.pay_date && d.pay_date < today).reduce((s, d) => s + take(d), 0)
+  }, [pipelineDeals])
+
+  // Group pipeline deals by pay week (Sun–Sat of the pay_date)
+  const pipelineWeeks = useMemo(() => {
+    const today = todayISO()
+    const weekKey = (payDate) => {
+      if (!payDate) return 'tbd'
+      const { from } = isoWeek(payDate)
+      return from
+    }
+    const map = {}
+    for (const d of pipelineDeals) {
+      const key = weekKey(d.pay_date)
+      if (!map[key]) {
+        const isOverdue = d.pay_date && d.pay_date < today
+        const weekStart = key !== 'tbd' ? key : null
+        const weekEnd = weekStart ? isoWeek(weekStart).to : null
+        map[key] = { key, weekStart, weekEnd, isOverdue: false, deals: [], total: 0 }
+      }
+      if (d.pay_date && d.pay_date < today) map[key].isOverdue = true
+      map[key].deals.push(d)
+      map[key].total += take(d)
+    }
+    return Object.values(map).sort((a, b) => {
+      if (a.isOverdue && !b.isOverdue) return -1
+      if (!a.isOverdue && b.isOverdue) return 1
+      if (!a.weekStart) return 1
+      if (!b.weekStart) return -1
+      return a.weekStart.localeCompare(b.weekStart)
+    })
   }, [pipelineDeals])
 
   // ── Forward-looking paydays ───────────────────────────────────
@@ -422,22 +482,22 @@ export default function Commissions() {
             </div>
           </div>
 
-          {/* Deal list */}
+          {/* Deal list grouped by week */}
           <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12, overflow: 'hidden' }}>
             <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
               <span className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">All unpaid deals</span>
-              <span className="text-[11px] text-white/30">overdue deals shown first</span>
+              <span className="text-[11px] text-white/30">grouped by pay week</span>
             </div>
 
             {loading ? (
               <div className="px-4 py-8 text-white/30 text-sm text-center">Loading…</div>
             ) : loadError ? (
               <div className="px-4 py-8 text-red-300 text-sm text-center">Couldn't load deals: {loadError}</div>
-            ) : pipelineDeals.length === 0 ? (
+            ) : pipelineWeeks.length === 0 ? (
               <div className="px-4 py-8 text-white/30 text-sm text-center">No unpaid deals — you're all caught up!</div>
             ) : (
-              pipelineDeals.map(d => (
-                <PipelineRow key={d.id} deal={d} id={id} users={users} statusColor={statusColor} />
+              pipelineWeeks.map(week => (
+                <PipelineWeekGroup key={week.key} week={week} id={id} users={users} statusColor={statusColor} />
               ))
             )}
           </div>
