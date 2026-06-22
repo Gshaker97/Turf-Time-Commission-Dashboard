@@ -79,6 +79,23 @@ export default function Deals() {
   // change shows instantly without a round-trip + full reload.
   const patchDeal = (id, data) => setDeals(ds => ds.map(d => d.id === id ? { ...d, ...data } : d))
 
+  // Inline edits (status, gold check, dates, dropdowns): show instantly, then
+  // persist with a couple of quiet retries so a brief network blip doesn't
+  // silently revert the change. Only resync (revert) if it truly won't save,
+  // and say why instead of failing silently.
+  async function persistInline(id, data) {
+    patchDeal(id, data)
+    for (let attempt = 0; ; attempt++) {
+      const res = await updateDeal(id, data)
+      if (!res?.error) return
+      if (attempt < 2) { await new Promise(r => setTimeout(r, 500 * (attempt + 1))); continue }
+      alert('Could not save that change, so it was reverted:\n' + (res.error.message || 'network error') +
+            '\n\nIf this keeps happening, reload the page (your session may have expired).')
+      load(true)
+      return
+    }
+  }
+
   const role = profile?.role
   // Rep-filter dropdowns hide ghost users from non-admins (their deals still show/count).
   const pickUsers = isAdmin ? users : users.filter(u => !u.ghost)
@@ -262,11 +279,7 @@ export default function Deals() {
         datePreset={datePreset}       setDateRange={setDateRange}
         onEdit={d => { setEditDeal(d); setModal(true) }}
         onDelete={handleDelete}
-        onUpdate={async (id, data) => {
-          patchDeal(id, data)                       // optimistic — show instantly
-          const res = await updateDeal(id, data)
-          if (res?.error) load(true)                // resync quietly if it failed
-        }}
+        onUpdate={persistInline}
         loading={loading}
       />
 

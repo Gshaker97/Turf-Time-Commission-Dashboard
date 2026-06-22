@@ -289,9 +289,15 @@ export default function Payroll() {
   })()
 
   async function setStatus(id, status) {
-    setDeals(ds => ds.map(d => d.id === id ? { ...d, status } : d))
-    const res = await updateDeal(id, { status })
-    if (res?.error) load()
+    setDeals(ds => ds.map(d => d.id === id ? { ...d, status } : d))   // optimistic
+    for (let attempt = 0; ; attempt++) {
+      const res = await updateDeal(id, { status })
+      if (!res?.error) return
+      if (attempt < 2) { await new Promise(r => setTimeout(r, 500 * (attempt + 1))); continue }
+      alert('Could not save the status change, so it was reverted:\n' + (res.error.message || 'network error'))
+      load()
+      return
+    }
   }
   async function markAll(status) {
     const ids = shownDeals.filter(d => d.status !== status).map(d => d.id)
