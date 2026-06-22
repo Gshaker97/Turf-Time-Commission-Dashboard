@@ -155,7 +155,10 @@ export default function Deals() {
       if (a.baseline > 0) totalMarkupPct += ((a.job - a.baseline) / a.baseline) * 100
     }
     const count = counted.length
-    return { baseline, totalComm, count, avgDeal: count ? totalJobPrice/count : 0, avgComm: count ? totalComm/count : 0, avgMarkupPct: count ? totalMarkupPct/count : 0 }
+    const total = filtered.length                 // all deals in view, incl. canceled
+    const canceled = total - count
+    const canceledPct = total ? (canceled / total) * 100 : 0
+    return { baseline, totalComm, count, total, canceled, canceledPct, avgDeal: count ? totalJobPrice/count : 0, avgComm: count ? totalComm/count : 0, avgMarkupPct: count ? totalMarkupPct/count : 0 }
   }, [filtered])
 
   function handleSort(key, dir) {
@@ -224,7 +227,8 @@ export default function Deals() {
       <div className="grid grid-cols-2 gap-2 md:flex md:gap-3">
         <KpiCard label="Baseline Rev"  value={fmt(kpis.baseline)} />
         <KpiCard label="Commissions"   value={fmt(kpis.totalComm)} />
-        <KpiCard label="Deals"         value={kpis.count} />
+        <KpiCard label="Deals"         value={kpis.total}
+          sub={kpis.canceled > 0 ? `${kpis.canceled} canceled · ${kpis.canceledPct.toFixed(kpis.canceledPct < 10 ? 1 : 0)}%` : undefined} />
         <KpiCard label="Avg Deal"      value={fmt(kpis.avgDeal)} />
         <div className="col-span-2 md:flex-1">
           <KpiCard label="Avg Comm" value={fmt(kpis.avgComm)} sub={`${kpis.avgMarkupPct.toFixed(1)}% markup`} />
