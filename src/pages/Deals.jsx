@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Plus } from 'lucide-react'
+import { Plus, Download } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import { fetchDeals, fetchUsers, fetchPayments, insertDeal, updateDeal, deleteDeal } from '../lib/db'
@@ -10,6 +10,18 @@ import DealTable, { dealNeedsReview } from '../components/DealTable'
 import DealModal from '../components/DealModal'
 import { calcDealCommissions, dealAmounts, fmt, isCanceled } from '../utils/commission'
 import { getPresetRange } from '../utils/dateRanges'
+
+// Build + download a CSV from an array of rows (first row = header).
+function downloadCsv(name, rows) {
+  const csv = rows.map(r => r.map(c => {
+    const s = String(c ?? '')
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
+  }).join(',')).join('\n')
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+  const a = document.createElement('a')
+  a.href = url; a.download = name; a.click()
+  URL.revokeObjectURL(url)
+}
 
 function sortValue(d, key) {
   if (key === 'setter')         return d.setter?.name ?? ''
@@ -208,6 +220,29 @@ export default function Deals() {
     }
   }
 
+  // Export the deals currently in view (respects filters + the review tab) to a
+  // clean, deal-per-row CSV.
+  function exportDeals() {
+    const cols = ['Deal', 'Status', 'Office', 'Closing Date', 'Install Date', 'Pay Date',
+      'Payment', 'Setter', 'Closer', 'Baseline', 'Job Price', 'Rep Pool',
+      'Rep Commission', 'Comm % (baseline)', 'Deduction', 'Verified', 'Project ID']
+    const rows = [cols]
+    for (const d of shownDeals) {
+      const a = dealAmounts(d)
+      const commPct = a.baseline > 0 ? (a.repCommission / a.baseline) * 100 : 0
+      rows.push([
+        d.deal_name || '', d.status || '', d.office || '',
+        d.sale_date || '', d.install_date || '', d.pay_date || '',
+        d.payment_method || '', d.setter?.name || '', d.closer?.name || '',
+        a.baseline.toFixed(2), a.job.toFixed(2), (a.job - a.baseline).toFixed(2),
+        a.repCommission.toFixed(2), commPct.toFixed(1) + '%',
+        a.deduction > 0 ? a.deduction.toFixed(2) : '',
+        d.commission_verified === true ? 'Yes' : 'No', d.project_id || '',
+      ])
+    }
+    downloadCsv(`deals-${new Date().toISOString().slice(0, 10)}.csv`, rows)
+  }
+
   return (
     <div className="space-y-3 pb-32 md:pb-20">
       <FilterBar
@@ -264,6 +299,15 @@ export default function Deals() {
           )}
         </div>
       )}
+
+      <div className="flex items-center justify-end">
+        <button onClick={exportDeals} disabled={!shownDeals.length}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold text-white/70 hover:text-white transition-colors disabled:opacity-40"
+          style={{ background: '#1e1e1e', border: '1px solid #2e2e2e' }}
+          title="Export the deals in view to a CSV">
+          <Download size={14} /> Export CSV
+        </button>
+      </div>
 
       <DealTable
         deals={shownDeals}
