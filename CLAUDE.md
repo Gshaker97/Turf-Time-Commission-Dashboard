@@ -256,9 +256,11 @@ Settings checklist editor still exist but drive nothing.)
 **Staging ("Needs review").** The Deals page gives VP/admin two tabs: **Needs
 review** (deals not yet vetted) and **All deals**. A deal graduates out of
 staging when its commission gets the gold check (`commission_verified` —
-`dealNeedsReview`, exported from `src/components/DealTable.jsx`). Change
-orders clear `commission_verified`, so re-signed deals automatically fall back
-into staging.
+`dealNeedsReview`, exported from `src/components/DealTable.jsx`). UNchecking a
+deal (manually, or via a change order clearing `commission_verified`) sends it
+back to staging — even a Paid deal — so the only state-based exclusions are
+Canceled and legacy (`sale_date` before `dataStartDate`). The Needs-review list
+is also scoped by the page's current filters/date range.
 
 **Payroll totals are finalized-only.** The pay-run headline (`Total payout`,
 Remaining, per-payee totals) counts only `Pay Finalized` + `Paid` deals

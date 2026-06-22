@@ -15,14 +15,13 @@ export const DATE_FIELDS = [
 ]
 
 // A deal sits in the "Needs review" staging area until its commission gets the
-// gold check (commission_verified). Canceled and already-Paid deals are never
-// in review (old paid history shouldn't flood staging). Change orders clear
-// the gold check, so re-signed deals fall back into staging.
-// Legacy deals (sale_date before the data-start cutoff) predate our atomized
-// data and are intentionally left out of staging — they're "it is what it is"
-// until they reach payout, when they'll be corrected by hand.
+// gold check (commission_verified) — so UNchecking a deal (manually, or via a
+// change order) always sends it back to review, even if it was already Paid.
+// Canceled deals are never in review. Legacy deals (sale_date before the
+// data-start cutoff) predate our atomized data and are intentionally left out
+// of staging — they're "it is what it is" until they reach payout.
 export const dealNeedsReview = (deal, dataStartDate) =>
-  !isCanceled(deal) && deal.status !== 'Paid' && deal.commission_verified !== true &&
+  !isCanceled(deal) && deal.commission_verified !== true &&
   !(dataStartDate && deal.sale_date && deal.sale_date < dataStartDate)
 
 // Changing a deal's office anywhere re-applies the office-driven Director/VP
