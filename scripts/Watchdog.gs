@@ -9,11 +9,11 @@
  *   • Site up?           — fetches the frontend URL.
  *   • Sync healthy?      — sync_heartbeat fresh, not stuck in DRY_RUN, no errors.
  *   • Backup healthy?    — backup_heartbeat within ~26h.
- *   • Payday hygiene     — deals paying within 7 days that are missing office /
- *                          payment / install date, or aren't gold-checked yet.
- *   • Overdue deals      — pay date in the past but never finalized/paid.
- *   • Data smells        — active deals where job price < baseline (negative pool).
  *   • Frontend crashes   — new rows in client_errors in the last 24h.
+ *
+ * It is a SITE/BACKEND sentry only — it does NOT report on deal/payroll status
+ * (overdue deals, below-baseline pricing, missing fields). Those are surfaced
+ * in-app (the Payroll banners, the Deals "Needs review" tab), where they belong.
  *
  * Emails only when the findings CHANGE (no hourly nagging about the same
  * thing), and writes watchdog_heartbeat to app_settings so the Admin page's
@@ -72,42 +72,7 @@ function watchdogRun() {
     }
   } catch (e) { add('WARN', 'Could not read heartbeats: ' + e.message); }
 
-  // ── 4–6. Data hygiene ─────────────────────────────────────
-  try {
-    const soon = wdISO_(7), today = wdISO_(0);
-    // UrlFetchApp rejects raw quotes/spaces in URLs — every quoted PostgREST
-    // list value must be percent-encoded (wdList_).
-    const active = 'status=not.in.(' + wdList_(['Canceled', 'Cancelled', 'Sales Issue']) + ')';
-    const sel = 'select=deal_name,status,office,payment_method,install_date,pay_date,commission_verified,baseline_revenue,job_price';
-
-    // Legacy cutoff: deals closed before data_start_date predate our atomized
-    // data and are intentionally NOT nagged about in the background (overdue /
-    // negative-pool). They still surface in the "paying within 7 days" checks
-    // below, so they're flagged once they actually approach payout.
-    const dataStart = wdDataStart_(url, key);
-    const notLegacy = dataStart ? '&sale_date=gte.' + dataStart : '';
-
-    // Deals paying within 7 days (kept unfiltered — these ARE the pay-time prompts)
-    const paying = wdGet_(url, key, '/rest/v1/deals?' + sel + '&pay_date=lte.' + soon + '&pay_date=gte.' + today + '&' + active);
-    const missing = paying.filter(d => !d.office || !d.payment_method || !d.install_date);
-    if (missing.length) add('WARN', missing.length + ' deal(s) paying within 7 days missing office/payment/install: ' +
-      wdNames_(missing));
-    const unverified = paying.filter(d => d.commission_verified !== true && d.status !== 'Paid');
-    if (unverified.length) add('WARN', unverified.length + ' deal(s) paying within 7 days not gold-checked: ' +
-      wdNames_(unverified));
-
-    // Overdue: pay date passed, never finalized (legacy deals excluded)
-    const overdue = wdGet_(url, key, '/rest/v1/deals?' + sel + '&pay_date=lt.' + today + notLegacy +
-      '&status=not.in.(' + wdList_(['Paid', 'Pay Finalized', 'Canceled', 'Cancelled', 'Sales Issue']) + ')');
-    if (overdue.length) add('WARN', overdue.length + ' deal(s) past their pay date but never finalized: ' + wdNames_(overdue));
-
-    // Negative rep pool (price below baseline) on active deals (legacy excluded)
-    const all = wdGet_(url, key, '/rest/v1/deals?select=deal_name,baseline_revenue,job_price&' + active + notLegacy);
-    const negative = all.filter(d => Number(d.job_price) > 0 && Number(d.job_price) < Number(d.baseline_revenue) - 0.5);
-    if (negative.length) add('WARN', negative.length + ' deal(s) priced BELOW baseline (negative rep pool): ' + wdNames_(negative));
-  } catch (e) { add('WARN', 'Data checks failed: ' + e.message); }
-
-  // ── 7. Frontend crashes (last 24h) ────────────────────────
+  // ── 4. Frontend crashes (last 24h) ────────────────────────
   try {
     const since = new Date(Date.now() - 24 * 3600000).toISOString();
     const errs = wdGet_(url, key, '/rest/v1/client_errors?select=message,path,at&at=gte.' + since + '&order=at.desc&limit=10');
@@ -150,27 +115,6 @@ function wdGet_(url, key, path) {
   });
   if (r.getResponseCode() >= 300) throw new Error('HTTP ' + r.getResponseCode() + ' ' + r.getContentText().slice(0, 120));
   return JSON.parse(r.getContentText());
-}
-// '"A","B C"' percent-encoded for a PostgREST in.() list (quotes + spaces).
-function wdList_(values) {
-  return values.map(function (v) { return '%22' + encodeURIComponent(v) + '%22'; }).join(',');
-}
-// The admin-set legacy cutoff (app_settings.data_start_date, a JSON string
-// like "2026-06-01"). Returns '' if unset so callers skip the filter.
-function wdDataStart_(url, key) {
-  try {
-    const rows = wdGet_(url, key, '/rest/v1/app_settings?select=value&key=eq.data_start_date');
-    const v = rows && rows[0] ? rows[0].value : null;
-    return (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) ? v : '';
-  } catch (e) { return ''; }
-}
-function wdISO_(daysAhead) {
-  const d = new Date(); d.setDate(d.getDate() + daysAhead);
-  return d.toISOString().slice(0, 10);
-}
-function wdNames_(deals) {
-  const names = deals.map(d => d.deal_name).slice(0, 6).join(', ');
-  return names + (deals.length > 6 ? ' (+' + (deals.length - 6) + ' more)' : '');
 }
 function wdHeartbeat_(url, key, summary) {
   try {
