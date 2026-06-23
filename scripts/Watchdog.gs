@@ -10,10 +10,16 @@
  *   • Sync healthy?      — sync_heartbeat fresh, not stuck in DRY_RUN, no errors.
  *   • Backup healthy?    — backup_heartbeat within ~26h.
  *   • Frontend crashes   — new rows in client_errors in the last 24h.
+ *   • Permission changes — a role / admin flag / active state changed, or an
+ *                          account was added/removed (privilege-escalation watch).
  *
  * It is a SITE/BACKEND sentry only — it does NOT report on deal/payroll status
  * (overdue deals, below-baseline pricing, missing fields). Those are surfaced
  * in-app (the Payroll banners, the Deals "Needs review" tab), where they belong.
+ *
+ * Note: it watches the server side (the DB + site). It can't see what a given
+ * user's browser renders, so a UI-only permission leak is guarded by the app's
+ * role-gating + RLS, not here — but any change to WHO has what access is caught.
  *
  * Emails only when the findings CHANGE (no hourly nagging about the same
  * thing), and writes watchdog_heartbeat to app_settings so the Admin page's
@@ -81,6 +87,36 @@ function watchdogRun() {
       add('WARN', errs.length + ' frontend error(s) in the last 24h — ' + uniq.slice(0, 3).join(' | '));
     }
   } catch (e) { /* table may not exist until migration 020 runs — fine */ }
+
+  // ── 5. Permission / roster changes ────────────────────────
+  // Snapshot every profile's role + admin flag + active state and alert when it
+  // changes between runs — catches privilege escalation (e.g. a rep suddenly
+  // is_admin), a role flip, a deactivated account coming back, or new/removed
+  // accounts. (RLS + the app's role-gating control what each person can SEE;
+  // this watches WHO has what access.)
+  try {
+    const profs = wdGet_(url, key, '/rest/v1/profiles?select=id,name,role,is_admin,active');
+    const sig = {};
+    profs.forEach(p => {
+      sig[p.id] = [p.name || '?', p.role || '?', p.is_admin === true ? 'A' : '-', p.active === false ? 'off' : 'on'].join('|');
+    });
+    const prev = JSON.parse(props.getProperty('WATCHDOG_PERMS') || 'null');
+    if (prev) {
+      const changes = [];
+      Object.keys(sig).forEach(id => {
+        if (!prev[id]) { const b = sig[id].split('|'); changes.push(b[0] + ': new account (' + b[1] + (b[2] === 'A' ? ', ADMIN' : '') + ')'); return; }
+        if (prev[id] === sig[id]) return;
+        const a = prev[id].split('|'), b = sig[id].split('|'), p = [];
+        if (a[1] !== b[1]) p.push('role ' + a[1] + ' → ' + b[1]);
+        if (a[2] !== b[2]) p.push(b[2] === 'A' ? 'ADMIN GRANTED' : 'admin removed');
+        if (a[3] !== b[3]) p.push(b[3] === 'off' ? 'deactivated' : 'reactivated');
+        changes.push(b[0] + ': ' + p.join(', '));
+      });
+      Object.keys(prev).forEach(id => { if (!sig[id]) changes.push(prev[id].split('|')[0] + ': account removed'); });
+      if (changes.length) add('CRIT', 'Permission/roster change — ' + changes.join(' · '));
+    }
+    props.setProperty('WATCHDOG_PERMS', JSON.stringify(sig));
+  } catch (e) { add('WARN', 'Permission check failed: ' + e.message); }
 
   // ── Report ────────────────────────────────────────────────
   const summary = issues.map(i => '[' + i.sev + '] ' + i.text);
