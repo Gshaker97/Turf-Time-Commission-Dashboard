@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { X } from 'lucide-react'
-import { userAdmin, userAdminConfigured } from '../lib/db'
+import { userAdmin, userAdminConfigured, updateUser } from '../lib/db'
 
 const ROLES = ['rep', 'manager', 'director', 'vp', 'admin']
 
@@ -61,6 +61,13 @@ export default function UserModal({ user, allUsers = [], onSave, onClose }) {
   async function setPassword() {
     if (pw.length < 8) return
     setPwBusy(true); setPwMsg(''); setPwErr(false)
+    // The UserAdmin endpoint finds the profile by email. If the email was edited
+    // but not saved, persist it first so the lookup matches (avoids the
+    // confusing "no roster profile with that email" error).
+    if (user && form.email && form.email !== user.email) {
+      const { error } = await updateUser(user.id, { email: form.email })
+      if (error) { setPwBusy(false); setPwErr(true); setPwMsg('Could not update the email first: ' + error.message); return }
+    }
     const action = user?.auth_id ? 'reset_password' : 'create_login'
     const r = await userAdmin(action, { email: form.email, password: pw })
     setPwBusy(false)
