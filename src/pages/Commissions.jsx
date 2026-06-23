@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ChevronDown, ChevronLeft, ChevronRight, CalendarClock, AlertTriangle } from 'lucide-react'
 import { format } from 'date-fns'
-import { fetchDeals, fetchUsers, fetchPayrollAdjustments } from '../lib/db'
+import { fetchDeals, fetchUsers, fetchPayrollAdjustments, logClientError } from '../lib/db'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
@@ -377,6 +377,15 @@ export default function Commissions() {
     }
     return { earned, paid, upcoming: Math.max(earned - paid, 0), commissions, overrides }
   }, [periodMine, id])
+
+  // Permission tripwire: a plain rep must never see override $ (overrides are
+  // siloed to the role-holder in myParts). If one ever does, it's a gating
+  // regression — log it to client_errors so the Watchdog surfaces it.
+  useEffect(() => {
+    if (viewUser?.role === 'rep' && totals.overrides > 0.005) {
+      logClientError({ message: `Permission leak: rep "${viewUser.name}" shows ${totals.overrides.toFixed(2)} in override commission`, stack: '' })
+    }
+  }, [viewUser, totals.overrides])
 
   const byStatus = useMemo(() => {
     const m = {}

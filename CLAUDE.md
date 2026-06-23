@@ -307,12 +307,18 @@ keeping the most recent 30.
 
 **`scripts/Watchdog.gs` (`watchdogRun`, hourly trigger).** A SITE/BACKEND
 sentry only: pings the site, checks sync/backup heartbeats (incl. the DRY_RUN
-trap), and reports recent `client_errors` rows. Writes `watchdog_heartbeat` to
-app_settings (shown on Admin → System Health) and emails ALERT_EMAIL a digest —
-only when findings CHANGE. It deliberately does NOT report deal/payroll status
-(overdue deals, below-baseline pricing, missing fields) — those are surfaced
-in-app (Payroll banners, the Deals "Needs review" tab). Detect-and-notify only;
-it never edits data. Frontend side: an ErrorBoundary in Layout + global
+trap), reports recent `client_errors` rows, and watches **permission/roster
+changes** — it snapshots every profile's role + `is_admin` + `active` (stored in
+the `WATCHDOG_PERMS` script property) and alerts (CRIT) when a role flips, admin
+is granted/removed, an account is (de)activated, or accounts are added/removed.
+Writes `watchdog_heartbeat` to app_settings (shown on Admin → System Health) and
+emails ALERT_EMAIL a digest — only when findings CHANGE. It deliberately does
+NOT report deal/payroll status (overdue deals, below-baseline pricing, missing
+fields) — those are surfaced in-app (Payroll banners, the Deals "Needs review"
+tab). It can't see what a user's browser renders; a UI permission leak is
+guarded by the app's role-gating + RLS, plus a tripwire on `Commissions.jsx`
+that `logClientError`s if a plain rep is ever shown override $ (which the
+Watchdog then reports). Detect-and-notify only; it never edits data. Frontend side: an ErrorBoundary in Layout + global
 error/unhandledrejection handlers report crashes to `client_errors`
 (migration 020) via `logClientError` in db.js.
 
