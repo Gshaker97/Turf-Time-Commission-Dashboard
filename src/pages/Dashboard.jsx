@@ -142,7 +142,7 @@ export default function Dashboard() {
     for (const d of rows) {
       const a = dealAmounts(d)
       baseline   += a.baseline
-      commission += a.totalCommission
+      commission += a.repCommission   // rep (setter+closer) take — matches the Deals tab + leaderboard, excludes overrides
     }
     const totalPrice = rows.reduce((s, d) => s + (parseFloat(d.job_price) || 0), 0)
     const count      = rows.length
