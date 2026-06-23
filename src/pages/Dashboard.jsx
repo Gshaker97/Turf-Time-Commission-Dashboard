@@ -591,7 +591,7 @@ export default function Dashboard() {
         <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
           <div className="mb-4">
             <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Weekly Performance</h3>
-            <p className="text-[11px] text-white/30 mt-0.5">Mon–Sun weeks</p>
+            <p className="text-[11px] text-white/30 mt-0.5">Sun–Sat weeks</p>
           </div>
           <div className="space-y-2">
             {weeklyData.map((w, i) => (
