@@ -117,7 +117,10 @@ function schSync() {
         const cust = String(rows[r][ix.customer] || '').trim().toLowerCase();
         if (!cust) continue;
         const st = String(ix.status >= 0 ? rows[r][ix.status] : '').trim().toUpperCase();
-        if (SCH_ONLY_STATUS && st && st !== SCH_ONLY_STATUS) continue;
+        // Only APPROVED rows drive deals. A blank/pending status (e.g. an
+        // unsigned ArcSite design that landed on the sheet) must NOT count — so
+        // require an exact APPROVED match whenever a Status column exists.
+        if (SCH_ONLY_STATUS && ix.status >= 0 && st !== SCH_ONLY_STATUS) continue;
         const when = schDate_(rows[r][ix.approved]) || '';
         const prev = newestRow[cust];
         if (!prev || when >= prev.when) newestRow[cust] = { r: r, when: when };
@@ -130,7 +133,10 @@ function schSync() {
         if (SCH_SKIP_NAME_CONTAINS.some(x => customer.toLowerCase().indexOf(x) !== -1)) { out.skipped++; continue; }
 
         const status = String(ix.status >= 0 ? row[ix.status] : '').trim().toUpperCase();
-        if (SCH_ONLY_STATUS && status && status !== SCH_ONLY_STATUS) { out.skipped++; continue; }
+        // Require an exact APPROVED match (when a Status column exists) so a
+        // blank/pending row — an unsigned design ArcSite parked on the sheet —
+        // can neither create a deal nor fire a change order.
+        if (SCH_ONLY_STATUS && ix.status >= 0 && status !== SCH_ONLY_STATUS) { out.skipped++; continue; }
 
         // Stale duplicate (older re-sign row) — the newest row owns this deal.
         const newest = newestRow[customer.toLowerCase()];
