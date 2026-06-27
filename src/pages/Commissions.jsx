@@ -278,10 +278,12 @@ export default function Commissions() {
 
   const take = (d) => getUserCommission(d, id)
 
-  // ── Total Pipeline: ALL unpaid deals across all time ─────────
+  // ── Total Pipeline: unpaid deals (excludes pre-cutoff legacy, which were
+  // never tracked through to Paid — same rule as the rest of the app) ──────────
   const pipelineDeals = useMemo(() => {
     return allMine
-      .filter(d => d.status !== PAID && d.status !== ISSUE)
+      .filter(d => d.status !== PAID && d.status !== ISSUE &&
+        !(dataStartDate && d.sale_date && d.sale_date < dataStartDate))
       .slice()
       .sort((a, b) => {
         // overdue first, then by pay date ascending, then TBD last
@@ -294,7 +296,7 @@ export default function Commissions() {
         if (!b.pay_date) return -1
         return a.pay_date.localeCompare(b.pay_date)
       })
-  }, [allMine])
+  }, [allMine, dataStartDate])
 
   const pipelineTotal = useMemo(
     () => pipelineDeals.reduce((s, d) => s + take(d), 0),
