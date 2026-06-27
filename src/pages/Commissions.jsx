@@ -226,7 +226,7 @@ function PipelineRow({ deal, id, users, statusColor }) {
 
 export default function Commissions() {
   const { profile, isAdmin } = useAuth()
-  const { statusColor, statusLabels } = useSettings()
+  const { statusColor, statusLabels, dataStartDate } = useSettings()
   const [viewId, setViewId] = useState(null)
   const id = viewId || profile?.id
   const [from,   setFrom]   = useState(getPresetRange('mtd').from)
@@ -339,7 +339,12 @@ export default function Commissions() {
   // ── Forward-looking paydays ───────────────────────────────────
   const { paydays, overdue } = useMemo(() => {
     const today = todayISO()
-    const unpaid = allMine.filter(d => d.status !== PAID && d.status !== ISSUE && d.pay_date)
+    // Legacy deals (closed before the data-start cutoff) predate our atomized
+    // workflow and were never tracked through to Paid — exclude them so the
+    // "pending from past pay dates" figure reflects only actionable recent deals
+    // (consistent with Payroll/Deals/Watchdog). They still count in historical totals.
+    const unpaid = allMine.filter(d => d.status !== PAID && d.status !== ISSUE && d.pay_date &&
+      !(dataStartDate && d.sale_date && d.sale_date < dataStartDate))
     const byDate = {}
     for (const d of unpaid) (byDate[d.pay_date] ||= []).push(d)
     const adjByDate = {}
@@ -356,7 +361,7 @@ export default function Commissions() {
       total: dealSum(byDate[dt]) + adjSum(adjByDate[dt]),
     }))
     return { paydays, overdue }
-  }, [allMine, id, adjustments])
+  }, [allMine, id, adjustments, dataStartDate])
 
   const payIdx = Math.min(paydayIdx, Math.max(paydays.length - 1, 0))
   const selPayday = paydays[payIdx] || null
