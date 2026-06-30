@@ -205,16 +205,24 @@ function DateField({ label, value, field, dealId, canEdit, onUpdate, deriveExtra
     <div className="flex items-center gap-1.5">
       <span className={`text-[10px] uppercase tracking-wide w-8 flex-shrink-0 ${missing ? 'text-amber-400' : 'text-white/30'}`}>{label}</span>
       {canEdit ? (
-        <input
-          type="date"
-          defaultValue={value ?? ''}
-          onChange={e => {
-            const v = e.target.value || null
-            onUpdate(dealId, { [field]: v, ...(deriveExtra ? deriveExtra(v) : null) })
-          }}
-          className={`text-[12px] border-0 outline-none cursor-pointer hover:text-white focus:text-white transition-colors w-[104px] rounded ${missing ? 'text-amber-400' : 'bg-transparent text-white/55'}`}
-          style={missing ? { colorScheme: 'dark', background: '#f59e0b18' } : { colorScheme: 'dark' }}
-        />
+        <span className="flex items-center gap-0.5">
+          <input
+            key={value ?? 'empty'}
+            type="date"
+            defaultValue={value ?? ''}
+            onChange={e => {
+              const v = e.target.value || null
+              onUpdate(dealId, { [field]: v, ...(deriveExtra ? deriveExtra(v) : null) })
+            }}
+            className={`text-[12px] border-0 outline-none cursor-pointer hover:text-white focus:text-white transition-colors w-[104px] rounded ${missing ? 'text-amber-400' : 'bg-transparent text-white/55'}`}
+            style={missing ? { colorScheme: 'dark', background: '#f59e0b18' } : { colorScheme: 'dark' }}
+          />
+          {value && (
+            <button type="button" title={`Clear ${label.toLowerCase()} date`}
+              onClick={() => onUpdate(dealId, { [field]: null, ...(deriveExtra ? deriveExtra(null) : null) })}
+              className="text-white/25 hover:text-red-400 transition-colors leading-none px-0.5">×</button>
+          )}
+        </span>
       ) : (
         <span className={`text-[12px] ${missing ? 'text-amber-400' : 'text-white/55'}`}>{value ?? '— missing'}</span>
       )}
