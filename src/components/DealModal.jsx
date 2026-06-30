@@ -223,7 +223,10 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
     }))
   }
 
-  const splitPct = Math.min(100, Math.max(0, parseFloat(form.setter_split_pct) || 50))
+  // Parse a % field, defaulting to 50 ONLY when blank/invalid — NOT when 0
+  // (so a 0% setter / 100% closer split is allowed; plain `|| 50` swallowed 0).
+  const pctOr50 = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 50 }
+  const splitPct = Math.min(100, Math.max(0, pctOr50(form.setter_split_pct)))
   // Let the split be set by typing a $ amount (back-calculated from the rep pool).
   const repPoolForm = Math.max((parseFloat(form.job_price) || 0) - (parseFloat(form.baseline_revenue) || 0), 0)
   const setterDollars = repPoolForm * splitPct / 100
@@ -278,7 +281,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
   const isSplitDeal = !!(form.setter_id && form.closer_id && form.setter_id !== form.closer_id)
   const setterName = users.find(u => u.id === form.setter_id)?.name || 'Setter'
   const closerName = users.find(u => u.id === form.closer_id)?.name || 'Closer'
-  const dedSplit = Math.min(100, Math.max(0, parseFloat(form.deduction_split_pct) || 50))  // setter's %
+  const dedSplit = Math.min(100, Math.max(0, pctOr50(form.deduction_split_pct)))  // setter's %
   const recipName = form.bonus_recipient === 'closer' ? closerName : setterName
   // Per-role override $ (gross) for showing the live "5% → 4%" net as bonuses pull from it.
   const overrideGross = {
@@ -304,7 +307,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
       ...formCols,
       baseline_revenue:      parseFloat(form.baseline_revenue) || 0,
       job_price:             parseFloat(form.job_price) || 0,
-      setter_split_pct:      form.setter_id !== form.closer_id ? Math.min(1, Math.max(0, (parseFloat(form.setter_split_pct) || 50) / 100)) : null,
+      setter_split_pct:      form.setter_id !== form.closer_id ? Math.min(1, Math.max(0, pctOr50(form.setter_split_pct) / 100)) : null,
       manager_override_pct:  form.manager_id  && form.manager_override_pct  ? parseFloat(form.manager_override_pct)  / 100 : null,
       director_override_pct: form.director_id && form.director_override_pct ? parseFloat(form.director_override_pct) / 100 : null,
       vp_override_pct:       form.vp_id       && form.vp_override_pct       ? parseFloat(form.vp_override_pct)       / 100 : null,
@@ -318,7 +321,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
       financed_amount:  form.financed_amount !== '' ? Math.max(0, parseFloat(form.financed_amount) || 0) : null,
       dealer_fee_pct:   form.dealer_fee_pct ? parseFloat(form.dealer_fee_pct) / 100 : null,
       deduction_paid_by: form.deduction_paid_by || 'closer',
-      deduction_split_pct: Math.min(1, Math.max(0, (parseFloat(form.deduction_split_pct) || 50) / 100)),
+      deduction_split_pct: Math.min(1, Math.max(0, pctOr50(form.deduction_split_pct) / 100)),
       // Multi-source bonus, stored as resolved $ per source.
       bonus_company:   bonus$.company  > 0 ? bonus$.company  : null,
       bonus_manager:   bonus$.manager  > 0 ? bonus$.manager  : null,
