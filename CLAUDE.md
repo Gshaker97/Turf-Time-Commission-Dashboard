@@ -142,7 +142,10 @@ setup + deploy steps.
   admins Lock/Unlock a `pay_date` on the Payroll page; a `guard_locked_payroll()`
   trigger on `deals` + `payroll_adjustments` rejects ANY insert/update/delete
   touching a locked pay date — app, sync, and raw SQL alike — with a snapshot of
-  payee totals stored at lock time). Do not re-run `001`/`002` against a populated database.
+  payee totals stored at lock time). The sync's AUTO-LOCK pass also freezes any
+  past-due run whose payable deals are ALL Paid (`snapshot.auto = true`); a
+  manual Unlock is honored for 24h (`app_settings.payroll_unlocks` grace map)
+  before auto-lock re-arms. Do not re-run `001`/`002` against a populated database.
 
 ## User management (Admin page)
 

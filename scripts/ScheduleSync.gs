@@ -84,7 +84,7 @@ function schSync() {
   });
 
   const ignoreCreate = new Set((props.getProperty(SCH_BASELINE_PROP) || '').split(',').filter(Boolean));
-  const out = { created: 0, changed: 0, updated: 0, paid: 0, skipped: 0, errors: 0, details: [] };
+  const out = { created: 0, changed: 0, updated: 0, paid: 0, locked: 0, skipped: 0, errors: 0, details: [] };
 
   // ── PAID PASS — Pay Finalized → Paid once the pay date has arrived ──
   const todayISO = new Date().toISOString().slice(0, 10);
@@ -94,6 +94,46 @@ function schSync() {
       else { try { schPatch_(url, key, '/rest/v1/deals?id=eq.' + d.id, { status: SCH_PAID_STATUS }); d.status = SCH_PAID_STATUS; out.paid++; } catch (e) { out.errors++; out.details.push((d.deal_name || d.project_id) + ': ' + e.message); } }
     }
   }
+
+  // ── AUTO-LOCK PASS — freeze past-due runs that are fully settled ──
+  // Once a pay date is in the past AND every payable deal on it is Paid, insert
+  // a payroll_locks row (migration 028) so the run is frozen automatically —
+  // no manual Lock click needed. Runs with unpaid stragglers stay open so they
+  // can still be paid, and a run an admin UNLOCKED in the last 24h is left
+  // alone (app_settings.payroll_unlocks) so the sync doesn't instantly re-lock
+  // it out from under their correction.
+  try {
+    const lockRows = schGet_(url, key, '/rest/v1/payroll_locks?select=pay_date');
+    const lockedDates = {};
+    lockRows.forEach(function (l) { lockedDates[l.pay_date] = true; });
+    // Recent manual unlocks → grace period.
+    try {
+      const unlockRows = schGet_(url, key, '/rest/v1/app_settings?select=value&key=eq.payroll_unlocks');
+      const unlocks = (unlockRows[0] && unlockRows[0].value) || {};
+      const graceMs = 24 * 3600 * 1000;
+      for (const dt in unlocks) {
+        if (Date.now() - new Date(unlocks[dt]).getTime() < graceMs) lockedDates[dt] = true;
+      }
+    } catch (e) { /* no unlock record — fine */ }
+    const skipStatuses = { 'Canceled': 1, 'Cancelled': 1, 'Sales Issue': 1 };
+    const runs = {};
+    for (const d of deals) {
+      if (!d.pay_date || d.pay_date >= todayISO) continue;   // only past-due runs
+      if (skipStatuses[d.status]) continue;                  // never counts toward a run
+      (runs[d.pay_date] = runs[d.pay_date] || []).push(d);
+    }
+    for (const dt in runs) {
+      if (lockedDates[dt]) continue;
+      if (!runs[dt].every(function (d) { return d.status === SCH_PAID_STATUS; })) continue;
+      if (SCH_DRY_RUN) { out.locked++; out.details.push('WOULD AUTO-LOCK run ' + dt + ' (' + runs[dt].length + ' deals, all Paid)'); }
+      else {
+        try {
+          schPost_(url, key, '/rest/v1/payroll_locks', { pay_date: dt, snapshot: { auto: true, deals: runs[dt].length } });
+          out.locked++;
+        } catch (e) { out.errors++; out.details.push('auto-lock ' + dt + ': ' + e.message); }
+      }
+    }
+  } catch (e) { /* payroll_locks table not created yet (migration 028) — skip quietly */ }
 
   // ── JOBS PASS — create new deals & catch change orders ──
   const jobsSheet = ss.getSheetByName(SCH_JOBS_TAB);
