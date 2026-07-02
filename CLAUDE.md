@@ -168,8 +168,10 @@ setup + deploy steps.
   display-only and edits go through the Edit modal (`UserModal`).
 - **What teams exist (`src/utils/team.js`, the ONE shared rule — ROLE-based,
   per Keaton):** everyone titled `manager` is ALWAYS a team head, regardless of
-  who reports to them; a director/VP additionally heads a team when people
-  report directly to them (Garrison's directs). Dissolving/absorbing a team is
+  who reports to them; a director/VP additionally heads a team when ACTIVE
+  people report directly to them (Garrison's directs) — a deactivated user's
+  stale reports-to link never keeps a team alive, and reporting to a non-head
+  groups as Unassigned. Dissolving/absorbing a team is
   done by CHANGING THE PERSON'S ROLE (Colt: manager → rep when Team Niznik
   merged into Team Jones), not by rewiring reports. Used by the Admin roster,
   Team page (comparison + card grouping + visibleReps), Dashboard
