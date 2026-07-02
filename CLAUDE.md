@@ -167,11 +167,13 @@ setup + deploy steps.
   section per team lead → Unassigned reps) with search; row badges are
   display-only and edits go through the Edit modal (`UserModal`).
 - **What teams exist (`src/utils/team.js`, the ONE shared rule — ROLE-based,
-  per Keaton):** everyone titled `manager` is ALWAYS a team head, regardless of
-  who reports to them; a director/VP additionally heads a team when ACTIVE
-  people report directly to them (Garrison's directs) — a deactivated user's
-  stale reports-to link never keeps a team alive, and reporting to a non-head
-  groups as Unassigned. Dissolving/absorbing a team is
+  per Keaton):** the `manager` ROLE is what makes a team — having people report
+  to you never makes you a head (a rep pointed at by a stale reports-to link is
+  NOT a team). Leadership exception: a director/VP shows as a head when ACTIVE
+  people report directly to them (Garrison's directs). Reporting to a non-head
+  groups as Unassigned. Moving/demoting someone WITH direct reports prompts a
+  cascade in Admin `saveUser` — "move their reports to the new lead too?" —
+  with each move date-stamped in `team_changes`. Dissolving/absorbing a team is
   done by CHANGING THE PERSON'S ROLE (Colt: manager → rep when Team Niznik
   merged into Team Jones), not by rewiring reports. Used by the Admin roster,
   Team page (comparison + card grouping + visibleReps), Dashboard

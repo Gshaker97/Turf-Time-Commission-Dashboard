@@ -130,6 +130,20 @@ export default function Admin() {
   async function saveUser(data) {
     if (editUser) {
       await updateUser(editUser.id, data)
+      // Cascade: if this person's team affiliation changed (new reports-to, or
+      // no longer a manager) and people report to THEM, offer to bring those
+      // reports along to the new lead — each move is date-stamped in the
+      // team-change log. e.g. moving Colt under Danny moves Colt's reps too.
+      const directs = users.filter(u => u.manager_id === editUser.id)
+      const movedTeams   = (data.manager_id ?? null) !== (editUser.manager_id ?? null)
+      const lostHeadship = editUser.role === 'manager' && data.role !== 'manager'
+      if (directs.length && (movedTeams || lostHeadship)) {
+        const destId = data.manager_id ?? null
+        const destName = destId ? (users.find(u => u.id === destId)?.name || 'their new lead') : 'Unassigned'
+        if (confirm(`${editUser.name} has ${directs.length} direct report${directs.length === 1 ? '' : 's'}. Move ${directs.length === 1 ? 'them' : 'them all'} to ${destName} too?\n\nOK = reports follow (each move is date-stamped) · Cancel = they keep reporting to ${editUser.name}.`)) {
+          await Promise.all(directs.map(d => updateUser(d.id, { manager_id: destId })))
+        }
+      }
     } else {
       const { error } = await insertUser(data)
       if (error) { alert('Could not create profile: ' + error.message); return }
