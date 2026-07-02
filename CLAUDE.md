@@ -250,6 +250,21 @@ SettingsContext via `setOverrideRateSchedule`); DealModal's stamped defaults;
 `schOfficeRate_`/`schManagerRate_`, read per run). No schedule configured →
 legacy constants (manager 3%; dir/VP 5%, Tucson 3.75%).
 
+**More admin-configurable behavior (`app_settings`, Admin → Settings).**
+`pay_date_rule` = `{ day: 1..7 Mon..Sun, weeks_after }` — the auto pay date is
+that weekday of the Nth week after the install week (default Friday/1 =
+historical Monday+11). Injected into `payDateFromInstall` via
+`setPayDateRule` (SettingsContext) and read per run by the sync
+(`SCH_PAY_RULE`/`schPayDate_`). Only applies when an install date is set or
+changed — existing pay dates never move. `note_notify` =
+`{ closer, setter, manager, admins }` booleans — who gets the bell when a deal
+note posts (default closer+admins; exposed as `noteNotify` from
+`useSettings()`, consumed in `NotesThread`). `sync_excluded_reps` +
+`sync_skip_names` (string arrays) — the sync's never-import rep list and
+junk-customer-name substrings (defaults rhett/ronnie + test/cute; read per run,
+lowercased substring match; a SAVED empty list means "no exclusions" while a
+missing key means "use defaults").
+
 **Legacy data cutoff (`data_start_date`).** Admin → Settings has a "Data Start
 Date" (an `app_settings` value, default `2026-06-01`, read as
 `dataStartDate` from `useSettings()`). Deals closed before it (`sale_date <

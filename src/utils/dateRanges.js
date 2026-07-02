@@ -113,16 +113,27 @@ export function weekStartOf(dateStr) {
   return f(startOfWeek(new Date(dateStr + 'T12:00:00'), WEEK))
 }
 
-// Default pay date for a given install date: we pay the Friday FOLLOWING the
-// week the job was installed. e.g. installed any day the week of Mon Jun 1 →
-// paid Fri Jun 12. That's the install week's MONDAY + 11 days. This stays
-// Monday-anchored regardless of the display week start (changing it would move
-// real pay dates), and matches migration 007's backfill.
+// Default pay date for a given install date. Historically: the Friday
+// FOLLOWING the install week (install week's MONDAY + 11 days — matches
+// migration 007's backfill). Now admin-configurable via
+// app_settings.pay_date_rule: { day: 1..7 (Mon..Sun), weeks_after: 0.. } →
+// pay day = that weekday of the Nth week after the install week. Injected by
+// SettingsContext. The rule only applies when an install date is SET or
+// CHANGED — existing pay dates never move retroactively. Stays Monday-anchored
+// regardless of the display week start (changing that would move pay dates).
 const PAY_WEEK = { weekStartsOn: 1 }
+let PAY_RULE = null
+export function setPayDateRule(rule) {
+  const day = Number(rule?.day), weeks = Number(rule?.weeks_after)
+  PAY_RULE = day >= 1 && day <= 7
+    ? { day, weeks_after: Math.max(0, Number.isFinite(weeks) ? weeks : 1) }
+    : null
+}
 export function payDateFromInstall(installDate) {
   if (!installDate) return null
   const monday = startOfWeek(new Date(installDate + 'T12:00:00'), PAY_WEEK)
-  return f(addDays(monday, 11))
+  const rule = PAY_RULE || { day: 5, weeks_after: 1 }   // Friday, one week after
+  return f(addDays(monday, rule.weeks_after * 7 + (rule.day - 1)))
 }
 
 // The list of (Sunday-anchored) weeks that overlap a [from, to] range.

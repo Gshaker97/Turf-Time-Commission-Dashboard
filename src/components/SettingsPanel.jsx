@@ -80,9 +80,11 @@ function StatusEditor() {
 }
 
 // Editor for a list of plain strings.
-function ListEditor({ title, hint, settingKey, placeholder }) {
+function ListEditor({ title, hint, settingKey, placeholder, fallback }) {
   const { settings, save } = useSettings()
-  const current = settings[settingKey] ?? []
+  // `fallback` seeds the editor when the setting has never been saved, so what
+  // you see matches what's actually in effect (e.g. the sync's built-in lists).
+  const current = settings[settingKey] ?? fallback ?? []
   const [rows, setRows]     = useState(current)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved]   = useState(false)
@@ -420,6 +422,109 @@ function OverrideRatesEditor() {
   )
 }
 
+// ── Pay-date rule — which weekday, how many weeks after the install week ─────
+const WEEKDAYS = [[1, 'Monday'], [2, 'Tuesday'], [3, 'Wednesday'], [4, 'Thursday'], [5, 'Friday'], [6, 'Saturday'], [7, 'Sunday']]
+
+function PayDateRuleEditor() {
+  const { settings, save } = useSettings()
+  const cur = settings.pay_date_rule || { day: 5, weeks_after: 1 }
+  const [day, setDay]     = useState(cur.day ?? 5)
+  const [weeks, setWeeks] = useState(cur.weeks_after ?? 1)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
+  const [error, setError]   = useState('')
+  useEffect(() => { setDay(cur.day ?? 5); setWeeks(cur.weeks_after ?? 1) }, [JSON.stringify(cur)])
+
+  const dirty = Number(day) !== Number(cur.day ?? 5) || Number(weeks) !== Number(cur.weeks_after ?? 1)
+  async function onSave() {
+    setError(''); setSaving(true)
+    const { error: err } = (await save('pay_date_rule', { day: Number(day), weeks_after: Math.max(0, Number(weeks) || 0) })) || {}
+    setSaving(false)
+    if (err) { setError(err.message || 'Could not save.'); return }
+    setSaved(true); setTimeout(() => setSaved(false), 1800)
+  }
+
+  const dayName = (WEEKDAYS.find(([v]) => v === Number(day)) || [5, 'Friday'])[1]
+  const weeksN = Math.max(0, Number(weeks) || 0)
+  return (
+    <div className="rounded-xl p-4 md:p-5 space-y-3" style={card}>
+      <div>
+        <h3 className="text-[13px] font-bold text-white">Pay Date Rule</h3>
+        <p className="text-[11px] text-white/40 mt-0.5">
+          When a deal's install date is set, its pay date is auto-filled by this rule. Changing it only affects
+          installs set/changed from now on — existing pay dates don't move. Pay dates can always be edited per deal.
+        </p>
+      </div>
+      <div className="flex items-end gap-3 flex-wrap">
+        <div>
+          <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1">Pay day</p>
+          <select value={day} onChange={e => setDay(e.target.value)} style={inputStyle} className={`${inputCls} w-36`}>
+            {WEEKDAYS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+          </select>
+        </div>
+        <div>
+          <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1">Weeks after install week</p>
+          <input type="number" min="0" max="8" value={weeks} onChange={e => setWeeks(e.target.value)}
+            style={inputStyle} className={`${inputCls} w-24 text-center`} />
+        </div>
+      </div>
+      <p className="text-[11px] text-white/40">
+        Rule: <span className="text-white/70">{dayName}</span> of {weeksN === 0 ? 'the install week itself' : weeksN === 1 ? 'the week after install' : `${weeksN} weeks after the install week`}.
+      </p>
+      <SaveBar dirty={dirty} saving={saving} saved={saved} error={error} onSave={onSave} />
+    </div>
+  )
+}
+
+// ── Deal-note notification recipients ─────────────────────────────────────────
+function NoteNotifyEditor() {
+  const { settings, save } = useSettings()
+  const cur = { closer: true, setter: false, manager: false, admins: true, ...(settings.note_notify || {}) }
+  const [cfg, setCfg]       = useState(cur)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
+  const [error, setError]   = useState('')
+  useEffect(() => { setCfg(cur) }, [JSON.stringify(cur)])
+
+  const dirty = JSON.stringify(cfg) !== JSON.stringify(cur)
+  async function onSave() {
+    setError(''); setSaving(true)
+    const { error: err } = (await save('note_notify', cfg)) || {}
+    setSaving(false)
+    if (err) { setError(err.message || 'Could not save.'); return }
+    setSaved(true); setTimeout(() => setSaved(false), 1800)
+  }
+  const Toggle = ({ k, label, hint }) => (
+    <button type="button" onClick={() => setCfg(c => ({ ...c, [k]: !c[k] }))}
+      className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg text-[13px] transition-colors w-full sm:w-auto sm:min-w-[190px]"
+      style={{ background: '#1a1a1a', border: '1px solid #3a3a3a', color: cfg[k] ? '#00b894' : 'rgba(255,255,255,0.6)' }}>
+      <span>{label}<span className="block text-[10px] text-white/30">{hint}</span></span>
+      <span className="w-9 h-5 rounded-full flex items-center px-0.5 flex-shrink-0 transition-colors"
+        style={{ background: cfg[k] ? '#00b894' : '#3a3a3a', justifyContent: cfg[k] ? 'flex-end' : 'flex-start' }}>
+        <span className="w-4 h-4 rounded-full bg-white block" />
+      </span>
+    </button>
+  )
+  return (
+    <div className="rounded-xl p-4 md:p-5 space-y-3" style={card}>
+      <div>
+        <h3 className="text-[13px] font-bold text-white">Deal Note Notifications</h3>
+        <p className="text-[11px] text-white/40 mt-0.5">
+          Who gets a bell notification when someone posts a note on a deal (the author never notifies themselves).
+          Everyone on the deal can still read the thread either way.
+        </p>
+      </div>
+      <div className="flex gap-2 flex-wrap">
+        <Toggle k="closer"  label="Closer"   hint="the deal's closer" />
+        <Toggle k="setter"  label="Setter"   hint="the deal's setter" />
+        <Toggle k="manager" label="Manager"  hint="the deal's manager" />
+        <Toggle k="admins"  label="Admins"   hint="every admin" />
+      </div>
+      <SaveBar dirty={dirty} saving={saving} saved={saved} error={error} onSave={onSave} />
+    </div>
+  )
+}
+
 export default function SettingsPanel() {
   return (
     <div className="space-y-4">
@@ -438,6 +543,14 @@ export default function SettingsPanel() {
         hint="Selectable office locations on deals."
         placeholder="e.g. Phoenix" />
       <OverrideRatesEditor />
+      <PayDateRuleEditor />
+      <NoteNotifyEditor />
+      <ListEditor title="Sync: Excluded Reps" settingKey="sync_excluded_reps"
+        hint="The sheet sync never imports deals for these sales reps (matched anywhere in the rep's name, case-insensitive)."
+        placeholder="e.g. Rhett" fallback={['rhett', 'ronnie']} />
+      <ListEditor title="Sync: Skip Deal Names" settingKey="sync_skip_names"
+        hint="Jobs whose customer name contains any of these are skipped as junk/test rows (case-insensitive substring)."
+        placeholder="e.g. test" fallback={['test', 'cute']} />
       <DateSetting title="Data Start Date" settingKey="data_start_date" fallback="2026-06-01"
         hint="Deals closed before this date are treated as legacy: they still count in historical totals, but they're left out of the Needs-review staging list, the payroll overdue nag, and the Watchdog's background alerts. You'll still be prompted as they reach their pay-date run." />
     </div>

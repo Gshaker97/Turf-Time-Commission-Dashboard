@@ -39,8 +39,10 @@ const SCH_JOBS_TAB        = 'Jobs';
 const SCH_ONLY_STATUS     = 'APPROVED';        // only import Jobs rows with this Status (blank = all)
 const SCH_DIRECTOR        = 'garrison shaker'; // default override chain (lowercased)
 const SCH_VP              = 'keaton shaker';
-const SCH_EXCLUDE_REPS    = ['rhett', 'ronnie'];   // never import these reps
-const SCH_SKIP_NAME_CONTAINS = ['test', 'cute'];   // junk/test customers
+// Defaults for the admin-editable sync rules (Admin → Settings). Overridden
+// per run from app_settings sync_excluded_reps / sync_skip_names when present.
+var SCH_EXCLUDE_REPS    = ['rhett', 'ronnie'];   // never import these reps
+var SCH_SKIP_NAME_CONTAINS = ['test', 'cute'];   // junk/test customers
 const SCH_NEW_STATUS      = 'Deal Review';      // status for a freshly imported deal
 const SCH_CHANGE_STATUS   = 'Change Order';     // a re-signed / changed deal
 // Statuses the sync never touches — finalized pay + manual triage. A deal you
@@ -69,16 +71,26 @@ function schSync() {
   const directorId = (byName[SCH_DIRECTOR] || {}).id || null;
   const vpId       = (byName[SCH_VP] || {}).id || null;
 
-  // Admin-configured override-rate schedule (Admin → Settings → Override
-  // Rates). Rates are picked by a deal's SALE DATE so a rate change going
-  // forward never re-prices older deals. Absent/unreadable → legacy defaults.
-  SCH_RATES = null;
+  // Admin-configured sync settings (Admin → Settings): override-rate schedule
+  // (picked by a deal's SALE DATE, so rate changes never re-price older deals),
+  // the excluded-reps / junk-name lists, and the pay-date rule. Any key that's
+  // absent/unreadable falls back to the built-in defaults.
+  SCH_RATES = null; SCH_PAY_RULE = null;
+  SCH_EXCLUDE_REPS = ['rhett', 'ronnie']; SCH_SKIP_NAME_CONTAINS = ['test', 'cute'];
   try {
-    const rr = schGet_(url, key, '/rest/v1/app_settings?select=value&key=eq.override_rates');
-    if (rr[0] && Array.isArray(rr[0].value) && rr[0].value.length) {
-      SCH_RATES = rr[0].value.slice().sort(function (a, b) { return String(a.effective || '').localeCompare(String(b.effective || '')); });
-    }
-  } catch (e) { /* settings row not there yet — use legacy defaults */ }
+    const cfg = schGet_(url, key, '/rest/v1/app_settings?select=key,value&key=in.(override_rates,sync_excluded_reps,sync_skip_names,pay_date_rule)');
+    cfg.forEach(function (row) {
+      if (row.key === 'override_rates' && Array.isArray(row.value) && row.value.length) {
+        SCH_RATES = row.value.slice().sort(function (a, b) { return String(a.effective || '').localeCompare(String(b.effective || '')); });
+      } else if (row.key === 'sync_excluded_reps' && Array.isArray(row.value)) {
+        SCH_EXCLUDE_REPS = row.value.map(function (s) { return String(s).trim().toLowerCase(); }).filter(Boolean);
+      } else if (row.key === 'sync_skip_names' && Array.isArray(row.value)) {
+        SCH_SKIP_NAME_CONTAINS = row.value.map(function (s) { return String(s).trim().toLowerCase(); }).filter(Boolean);
+      } else if (row.key === 'pay_date_rule' && row.value && Number(row.value.day) >= 1 && Number(row.value.day) <= 7) {
+        SCH_PAY_RULE = { day: Number(row.value.day), weeks_after: Math.max(0, Number(row.value.weeks_after) || 0) };
+      }
+    });
+  } catch (e) { /* settings rows not there yet — use built-in defaults */ }
 
   // Existing deals, keyed by project_id; plus the set of customer names (to
   // protect hand-entered deals from being duplicated).
@@ -555,6 +567,11 @@ function schDate_(val) {
   if (m) { let [, mo, d, y] = m; if (y.length === 2) y = '20' + y; return y + '-' + String(mo).padStart(2, '0') + '-' + String(d).padStart(2, '0'); }
   return null;
 }
+// Pay date from install date, per the admin-configurable rule (Admin →
+// Settings → Pay Date Rule): { day: 1..7 Mon..Sun, weeks_after } → that
+// weekday of the Nth week after the install week. Default = Friday of the
+// week after install (Monday + 11), matching history.
+var SCH_PAY_RULE = null;
 function schPayDate_(iso) {
   if (!iso) return null;
   const d = new Date(iso + 'T12:00:00Z');
@@ -562,7 +579,8 @@ function schPayDate_(iso) {
   const dow = d.getUTCDay();
   const offset = (dow === 0 ? 7 : dow) - 1;
   const monday = new Date(d); monday.setUTCDate(d.getUTCDate() - offset);
-  const pay = new Date(monday); pay.setUTCDate(monday.getUTCDate() + 11);
+  const rule = SCH_PAY_RULE || { day: 5, weeks_after: 1 };
+  const pay = new Date(monday); pay.setUTCDate(monday.getUTCDate() + rule.weeks_after * 7 + (rule.day - 1));
   return pay.toISOString().slice(0, 10);
 }
 

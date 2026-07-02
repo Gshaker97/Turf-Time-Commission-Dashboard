@@ -432,6 +432,7 @@ function NotesThread({ deal, profile, users, onCountChange }) {
   const [editId, setEditId]   = useState(null) // note being edited
   const [editText, setEditText] = useState('')
   const [showLog, setShowLog] = useState(null) // note whose edit history is open
+  const { noteNotify } = useSettings()
   const isAdmin = profile?.role === 'admin' || profile?.is_admin === true
 
   const reload = async () => {
@@ -469,10 +470,15 @@ function NotesThread({ deal, profile, users, onCountChange }) {
     const body = draft.trim()
     if (!body || !profile?.id) return
     setPosting(true)
-    // Notify the CLOSER + admins only (minus the author). Setters/managers can
-    // read the thread but don't get pinged — per Keaton's call.
-    const admins = (users || []).filter(u => u.role === 'admin' || u.is_admin === true).map(u => u.id)
-    const recipientIds = [deal.closer_id, ...admins]
+    // Who gets pinged is admin-configurable (Admin → Settings → Deal Note
+    // Notifications); default is closer + admins, minus the author.
+    const recipientIds = []
+    if (noteNotify.closer !== false) recipientIds.push(deal.closer_id)
+    if (noteNotify.setter)  recipientIds.push(deal.setter_id)
+    if (noteNotify.manager) recipientIds.push(deal.manager_id)
+    if (noteNotify.admins !== false) {
+      recipientIds.push(...(users || []).filter(u => u.role === 'admin' || u.is_admin === true).map(u => u.id))
+    }
     const { error } = await addDealNote({
       dealId: deal.id, dealName: deal.deal_name, body,
       author: { id: profile.id, name: profile.name },
