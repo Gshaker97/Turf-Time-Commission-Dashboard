@@ -6,10 +6,8 @@ import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import { dealAmounts, getUserCommission, fmt, activeDeals } from '../utils/commission'
-import { getPresetRange, matchPreset, rangeMatches, presetLabel, PRESETS, PRESETS_BY_KEY } from '../utils/dateRanges'
 
 const todayISO = () => new Date().toISOString().slice(0, 10)
-const inRange = (date, from, to) => !!date && (!from || date >= from) && (!to || date <= to)
 // Sunday–Saturday week containing the given date (ISO strings).
 const isoWeek = (dateStr) => {
   const d = dateStr ? new Date(dateStr + 'T12:00:00') : new Date()
@@ -226,29 +224,18 @@ function PipelineRow({ deal, id, users, statusColor }) {
 
 export default function Commissions() {
   const { profile, isAdmin } = useAuth()
-  const { statusColor, statusLabels, dataStartDate } = useSettings()
+  const { statusColor, dataStartDate } = useSettings()
   const [viewId, setViewId] = useState(null)
   const id = viewId || profile?.id
-  const [from,   setFrom]   = useState(getPresetRange('mtd').from)
-  const [to,     setTo]     = useState(getPresetRange('mtd').to)
-  const [preset, setPreset] = useState('mtd')
-  const [basis,  setBasis]  = useState('sale')      // 'sale' | 'pay' | 'pipeline'
   const [paydayIdx, setPaydayIdx] = useState(0)
   const [payOpen, setPayOpen] = useState(false)
+  const [tab, setTab] = useState('owed')            // 'owed' | 'paid'
 
-  const stepWeek = (dir) => {
-    const anchor = new Date((from || todayISO()) + 'T12:00:00')
-    anchor.setDate(anchor.getDate() + dir * 7)
-    const r = isoWeek(anchor.toISOString().slice(0, 10))
-    setFrom(r.from); setTo(r.to); setPreset('custom')
-  }
-  const goThisWeek = () => { const r = isoWeek(todayISO()); setFrom(r.from); setTo(r.to); setPreset('custom') }
   const [allDeals, setAllDeals] = useState([])
   const [users, setUsers] = useState([])
   const [adjustments, setAdjustments] = useState([])
   const [loading, setLoading] = useState(true)
 
-  const periodLabel = presetLabel(rangeMatches(preset, from, to) ? preset : matchPreset(from, to))
   const viewUser = useMemo(() => users.find(u => u.id === id) || profile, [users, id, profile])
 
   const [loadError, setLoadError] = useState('')
@@ -269,11 +256,6 @@ export default function Commissions() {
   const allMine = useMemo(
     () => allDeals.filter(d => [d.setter_id, d.closer_id, d.manager_id, d.director_id, d.vp_id].includes(id)),
     [allDeals, id]
-  )
-
-  const periodMine = useMemo(
-    () => allMine.filter(d => inRange(basis === 'pay' ? d.pay_date : d.sale_date, from, to)),
-    [allMine, from, to, basis]
   )
 
   const take = (d) => getUserCommission(d, id)
@@ -302,11 +284,6 @@ export default function Commissions() {
     () => pipelineDeals.reduce((s, d) => s + take(d), 0),
     [pipelineDeals]
   )
-
-  const pipelineOverdue = useMemo(() => {
-    const today = todayISO()
-    return pipelineDeals.filter(d => d.pay_date && d.pay_date < today).reduce((s, d) => s + take(d), 0)
-  }, [pipelineDeals])
 
   // Group pipeline deals by pay week (Sun–Sat of the pay_date)
   const pipelineWeeks = useMemo(() => {
@@ -338,30 +315,35 @@ export default function Commissions() {
     })
   }, [pipelineDeals])
 
-  // ── Forward-looking paydays ───────────────────────────────────
+  // ── Forward-looking paydays ("what's being paid") ─────────────
   const { paydays, overdue } = useMemo(() => {
     const today = todayISO()
-    // Legacy deals (closed before the data-start cutoff) predate our atomized
-    // workflow and were never tracked through to Paid — exclude them so the
-    // "pending from past pay dates" figure reflects only actionable recent deals
-    // (consistent with Payroll/Deals/Watchdog). They still count in historical totals.
-    const unpaid = allMine.filter(d => d.status !== PAID && d.status !== ISSUE && d.pay_date &&
-      !(dataStartDate && d.sale_date && d.sale_date < dataStartDate))
+    // An upcoming paycheck shows EVERY payable deal on that date — including
+    // ones already marked Paid ahead of the run, and legacy (pre-cutoff) deals
+    // (pay-time prompts are deliberately kept for those). Sales-Issue deals are
+    // flagged, not payable.
     const byDate = {}
-    for (const d of unpaid) (byDate[d.pay_date] ||= []).push(d)
+    for (const d of allMine) {
+      if (!d.pay_date || d.pay_date < today || d.status === ISSUE) continue
+      ;(byDate[d.pay_date] ||= []).push(d)
+    }
     const adjByDate = {}
-    for (const adj of adjustments) if (adj.payee_id === id && adj.pay_date) (adjByDate[adj.pay_date] ||= []).push(adj)
+    for (const adj of adjustments) if (adj.payee_id === id && adj.pay_date && adj.pay_date >= today) (adjByDate[adj.pay_date] ||= []).push(adj)
     const dealSum = (arr) => (arr || []).reduce((s, d) => s + take(d), 0)
     const adjSum  = (arr) => (arr || []).reduce((s, a) => s + num(a.amount), 0)
     const dates = [...new Set([...Object.keys(byDate), ...Object.keys(adjByDate)])].sort()
-    const overdue = dates.filter(dt => dt < today).reduce((s, dt) => s + dealSum(byDate[dt]) + adjSum(adjByDate[dt]), 0)
-    const paydays = dates.filter(dt => dt >= today).slice(0, 6).map(dt => ({
+    const paydays = dates.slice(0, 6).map(dt => ({
       date: dt,
       deals: byDate[dt] || [],
       adjustments: adjByDate[dt] || [],
       count: (byDate[dt] || []).length,
       total: dealSum(byDate[dt]) + adjSum(adjByDate[dt]),
     }))
+    // Overdue = actionable only: unpaid, past-due, non-legacy.
+    const overdue = allMine
+      .filter(d => d.pay_date && d.pay_date < today && d.status !== PAID && d.status !== ISSUE &&
+        !(dataStartDate && d.sale_date && d.sale_date < dataStartDate))
+      .reduce((s, d) => s + take(d), 0)
     return { paydays, overdue }
   }, [allMine, id, adjustments, dataStartDate])
 
@@ -369,45 +351,21 @@ export default function Commissions() {
   const selPayday = paydays[payIdx] || null
   useEffect(() => { setPaydayIdx(0) }, [id])
 
-  // ── Period totals ─────────────────────────────────────────────
-  const totals = useMemo(() => {
-    let earned = 0, paid = 0, commissions = 0, overrides = 0
-    for (const d of periodMine) {
-      let t = 0
-      for (const p of myParts(d, id)) {
-        t += p.amount
-        if (p.role === 'Setter' || p.role === 'Closer') commissions += p.amount
-        else overrides += p.amount
-      }
-      earned += t
-      if (d.status === PAID) paid += t
+  // ── Paid history ("what's been paid") ─────────────────────────
+  const paidDeals = useMemo(() => allMine.filter(d => d.status === PAID), [allMine])
+  const paidTotals = useMemo(() => {
+    const curMonth = todayISO().slice(0, 7)
+    let total = 0, mtd = 0
+    for (const d of paidDeals) {
+      const t = take(d)
+      total += t
+      if ((d.pay_date || d.sale_date || '').startsWith(curMonth)) mtd += t
     }
-    return { earned, paid, upcoming: Math.max(earned - paid, 0), commissions, overrides }
-  }, [periodMine, id])
-
-  // Permission tripwire: a plain rep must never see override $ (overrides are
-  // siloed to the role-holder in myParts). If one ever does, it's a gating
-  // regression — log it to client_errors so the Watchdog surfaces it.
-  useEffect(() => {
-    if (viewUser?.role === 'rep' && totals.overrides > 0.005) {
-      logClientError({ message: `Permission leak: rep "${viewUser.name}" shows ${totals.overrides.toFixed(2)} in override commission`, stack: '' })
-    }
-  }, [viewUser, totals.overrides])
-
-  const byStatus = useMemo(() => {
+    return { total, mtd }
+  }, [paidDeals, id])
+  const paidGroups = useMemo(() => {
     const m = {}
-    for (const d of periodMine) {
-      const k = d.status || '—'
-      if (!m[k]) m[k] = { status: k, count: 0, amount: 0 }
-      m[k].count += 1; m[k].amount += take(d)
-    }
-    const order = statusLabels || []
-    return Object.values(m).sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status))
-  }, [periodMine, id, statusLabels])
-
-  const groups = useMemo(() => {
-    const m = {}
-    for (const d of periodMine) {
+    for (const d of paidDeals) {
       const k = d.pay_date || 'unscheduled'
       if (!m[k]) m[k] = { key: k, date: d.pay_date || null, deals: [], total: 0 }
       m[k].deals.push(d); m[k].total += take(d)
@@ -417,9 +375,19 @@ export default function Commissions() {
       if (!b.date) return -1
       return b.date.localeCompare(a.date)
     })
-  }, [periodMine, id])
+  }, [paidDeals, id])
 
-  const isPipeline = basis === 'pipeline'
+  // Permission tripwire: a plain rep must never see override $ (overrides are
+  // siloed to the role-holder in myParts). If one ever does, it's a gating
+  // regression — log it to client_errors so the Watchdog surfaces it.
+  useEffect(() => {
+    if (viewUser?.role !== 'rep') return
+    const overrides = allMine.reduce((s, d) =>
+      s + myParts(d, id).filter(p => p.role !== 'Setter' && p.role !== 'Closer').reduce((t, p) => t + p.amount, 0), 0)
+    if (overrides > 0.005) {
+      logClientError({ message: `Permission leak: rep "${viewUser.name}" shows ${overrides.toFixed(2)} in override commission`, stack: '' })
+    }
+  }, [viewUser, allMine, id])
 
   return (
     <div style={{ background: '#1a1a1a', color: '#fff', minHeight: '100%' }}>
@@ -443,85 +411,9 @@ export default function Commissions() {
             </select>
           )}
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* Week stepper — hidden in pipeline mode since it doesn't use a date range */}
-          {!isPipeline && (
-            <>
-              <div className="flex items-center rounded-lg overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-                <button onClick={() => stepWeek(-1)} className="px-2 py-1.5 text-white/50 hover:text-white" title="Previous week"><ChevronLeft size={15} /></button>
-                <button onClick={goThisWeek} className="px-3 py-1.5 text-[12px] font-semibold text-white/80 hover:text-white border-x border-white/10" title="Jump to this week">
-                  {from && to ? `${format(new Date(from + 'T12:00:00'), 'MMM d')} – ${format(new Date(to + 'T12:00:00'), 'MMM d')}` : 'This week'}
-                </button>
-                <button onClick={() => stepWeek(1)} className="px-2 py-1.5 text-white/50 hover:text-white" title="Next week"><ChevronRight size={15} /></button>
-              </div>
-              <select
-                value={rangeMatches(preset, from, to) ? preset : matchPreset(from, to)}
-                onChange={e => { const p = PRESETS_BY_KEY[e.target.value]; if (!p) return; const r = p.range(); setFrom(r.from); setTo(r.to); setPreset(p.key) }}
-                className="text-[12px] px-2.5 py-1.5 rounded-lg text-white/80 focus:outline-none"
-                style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}
-                title="Jump to a period">
-                <option value="custom" disabled style={{ background: '#2a2a2a' }}>Custom range</option>
-                {PRESETS.map(p => <option key={p.key} value={p.key} style={{ background: '#2a2a2a' }}>{p.label}</option>)}
-              </select>
-            </>
-          )}
-          {/* Basis tabs */}
-          <div className="flex rounded-lg overflow-hidden text-[11px] font-semibold" style={{ border: '1px solid #2a2a2a' }}>
-            {[['sale', 'By sale date'], ['pay', 'By pay date'], ['pipeline', 'Total pipeline pay']].map(([k, label]) => (
-              <button key={k} onClick={() => setBasis(k)}
-                className="px-3 py-1.5 transition-colors"
-                style={basis === k ? { background: '#00b894', color: '#0b0b0b' } : { background: '#1e1e1e', color: 'rgba(255,255,255,0.5)' }}>
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
       </div>
 
-      {/* ── PIPELINE VIEW ─────────────────────────────────────────── */}
-      {isPipeline ? (
-        <div>
-          {/* Total owed hero */}
-          <div className="rounded-2xl p-4 md:p-5 mb-4"
-            style={{ background: 'linear-gradient(135deg,#143d34,#1e1e1e)', border: '1px solid #1f5a4d' }}>
-            <p className="text-[10px] uppercase tracking-widest text-white/40 font-semibold mb-1">Total commission owed</p>
-            <p className="text-3xl md:text-4xl font-bold text-teal">{fmt(pipelineTotal)}</p>
-            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
-              <span className="text-[12px] text-white/50">
-                {pipelineDeals.length} deal{pipelineDeals.length === 1 ? '' : 's'} unpaid
-              </span>
-              {pipelineOverdue > 0 && (
-                <span className="text-[12px] text-amber-400/90">
-                  {fmt(pipelineOverdue)} overdue from past pay dates
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Deal list grouped by week */}
-          <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12, overflow: 'hidden' }}>
-            <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
-              <span className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">All unpaid deals</span>
-              <span className="text-[11px] text-white/30">grouped by pay week</span>
-            </div>
-
-            {loading ? (
-              <div className="px-4 py-8 text-white/30 text-sm text-center">Loading…</div>
-            ) : loadError ? (
-              <div className="px-4 py-8 text-red-300 text-sm text-center">Couldn't load deals: {loadError}</div>
-            ) : pipelineWeeks.length === 0 ? (
-              <div className="px-4 py-8 text-white/30 text-sm text-center">No unpaid deals — you're all caught up!</div>
-            ) : (
-              pipelineWeeks.map(week => (
-                <PipelineWeekGroup key={week.key} week={week} id={id} users={users} statusColor={statusColor} />
-              ))
-            )}
-          </div>
-        </div>
-      ) : (
-        <>
-          {/* ── STANDARD VIEW (sale / pay date) ───────────────────── */}
-
+      <>
           {/* Next payday hero */}
           <div onClick={() => selPayday && setPayOpen(o => !o)}
             className={`rounded-2xl p-4 md:p-5 ${payOpen ? '' : 'mb-4'} flex items-center gap-4 ${selPayday ? 'cursor-pointer hover:brightness-110 transition-all' : ''}`}
@@ -612,80 +504,66 @@ export default function Commissions() {
             </div>
           )}
 
-          {/* Earned card */}
-          <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12 }} className="p-3 md:p-4 mb-2">
-            <div className="text-[9px] md:text-[11px] uppercase tracking-wider text-white/30 font-semibold mb-1.5">Earned · {periodLabel}</div>
-            <div className="text-[18px] md:text-2xl font-bold text-teal">{fmt(totals.earned)}</div>
-            <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-white/5">
-              <div>
-                <div className="text-[10px] uppercase tracking-wider text-white/30 font-semibold mb-0.5">Commissions</div>
-                <div className="text-[15px] md:text-[17px] font-bold text-white">{fmt(totals.commissions)}</div>
-                <div className="text-[10px] text-white/30">setter / closer</div>
-              </div>
-              <div>
-                <div className="text-[10px] uppercase tracking-wider text-white/30 font-semibold mb-0.5">Overrides</div>
-                <div className="text-[15px] md:text-[17px] font-bold text-white">{fmt(totals.overrides)}</div>
-                <div className="text-[10px] text-white/30">manager / director / VP</div>
-              </div>
-            </div>
-          </div>
-
-          {/* Paid / Upcoming */}
+          {/* Owed / Paid — the two numbers that matter */}
           <div className="grid grid-cols-2 gap-2 md:gap-3 mb-3">
-            <Card label="Paid"     value={fmt(totals.paid)}     color="#74b9ff" sub="status = Paid" />
-            <Card label="Upcoming" value={fmt(totals.upcoming)} color="#fdcb6e" sub="not yet paid · incl. unfinalized deals" />
+            <Card label="Owed to you" value={fmt(pipelineTotal)} color="#fdcb6e"
+              sub={`${pipelineDeals.length} unpaid deal${pipelineDeals.length === 1 ? '' : 's'}${overdue > 0 ? ` · ${fmt(overdue)} overdue` : ''}`} />
+            <Card label="Paid out" value={fmt(paidTotals.total)} color="#74b9ff"
+              sub={`all time · ${fmt(paidTotals.mtd)} this month`} />
           </div>
 
-          {/* Per-status strip */}
-          {byStatus.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-4">
-              {byStatus.map(s => {
-                const c = statusColor(s.status)
-                return (
-                  <div key={s.status} className="flex items-center gap-2 px-3 py-1.5 rounded-lg"
-                    style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: c }} />
-                    <span className="text-[11px] text-white/60">{s.status}</span>
-                    <span className="text-[11px] font-semibold text-white">{fmt(s.amount)}</span>
-                    <span className="text-[10px] text-white/30">×{s.count}</span>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-
-          {/* Deals grouped by payday */}
+          {/* Owed / Paid deal lists */}
           <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12, overflow: 'hidden' }}>
-            <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
-              <span className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">Deals · {periodLabel}</span>
-              <span className="text-[11px] text-white/30">tap a deal for the breakdown</span>
+            <div className="px-4 py-2.5 border-b border-white/5 flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex gap-1 p-1 rounded-xl" style={{ background: '#171717', border: '1px solid #262626' }}>
+                <button onClick={() => setTab('owed')}
+                  className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors ${tab === 'owed' ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
+                  To be paid ({pipelineDeals.length})
+                </button>
+                <button onClick={() => setTab('paid')}
+                  className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors ${tab === 'paid' ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
+                  Paid ({paidDeals.length})
+                </button>
+              </div>
+              <span className="text-[11px] text-white/30">
+                {tab === 'owed' ? 'grouped by pay week · tap a week' : 'grouped by pay date · tap a deal'}
+              </span>
             </div>
 
             {loading ? (
               <div className="px-4 py-8 text-white/30 text-sm text-center">Loading…</div>
             ) : loadError ? (
               <div className="px-4 py-8 text-red-300 text-sm text-center">Couldn't load deals: {loadError}</div>
-            ) : groups.length === 0 ? (
-              <div className="px-4 py-8 text-white/30 text-sm text-center">No deals in this period.</div>
+            ) : tab === 'owed' ? (
+              pipelineWeeks.length === 0 ? (
+                <div className="px-4 py-8 text-white/30 text-sm text-center">No unpaid deals — you're all caught up!</div>
+              ) : (
+                pipelineWeeks.map(week => (
+                  <PipelineWeekGroup key={week.key} week={week} id={id} users={users} statusColor={statusColor} />
+                ))
+              )
             ) : (
-              groups.map(g => (
-                <div key={g.key}>
-                  <div className="flex items-center justify-between px-4 py-2 bg-white/[0.02] border-b border-white/5">
-                    <span className="text-[11px] font-semibold text-white/50">
-                      {g.date ? `Pays ${fmtDay(g.date)}` : 'Pay date TBD'}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-white/30">{g.deals.length} deal{g.deals.length === 1 ? '' : 's'}</span>
-                      <span className="text-[12px] font-bold text-teal">{fmt(g.total)}</span>
+              paidGroups.length === 0 ? (
+                <div className="px-4 py-8 text-white/30 text-sm text-center">Nothing paid out yet.</div>
+              ) : (
+                paidGroups.map(g => (
+                  <div key={g.key}>
+                    <div className="flex items-center justify-between px-4 py-2 bg-white/[0.02] border-b border-white/5">
+                      <span className="text-[11px] font-semibold text-white/50">
+                        {g.date ? `Paid ${fmtDay(g.date)}` : 'No pay date'}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-white/30">{g.deals.length} deal{g.deals.length === 1 ? '' : 's'}</span>
+                        <span className="text-[12px] font-bold" style={{ color: '#74b9ff' }}>{fmt(g.total)}</span>
+                      </div>
                     </div>
+                    {g.deals.map(d => <DealRow key={d.id} deal={d} id={id} statusColor={statusColor} />)}
                   </div>
-                  {g.deals.map(d => <DealRow key={d.id} deal={d} id={id} statusColor={statusColor} />)}
-                </div>
-              ))
+                ))
+              )
             )}
           </div>
         </>
-      )}
     </div>
   )
 }
