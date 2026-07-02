@@ -282,7 +282,9 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
   const setterName = users.find(u => u.id === form.setter_id)?.name || 'Setter'
   const closerName = users.find(u => u.id === form.closer_id)?.name || 'Closer'
   const dedSplit = Math.min(100, Math.max(0, pctOr50(form.deduction_split_pct)))  // setter's %
-  const recipName = form.bonus_recipient === 'closer' ? closerName : setterName
+  // Mirror the engine: the bonus goes to the closer only when a DISTINCT closer
+  // is set — on a solo deal it falls back to the setter, so show that name.
+  const recipName = (form.bonus_recipient === 'closer' && form.closer_id && form.closer_id !== form.setter_id) ? closerName : setterName
   // Per-role override $ (gross) for showing the live "5% → 4%" net as bonuses pull from it.
   const overrideGross = {
     manager:  form.manager_id  ? baseForBonus * ((parseFloat(form.manager_override_pct)  || 0) / 100) : 0,
