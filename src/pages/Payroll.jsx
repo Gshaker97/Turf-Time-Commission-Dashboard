@@ -46,7 +46,9 @@ function Card({ label, value, color = '#fff', sub }) {
 function dealPayouts(d) {
   const a = dealAmounts(d)
   const out = []
-  const push = (person, role, amount) => { if (person && person.id && amount > 0) out.push({ id: person.id, name: person.name, role, amount }) }
+  // NEGATIVE takes flow through too (a below-baseline deal docks the rep) —
+  // dropping them would overstate the payee's total vs the run's Total payout.
+  const push = (person, role, amount) => { if (person && person.id && amount !== 0) out.push({ id: person.id, name: person.name, role, amount }) }
   push(d.setter, 'Setter', a.setter)
   if (d.closer_id !== d.setter_id) push(d.closer, 'Closer', a.closer)
   push(d.manager, 'Manager', a.manager)
@@ -175,7 +177,9 @@ export default function Payroll() {
     const m = {}
     const ensure = (id, name) => (m[id] ||= { id, name, total: 0, lines: [], dealIds: new Set(), adjustments: [] })
     const add = (person, role, amount, deal, a) => {
-      if (!person || !person.id || !(amount > 0)) return
+      // amount !== 0 (not > 0): a NEGATIVE take from a below-baseline deal must
+      // dock the payee's total, or the payee rows overstate vs Total payout.
+      if (!person || !person.id || !amount) return
       const p = ensure(person.id, person.name)
       p.total += amount
       const isRep = role === 'Setter' || role === 'Closer'
@@ -250,7 +254,7 @@ export default function Payroll() {
   // Deals page's "Needs review" tab is the verification inbox; this is just
   // the pre-payout safety net.
   const runUnverified = useMemo(
-    () => runDeals.filter(d => d.commission_verified !== true && dealAmounts(d).totalCommission > 0),
+    () => runDeals.filter(d => d.commission_verified !== true && dealAmounts(d).totalCommission !== 0),
     [runDeals]
   )
 
@@ -728,7 +732,7 @@ export default function Payroll() {
                     <div><p className="text-white/30 text-[10px] uppercase">Sold</p><p className="text-white/80">{fmtDay(d.sale_date) || '—'}</p></div>
                     <div><p className="text-white/30 text-[10px] uppercase">Baseline</p><p className="text-white/80">{fmt(a.baseline)}</p></div>
                     <div><p className="text-white/30 text-[10px] uppercase">Job price</p><p className="text-white/80">{fmt(a.job)}</p></div>
-                    <div><p className="text-white/30 text-[10px] uppercase">Rep pool</p><p className="text-white/80">{fmt(Math.max(a.job - a.baseline, 0))}</p></div>
+                    <div><p className="text-white/30 text-[10px] uppercase">Rep pool</p><p className={a.job - a.baseline < 0 ? 'text-red-400' : 'text-white/80'}>{fmt(a.job - a.baseline)}</p></div>
                     <div><p className="text-white/30 text-[10px] uppercase">Pay date</p><p className="text-white/80">{fmtDay(d.pay_date) || 'TBD'}</p></div>
                   </div>
 
