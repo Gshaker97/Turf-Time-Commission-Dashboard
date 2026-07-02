@@ -166,13 +166,14 @@ setup + deploy steps.
 - **Users tab layout:** a team-grouped roster (Leadership & Admin → one
   section per team lead → Unassigned reps) with search; row badges are
   display-only and edits go through the Edit modal (`UserModal`).
-- **What teams exist (`src/utils/team.js`, the ONE shared rule):** a team head
-  is anyone with direct reports, or a manager who reports to nobody. A manager
-  who reports to another lead with NO directs of their own is a MEMBER of that
-  lead's team (e.g. Team Niznik absorbed into Team Jones: Colt reports to
-  Danny and files under Team Jones). Used by the Admin roster, Team page
-  (comparison + card grouping + visibleReps), Dashboard breakdown/filter, and
-  Weekly Stats — never re-derive team headship from `role === 'manager'`.
+- **What teams exist (`src/utils/team.js`, the ONE shared rule — ROLE-based,
+  per Keaton):** everyone titled `manager` is ALWAYS a team head, regardless of
+  who reports to them; a director/VP additionally heads a team when people
+  report directly to them (Garrison's directs). Dissolving/absorbing a team is
+  done by CHANGING THE PERSON'S ROLE (Colt: manager → rep when Team Niznik
+  merged into Team Jones), not by rewiring reports. Used by the Admin roster,
+  Team page (comparison + card grouping + visibleReps), Dashboard
+  breakdown/filter, and Weekly Stats — never re-derive headship inline.
 - **"Reports to" (`profiles.manager_id`) can be a manager, DIRECTOR, or VP** —
   some reps are managed directly by Garrison (director). It drives Team-page
   grouping (team heads = managers + anyone with direct reports), goal
