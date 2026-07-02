@@ -489,6 +489,12 @@ export async function deletePayrollAdjustment(id) {
   return supabase.from('payroll_adjustments').delete().eq('id', id).select('id')
 }
 
+// ── Team change log (reports-to moves, trigger-written; migration 029) ──
+export async function fetchTeamChanges() {
+  if (DEMO_MODE) return { data: [], error: null }
+  return supabase.from('team_changes').select('*').order('changed_at', { ascending: false }).limit(100)
+}
+
 // ── Payroll run locks (freeze a completed pay run, see migration 028) ──
 let _payrollLocks = []   // demo store: { pay_date, locked_at, locked_by, snapshot }
 

@@ -145,7 +145,11 @@ setup + deploy steps.
   payee totals stored at lock time). The sync's AUTO-LOCK pass also freezes any
   past-due run whose payable deals are ALL Paid (`snapshot.auto = true`); a
   manual Unlock is honored for 24h (`app_settings.payroll_unlocks` grace map)
-  before auto-lock re-arms. Do not re-run `001`/`002` against a populated database.
+  before auto-lock re-arms; `029` adds `team_changes` (a date-stamped log of
+  reports-to moves — a SECURITY DEFINER trigger on `profiles` records old/new
+  lead + who changed it whenever `manager_id` changes; read-only for clients;
+  shown as the collapsible "Team change log" on Admin → Users, and the latest
+  change stamps "since <date>" on roster rows). Do not re-run `001`/`002` against a populated database.
 
 ## User management (Admin page)
 
@@ -162,6 +166,13 @@ setup + deploy steps.
 - **Users tab layout:** a team-grouped roster (Leadership & Admin → one
   section per team lead → Unassigned reps) with search; row badges are
   display-only and edits go through the Edit modal (`UserModal`).
+- **What teams exist (`src/utils/team.js`, the ONE shared rule):** a team head
+  is anyone with direct reports, or a manager who reports to nobody. A manager
+  who reports to another lead with NO directs of their own is a MEMBER of that
+  lead's team (e.g. Team Niznik absorbed into Team Jones: Colt reports to
+  Danny and files under Team Jones). Used by the Admin roster, Team page
+  (comparison + card grouping + visibleReps), Dashboard breakdown/filter, and
+  Weekly Stats — never re-derive team headship from `role === 'manager'`.
 - **"Reports to" (`profiles.manager_id`) can be a manager, DIRECTOR, or VP** —
   some reps are managed directly by Garrison (director). It drives Team-page
   grouping (team heads = managers + anyone with direct reports), goal

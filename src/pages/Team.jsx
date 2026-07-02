@@ -5,6 +5,7 @@ import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserCommission, fmt, activeDeals, isCanceled } from '../utils/commission'
 import { getPresetRange, presetLabel, weeksInRange, weekStartOf } from '../utils/dateRanges'
+import { headIdSet, teamKeyFor } from '../utils/team'
 import DateRangeFilter from '../components/DateRangeFilter'
 import WeeklyStats from '../components/WeeklyStats'
 import { useSettings } from '../contexts/SettingsContext'
@@ -306,11 +307,11 @@ export default function Team() {
         u.manager_id === profile.id)   // reps who report DIRECTLY to this director
     }
     if (role === 'manager') return users.filter(u =>
-      (u.role === 'rep' && u.manager_id === profile.id) || u.id === profile.id)
+      u.manager_id === profile.id || u.id === profile.id)   // directs of ANY role (an absorbed manager counts)
     if (role === 'rep') {
       return profile.manager_id
         ? users.filter(u =>
-            (u.role === 'rep' && u.manager_id === profile.manager_id) || u.id === profile.manager_id)
+            u.manager_id === profile.manager_id || u.id === profile.manager_id)
         : users.filter(u => u.id === profile.id)
     }
     return []
@@ -388,11 +389,13 @@ export default function Team() {
 
   const teamStats = useMemo(() => {
     if (!profile) return []
-    // Team heads = managers plus anyone with direct reports (e.g. a director
-    // who directly manages some reps — their directs show as their own team).
-    const headIds = new Set(users.filter(u => u.manager_id).map(u => u.manager_id))
-    return users.filter(u => (u.role === 'manager' || headIds.has(u.id)) && (isAdmin || !u.ghost)).map(mgr => {
-      const teamReps  = users.filter(u => u.role === 'rep' && u.manager_id === mgr.id)
+    // Team heads via the shared rule (utils/team.js): anyone with direct
+    // reports, or a manager reporting to nobody. A manager absorbed into
+    // another team (reports to a lead, no directs) is a MEMBER there, not a
+    // team of their own.
+    const heads = headIdSet(users)
+    return users.filter(u => heads.has(u.id) && (isAdmin || !u.ghost)).map(mgr => {
+      const teamReps  = users.filter(u => u.manager_id === mgr.id && !heads.has(u.id) && isSeller(u))
       const repIds    = new Set([...teamReps.map(r => r.id), mgr.id])  // include the manager's own sales
       const teamDeals = deals.filter(d => {
         const inPeriod = (!dateFrom||(d.sale_date??'')>=dateFrom)&&(!dateTo||(d.sale_date??'')<=dateTo)
@@ -487,7 +490,7 @@ export default function Team() {
     const nameOf = (id) => (hideGhost(id) ? null : users.find(u => u.id === id)?.name)
     const groups = {}
     for (const rep of displayReps) {
-      const mid = rep.role === 'manager' ? rep.id : (rep.manager_id || 'unassigned')
+      const mid = teamKeyFor(rep, headIdSet(users))
       if (!groups[mid]) groups[mid] = { id: mid, name: mid === 'unassigned' ? 'Unassigned' : (nameOf(mid) ? `${nameOf(mid)}'s Team` : 'Team'), rows: [] }
       groups[mid].rows.push(rep)
     }
