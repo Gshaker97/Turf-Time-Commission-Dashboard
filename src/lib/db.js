@@ -512,7 +512,20 @@ export async function unlockPayrollRun(payDate) {
     _payrollLocks = _payrollLocks.filter(l => l.pay_date !== payDate)
     return { error: null }
   }
-  return supabase.from('payroll_locks').delete().eq('pay_date', payDate)
+  const res = await supabase.from('payroll_locks').delete().eq('pay_date', payDate)
+  if (!res?.error) {
+    // Record the unlock so the sync's auto-lock pass leaves this run alone for
+    // 24h (otherwise it would re-lock a fully-paid past-due run within a
+    // minute, before the admin could make their correction).
+    try {
+      const { data } = await supabase.from('app_settings').select('value').eq('key', 'payroll_unlocks').maybeSingle()
+      const map = (data?.value && typeof data.value === 'object') ? data.value : {}
+      map[payDate] = new Date().toISOString()
+      await supabase.from('app_settings')
+        .upsert({ key: 'payroll_unlocks', value: map }, { onConflict: 'key' })
+    } catch { /* best-effort — worst case the run re-locks and can be re-unlocked */ }
+  }
+  return res
 }
 
 // ── Weekly stats (rep estimates → close rate) ─────────────────

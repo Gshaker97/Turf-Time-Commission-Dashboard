@@ -547,7 +547,8 @@ export default function Payroll() {
               <div className="min-w-0 flex-1">
                 <p className="text-[12px] font-semibold text-teal">This pay run is locked</p>
                 <p className="text-[11px] text-white/40">
-                  Locked {runLock.locked_at ? format(new Date(runLock.locked_at), 'MMM d, yyyy · h:mmaaa') : ''}
+                  {runLock.snapshot?.auto ? 'Auto-locked (pay date passed with every deal Paid)' : 'Locked'}
+                  {runLock.locked_at ? ` ${format(new Date(runLock.locked_at), 'MMM d, yyyy · h:mmaaa')}` : ''}
                   {runLock.locked_by ? ` by ${users.find(u => u.id === runLock.locked_by)?.name || 'an admin'}` : ''}
                   {runLock.snapshot?.total != null ? ` · locked total ${fmt(runLock.snapshot.total)}` : ''} — deals and adjustments on this run are frozen.
                 </p>
