@@ -1,7 +1,11 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { fetchSettings, saveSetting as saveSettingDb } from '../lib/db'
 import { setOverrideRateSchedule } from '../utils/commission'
+import { setPayDateRule } from '../utils/dateRanges'
 import { useAuth } from './AuthContext'
+
+// Who gets a bell notification when a deal note is posted (minus the author).
+const NOTE_NOTIFY_DEFAULT = { closer: true, setter: false, manager: false, admins: true }
 
 // Fallback config so the app renders correctly before settings load (and if
 // the app_settings table hasn't been created yet on a live DB).
@@ -38,9 +42,10 @@ export function SettingsProvider({ children }) {
   // loads once RLS lets us read it).
   useEffect(() => { refresh() }, [user?.id])
 
-  // Feed the admin-configured override-rate schedule into the commission
-  // engine (a plain module, not a React consumer) whenever it loads/changes.
+  // Feed the admin-configured override-rate schedule + pay-date rule into the
+  // plain util modules (not React consumers) whenever they load/change.
   useEffect(() => { setOverrideRateSchedule(settings.override_rates) }, [settings.override_rates])
+  useEffect(() => { setPayDateRule(settings.pay_date_rule) }, [settings.pay_date_rule])
 
   // Optimistic save — update local state immediately so the whole app reflects
   // the change in real time, then persist.
@@ -63,6 +68,7 @@ export function SettingsProvider({ children }) {
     statuses, statusLabels, statusColor,
     paymentMethods: settings.payment_methods ?? [],
     offices: settings.offices ?? [],
+    noteNotify: { ...NOTE_NOTIFY_DEFAULT, ...(settings.note_notify || {}) },
   }
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>
 }
@@ -71,5 +77,5 @@ export const useSettings = () => useContext(SettingsContext) ?? {
   settings: DEFAULTS, loaded: false, refresh: () => {}, save: async () => ({}),
   statuses: DEFAULTS.deal_statuses, statusLabels: DEFAULTS.deal_statuses.map(s => s.label),
   statusColor: () => '#94a3b8', paymentMethods: DEFAULTS.payment_methods, offices: DEFAULTS.offices,
-  siteName: 'Turf Time Dashboard', dataStartDate: '2026-06-01',
+  siteName: 'Turf Time Dashboard', dataStartDate: '2026-06-01', noteNotify: NOTE_NOTIFY_DEFAULT,
 }
