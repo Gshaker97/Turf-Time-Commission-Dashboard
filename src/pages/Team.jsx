@@ -250,7 +250,7 @@ export default function Team() {
   const [teamGoalInput,   setTeamGoalInput]   = useState('')
 
   // Persisted goals (migration 024) replace the old per-browser localStorage.
-  const teamSubject  = profile?.role === 'manager' ? profile.id : null
+  const teamSubject  = ['manager', 'director'].includes(profile?.role) ? profile.id : null
   const teamSavedGoal = teamSubject != null ? goalMap['team:' + teamSubject] : null
 
   async function persistGoal(subjectId, scope, value) {
@@ -302,7 +302,8 @@ export default function Team() {
       const myMgrIds = new Set(users.filter(u => u.director_id === profile.id).map(u => u.id))
       return users.filter(u =>
         (u.role === 'rep' && myMgrIds.has(u.manager_id)) ||
-        (u.role === 'manager' && myMgrIds.has(u.id)))
+        (u.role === 'manager' && myMgrIds.has(u.id)) ||
+        u.manager_id === profile.id)   // reps who report DIRECTLY to this director
     }
     if (role === 'manager') return users.filter(u =>
       (u.role === 'rep' && u.manager_id === profile.id) || u.id === profile.id)
@@ -387,7 +388,10 @@ export default function Team() {
 
   const teamStats = useMemo(() => {
     if (!profile) return []
-    return users.filter(u => u.role === 'manager' && (isAdmin || !u.ghost)).map(mgr => {
+    // Team heads = managers plus anyone with direct reports (e.g. a director
+    // who directly manages some reps — their directs show as their own team).
+    const headIds = new Set(users.filter(u => u.manager_id).map(u => u.manager_id))
+    return users.filter(u => (u.role === 'manager' || headIds.has(u.id)) && (isAdmin || !u.ghost)).map(mgr => {
       const teamReps  = users.filter(u => u.role === 'rep' && u.manager_id === mgr.id)
       const repIds    = new Set([...teamReps.map(r => r.id), mgr.id])  // include the manager's own sales
       const teamDeals = deals.filter(d => {
@@ -398,7 +402,7 @@ export default function Team() {
       // Only what this team's members actually earn on these deals — not the
       // director/VP overrides or an outside setter/closer's share.
       const commission = [...repIds].reduce((s, id) => s + getUserCommission(teamDeals, id), 0)
-      return { id: mgr.id, name: mgr.name, reps: teamReps.length, deals: teamDeals.length, revenue, commission, revenuePerRep: teamReps.length>0?revenue/teamReps.length:0, isMyTeam: role==='manager'&&mgr.id===profile.id }
+      return { id: mgr.id, name: mgr.name, reps: teamReps.length, deals: teamDeals.length, revenue, commission, revenuePerRep: teamReps.length>0?revenue/teamReps.length:0, isMyTeam: mgr.id===profile.id }
     }).sort((a,b) => b.revenue-a.revenue)
   }, [users, deals, dateFrom, dateTo, role, profile, isAdmin])
 
@@ -586,7 +590,7 @@ export default function Team() {
             </div>
             <div className="ml-auto text-right">
               <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mb-0.5">
-                Goal {role==='manager'&&!editingTeamGoal&&(
+                Goal {['manager','director'].includes(role)&&!editingTeamGoal&&(
                   <button onClick={()=>{setTeamGoalInput(paceData.goal.toFixed(0));setEditingTeamGoal(true)}}
                     className="ml-1 text-white/20 hover:text-teal/60 align-middle"><Pencil size={10}/></button>
                 )}

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Pencil, Trash2, RefreshCw, Activity, KeyRound, UserPlus, UserCheck, UserX } from 'lucide-react'
+import { Plus, Pencil, Trash2, RefreshCw, Activity, KeyRound, UserPlus, Search, ShieldCheck } from 'lucide-react'
 import {
   fetchUsers, insertUser, updateUser, deleteUser,
   userAdmin, userAdminConfigured,
@@ -11,46 +11,9 @@ import { DEMO_MODE } from '../lib/supabase'
 
 const TABS = ['Users', 'Settings']
 
-const ROLES = ['rep', 'manager', 'director', 'vp', 'admin']
-
 const ROLE_COLOR = {
   vp: 'text-purple-400', director: 'text-indigo-400',
   manager: 'text-amber-400', rep: 'text-white/50', admin: 'text-teal',
-}
-
-// Click-to-edit text cell — shows the value; click turns it into an input that
-// saves on blur/Enter (Esc cancels).
-function EditableText({ value, onSave, placeholder }) {
-  const [editing, setEditing] = useState(false)
-  const [val, setVal] = useState(value ?? '')
-  useEffect(() => { setVal(value ?? '') }, [value])
-  if (editing) {
-    const commit = () => { setEditing(false); const v = val.trim(); if (v !== (value ?? '')) onSave(v) }
-    return (
-      <input autoFocus value={val} onChange={e => setVal(e.target.value)} onBlur={commit}
-        onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') { setVal(value ?? ''); setEditing(false) } }}
-        placeholder={placeholder} style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }}
-        className="px-2 py-1 rounded-lg text-[13px] text-white w-full max-w-[200px] focus:outline-none" />
-    )
-  }
-  return (
-    <button onClick={() => setEditing(true)} className="text-left hover:text-teal transition-colors" title="Click to edit">
-      {value || <span className="text-white/25">—</span>}
-    </button>
-  )
-}
-
-// Click-to-pick cell — an invisible <select> overlays the displayed value.
-function EditableSelect({ value, options, onChange, children }) {
-  return (
-    <div className="relative inline-block cursor-pointer" title="Click to change">
-      <span className="hover:text-teal transition-colors">{children}</span>
-      <select value={value ?? ''} onChange={e => onChange(e.target.value)}
-        className="absolute inset-0 opacity-0 cursor-pointer w-full">
-        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
-    </div>
-  )
 }
 
 // ── System health — heartbeats written by the Apps Scripts into app_settings.
@@ -188,11 +151,6 @@ export default function Admin() {
     if (res?.error) { alert('Could not update: ' + (res.error.message || '')); loadAll() }
   }
 
-  // Quick inline toggle of a user's ghost flag (hide from non-admins).
-  async function toggleGhost(u) {
-    patchUser(u.id, { ghost: !u.ghost })
-  }
-
   const [busyUser, setBusyUser] = useState('')   // user id mid-action
   const hasUserAdmin = userAdminConfigured()
 
@@ -236,8 +194,104 @@ export default function Admin() {
     }`
 
   const card  = { background: '#242424', border: '1px solid #2e2e2e' }
-  const thead = { background: '#00b894' }
-  const managerOptions = users.filter(u => u.role === 'manager').map(m => ({ value: m.id, label: m.name }))
+  const [search, setSearch] = useState('')
+
+  // ── Roster grouping: leadership → each team (under its lead) → unassigned.
+  // A "team lead" is anyone people report to (manager_id) — manager, director,
+  // or VP alike — plus every manager (even with no reps yet).
+  const byName = (a, b) => (a.name || '').localeCompare(b.name || '')
+  const q = search.trim().toLowerCase()
+  const match = (u) => !q || (u.name || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q)
+  const reportsTo = {}
+  users.forEach(u => { if (u.manager_id) (reportsTo[u.manager_id] ||= []).push(u) })
+  const isHead = (u) => u.role === 'manager' || (reportsTo[u.id] || []).length > 0
+  const teams = users.filter(isHead).sort(byName).map(h => ({
+    head: h,
+    members: (reportsTo[h.id] || []).filter(u => !isHead(u)).sort(byName),
+  }))
+  const grouped = new Set(teams.flatMap(t => [t.head.id, ...t.members.map(m => m.id)]))
+  const restUsers  = users.filter(u => !grouped.has(u.id))
+  const ROLE_RANK = { admin: 0, vp: 1, director: 2, manager: 3, rep: 4 }
+  const leadership = restUsers.filter(u => u.role !== 'rep').sort((a, b) => (ROLE_RANK[a.role] ?? 9) - (ROLE_RANK[b.role] ?? 9) || byName(a, b))
+  const unassigned = restUsers.filter(u => u.role === 'rep').sort(byName)
+
+  // One row per person — badges are display-only; edits go through the modal.
+  function UserRow({ u, subtitle }) {
+    const boss = users.find(x => x.id === u.manager_id)
+    const initials = (u.name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
+    return (
+      <div className="px-3 md:px-4 py-2.5 flex items-center gap-3 hover:bg-white/[0.02] transition-colors"
+        style={{ opacity: u.active === false ? 0.5 : 1 }}>
+        <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0"
+          style={{ background: '#1a1a1a', border: '1px solid #333', color: '#00b894' }}>
+          {initials}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[13px] font-semibold text-white truncate">{u.name}</span>
+            <span className={`text-[9px] font-bold uppercase tracking-wide ${ROLE_COLOR[u.role] || 'text-white/40'}`}>{u.role}</span>
+            {u.is_admin && u.role !== 'admin' && (
+              <span className="inline-flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full" style={{ color: '#00b894', border: '1px solid #00b89455' }}>
+                <ShieldCheck size={9} /> admin
+              </span>
+            )}
+            {u.ghost && <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full" style={{ color: '#a78bfa', border: '1px solid #a78bfa55' }}>ghost</span>}
+            {u.active === false && <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full" style={{ color: '#f87171', border: '1px solid #f8717155' }}>deactivated</span>}
+          </div>
+          <p className="text-[11px] text-white/35 truncate mt-0.5">
+            {u.email}
+            {subtitle !== false && boss && <span className="text-white/25"> · reports to {boss.name}</span>}
+          </p>
+        </div>
+        <div className="flex items-center gap-1 md:gap-1.5 flex-shrink-0">
+          {u.auth_id ? (
+            hasUserAdmin && (
+              <button onClick={() => resetLogin(u)} disabled={busyUser === u.id} title="Reset their password"
+                className="p-1.5 rounded-lg text-white/25 hover:text-amber-400 hover:bg-amber-500/10 transition-colors disabled:opacity-40">
+                <KeyRound size={14} />
+              </button>
+            )
+          ) : hasUserAdmin ? (
+            <button onClick={() => createLogin(u)} disabled={busyUser === u.id} title="No login yet — create one"
+              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold text-teal transition-colors disabled:opacity-40"
+              style={{ border: '1px solid #00b89440' }}>
+              <UserPlus size={11} /> {busyUser === u.id ? '…' : 'login'}
+            </button>
+          ) : (
+            <span className="text-[10px] text-white/20 hidden md:inline" title="No auth login — set VITE_USER_ADMIN_URL or use Studio">no login</span>
+          )}
+          <button onClick={() => toggleActive(u)} title={u.active === false ? 'Deactivated — click to reactivate' : 'Active — click to deactivate'}
+            className="w-9 h-5 rounded-full flex items-center px-0.5 transition-colors flex-shrink-0"
+            style={{ background: u.active === false ? '#3a3a3a' : '#00b894', justifyContent: u.active === false ? 'flex-start' : 'flex-end' }}>
+            <span className="w-4 h-4 rounded-full bg-white block" />
+          </button>
+          <button onClick={() => { setEditUser(u); setUserModal(true) }} title="Edit"
+            className="p-1.5 rounded-lg text-white/25 hover:text-teal hover:bg-teal/10 transition-colors">
+            <Pencil size={14} />
+          </button>
+          <button onClick={() => handleDeleteUser(u.id)} title="Delete"
+            className="p-1.5 rounded-lg text-white/25 hover:text-red-400 hover:bg-red-500/10 transition-colors">
+            <Trash2 size={14} />
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  function Section({ title, sub, children, count }) {
+    return (
+      <div className="rounded-xl overflow-hidden" style={card}>
+        <div className="px-3 md:px-4 py-2.5 flex items-center justify-between gap-3" style={{ background: '#1e1e1e', borderBottom: '1px solid #2a2a2a' }}>
+          <div className="flex items-baseline gap-2 min-w-0">
+            <h3 className="text-[12px] font-bold text-white truncate">{title}</h3>
+            {sub && <span className="text-[10px] text-white/30 truncate">{sub}</span>}
+          </div>
+          <span className="text-[10px] text-white/30 flex-shrink-0">{count} {count === 1 ? 'person' : 'people'}</span>
+        </div>
+        <div className="divide-y divide-white/5">{children}</div>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-4 pb-8">
@@ -254,143 +308,45 @@ export default function Admin() {
 
       {/* ── USERS ── */}
       {tab === 'Users' && (
-        <div>
-          <div className="flex justify-between items-center mb-3">
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="relative flex-1 min-w-[200px] max-w-sm">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/25" />
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name or email…"
+                className="w-full pl-9 pr-3 py-2 rounded-xl text-[13px] text-white placeholder-white/25 focus:outline-none focus:border-teal/40 transition-colors"
+                style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }} />
+            </div>
             <p className="text-[12px] text-white/40">{users.length} users</p>
             <button onClick={() => { setEditUser(null); setUserModal(true) }}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-bold text-dark bg-teal transition-colors">
+              className="ml-auto flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-bold text-dark bg-teal transition-colors">
               <Plus size={13} /> Add User
             </button>
           </div>
 
-          {/* Mobile: card list */}
-          <div className="md:hidden rounded-xl overflow-hidden" style={card}>
-            {users.length === 0 && <p className="px-4 py-6 text-white/30 text-[13px]">No users.</p>}
-            <div className="divide-y divide-white/5">
-              {users.map(u => {
-                const mgr = users.find(x => x.id === u.manager_id)
-                return (
-                  <div key={u.id} className="px-4 py-3 flex items-center gap-3" style={{ opacity: u.active === false ? 0.55 : 1 }}>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-[13px] font-semibold text-white">{u.name}</p>
-                        <span className={`text-[10px] font-bold uppercase ${ROLE_COLOR[u.role]}`}>{u.role}</span>
-                        {u.ghost && <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full" style={{ color: '#a78bfa', border: '1px solid #a78bfa55' }}>Ghost</span>}
-                      </div>
-                      <p className="text-[11px] text-white/40 mt-0.5 truncate">{u.email}</p>
-                      {mgr && <p className="text-[11px] text-white/30 mt-0.5">Mgr: {mgr.name}</p>}
-                      <div className="flex items-center gap-3 mt-1.5">
-                        {u.auth_id ? (
-                          <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400/90"><UserCheck size={11} /> login</span>
-                        ) : hasUserAdmin ? (
-                          <button onClick={() => createLogin(u)} disabled={busyUser === u.id}
-                            className="inline-flex items-center gap-1 text-[10px] font-semibold text-teal disabled:opacity-40"><UserPlus size={11} /> create login</button>
-                        ) : null}
-                        {u.auth_id && hasUserAdmin && (
-                          <button onClick={() => resetLogin(u)} disabled={busyUser === u.id} className="inline-flex items-center gap-1 text-[10px] text-amber-400"><KeyRound size={11} /> reset</button>
-                        )}
-                        <button onClick={() => toggleActive(u)} className="inline-flex items-center gap-1 text-[10px]" style={{ color: u.active === false ? '#f87171' : '#34d399' }}>
-                          {u.active === false ? <><UserX size={11} /> deactivated</> : <><UserCheck size={11} /> active</>}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="flex gap-1 flex-shrink-0">
-                      <button onClick={() => { setEditUser(u); setUserModal(true) }}
-                        className="p-1.5 rounded text-white/30 hover:text-teal hover:bg-teal/10 transition-colors">
-                        <Pencil size={13} />
-                      </button>
-                      <button onClick={() => handleDeleteUser(u.id)}
-                        className="p-1.5 rounded text-white/30 hover:text-red-400 hover:bg-red-500/10 transition-colors">
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
+          {leadership.filter(match).length > 0 && (
+            <Section title="Leadership & Admin" count={leadership.filter(match).length}>
+              {leadership.filter(match).map(u => <UserRow key={u.id} u={u} />)}
+            </Section>
+          )}
 
-          {/* Desktop: table */}
-          <div className="hidden md:block rounded-xl overflow-hidden" style={card}>
-            <table className="w-full">
-              <thead>
-                <tr style={thead}>
-                  {['Name','Email','Role','Company','Manager','Ghost','Login','Active','Actions'].map(h => (
-                    <th key={h} className="px-4 py-3 text-left text-[10px] font-bold text-dark uppercase tracking-wider">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((u, i) => {
-                  const mgr = users.find(x => x.id === u.manager_id)
-                  return (
-                    <tr key={u.id} style={{ background: i%2===0?'#242424':'#262626', opacity: u.active === false ? 0.55 : 1 }} className="hover:bg-white/[0.03]">
-                      <td className="px-4 py-3 text-[13px] font-semibold text-white">
-                        <EditableText value={u.name} onSave={v => patchUser(u.id, { name: v })} placeholder="Name" />
-                      </td>
-                      <td className="px-4 py-3 text-[13px] text-white/50">
-                        <EditableText value={u.email} onSave={v => patchUser(u.id, { email: v })} placeholder="Email" />
-                      </td>
-                      <td className="px-4 py-3">
-                        <EditableSelect value={u.role} options={ROLES.map(r => ({ value: r, label: r }))}
-                          onChange={v => patchUser(u.id, { role: v })}>
-                          <span className={`text-[12px] font-semibold uppercase ${ROLE_COLOR[u.role]}`}>{u.role}</span>
-                        </EditableSelect>
-                      </td>
-                      <td className="px-4 py-3 text-[13px] text-white/50">
-                        <EditableText value={u.company_name} onSave={v => patchUser(u.id, { company_name: v })} placeholder="Company" />
-                      </td>
-                      <td className="px-4 py-3 text-[13px] text-white/50">
-                        <EditableSelect value={u.manager_id ?? ''}
-                          options={[{ value: '', label: '— None' }, ...managerOptions]}
-                          onChange={v => patchUser(u.id, { manager_id: v || null })}>
-                          {mgr?.name ?? <span className="text-white/25">—</span>}
-                        </EditableSelect>
-                      </td>
-                      <td className="px-4 py-3">
-                        <button onClick={() => toggleGhost(u)} title={u.ghost ? 'Visible to admins only — click to unhide' : 'Click to hide from non-admins'}
-                          className="w-9 h-5 rounded-full flex items-center px-0.5 transition-colors"
-                          style={{ background: u.ghost ? '#a78bfa' : '#3a3a3a', justifyContent: u.ghost ? 'flex-end' : 'flex-start' }}>
-                          <span className="w-4 h-4 rounded-full bg-white block" />
-                        </button>
-                      </td>
-                      <td className="px-4 py-3">
-                        {u.auth_id ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400/90"><UserCheck size={13} /> Has login</span>
-                        ) : hasUserAdmin ? (
-                          <button onClick={() => createLogin(u)} disabled={busyUser === u.id}
-                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-teal hover:text-teal-light disabled:opacity-40">
-                            <UserPlus size={13} /> {busyUser === u.id ? 'Creating…' : 'Create login'}
-                          </button>
-                        ) : (
-                          <span className="text-[11px] text-white/25" title="Set VITE_USER_ADMIN_URL to enable">No login</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <button onClick={() => toggleActive(u)} title={u.active === false ? 'Deactivated — click to reactivate' : 'Active — click to deactivate'}
-                          className="w-9 h-5 rounded-full flex items-center px-0.5 transition-colors"
-                          style={{ background: u.active === false ? '#3a3a3a' : '#00b894', justifyContent: u.active === false ? 'flex-start' : 'flex-end' }}>
-                          <span className="w-4 h-4 rounded-full bg-white block" />
-                        </button>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-1.5">
-                          {u.auth_id && hasUserAdmin && (
-                            <button onClick={() => resetLogin(u)} disabled={busyUser === u.id} title="Reset password"
-                              className="p-1.5 rounded text-white/30 hover:text-amber-400 hover:bg-amber-500/10 transition-colors"><KeyRound size={13} /></button>
-                          )}
-                          <button onClick={() => { setEditUser(u); setUserModal(true) }}
-                            className="p-1.5 rounded text-white/30 hover:text-teal hover:bg-teal/10 transition-colors"><Pencil size={13} /></button>
-                          <button onClick={() => handleDeleteUser(u.id)}
-                            className="p-1.5 rounded text-white/30 hover:text-red-400 hover:bg-red-500/10 transition-colors"><Trash2 size={13} /></button>
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+          {teams.map(({ head, members }) => {
+            const shown = [head, ...members].filter(match)
+            if (!shown.length) return null
+            return (
+              <Section key={head.id}
+                title={`${head.name}'s Team`}
+                sub={head.role !== 'manager' ? `led by their ${head.role}` : null}
+                count={shown.length}>
+                {shown.map(u => <UserRow key={u.id} u={u} subtitle={u.id !== head.id ? false : undefined} />)}
+              </Section>
+            )
+          })}
+
+          {unassigned.filter(match).length > 0 && (
+            <Section title="Unassigned reps" sub="no team lead set — assign one in Edit → Reports To" count={unassigned.filter(match).length}>
+              {unassigned.filter(match).map(u => <UserRow key={u.id} u={u} />)}
+            </Section>
+          )}
         </div>
       )}
 
