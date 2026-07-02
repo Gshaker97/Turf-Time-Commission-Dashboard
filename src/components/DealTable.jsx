@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, X, MessageSquare, BadgeCheck } from 'lucide-react'
-import { calcDealCommissions, fmt, fmtPct, isCanceled } from '../utils/commission'
+import { calcDealCommissions, fmt, fmtPct, isCanceled, officeOverrideRate } from '../utils/commission'
 import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
 import { fetchDealNotes, fetchDealNoteCounts, addDealNote, updateDealNote, deleteDealNote } from '../lib/db'
@@ -29,7 +29,9 @@ export const dealNeedsReview = (deal, dataStartDate) =>
 // recomputes from current numbers — same behavior as the edit modal. Without
 // this, an old imported deal kept its uploaded amounts no matter what changed.
 export const officeChangePatch = (deal, office) => {
-  const rate = String(office || '').toLowerCase() === 'tucson' ? 0.0375 : 0.05
+  // Era-aware: the rate comes from the admin schedule for THIS deal's sale
+  // date, so re-officing an old deal applies the rate in force back then.
+  const rate = officeOverrideRate({ office, sale_date: deal.sale_date })
   return {
     ...(deal.director_id ? { director_override_pct: rate } : null),
     ...(deal.vp_id       ? { vp_override_pct: rate }       : null),

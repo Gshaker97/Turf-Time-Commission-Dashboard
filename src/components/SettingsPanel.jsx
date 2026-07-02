@@ -318,6 +318,108 @@ function DateSetting({ title, hint, settingKey, fallback }) {
   )
 }
 
+// ── Override-rate schedule — effective-dated commission rate "eras" ──────────
+// Each era: { effective, manager, default, byOffice: { <office lc>: pct } }.
+// Percent values are HUMAN numbers (3.75 = 3.75%). A deal uses the era in
+// force on its SALE DATE, so adding a new era re-prices nothing historical.
+const LEGACY_ERA = { effective: '2000-01-01', manager: 3, default: 5, byOffice: { tucson: 3.75 } }
+
+function OverrideRatesEditor() {
+  const { settings, offices, save } = useSettings()
+  const current = Array.isArray(settings.override_rates) && settings.override_rates.length
+    ? settings.override_rates : [LEGACY_ERA]
+  const [rows, setRows]     = useState(current)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
+  const [error, setError]   = useState('')
+  useEffect(() => { setRows(current) }, [JSON.stringify(current)])
+
+  const dirty = JSON.stringify(rows) !== JSON.stringify(current)
+  const setEra = (i, patch) => setRows(rs => rs.map((r, x) => x === i ? { ...r, ...patch } : r))
+  const setOffice = (i, office, v) => setRows(rs => rs.map((r, x) =>
+    x === i ? { ...r, byOffice: { ...(r.byOffice || {}), [office.toLowerCase()]: v } } : r))
+
+  function addEra() {
+    const last = rows[rows.length - 1] || LEGACY_ERA
+    setRows(rs => [...rs, { ...last, byOffice: { ...(last.byOffice || {}) }, effective: new Date().toISOString().slice(0, 10) }])
+  }
+  async function onSave() {
+    setError(''); setSaving(true)
+    const clean = rows
+      .filter(r => r.effective)
+      .map(r => ({
+        effective: r.effective,
+        manager: Math.max(0, parseFloat(r.manager) || 0),
+        default: Math.max(0, parseFloat(r.default) || 0),
+        byOffice: Object.fromEntries(Object.entries(r.byOffice || {})
+          .filter(([, v]) => v !== '' && v != null && Number.isFinite(parseFloat(v)))
+          .map(([k, v]) => [k, Math.max(0, parseFloat(v))])),
+      }))
+      .sort((a, b) => a.effective.localeCompare(b.effective))
+    const { error: err } = (await save('override_rates', clean)) || {}
+    setSaving(false)
+    if (err) { setError(err.message || 'Could not save.'); return }
+    setSaved(true); setTimeout(() => setSaved(false), 1800)
+  }
+
+  const numInp = (value, onChange) => (
+    <input type="number" min="0" step="0.01" value={value ?? ''} onChange={onChange}
+      style={inputStyle} className={`${inputCls} w-20 text-center`} />
+  )
+
+  return (
+    <div className="rounded-xl p-4 md:p-5 space-y-3" style={card}>
+      <div>
+        <h3 className="text-[13px] font-bold text-white">Override Rates</h3>
+        <p className="text-[11px] text-white/40 mt-0.5">
+          The default Manager / Director / VP override % stamped on new deals (and used when a deal has no
+          explicit %). Each row takes effect for deals <span className="text-white/60">closed on or after</span> its
+          effective date — older deals keep the rates in force when they closed. A deal's own edited % always wins.
+        </p>
+      </div>
+      <div className="space-y-3">
+        {rows.map((r, i) => (
+          <div key={i} className="rounded-lg p-3 space-y-2" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+            <div className="flex items-end gap-3 flex-wrap">
+              <div>
+                <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1">Effective from</p>
+                <input type="date" value={r.effective || ''} onChange={e => setEra(i, { effective: e.target.value })}
+                  style={{ ...inputStyle, colorScheme: 'dark' }} className={`${inputCls} w-40`} />
+              </div>
+              <div>
+                <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1">Manager %</p>
+                {numInp(r.manager, e => setEra(i, { manager: e.target.value }))}
+              </div>
+              {offices.map(o => (
+                <div key={o}>
+                  <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1">Dir/VP % · {o}</p>
+                  {numInp(r.byOffice?.[o.toLowerCase()] ?? r.default, e => setOffice(i, o, e.target.value))}
+                </div>
+              ))}
+              <div>
+                <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1">Dir/VP % · other</p>
+                {numInp(r.default, e => setEra(i, { default: e.target.value }))}
+              </div>
+              {rows.length > 1 && (
+                <button onClick={() => setRows(rs => rs.filter((_, x) => x !== i))}
+                  className="p-2 rounded-lg text-white/25 hover:text-red-400 hover:bg-red-500/10 transition-colors mb-0.5" title="Remove this rate era">
+                  <Trash2 size={14} />
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      <button onClick={addEra}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold text-white/60 hover:text-white transition-colors"
+        style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+        <Plus size={13} /> Add a rate change
+      </button>
+      <SaveBar dirty={dirty} saving={saving} saved={saved} error={error} onSave={onSave} />
+    </div>
+  )
+}
+
 export default function SettingsPanel() {
   return (
     <div className="space-y-4">
@@ -335,6 +437,7 @@ export default function SettingsPanel() {
       <ListEditor title="Offices" settingKey="offices"
         hint="Selectable office locations on deals."
         placeholder="e.g. Phoenix" />
+      <OverrideRatesEditor />
       <DateSetting title="Data Start Date" settingKey="data_start_date" fallback="2026-06-01"
         hint="Deals closed before this date are treated as legacy: they still count in historical totals, but they're left out of the Needs-review staging list, the payroll overdue nag, and the Watchdog's background alerts. You'll still be prompted as they reach their pay-date run." />
     </div>

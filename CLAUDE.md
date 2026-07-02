@@ -237,6 +237,19 @@ The default seed is `Deal Review`, `Pending Install`, `Change Order`,
 statuses are configurable, there is no longer a DB CHECK on `deals.status` (see
 `006_settings.sql`).
 
+**Override rates are admin-configurable (`app_settings.override_rates`).**
+Admin → Settings → Override Rates holds effective-dated rate "eras":
+`{ effective, manager, default, byOffice: { <office lc>: pct } }` with HUMAN
+percents (3.75 = 3.75%). A deal's era is picked by its SALE DATE (last era
+effective on/before it), so adding a new era never re-prices older deals; a
+deal's own stored `*_override_pct` always wins over these defaults. Consumers:
+`officeOverrideRate(deal)` / `managerDefaultRate(saleDate)` /
+`rateEraFor(saleDate)` in `commission.js` (schedule injected by
+SettingsContext via `setOverrideRateSchedule`); DealModal's stamped defaults;
+`officeChangePatch` in DealTable; and the sync (`SCH_RATES` +
+`schOfficeRate_`/`schManagerRate_`, read per run). No schedule configured →
+legacy constants (manager 3%; dir/VP 5%, Tucson 3.75%).
+
 **Legacy data cutoff (`data_start_date`).** Admin → Settings has a "Data Start
 Date" (an `app_settings` value, default `2026-06-01`, read as
 `dataStartDate` from `useSettings()`). Deals closed before it (`sale_date <
