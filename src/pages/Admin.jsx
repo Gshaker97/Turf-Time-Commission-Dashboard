@@ -2,9 +2,10 @@ import { useState, useEffect } from 'react'
 import { Plus, Pencil, Trash2, RefreshCw, Activity, KeyRound, UserPlus, Search, ShieldCheck } from 'lucide-react'
 import {
   fetchUsers, insertUser, updateUser, deleteUser,
-  userAdmin, userAdminConfigured,
+  userAdmin, userAdminConfigured, fetchTeamChanges,
 } from '../lib/db'
 import UserModal from '../components/UserModal'
+import { headIdSet } from '../utils/team'
 import SettingsPanel from '../components/SettingsPanel'
 import { useSettings } from '../contexts/SettingsContext'
 import { DEMO_MODE } from '../lib/supabase'
@@ -116,10 +117,13 @@ export default function Admin() {
 
   useEffect(() => { loadAll() }, [])
 
+  const [teamChanges, setTeamChanges] = useState([])
+
   async function loadAll() {
     setLoading(true)
-    const { data: u } = await fetchUsers()
+    const [{ data: u }, { data: tc }] = await Promise.all([fetchUsers(), fetchTeamChanges()])
     setUsers(u ?? [])
+    setTeamChanges(tc ?? [])
     setLoading(false)
   }
 
@@ -195,6 +199,7 @@ export default function Admin() {
 
   const card  = { background: '#242424', border: '1px solid #2e2e2e' }
   const [search, setSearch] = useState('')
+  const [showLog, setShowLog] = useState(false)
 
   // ── Roster grouping: leadership → each team (under its lead) → unassigned.
   // A "team lead" is anyone people report to (manager_id) — manager, director,
@@ -204,16 +209,24 @@ export default function Admin() {
   const match = (u) => !q || (u.name || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q)
   const reportsTo = {}
   users.forEach(u => { if (u.manager_id) (reportsTo[u.manager_id] ||= []).push(u) })
-  const isHead = (u) => u.role === 'manager' || (reportsTo[u.id] || []).length > 0
-  const teams = users.filter(isHead).sort(byName).map(h => ({
+  // Shared head rule (utils/team.js): direct reports make a team; a manager
+  // who reports to another lead with no directs of their own is a MEMBER (so
+  // an absorbed team's lead files under the absorbing team, not their own).
+  const heads = headIdSet(users)
+  const teams = users.filter(u => heads.has(u.id)).sort(byName).map(h => ({
     head: h,
-    members: (reportsTo[h.id] || []).filter(u => !isHead(u)).sort(byName),
+    members: (reportsTo[h.id] || []).filter(u => !heads.has(u.id)).sort(byName),
   }))
   const grouped = new Set(teams.flatMap(t => [t.head.id, ...t.members.map(m => m.id)]))
   const restUsers  = users.filter(u => !grouped.has(u.id))
   const ROLE_RANK = { admin: 0, vp: 1, director: 2, manager: 3, rep: 4 }
   const leadership = restUsers.filter(u => u.role !== 'rep').sort((a, b) => (ROLE_RANK[a.role] ?? 9) - (ROLE_RANK[b.role] ?? 9) || byName(a, b))
   const unassigned = restUsers.filter(u => u.role === 'rep').sort(byName)
+
+  // Latest team change per person → the 'since <date>' stamp on their row.
+  const sinceByProfile = {}
+  for (const c of teamChanges) if (!sinceByProfile[c.profile_id]) sinceByProfile[c.profile_id] = c.changed_at
+  const fmtSince = (iso) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
   // One row per person — badges are display-only; edits go through the modal.
   function UserRow({ u, subtitle }) {
@@ -241,6 +254,7 @@ export default function Admin() {
           <p className="text-[11px] text-white/35 truncate mt-0.5">
             {u.email}
             {subtitle !== false && boss && <span className="text-white/25"> · reports to {boss.name}</span>}
+            {subtitle !== false && boss && sinceByProfile[u.id] && <span className="text-white/20"> · since {fmtSince(sinceByProfile[u.id])}</span>}
           </p>
         </div>
         <div className="flex items-center gap-1 md:gap-1.5 flex-shrink-0">
@@ -346,6 +360,38 @@ export default function Admin() {
             <Section title="Unassigned reps" sub="no team lead set — assign one in Edit → Reports To" count={unassigned.filter(match).length}>
               {unassigned.filter(match).map(u => <UserRow key={u.id} u={u} />)}
             </Section>
+          )}
+
+          {/* Date-stamped log of reports-to moves (trigger-written, migration 029) */}
+          {teamChanges.length > 0 && (
+            <div className="rounded-xl overflow-hidden" style={card}>
+              <button onClick={() => setShowLog(v => !v)}
+                className="w-full px-3 md:px-4 py-2.5 flex items-center justify-between gap-3 hover:bg-white/[0.02] transition-colors"
+                style={{ background: '#1e1e1e' }}>
+                <span className="text-[12px] font-bold text-white">Team change log</span>
+                <span className="text-[10px] text-white/30">{teamChanges.length} change{teamChanges.length === 1 ? '' : 's'} · {showLog ? 'hide' : 'show'}</span>
+              </button>
+              {showLog && (
+                <div className="divide-y divide-white/5">
+                  {teamChanges.map(c => {
+                    const who  = users.find(x => x.id === c.profile_id)?.name || '—'
+                    const from = c.old_manager_id ? (users.find(x => x.id === c.old_manager_id)?.name || '—') : 'Unassigned'
+                    const to   = c.new_manager_id ? (users.find(x => x.id === c.new_manager_id)?.name || '—') : 'Unassigned'
+                    const by   = c.changed_by ? users.find(x => x.id === c.changed_by)?.name : null
+                    return (
+                      <div key={c.id} className="px-3 md:px-4 py-2 flex items-center gap-3 flex-wrap">
+                        <span className="text-[11px] text-white/30 w-[104px] flex-shrink-0">{fmtSince(c.changed_at)}</span>
+                        <span className="text-[12px] text-white/75 min-w-0">
+                          <span className="font-semibold text-white">{who}</span>
+                          <span className="text-white/40"> — {from} → {to}</span>
+                          {by && <span className="text-white/25"> · by {by}</span>}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}

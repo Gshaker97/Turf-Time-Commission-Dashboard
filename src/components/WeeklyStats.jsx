@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { fetchWeeklyStats, upsertWeeklyStat } from '../lib/db'
 import { isCanceled } from '../utils/commission'
+import { headIdSet, teamKeyFor } from '../utils/team'
 import DateRangeFilter from './DateRangeFilter'
 import {
   getPresetRange, weeksInRange, weekStartOf, matchPreset, rangeMatches, presetLabel,
@@ -98,12 +99,13 @@ export default function WeeklyStats({ deals = [], reps = [], users = [], canEdit
 
   // Group visible reps by manager into teams (with subtotals).
   const teams = useMemo(() => {
+    const heads = headIdSet(users)
     const nameOf = (id) => users.find(u => u.id === id)?.name
     const groups = {}
     for (const rep of reps) {
-      // A manager heads their own team (group under their own id); reps group
-      // under their manager. So a team lead shows with their team, not Unassigned.
-      const mid = rep.role === 'manager' ? rep.id : (rep.manager_id || 'unassigned')
+      // Shared team rule (utils/team.js): heads group under themselves; an
+      // absorbed manager (reports to a lead, no directs) groups under that lead.
+      const mid = teamKeyFor(rep, heads)
       if (!groups[mid]) groups[mid] = { id: mid, name: mid === 'unassigned' ? 'Unassigned' : (nameOf(mid) ? `${nameOf(mid)}'s Team` : 'Team'), rows: [] }
       groups[mid].rows.push(rowFor(rep))
     }

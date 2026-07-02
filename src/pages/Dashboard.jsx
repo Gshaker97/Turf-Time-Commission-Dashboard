@@ -7,6 +7,7 @@ import { Check, X, TrendingUp, TrendingDown, Minus, ChevronUp, ChevronDown, Chev
 import { useAuth } from '../contexts/AuthContext'
 import { fetchDeals, fetchUsers, fetchGoal, saveGoal as saveGoalDb, deleteGoal as deleteGoalDb } from '../lib/db'
 import { fmt, dealAmounts, activeDeals } from '../utils/commission'
+import { headIdSet } from '../utils/team'
 import { getPresetRange, getPreviousRange } from '../utils/dateRanges'
 import DateRangeFilter from '../components/DateRangeFilter'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
@@ -195,7 +196,10 @@ export default function Dashboard() {
   }
 
   const teamData = useMemo(() => {
-    const mgrs = teamFilter ? users.filter(u => u.id === teamFilter) : users.filter(u => u.role === 'manager')
+    // Team heads via the shared rule (utils/team.js) — an absorbed manager
+    // (reports to another lead, no directs) is a member, not their own team.
+    const heads = headIdSet(users)
+    const mgrs = teamFilter ? users.filter(u => u.id === teamFilter) : users.filter(u => heads.has(u.id))
     return mgrs.map(mgr => {
       const members = [mgr, ...users.filter(u => u.manager_id === mgr.id)]
       const repIds  = new Set(members.map(m => m.id))   // include the manager's own sales
@@ -338,7 +342,7 @@ export default function Dashboard() {
 
   if (loading) return <div className="flex items-center justify-center py-24 text-white/30 text-[13px]">Loading…</div>
 
-  const managers         = users.filter(u => u.role === 'manager')
+  const managers         = users.filter(u => headIdSet(users).has(u.id))   // team heads for the filter dropdown
   const maxWeekRevLocal  = maxWeekRev
   const selectedTeamName = teamFilter ? managers.find(m => m.id === teamFilter)?.name : null
 
