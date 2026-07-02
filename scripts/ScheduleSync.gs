@@ -65,7 +65,9 @@ function schSync() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
   // Roster by name → ids + override chain.
-  const profiles = schGet_(url, key, '/rest/v1/profiles?select=id,name,manager_id');
+  const profiles = schGet_(url, key, '/rest/v1/profiles?select=id,name,role,manager_id');
+  const profById = {};
+  profiles.forEach(function (p) { profById[p.id] = p; });
   const byName = {};
   profiles.forEach(p => { if (p?.name) byName[String(p.name).trim().toLowerCase()] = p; });
   const directorId = (byName[SCH_DIRECTOR] || {}).id || null;
@@ -272,7 +274,12 @@ function schSync() {
         const deal = {
           deal_name: customer, sale_date: newSaleDate, status: SCH_NEW_STATUS,
           setter_id: rep.id, closer_id: rep.id, setter_split_pct: 1,
-          manager_id: rep.manager_id || null, director_id: directorId, vp_id: vpId,
+          // The deal's manager-override recipient — ONLY when the rep's
+          // reports-to is an actual MANAGER. A rep managed directly by a
+          // director/VP has no manager override (that person already earns
+          // their own override; stamping them as manager would double-pay).
+          manager_id: (rep.manager_id && profById[rep.manager_id] && profById[rep.manager_id].role === 'manager') ? rep.manager_id : null,
+          director_id: directorId, vp_id: vpId,
           baseline_revenue: baselineVal, job_price: saleVal, project_id: projectId,
           // Snapshot of the sheet figures, so a later sheet change is detected
           // as a change order (vs. a manual edit).

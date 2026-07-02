@@ -90,6 +90,10 @@ export default function UserModal({ user, allUsers = [], onSave, onClose }) {
   const managers  = allUsers.filter(u => u.role === 'manager')
   const directors = allUsers.filter(u => u.role === 'director')
   const vps       = allUsers.filter(u => u.role === 'vp')
+  // "Reports to" can be a manager, director, or VP — some reps are managed
+  // directly by a director (e.g. Garrison). Drives Team-page grouping, goal
+  // permissions, and (managers only) the deal's manager-override default.
+  const leads     = [...managers, ...directors, ...vps]
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -161,11 +165,12 @@ export default function UserModal({ user, allUsers = [], onSave, onClose }) {
           </div>
 
           <div className="grid grid-cols-1 gap-4">
-            <Field label="Assigned Manager">
+            <Field label="Reports To">
               <Sel value={form.manager_id} onChange={e => set('manager_id', e.target.value)}>
                 <option value="">None</option>
-                {managers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                {leads.map(u => <option key={u.id} value={u.id}>{u.name} ({u.role})</option>)}
               </Sel>
+              <p className="text-[10px] text-white/30 mt-1">Their team lead — a manager, director, or VP. Groups them on the Team page and lets that person set their goals. Manager overrides on deals only apply when this is a manager.</p>
             </Field>
             <Field label="Assigned Director">
               <Sel value={form.director_id} onChange={e => set('director_id', e.target.value)}>

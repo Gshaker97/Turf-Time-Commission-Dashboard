@@ -159,6 +159,16 @@ setup + deploy steps.
   Password** field — an admin types a password of their choice and it's set via
   `userAdmin('reset_password'|'create_login', { email, password })` (creates the
   login if none yet), so admins manage known passwords directly.
+- **Users tab layout:** a team-grouped roster (Leadership & Admin → one
+  section per team lead → Unassigned reps) with search; row badges are
+  display-only and edits go through the Edit modal (`UserModal`).
+- **"Reports to" (`profiles.manager_id`) can be a manager, DIRECTOR, or VP** —
+  some reps are managed directly by Garrison (director). It drives Team-page
+  grouping (team heads = managers + anyone with direct reports), goal
+  permissions, and Dashboard team breakdowns. BUT the deal-level
+  manager-override default only applies when the reports-to person is an
+  actual MANAGER — the sync (`profById` role guard) stamps `deal.manager_id`
+  null otherwise, so a director never double-dips manager + director override.
 - **Deactivation:** the Active toggle flips `profiles.active`. A deactivated
   user is signed out and blocked at login (`AuthContext.fetchProfile` checks
   `active`), but **all their deals/stats stay and still count** — never filter
