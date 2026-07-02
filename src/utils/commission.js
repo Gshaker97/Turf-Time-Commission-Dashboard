@@ -21,7 +21,42 @@ const num = (v) => (v == null ? 0 : Number(v) || 0)
 export const TUCSON_OVERRIDE_RATE  = 0.0375
 export const DEFAULT_OVERRIDE_RATE = 0.05
 export const isTucson = (deal) => String(deal?.office || '').trim().toLowerCase() === 'tucson'
-export const officeOverrideRate = (deal) => (isTucson(deal) ? TUCSON_OVERRIDE_RATE : DEFAULT_OVERRIDE_RATE)
+
+// ── Admin-configurable rate schedule (app_settings.override_rates) ──────────
+// An array of "eras": { effective: 'YYYY-MM-DD', manager: 3, default: 5,
+// byOffice: { tucson: 3.75 } } — percentages in HUMAN form (3.75 = 3.75%).
+// A deal's era is picked by its SALE DATE (last era whose effective date is on
+// or before it), so changing rates going forward never re-prices older deals:
+// they keep the era in force when they closed. When no schedule is configured,
+// the legacy constants above apply. SettingsContext feeds this on load/save.
+let RATE_SCHEDULE = null
+export function setOverrideRateSchedule(rows) {
+  RATE_SCHEDULE = Array.isArray(rows) && rows.length
+    ? [...rows].sort((a, b) => String(a.effective || '').localeCompare(String(b.effective || '')))
+    : null
+}
+export function rateEraFor(saleDate) {
+  if (!RATE_SCHEDULE) return null
+  const d = saleDate || new Date().toISOString().slice(0, 10)
+  let era = RATE_SCHEDULE[0]
+  for (const r of RATE_SCHEDULE) { if (String(r.effective || '') <= d) era = r; else break }
+  return era
+}
+// Director/VP rate for a deal (fraction, e.g. 0.05) — era-aware, office-aware.
+export function officeOverrideRate(deal) {
+  const era = rateEraFor(deal?.sale_date)
+  if (era) {
+    const office = String(deal?.office || '').trim().toLowerCase()
+    const v = era.byOffice && era.byOffice[office] != null ? era.byOffice[office] : era.default
+    return (Number(v) || 0) / 100 || DEFAULT_OVERRIDE_RATE
+  }
+  return isTucson(deal) ? TUCSON_OVERRIDE_RATE : DEFAULT_OVERRIDE_RATE
+}
+// Manager default rate for a deal closed on saleDate (fraction, e.g. 0.03).
+export function managerDefaultRate(saleDate) {
+  const era = rateEraFor(saleDate)
+  return era && era.manager != null ? (Number(era.manager) || 0) / 100 : 0.03
+}
 
 export function dealAmounts(deal) {
   const baseline = num(deal.baseline_revenue)

@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { fetchSettings, saveSetting as saveSettingDb } from '../lib/db'
+import { setOverrideRateSchedule } from '../utils/commission'
 import { useAuth } from './AuthContext'
 
 // Fallback config so the app renders correctly before settings load (and if
@@ -36,6 +37,10 @@ export function SettingsProvider({ children }) {
   // Load on mount and whenever the signed-in user changes (so custom config
   // loads once RLS lets us read it).
   useEffect(() => { refresh() }, [user?.id])
+
+  // Feed the admin-configured override-rate schedule into the commission
+  // engine (a plain module, not a React consumer) whenever it loads/changes.
+  useEffect(() => { setOverrideRateSchedule(settings.override_rates) }, [settings.override_rates])
 
   // Optimistic save — update local state immediately so the whole app reflects
   // the change in real time, then persist.

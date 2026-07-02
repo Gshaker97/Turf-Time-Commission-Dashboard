@@ -69,10 +69,21 @@ function schSync() {
   const directorId = (byName[SCH_DIRECTOR] || {}).id || null;
   const vpId       = (byName[SCH_VP] || {}).id || null;
 
+  // Admin-configured override-rate schedule (Admin → Settings → Override
+  // Rates). Rates are picked by a deal's SALE DATE so a rate change going
+  // forward never re-prices older deals. Absent/unreadable → legacy defaults.
+  SCH_RATES = null;
+  try {
+    const rr = schGet_(url, key, '/rest/v1/app_settings?select=value&key=eq.override_rates');
+    if (rr[0] && Array.isArray(rr[0].value) && rr[0].value.length) {
+      SCH_RATES = rr[0].value.slice().sort(function (a, b) { return String(a.effective || '').localeCompare(String(b.effective || '')); });
+    }
+  } catch (e) { /* settings row not there yet — use legacy defaults */ }
+
   // Existing deals, keyed by project_id; plus the set of customer names (to
   // protect hand-entered deals from being duplicated).
   const deals = schGet_(url, key,
-    '/rest/v1/deals?select=id,project_id,deal_name,status,baseline_revenue,job_price,install_date,pay_date,payment_method,office,setter_id,closer_id,manager_override_pct,director_override_pct,vp_override_pct,commission_verified,checklist,synced_baseline,synced_job_price');
+    '/rest/v1/deals?select=id,project_id,deal_name,status,sale_date,baseline_revenue,job_price,install_date,pay_date,payment_method,office,setter_id,closer_id,manager_override_pct,director_override_pct,vp_override_pct,commission_verified,checklist,synced_baseline,synced_job_price');
   const byProject = {}, namesSeen = new Set(), dealByName = {};
   deals.forEach(d => {
     if (d.project_id) byProject[String(d.project_id)] = d;
@@ -245,17 +256,21 @@ function schSync() {
         const rep = byName[repLc];
         if (!rep) { out.skipped++; out.details.push('Unknown rep "' + repName + '" for ' + customer); continue; }
 
+        const newSaleDate = schDate_(row[ix.approved]);
         const deal = {
-          deal_name: customer, sale_date: schDate_(row[ix.approved]), status: SCH_NEW_STATUS,
+          deal_name: customer, sale_date: newSaleDate, status: SCH_NEW_STATUS,
           setter_id: rep.id, closer_id: rep.id, setter_split_pct: 1,
           manager_id: rep.manager_id || null, director_id: directorId, vp_id: vpId,
           baseline_revenue: baselineVal, job_price: saleVal, project_id: projectId,
           // Snapshot of the sheet figures, so a later sheet change is detected
           // as a change order (vs. a manual edit).
           synced_baseline: baselineVal, synced_job_price: saleVal,
-          // Office-based override defaults (office unknown at sold-time → 5%;
-          // the Schedule pass corrects Director/VP to the office rate).
-          manager_override_pct: 0.03, director_override_pct: 0.05, vp_override_pct: 0.05,
+          // Rate-schedule defaults for the deal's sale date (office unknown at
+          // sold-time → the era's default; the Schedule pass corrects
+          // Director/VP to the office rate).
+          manager_override_pct: schManagerRate_(newSaleDate),
+          director_override_pct: schOfficeRate_('', newSaleDate),
+          vp_override_pct: schOfficeRate_('', newSaleDate),
         };
         if (SCH_DRY_RUN) {
           out.created++; byProject[projectId] = Object.assign({ id: 'preview' }, deal); namesSeen.add(customer.toLowerCase());
@@ -323,10 +338,12 @@ function schSync() {
           const officeChanged = office && existing.office !== office;
           if (officeChanged) patch.office = office;
 
-          // Override % by office (Tucson 3.75%, else 5%; manager 3%). Backfill any
-          // nulls and recompute Director/VP when the office is first set/changed.
-          const rate = schOfficeRate_(office);
-          if (existing.manager_override_pct  == null) patch.manager_override_pct  = 0.03;
+          // Override % from the rate schedule for THIS deal's sale date (so an
+          // old deal re-officed today still gets the rate in force when it
+          // closed). Backfill nulls; recompute Director/VP when the office is
+          // first set/changed.
+          const rate = schOfficeRate_(office, existing.sale_date);
+          if (existing.manager_override_pct  == null) patch.manager_override_pct  = schManagerRate_(existing.sale_date);
           if (existing.director_override_pct == null || officeChanged) patch.director_override_pct = rate;
           if (existing.vp_override_pct       == null || officeChanged) patch.vp_override_pct       = rate;
         }
@@ -463,7 +480,32 @@ function schHeartbeat_(url, key, out) {
 }
 
 // ── PARSERS ─────────────────────────────────────────────────
-function schOfficeRate_(office) { return String(office || '').toLowerCase() === 'tucson' ? 0.0375 : 0.05; }
+// ── Rate schedule (app_settings.override_rates, set per run in schSync) ─────
+// Eras: { effective, manager, default, byOffice: { <office lc>: pct } } with
+// HUMAN percents (3.75 = 3.75%). Era = last one effective on/before saleDate.
+var SCH_RATES = null;
+function schEraFor_(saleDate) {
+  if (!SCH_RATES || !SCH_RATES.length) return null;
+  const d = saleDate || new Date().toISOString().slice(0, 10);
+  var era = SCH_RATES[0];
+  for (var i = 0; i < SCH_RATES.length; i++) {
+    if (String(SCH_RATES[i].effective || '') <= d) era = SCH_RATES[i]; else break;
+  }
+  return era;
+}
+function schOfficeRate_(office, saleDate) {
+  const era = schEraFor_(saleDate);
+  if (era) {
+    const o = String(office || '').trim().toLowerCase();
+    const v = era.byOffice && era.byOffice[o] != null ? era.byOffice[o] : era['default'];
+    return ((Number(v) || 0) / 100) || 0.05;
+  }
+  return String(office || '').toLowerCase() === 'tucson' ? 0.0375 : 0.05;
+}
+function schManagerRate_(saleDate) {
+  const era = schEraFor_(saleDate);
+  return era && era.manager != null ? (Number(era.manager) || 0) / 100 : 0.03;
+}
 function schChanged_(stored, sheetVal) {
   if (sheetVal == null) return false;                     // missing sheet value → don't wipe
   return Math.abs((Number(stored) || 0) - (Number(sheetVal) || 0)) > 0.5;
