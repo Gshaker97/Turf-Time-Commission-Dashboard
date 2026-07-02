@@ -340,9 +340,18 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
     setSaving(false)
   }
 
-  const managers  = users.filter(u => u.role === 'manager')
-  const directors = users.filter(u => u.role === 'director')
-  const vps       = users.filter(u => u.role === 'vp')
+  // Override dropdowns list people by CURRENT role — but a deal keeps paying
+  // whoever is stamped on it, so someone demoted since (e.g. a manager moved to
+  // rep) must still appear as the assigned option on their old deals, or the
+  // field would show blank and a re-save could silently knock them off the pay.
+  const withAssigned = (list, id) => {
+    if (!id || list.some(u => u.id === id)) return list
+    const cur = users.find(u => u.id === id)
+    return cur ? [...list, cur] : list
+  }
+  const managers  = withAssigned(users.filter(u => u.role === 'manager'),  form.manager_id)
+  const directors = withAssigned(users.filter(u => u.role === 'director'), form.director_id)
+  const vps       = withAssigned(users.filter(u => u.role === 'vp'),       form.vp_id)
   const showPreview = form.job_price && form.baseline_revenue
 
   const overrideRows = [
