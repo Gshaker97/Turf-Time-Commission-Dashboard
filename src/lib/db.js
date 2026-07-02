@@ -489,6 +489,32 @@ export async function deletePayrollAdjustment(id) {
   return supabase.from('payroll_adjustments').delete().eq('id', id).select('id')
 }
 
+// ── Payroll run locks (freeze a completed pay run, see migration 028) ──
+let _payrollLocks = []   // demo store: { pay_date, locked_at, locked_by, snapshot }
+
+export async function fetchPayrollLocks() {
+  if (DEMO_MODE) return { data: _payrollLocks, error: null }
+  return supabase.from('payroll_locks').select('*')
+}
+
+export async function lockPayrollRun(payDate, snapshot, lockedBy) {
+  if (DEMO_MODE) {
+    _payrollLocks = [..._payrollLocks.filter(l => l.pay_date !== payDate),
+      { pay_date: payDate, locked_at: new Date().toISOString(), locked_by: lockedBy, snapshot }]
+    return { error: null }
+  }
+  return supabase.from('payroll_locks')
+    .upsert({ pay_date: payDate, snapshot, locked_by: lockedBy }, { onConflict: 'pay_date' })
+}
+
+export async function unlockPayrollRun(payDate) {
+  if (DEMO_MODE) {
+    _payrollLocks = _payrollLocks.filter(l => l.pay_date !== payDate)
+    return { error: null }
+  }
+  return supabase.from('payroll_locks').delete().eq('pay_date', payDate)
+}
+
 // ── Weekly stats (rep estimates → close rate) ─────────────────
 export async function fetchWeeklyStats() {
   if (DEMO_MODE) return { data: _weeklyStats, error: null }
