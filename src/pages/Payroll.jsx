@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronLeft, ChevronRight, ChevronDown, Download, Pencil, AlertTriangle, CheckCircle2, Wallet, BadgeCheck, Copy, Check, Plus, X, Trash2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronDown, Download, Pencil, AlertTriangle, CheckCircle2, Wallet, BadgeCheck, Copy, Check, Plus, X, Trash2, Lock } from 'lucide-react'
 import { format } from 'date-fns'
-import { fetchDeals, fetchUsers, updateDeal, fetchPayrollAdjustments, addPayrollAdjustment, deletePayrollAdjustment } from '../lib/db'
+import { fetchDeals, fetchUsers, updateDeal, fetchPayrollAdjustments, addPayrollAdjustment, deletePayrollAdjustment, fetchPayrollLocks, lockPayrollRun, unlockPayrollRun } from '../lib/db'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import { dealAmounts, fmt, activeDeals, officeOverrideRate } from '../utils/commission'
@@ -99,13 +99,16 @@ export default function Payroll() {
   const [adjFor, setAdjFor] = useState('')            // payee id whose adjustment editor is open
   const [adjAmt, setAdjAmt] = useState('')
   const [adjNote, setAdjNote] = useState('')
+  const [locks, setLocks] = useState([])              // locked pay runs (migration 028)
   const today = todayISO()
 
   useEffect(() => { load() }, [])
   async function load() {
-    const [{ data: d }, { data: u }, { data: adj }] = await Promise.all([fetchDeals(), fetchUsers(), fetchPayrollAdjustments()])
+    const [{ data: d }, { data: u }, { data: adj }, { data: lk }] = await Promise.all([
+      fetchDeals(), fetchUsers(), fetchPayrollAdjustments(), fetchPayrollLocks(),
+    ])
     const dd = activeDeals(d || [])   // canceled jobs are never paid / counted
-    setDeals(dd); setUsers(u || []); setAdjustments(adj || [])
+    setDeals(dd); setUsers(u || []); setAdjustments(adj || []); setLocks(lk || [])
     setView(v => {
       if (v) return v
       const pds = distinctPayDates(dd)
@@ -258,13 +261,46 @@ export default function Payroll() {
     [runDeals]
   )
 
+  // Is the current run locked? A locked run is frozen — no status changes,
+  // deal edits, or adjustments (enforced in the DB by migration 028's trigger;
+  // this mirrors it in the UI).
+  const runLock = view && view !== 'overdue' ? locks.find(l => l.pay_date === view) : null
+
   // Viewing payroll is leadership (route guard: vp/admin), but CHANGING data
   // (advancing status, editing a deal) is admin-only — non-admins get a
-  // read-only run.
-  const canApprove = isAdmin && statusLabels?.includes(APPROVED)
-  const canPay     = isAdmin && statusLabels?.includes(PAID)
-  const openEdit   = (deal) => { if (!isAdmin) return; setEditDeal(deal); setModal(true) }
+  // read-only run. A locked run is read-only for everyone.
+  const canApprove = isAdmin && !runLock && statusLabels?.includes(APPROVED)
+  const canPay     = isAdmin && !runLock && statusLabels?.includes(PAID)
+  const openEdit   = (deal) => {
+    if (!isAdmin) return
+    if (locks.some(l => l.pay_date === deal.pay_date)) { alert('This deal is on a locked pay run — unlock the run first.'); return }
+    setEditDeal(deal); setModal(true)
+  }
   const viewLabel  = view === 'overdue' ? 'Overdue (unpaid)' : (fmtDay(view) || '—')
+
+  async function lockRun() {
+    if (!view || view === 'overdue') return
+    const unpaid = runDeals.filter(d => d.status !== PAID).length
+    const msg = unpaid
+      ? `Lock the ${viewLabel} run? ${unpaid} deal(s) are not marked Paid yet — locking freezes them as-is.`
+      : `Lock the ${viewLabel} run? Its deals and adjustments become read-only until unlocked.`
+    if (!confirm(msg)) return
+    const snapshot = {
+      total: summary.total,
+      payees: payees.map(p => ({ id: p.id, name: p.name, total: +p.total.toFixed(2) })),
+      deals: runDeals.length,
+    }
+    const res = await lockPayrollRun(view, snapshot, profile?.id)
+    if (res?.error) { alert('Could not lock the run: ' + (res.error.message || 'unknown error') + '\n(Has migration 028 been run?)'); return }
+    const { data } = await fetchPayrollLocks(); setLocks(data || [])
+  }
+  async function unlockRun() {
+    if (!runLock) return
+    if (!confirm(`Unlock the ${viewLabel} run? Its deals become editable again.`)) return
+    const res = await unlockPayrollRun(runLock.pay_date)
+    if (res?.error) { alert('Could not unlock: ' + (res.error.message || 'unknown error')); return }
+    const { data } = await fetchPayrollLocks(); setLocks(data || [])
+  }
 
   // Optional filter: scope the run to a single payee/rep. Auto-clears if that
   // person isn't in the current run.
@@ -384,16 +420,51 @@ export default function Payroll() {
     const text = `Pay statement — ${p.name} — ${viewLabel}\n\n`
       + items.map(l => `• ${l.deal ? l.deal + (l.baseline ? ` (baseline ${l.baseline})` : '') + ' — ' : ''}${l.role}${l.pct ? ` (${l.pct})` : ''}: ${fmt(l.amount)}`).join('\n')
       + `\n\nNet total: ${fmt(p.total)}`
-    const cell = 'padding:6px 12px;border:1px solid #d1d5db'
+
+    // Styled statement (inline CSS only — it's pasted into email clients).
+    const F = 'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Arial,sans-serif'
+    const money = (v) => `<span style="color:${v < 0 ? '#dc2626' : '#111827'};font-weight:600;white-space:nowrap">${fmt(v)}</span>`
+    const dealRows = items.filter(l => l.deal !== 'Adjustment')
+    const adjRows  = items.filter(l => l.deal === 'Adjustment')
+    const th = (label, align = 'left') =>
+      `<td style="padding:8px 12px;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:#6b7280;font-weight:700;text-align:${align};border-bottom:2px solid #e5e7eb">${label}</td>`
+    const row = (l, last) => l.dim
+      ? `<tr><td colspan="4" style="padding:2px 12px 8px 24px;font-size:12px;color:#dc2626;font-style:italic;${last ? '' : 'border-bottom:1px solid #f3f4f6'}">− ${esc(l.role)}</td>` +
+        `<td style="padding:2px 12px 8px;font-size:12px;text-align:right;color:#dc2626;font-style:italic;${last ? '' : 'border-bottom:1px solid #f3f4f6'}">${fmt(l.amount)}</td></tr>`
+      : `<tr>` +
+        `<td style="padding:10px 12px;font-size:13px;color:#111827;font-weight:600;${last ? '' : 'border-bottom:1px solid #f3f4f6'}">${esc(l.deal)}</td>` +
+        `<td style="padding:10px 12px;font-size:13px;color:#6b7280;text-align:right;${last ? '' : 'border-bottom:1px solid #f3f4f6'}">${esc(l.baseline)}</td>` +
+        `<td style="padding:10px 12px;font-size:12px;color:#374151;${last ? '' : 'border-bottom:1px solid #f3f4f6'}">${esc(l.role)}</td>` +
+        `<td style="padding:10px 12px;font-size:13px;color:#374151;text-align:right;${last ? '' : 'border-bottom:1px solid #f3f4f6'}">${esc(l.pct)}</td>` +
+        `<td style="padding:10px 12px;font-size:13px;text-align:right;${last ? '' : 'border-bottom:1px solid #f3f4f6'}">${money(l.amount)}</td></tr>`
     const html =
-      `<p style="font-family:Arial,sans-serif;font-size:13px"><strong>${esc(p.name)}</strong> — pay for ${esc(viewLabel)}</p>` +
-      `<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">` +
-      `<thead><tr style="background:#00b894;color:#0b0b0b">` +
-      `<th style="${cell};text-align:left">Deal</th><th style="${cell};text-align:right">Baseline</th><th style="${cell};text-align:left">Role</th><th style="${cell};text-align:right">%</th><th style="${cell};text-align:right">Commission</th></tr></thead><tbody>` +
-      items.map((l, i) => `<tr style="background:${i % 2 ? '#f3f4f6' : '#ffffff'};color:${l.dim ? '#b91c1c' : '#111'}">` +
-        `<td style="${cell}">${esc(l.deal)}</td><td style="${cell};text-align:right">${esc(l.baseline)}</td><td style="${cell}">${esc(l.role)}</td><td style="${cell};text-align:right">${esc(l.pct)}</td><td style="${cell};text-align:right">${fmt(l.amount)}</td></tr>`).join('') +
-      `<tr style="font-weight:bold;color:#111"><td style="${cell}" colspan="4">Net total</td><td style="${cell};text-align:right">${fmt(p.total)}</td></tr>` +
-      `</tbody></table>`
+      `<div style="${F};max-width:620px;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden">` +
+      // Header band
+      `<div style="background:#0f2e28;padding:18px 20px">` +
+      `<div style="font-size:11px;letter-spacing:0.18em;color:#2dd4a7;font-weight:800">TURF TIME</div>` +
+      `<div style="font-size:19px;color:#ffffff;font-weight:700;margin-top:2px">Pay Statement</div>` +
+      `<table style="width:100%;border-collapse:collapse;margin-top:10px"><tr>` +
+      `<td style="${F}"><div style="font-size:11px;color:#7fb8aa;text-transform:uppercase;letter-spacing:0.08em">Paid to</div>` +
+      `<div style="font-size:15px;color:#ffffff;font-weight:600">${esc(p.name)}</div></td>` +
+      `<td style="${F};text-align:right"><div style="font-size:11px;color:#7fb8aa;text-transform:uppercase;letter-spacing:0.08em">Pay date</div>` +
+      `<div style="font-size:15px;color:#ffffff;font-weight:600">${esc(viewLabel)}</div></td>` +
+      `</tr></table></div>` +
+      // Deal lines
+      `<table style="width:100%;border-collapse:collapse;background:#ffffff">` +
+      `<tr>${th('Deal')}${th('Baseline', 'right')}${th('Role')}${th('%', 'right')}${th('Commission', 'right')}</tr>` +
+      dealRows.map((l, i) => row(l, i === dealRows.length - 1 && !adjRows.length)).join('') +
+      (adjRows.length
+        ? `<tr><td colspan="5" style="padding:12px 12px 4px;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:#6b7280;font-weight:700;border-top:2px solid #e5e7eb">Adjustments</td></tr>` +
+          adjRows.map((l, i) => `<tr>` +
+            `<td colspan="4" style="padding:8px 12px;font-size:13px;color:#374151;${i === adjRows.length - 1 ? '' : 'border-bottom:1px solid #f3f4f6'}">${esc(l.role)}</td>` +
+            `<td style="padding:8px 12px;font-size:13px;text-align:right;${i === adjRows.length - 1 ? '' : 'border-bottom:1px solid #f3f4f6'}">${money(l.amount)}</td></tr>`).join('')
+        : '') +
+      // Net total band
+      `<tr><td colspan="4" style="padding:14px 12px;background:#f0fdf9;border-top:2px solid #00b894;font-size:14px;color:#0f2e28;font-weight:800">Net total</td>` +
+      `<td style="padding:14px 12px;background:#f0fdf9;border-top:2px solid #00b894;font-size:17px;text-align:right;color:${p.total < 0 ? '#dc2626' : '#047857'};font-weight:800;white-space:nowrap">${fmt(p.total)}</td></tr>` +
+      `</table>` +
+      `<div style="background:#f9fafb;padding:10px 20px;font-size:11px;color:#9ca3af;border-top:1px solid #e5e7eb">Deductions are already reflected in each line. Questions? Reply to this email.</div>` +
+      `</div>`
     try {
       if (navigator.clipboard && window.ClipboardItem) {
         await navigator.clipboard.write([new window.ClipboardItem({
@@ -469,6 +540,28 @@ export default function Payroll() {
         </div>
       ) : (
         <>
+          {/* Locked-run banner */}
+          {runLock && (
+            <div className="mb-3 rounded-xl p-3 flex items-center gap-3 flex-wrap" style={{ background: '#00b89412', border: '1px solid #00b89440' }}>
+              <Lock size={14} className="text-teal flex-shrink-0" />
+              <div className="min-w-0 flex-1">
+                <p className="text-[12px] font-semibold text-teal">This pay run is locked</p>
+                <p className="text-[11px] text-white/40">
+                  Locked {runLock.locked_at ? format(new Date(runLock.locked_at), 'MMM d, yyyy · h:mmaaa') : ''}
+                  {runLock.locked_by ? ` by ${users.find(u => u.id === runLock.locked_by)?.name || 'an admin'}` : ''}
+                  {runLock.snapshot?.total != null ? ` · locked total ${fmt(runLock.snapshot.total)}` : ''} — deals and adjustments on this run are frozen.
+                </p>
+              </div>
+              {isAdmin && (
+                <button onClick={unlockRun}
+                  className="px-3 py-1.5 rounded-lg text-[11px] font-bold text-white/60 hover:text-white transition-colors flex-shrink-0"
+                  style={{ background: '#1e1e1e', border: '1px solid #2e2e2e' }}>
+                  Unlock
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Summary */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mb-3">
             <Card label={effFilter ? "Rep payout" : "Total payout"} value={fmt(summary.total)} color="#00b894"
@@ -570,6 +663,13 @@ export default function Payroll() {
                   Mark all paid
                 </button>
               )}
+              {isAdmin && !runLock && (
+                <button onClick={lockRun} title="Freeze this run — its deals and adjustments become read-only until unlocked"
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold text-white/70 hover:text-white transition-colors ml-auto"
+                  style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+                  <Lock size={13} /> Lock run
+                </button>
+              )}
             </div>
           )}
 
@@ -597,7 +697,7 @@ export default function Payroll() {
                         </span>
                         <span className="flex items-center gap-1.5 flex-shrink-0">
                           <span className="text-[13px] font-semibold text-white whitespace-nowrap">{fmt(p.total)}</span>
-                          {isAdmin && view !== 'overdue' && (
+                          {isAdmin && view !== 'overdue' && !runLock && (
                             <button onClick={() => { setAdjFor(adjFor === p.id ? '' : p.id); setAdjAmt(''); setAdjNote('') }}
                               title="Add a payroll adjustment (+/−)"
                               className="p-1 rounded text-white/30 hover:text-teal hover:bg-teal/10 transition-colors"><Plus size={13} /></button>
@@ -617,7 +717,7 @@ export default function Payroll() {
                             <span className={`text-[11px] font-semibold whitespace-nowrap ${Number(a.amount) < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
                               {Number(a.amount) < 0 ? '−' : '+'}{fmt(Math.abs(Number(a.amount)))}
                             </span>
-                            {isAdmin && (
+                            {isAdmin && !runLock && (
                               <button onClick={() => removeAdjustment(a.id)} title="Remove adjustment"
                                 className="p-0.5 rounded text-white/25 hover:text-red-400"><Trash2 size={11} /></button>
                             )}

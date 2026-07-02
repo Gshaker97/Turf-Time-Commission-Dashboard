@@ -138,7 +138,11 @@ setup + deploy steps.
   payroll corrections like a deduction discovered after a deal already paid out;
   RLS: anyone reads, admins write). Folded into the Payroll run totals +
   pay statements in `src/pages/Payroll.jsx` (a payee can appear on an
-  adjustment alone). Do not re-run `001`/`002` against a populated database.
+  adjustment alone); `028` adds `payroll_locks` (freeze a completed pay run:
+  admins Lock/Unlock a `pay_date` on the Payroll page; a `guard_locked_payroll()`
+  trigger on `deals` + `payroll_adjustments` rejects ANY insert/update/delete
+  touching a locked pay date — app, sync, and raw SQL alike — with a snapshot of
+  payee totals stored at lock time). Do not re-run `001`/`002` against a populated database.
 
 ## User management (Admin page)
 
