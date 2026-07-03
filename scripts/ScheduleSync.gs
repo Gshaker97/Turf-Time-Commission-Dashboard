@@ -186,6 +186,11 @@ function schSync() {
         // unsigned ArcSite design that landed on the sheet) must NOT count — so
         // require an exact APPROVED match whenever a Status column exists.
         if (SCH_ONLY_STATUS && ix.status >= 0 && st !== SCH_ONLY_STATUS) continue;
+        // Rows the sync would never import can't OWN a customer either — an
+        // excluded rep's newer row must not shadow an older legit row (real
+        // case: Ronnie's row blocked Juan Martinez's actual sale from importing).
+        const rep0 = schCleanRep_(rows[r][ix.rep]).toLowerCase();
+        if (SCH_EXCLUDE_REPS.some(function (x) { return rep0.indexOf(x) !== -1; })) continue;
         const when = schDate_(rows[r][ix.approved]) || '';
         const prev = newestRow[cust];
         if (!prev || when >= prev.when) newestRow[cust] = { r: r, when: when };
@@ -648,13 +653,16 @@ function schDiagnose(name) {
   const ix = { approved: c('Approved Date'), customer: c('Customer'), rep: c('Sales Rep'),
     baseline: c('Baseline Cost'), sale: c('Pre-Tax Sale'), project: c('Project ID'), proposal: c('Proposal ID'), status: c('Status') };
 
-  // Newest APPROVED row per customer (same as the sync).
+  // Newest importable APPROVED row per customer (same as the sync — rows the
+  // sync would never import, e.g. an excluded rep's, can't own the customer).
   const newestRow = {};
   for (var r = 1; r < rows.length; r++) {
     const cust = String(rows[r][ix.customer] || '').trim().toLowerCase();
     if (!cust) continue;
     const st = String(ix.status >= 0 ? rows[r][ix.status] : '').trim().toUpperCase();
     if (SCH_ONLY_STATUS && ix.status >= 0 && st !== SCH_ONLY_STATUS) continue;
+    const rep0 = schCleanRep_(rows[r][ix.rep]).toLowerCase();
+    if (SCH_EXCLUDE_REPS.some(function (x) { return rep0.indexOf(x) !== -1; })) continue;
     const when = schDate_(rows[r][ix.approved]) || '';
     const prev = newestRow[cust];
     if (!prev || when >= prev.when) newestRow[cust] = { r: r, when: when };
