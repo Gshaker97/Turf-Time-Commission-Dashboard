@@ -395,8 +395,12 @@ export default function Team() {
     // team of their own.
     const heads = headIdSet(users)
     return users.filter(u => heads.has(u.id) && (isAdmin || !u.ghost)).map(mgr => {
-      const teamReps  = users.filter(u => u.manager_id === mgr.id && !heads.has(u.id) && isSeller(u))
-      const repIds    = new Set([...teamReps.map(r => r.id), mgr.id])  // include the manager's own sales
+      // ALL members (incl. deactivated) feed the money — an inactive rep's
+      // sales still count toward the team. But the "X reps" headcount and
+      // rev/rep only reflect ACTIVE members.
+      const teamMembers = users.filter(u => u.manager_id === mgr.id && !heads.has(u.id) && isSeller(u))
+      const activeReps  = teamMembers.filter(u => u.active !== false)
+      const repIds    = new Set([...teamMembers.map(r => r.id), mgr.id])  // include the manager's own sales
       const teamDeals = deals.filter(d => {
         const inPeriod = (!dateFrom||(d.sale_date??'')>=dateFrom)&&(!dateTo||(d.sale_date??'')<=dateTo)
         return inPeriod && (repIds.has(d.setter_id)||repIds.has(d.closer_id))
@@ -405,7 +409,7 @@ export default function Team() {
       // Only what this team's members actually earn on these deals — not the
       // director/VP overrides or an outside setter/closer's share.
       const commission = [...repIds].reduce((s, id) => s + getUserCommission(teamDeals, id), 0)
-      return { id: mgr.id, name: mgr.name, reps: teamReps.length, deals: teamDeals.length, revenue, commission, revenuePerRep: teamReps.length>0?revenue/teamReps.length:0, isMyTeam: mgr.id===profile.id }
+      return { id: mgr.id, name: mgr.name, reps: activeReps.length, deals: teamDeals.length, revenue, commission, revenuePerRep: activeReps.length>0?revenue/activeReps.length:0, isMyTeam: mgr.id===profile.id }
     }).sort((a,b) => b.revenue-a.revenue)
   }, [users, deals, dateFrom, dateTo, role, profile, isAdmin])
 
@@ -476,9 +480,12 @@ export default function Team() {
       .map(d=>({ ...d, repName: users.find(u=>u.id===(d.closer_id||d.setter_id))?.name??'—', daysAgo: d.sale_date?Math.max(0,Math.floor((now.getTime()-new Date(d.sale_date+'T12:00:00').getTime())/86400000)):0 }))
   }, [deals, visibleReps, users, isAdmin, ghostIds])
 
-  // Reps shown as cards (ghost reps hidden from non-admins).
+  // Reps shown as cards: ghost reps hidden from non-admins, and DEACTIVATED
+  // members hidden from everyone — their sales still feed the KPIs/team totals
+  // above (which use the unfiltered repStats), they just aren't shown as
+  // active members of the team.
   const displayReps = useMemo(
-    () => repStats.filter(rep => isAdmin || !rep.ghost),
+    () => repStats.filter(rep => (isAdmin || !rep.ghost) && rep.active !== false),
     [repStats, isAdmin]
   )
 
@@ -544,7 +551,7 @@ export default function Team() {
       </div>
 
       {tab === 'weekly' ? (
-        <WeeklyStats deals={deals} reps={visibleReps} users={users} canEdit={canEditNotes} profileId={profile?.id} />
+        <WeeklyStats deals={deals} reps={visibleReps.filter(u => u.active !== false)} users={users} canEdit={canEditNotes} profileId={profile?.id} />
       ) : (
       <>
       {/* Filter */}
