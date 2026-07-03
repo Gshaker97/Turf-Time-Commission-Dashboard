@@ -320,11 +320,14 @@ export default function Payroll() {
         pending += amt; pendingCount++
       }
     }
-    // Manual adjustments count toward the payout total (and remaining — they're
-    // applied at pay time, not tied to a deal's paid status).
+    // Manual adjustments count toward the payout total. They go out WITH the
+    // paychecks, so they count toward Remaining only while the run still has
+    // unpaid finalized deals — once everything's Paid, the adjustments were
+    // disbursed too and Remaining reads $0 (not the stray adjustment total).
     const adjTotal = shownPayees.reduce((s, p) => s + p.adjustments.reduce((t, a) => t + Number(a.amount), 0), 0)
     total += adjTotal
-    return { total, paid, remaining: total - paid, pending, pendingCount, finalizedCount, adjTotal,
+    const allPaid = finalizedCount === 0 || paidCount === finalizedCount
+    return { total, paid, remaining: allPaid ? 0 : total - paid, pending, pendingCount, finalizedCount, adjTotal,
              count: shownDeals.length, paidCount, payees: shownPayees.length }
   })()
 
