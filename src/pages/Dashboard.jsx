@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import {
-  format, subMonths, startOfMonth, startOfWeek, endOfWeek, addDays,
+  format, subMonths, startOfWeek, endOfWeek, addDays,
 } from 'date-fns'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { Check, X, TrendingUp, TrendingDown, Minus, ChevronUp, ChevronDown, ChevronsUpDown, Copy } from 'lucide-react'
@@ -305,24 +305,38 @@ export default function Dashboard() {
     }
   }
 
+  // Rolling last 8 FULL weeks + the current (partial) week, newest first —
+  // independent of the page's date filter so the trend is always visible
+  // (the team filter still applies). Average is over the full weeks only, so
+  // a Tuesday doesn't drag the number down.
   const weeklyData = useMemo(() => {
-    const now    = new Date()
-    const toDate = dateTo ? new Date(dateTo + 'T23:59:59') : now
-    let fromDate = dateFrom ? new Date(dateFrom + 'T00:00:00') : new Date(startOfMonth(now))
-    const maxFrom = addDays(toDate, -(8*7-1))
-    if (fromDate < maxFrom) fromDate = maxFrom
+    const scoped   = applyScopeFilters(deals)
+    const curStart = startOfWeek(new Date(), { weekStartsOn: 0 })
     const weeks = []
-    let ptr = startOfWeek(fromDate, { weekStartsOn: 0 })
-    while (ptr <= toDate) {
-      const wEnd  = endOfWeek(ptr, { weekStartsOn: 0 })
-      const wFrom = format(ptr  < fromDate ? fromDate : ptr,  'yyyy-MM-dd')
-      const wTo   = format(wEnd > toDate   ? toDate   : wEnd, 'yyyy-MM-dd')
-      const wDls  = filtered.filter(d => d.sale_date >= wFrom && d.sale_date <= wTo)
-      weeks.push({ label: format(new Date(wFrom + 'T12:00:00'), 'MMM d'), deals: wDls.length, revenue: wDls.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0) })
-      ptr = addDays(ptr, 7)
+    for (let i = 0; i <= 8; i++) {
+      const ws = addDays(curStart, -7 * i)
+      const from = format(ws, 'yyyy-MM-dd')
+      const to   = format(endOfWeek(ws, { weekStartsOn: 0 }), 'yyyy-MM-dd')
+      const wDls = scoped.filter(d => d.sale_date >= from && d.sale_date <= to)
+      weeks.push({
+        label: format(ws, 'MMM d'),
+        deals: wDls.length,
+        revenue: wDls.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0),
+        current: i === 0,
+      })
     }
-    return weeks
-  }, [filtered, dateFrom, dateTo])
+    return weeks   // newest first
+  }, [deals, teamFilter, users])
+
+  const weeklyAvg = useMemo(() => {
+    const full = weeklyData.filter(w => !w.current)
+    if (!full.length) return null
+    return {
+      revenue: full.reduce((s, w) => s + w.revenue, 0) / full.length,
+      deals:   full.reduce((s, w) => s + w.deals, 0) / full.length,
+      weeks:   full.length,
+    }
+  }, [weeklyData])
 
   const maxWeekRev = useMemo(() => weeklyData.reduce((m, w) => Math.max(m, w.revenue), 0) || 1, [weeklyData])
 
@@ -595,14 +609,19 @@ export default function Dashboard() {
         <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
           <div className="mb-4">
             <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Weekly Performance</h3>
-            <p className="text-[11px] text-white/30 mt-0.5">Sun–Sat weeks</p>
+            <p className="text-[11px] text-white/30 mt-0.5">
+              Sun–Sat · last {weeklyData.length - 1} full weeks + this week
+              {weeklyAvg && (
+                <span className="text-white/50"> · avg <span className="font-semibold text-teal/80">{fmt(weeklyAvg.revenue)}</span> & {weeklyAvg.deals.toFixed(1)} deals / week</span>
+              )}
+            </p>
           </div>
-          <div className="space-y-2">
+          <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
             {weeklyData.map((w, i) => (
               <div key={i} className="rounded-lg px-3 py-2.5 flex items-center gap-3"
-                style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+                style={{ background: '#1a1a1a', border: w.current ? '1px solid #00b89440' : '1px solid #2a2a2a' }}>
                 <div className="w-14 md:w-20 flex-shrink-0">
-                  <p className="text-[9px] font-semibold text-white/40 uppercase tracking-wider">Week</p>
+                  <p className="text-[9px] font-semibold uppercase tracking-wider" style={{ color: w.current ? '#00b894' : 'rgba(255,255,255,0.4)' }}>{w.current ? 'This wk' : 'Week'}</p>
                   <p className="text-[12px] md:text-[13px] font-bold text-white">{w.label}</p>
                 </div>
                 <div className="flex-1 min-w-0">
