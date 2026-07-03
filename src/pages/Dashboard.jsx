@@ -201,13 +201,16 @@ export default function Dashboard() {
     const heads = headIdSet(users)
     const mgrs = teamFilter ? users.filter(u => u.id === teamFilter) : users.filter(u => heads.has(u.id))
     return mgrs.map(mgr => {
+      // ALL members (incl. deactivated) feed the team's money — an inactive
+      // rep's sales still count. But the drill-down rows and the headcount
+      // only show ACTIVE members (an inactive person isn't on the team).
       const members = [mgr, ...users.filter(u => u.manager_id === mgr.id)]
       const repIds  = new Set(members.map(m => m.id))   // include the manager's own sales
       const mDeals  = filtered.filter(d => repIds.has(d.setter_id))
       const revenue = mDeals.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
       const prevRev = prevFiltered.filter(d => repIds.has(d.setter_id)).reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
-      // Per-member breakdown (setter-based, so the rows sum to the team total).
-      const reps = members.map(m => {
+      // Per-member breakdown (setter-based; active members only).
+      const reps = members.filter(m => m.active !== false).map(m => {
         const md = filtered.filter(d => d.setter_id === m.id)
         return {
           id: m.id, name: m.name, ghost: m.ghost === true, isManager: m.id === mgr.id,
@@ -215,7 +218,8 @@ export default function Dashboard() {
           revenue: md.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0),
         }
       }).sort((a, b) => b.revenue - a.revenue)
-      return { id: mgr.id, name: mgr.name, ghost: mgr.ghost === true, repCount: members.length - 1, deals: mDeals.length, revenue, prevRev, reps, pct: (revenue / companyTotalRev) * 100 }
+      const repCount = members.filter(m => m.id !== mgr.id && m.active !== false).length
+      return { id: mgr.id, name: mgr.name, ghost: mgr.ghost === true, repCount, deals: mDeals.length, revenue, prevRev, reps, pct: (revenue / companyTotalRev) * 100 }
     }).sort((a, b) => b.revenue - a.revenue)
   }, [users, filtered, prevFiltered, companyTotalRev, teamFilter])
 
