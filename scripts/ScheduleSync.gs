@@ -605,3 +605,92 @@ function schPatch_(url, key, path, payload) {
   const resp = UrlFetchApp.fetch(url + path, { method: 'patch', contentType: 'application/json', headers: { apikey: key, Authorization: 'Bearer ' + key, Prefer: 'return=minimal' }, payload: JSON.stringify(payload), muteHttpExceptions: true });
   if (resp.getResponseCode() >= 300) throw new Error('Patch failed: ' + resp.getContentText());
 }
+
+// ── DIAGNOSE — why didn't a customer import? ─────────────────
+// Run schDiagnose from the Apps Script editor with the customer's name (edit
+// the default below or call schDiagnose('Juan Martinez') from a scratch
+// function), then read the Execution log. It walks every Jobs row matching
+// that name through the exact same gates as the real sync and prints which
+// one skips it. Read-only — writes nothing.
+function schDiagnose(name) {
+  name = String(name || 'Juan Martinez').trim().toLowerCase();
+  const props = PropertiesService.getScriptProperties();
+  const url = props.getProperty('SUPABASE_URL');
+  const key = props.getProperty('SUPABASE_SERVICE_KEY');
+  const log = (m) => Logger.log(m);
+
+  log('Diagnosing "' + name + '" · DRY_RUN=' + SCH_DRY_RUN + (SCH_DRY_RUN ? '  ⚠ sync is in PREVIEW mode — it writes NOTHING' : ''));
+
+  // Same config the sync loads.
+  try {
+    const cfg = schGet_(url, key, '/rest/v1/app_settings?select=key,value&key=in.(sync_excluded_reps,sync_skip_names)');
+    cfg.forEach(function (row) {
+      if (row.key === 'sync_excluded_reps' && Array.isArray(row.value)) SCH_EXCLUDE_REPS = row.value.map(function (s) { return String(s).trim().toLowerCase(); }).filter(Boolean);
+      if (row.key === 'sync_skip_names' && Array.isArray(row.value)) SCH_SKIP_NAME_CONTAINS = row.value.map(function (s) { return String(s).trim().toLowerCase(); }).filter(Boolean);
+    });
+  } catch (e) { /* defaults */ }
+
+  const profiles = schGet_(url, key, '/rest/v1/profiles?select=id,name,role');
+  const byName = {};
+  profiles.forEach(function (p) { if (p && p.name) byName[String(p.name).trim().toLowerCase()] = p; });
+  const deals = schGet_(url, key, '/rest/v1/deals?select=id,project_id,deal_name,status,synced_baseline,synced_job_price');
+  const byProject = {}, dealByName = {};
+  deals.forEach(function (d) {
+    if (d.project_id) byProject[String(d.project_id)] = d;
+    if (d.deal_name) dealByName[String(d.deal_name).trim().toLowerCase()] = d;
+  });
+  const ignoreCreate = (props.getProperty(SCH_BASELINE_PROP) || '').split(',').filter(Boolean);
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const rows = ss.getSheetByName(SCH_JOBS_TAB).getDataRange().getDisplayValues();
+  const h = rows[0].map(function (x) { return String(x).trim(); });
+  const c = function (n) { return h.indexOf(n); };
+  const ix = { approved: c('Approved Date'), customer: c('Customer'), rep: c('Sales Rep'),
+    baseline: c('Baseline Cost'), sale: c('Pre-Tax Sale'), project: c('Project ID'), proposal: c('Proposal ID'), status: c('Status') };
+
+  // Newest APPROVED row per customer (same as the sync).
+  const newestRow = {};
+  for (var r = 1; r < rows.length; r++) {
+    const cust = String(rows[r][ix.customer] || '').trim().toLowerCase();
+    if (!cust) continue;
+    const st = String(ix.status >= 0 ? rows[r][ix.status] : '').trim().toUpperCase();
+    if (SCH_ONLY_STATUS && ix.status >= 0 && st !== SCH_ONLY_STATUS) continue;
+    const when = schDate_(rows[r][ix.approved]) || '';
+    const prev = newestRow[cust];
+    if (!prev || when >= prev.when) newestRow[cust] = { r: r, when: when };
+  }
+
+  var found = 0;
+  for (var r2 = 1; r2 < rows.length; r2++) {
+    const row = rows[r2];
+    const customer = String(row[ix.customer] || '').trim();
+    if (!customer || customer.toLowerCase().indexOf(name) === -1) continue;
+    found++;
+    const pfx = 'Row ' + (r2 + 1) + ' ("' + customer + '"): ';
+    const status = String(ix.status >= 0 ? row[ix.status] : '').trim().toUpperCase();
+    if (SCH_SKIP_NAME_CONTAINS.some(function (x) { return customer.toLowerCase().indexOf(x) !== -1; })) { log(pfx + 'SKIPPED — name matches the junk/skip list (' + SCH_SKIP_NAME_CONTAINS.join(', ') + ')'); continue; }
+    if (SCH_ONLY_STATUS && ix.status >= 0 && status !== SCH_ONLY_STATUS) { log(pfx + 'SKIPPED — Status is "' + (row[ix.status] || '(blank)') + '", needs exactly ' + SCH_ONLY_STATUS); continue; }
+    const newest = newestRow[customer.toLowerCase()];
+    if (newest && newest.r !== r2) { log(pfx + 'SKIPPED — an APPROVED row with a newer Approved Date exists for this customer (row ' + (newest.r + 1) + ' drives the deal)'); continue; }
+    const projectId = String(row[ix.project] || '').trim() || String(ix.proposal >= 0 ? row[ix.proposal] : '').trim();
+    if (!projectId) { log(pfx + 'SKIPPED — no Project ID or Proposal ID on the row'); continue; }
+    const repName = schCleanRep_(row[ix.rep]);
+    if (SCH_EXCLUDE_REPS.some(function (x) { return repName.toLowerCase().indexOf(x) !== -1; })) { log(pfx + 'SKIPPED — Sales Rep "' + repName + '" is on the excluded-reps list'); continue; }
+    const existing = byProject[projectId] || dealByName[customer.toLowerCase()];
+    if (existing) {
+      const how = byProject[projectId] ? 'Project ID' : 'CUSTOMER NAME';
+      const snapMissing = existing.synced_baseline == null && existing.synced_job_price == null;
+      const changed = !snapMissing && (schChanged_(existing.synced_baseline, schMoney_(row[ix.baseline])) || schChanged_(existing.synced_job_price, schMoney_(row[ix.sale])));
+      log(pfx + 'MATCHED AN EXISTING DEAL by ' + how + ' → deal "' + existing.deal_name + '" (status ' + existing.status + ', project ' + (existing.project_id || 'none') + '). '
+        + (snapMissing ? 'No sheet snapshot yet — the sync adopts these numbers silently, no new deal.'
+           : changed ? 'Sheet numbers differ from the snapshot — the sync fires a CHANGE ORDER on that existing deal, no new deal.'
+                     : 'Numbers match the snapshot — nothing to do, no new deal.')
+        + ' If this is genuinely a DIFFERENT job for the same customer, rename one (e.g. "Juan Martinez 2") or give it a distinct Project ID.');
+      continue;
+    }
+    if (ignoreCreate.indexOf(projectId) !== -1) { log(pfx + 'SKIPPED — Project ID ' + projectId + ' is in the baseline ignore list (schBaselineNow was run after this job landed). Remove it from the SCHED_BASELINE_IDS script property to import.'); continue; }
+    if (!byName[repName.toLowerCase()]) { log(pfx + 'SKIPPED — Sales Rep "' + repName + '" doesn\'t match any roster name. Fix the sheet name or the roster.'); continue; }
+    log(pfx + 'WOULD CREATE ✓ — nothing blocks this row. If it still isn\'t in the site, check System Health (DRY_RUN / sync stalled / errors).');
+  }
+  if (!found) log('No Jobs row found containing "' + name + '" — check the spelling/tab.');
+}
