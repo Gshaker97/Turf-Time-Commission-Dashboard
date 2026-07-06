@@ -4,7 +4,7 @@ import { format } from 'date-fns'
 import { fetchDeals, fetchUsers, updateDeal, fetchPayrollAdjustments, addPayrollAdjustment, deletePayrollAdjustment, fetchPayrollLocks, lockPayrollRun, unlockPayrollRun } from '../lib/db'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
-import { dealAmounts, fmt, activeDeals, officeOverrideRate } from '../utils/commission'
+import { dealAmounts, fmt, activeDeals } from '../utils/commission'
 import DealModal from '../components/DealModal'
 
 const todayISO = () => new Date().toISOString().slice(0, 10)
@@ -59,12 +59,6 @@ function dealPayouts(d) {
 
 // Ratio (e.g. 0.2 or 0.0375) → "20%" / "3.75%".
 const asPct = (ratio) => { const v = (Number(ratio) || 0) * 100; return (Number.isInteger(v) ? v : +v.toFixed(2)) + '%' }
-// The override % a role is paid (director/VP fall back to the office rate).
-const overridePctFor = (d, role) =>
-  role === 'Manager'  ? Number(d.manager_override_pct) || 0
-  : role === 'Director' ? (d.director_override_pct != null ? Number(d.director_override_pct) : officeOverrideRate(d))
-  : role === 'VP'       ? (d.vp_override_pct       != null ? Number(d.vp_override_pct)       : officeOverrideRate(d))
-  : 0
 // How much of a deal's deduction a setter/closer absorbed (mirrors the engine).
 function roleDeduction(d, role, a) {
   if (role !== 'Setter' && role !== 'Closer') return 0
@@ -185,12 +179,13 @@ export default function Payroll() {
       if (!person || !person.id || !amount) return
       const p = ensure(person.id, person.name)
       p.total += amount
-      const isRep = role === 'Setter' || role === 'Closer'
       const ded = roleDeduction(deal, role, a)
       p.lines.push({
         deal: deal.deal_name, role, amount, baseline: a.baseline,
         // setter/closer: % of baseline they net; mgmt: their override %
-        pct: isRep ? (a.baseline > 0 ? amount / a.baseline : 0) : overridePctFor(deal, role),
+        // amount ÷ baseline for every role — for mgmt this is the EFFECTIVE
+        // override rate (reflects override exclusions, e.g. 2.7% not 3%).
+        pct: a.baseline > 0 ? amount / a.baseline : 0,
         ded, note: deal.deduction_note || '',
       })
       p.dealIds.add(deal.id)
@@ -377,7 +372,7 @@ export default function Payroll() {
       rows.push([d.deal_name || '—', a.baseline.toFixed(2), '', '', '', '', d.office || ''])
       for (const p of payouts) {
         const isRep = p.role === 'Setter' || p.role === 'Closer'
-        const pctRatio = isRep ? (a.baseline > 0 ? p.amount / a.baseline : 0) : overridePctFor(d, p.role)
+        const pctRatio = a.baseline > 0 ? p.amount / a.baseline : 0   // effective rate (reflects exclusions)
         rows.push(['', '', p.name, isRep ? p.role : 'Override', asPct(pctRatio), p.amount.toFixed(2), ''])
       }
       if (!repFilterId && a.deduction > 0)

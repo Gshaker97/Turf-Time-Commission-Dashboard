@@ -545,6 +545,9 @@ export default function SettingsPanel() {
       <OverrideRatesEditor />
       <PayDateRuleEditor />
       <NoteNotifyEditor />
+      <ListEditor title="Override Exclusion Items" settingKey="override_exclusion_items"
+        hint="Subcontracted products that earn no manager/director/VP override. On a deal, pick the item and enter its price — overrides then compute off baseline minus those amounts (baseline and job price don't change)."
+        placeholder="e.g. Electrical" fallback={['Electrical', 'Gas', 'Pergolas']} />
       <ListEditor title="Sync: Excluded Reps" settingKey="sync_excluded_reps"
         hint="The sheet sync never imports deals for these sales reps (matched anywhere in the rep's name, case-insensitive)."
         placeholder="e.g. Rhett" fallback={['rhett', 'ronnie']} />

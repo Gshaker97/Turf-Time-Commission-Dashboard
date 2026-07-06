@@ -45,6 +45,16 @@ setup + deploy steps.
      person is assigned — a stranded override %/amount with no manager/director/vp
      id counts as 0 (it pays nobody, so it must never inflate a total). The
      DealModal clears the % when its person is set to None and saves it null.
+   - **Override exclusions** (migration 030): `deals.override_exclusions` =
+     jsonb `[{ item, amount }]` — subcontracted items (defaults Electrical/Gas/
+     Pergolas; list is admin-editable via `app_settings.override_exclusion_items`)
+     whose price earns NO override. Baseline/job price stay untouched; overrides
+     compute off `overrideBase = baseline − exclusions`. Displays show the
+     EFFECTIVE rate (`amount ÷ baseline`, e.g. 2.7% not 3%) — Commissions
+     `myParts`, Payroll payee lines + exports; the DealModal keeps the entered
+     contract rate in the % inputs and shows the effective rates in the
+     Override Exclusions section note. `dealAmounts` returns `exclusionsTotal`
+     + `overrideBase`.
    - When a stored `*_amount` field is present, it WINS over the computed value.
    - **Rep bonus** (migrations 025→026): several roles can chip in toward a
      bonus for the rep (`bonus_recipient` = setter|closer). Each contribution is
@@ -149,7 +159,9 @@ setup + deploy steps.
   reports-to moves — a SECURITY DEFINER trigger on `profiles` records old/new
   lead + who changed it whenever `manager_id` changes; read-only for clients;
   shown as the collapsible "Team change log" on Admin → Users, and the latest
-  change stamps "since <date>" on roster rows). Do not re-run `001`/`002` against a populated database.
+  change stamps "since <date>" on roster rows); `030` adds
+  `deals.override_exclusions` (jsonb `[{ item, amount }]` — subcontracted items
+  that earn no override; see the engine rules above). Do not re-run `001`/`002` against a populated database.
 
 ## User management (Admin page)
 
