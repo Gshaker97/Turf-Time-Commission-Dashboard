@@ -127,9 +127,11 @@ function DealHistory({ dealId, users }) {
 }
 
 export default function DealModal({ deal, users = [], existingDeals = [], onSave, onClose }) {
-  const { statusLabels, offices, paymentMethods } = useSettings()
+  const { statusLabels, offices, paymentMethods, overrideExclusionItems } = useSettings()
   const [form, setForm] = useState(BLANK)
   const [saving, setSaving] = useState(false)
+  // Override exclusions: [{ item, amount }] — subcontracted items with no override.
+  const [exRows, setExRows] = useState([])
 
   // Warn about a likely duplicate when creating a new deal whose name already
   // exists (case-insensitive). Editing an existing deal never flags.
@@ -140,6 +142,9 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
   }, [deal, form.deal_name, existingDeals])
 
   useEffect(() => {
+    setExRows(Array.isArray(deal?.override_exclusions)
+      ? deal.override_exclusions.map(x => ({ item: x?.item || '', amount: x?.amount != null ? String(x.amount) : '' }))
+      : [])
     if (deal) {
       setForm({
         ...BLANK, ...deal,
@@ -243,6 +248,10 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
   }
   // Resolve a typed bonus contribution to dollars (% is of baseline).
   const baseForBonus = parseFloat(form.baseline_revenue) || 0
+  // Override exclusions — subcontracted items (Electrical/Gas/Pergolas…) whose
+  // price earns no override. Overrides compute off baseline − these amounts.
+  const exclusionsTotal = exRows.reduce((s2, r2) => s2 + (parseFloat(r2.amount) || 0), 0)
+  const overrideBaseForm = Math.max(baseForBonus - exclusionsTotal, 0)
   const resolveBonus = (raw) => {
     const v = parseFloat(raw) || 0
     if (v <= 0) return 0
@@ -268,6 +277,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
     manager_override_pct:  parseFloat(form.manager_override_pct)  / 100 || 0,
     director_override_pct: parseFloat(form.director_override_pct) / 100 || 0,
     vp_override_pct:       parseFloat(form.vp_override_pct)       / 100 || 0,
+    override_exclusions:   exRows.map(r => ({ item: r.item, amount: parseFloat(r.amount) || 0 })),
     bonus_recipient:       form.bonus_recipient,
     bonus_company:         bonus$.company,
     bonus_manager:         bonus$.manager,
@@ -289,9 +299,9 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
   const recipName = (form.bonus_recipient === 'closer' && form.closer_id && form.closer_id !== form.setter_id) ? closerName : setterName
   // Per-role override $ (gross) for showing the live "5% → 4%" net as bonuses pull from it.
   const overrideGross = {
-    manager:  form.manager_id  ? baseForBonus * ((parseFloat(form.manager_override_pct)  || 0) / 100) : 0,
-    director: form.director_id ? baseForBonus * ((parseFloat(form.director_override_pct) || 0) / 100) : 0,
-    vp:       form.vp_id       ? baseForBonus * ((parseFloat(form.vp_override_pct)        || 0) / 100) : 0,
+    manager:  form.manager_id  ? overrideBaseForm * ((parseFloat(form.manager_override_pct)  || 0) / 100) : 0,
+    director: form.director_id ? overrideBaseForm * ((parseFloat(form.director_override_pct) || 0) / 100) : 0,
+    vp:       form.vp_id       ? overrideBaseForm * ((parseFloat(form.vp_override_pct)        || 0) / 100) : 0,
   }
   // The contributor rows rendered in the Rep Bonus section.
   const bonusRows = [
@@ -326,6 +336,13 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
       dealer_fee_pct:   form.dealer_fee_pct ? parseFloat(form.dealer_fee_pct) / 100 : null,
       deduction_paid_by: form.deduction_paid_by || 'closer',
       deduction_split_pct: Math.min(1, Math.max(0, pctOr50(form.deduction_split_pct) / 100)),
+      // Subcontracted items that earn no override (null when none).
+      override_exclusions: (() => {
+        const clean = exRows
+          .map(r => ({ item: String(r.item || '').trim(), amount: Math.max(0, parseFloat(r.amount) || 0) }))
+          .filter(r => r.item && r.amount > 0)
+        return clean.length ? clean : null
+      })(),
       // Multi-source bonus, stored as resolved $ per source.
       bonus_company:   bonus$.company  > 0 ? bonus$.company  : null,
       bonus_manager:   bonus$.manager  > 0 ? bonus$.manager  : null,
@@ -631,6 +648,49 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                 )
               })}
             </div>
+          </div>
+
+          {/* Override exclusions — subcontracted items (Electrical, Gas,
+              Pergolas…) whose price earns no override. Baseline/job price
+              stay the same; overrides compute off baseline − these amounts. */}
+          <div>
+            <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-1">Override Exclusions <span className="text-white/20 normal-case font-medium">· subcontracted items, no override on these</span></p>
+            <p className="text-[11px] text-white/35 mb-3">Baseline &amp; job price don't change — the override % just applies to baseline minus these amounts.</p>
+            <div className="space-y-2">
+              {exRows.map((r, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <Sel value={r.item} onChange={e => setExRows(rs => rs.map((x, j) => j === i ? { ...x, item: e.target.value } : x))}>
+                    <option value="">Select item…</option>
+                    {overrideExclusionItems.map(it => <option key={it} value={it}>{it}</option>)}
+                    {r.item && !overrideExclusionItems.includes(r.item) && <option value={r.item}>{r.item}</option>}
+                  </Sel>
+                  <input type="number" min="0" step="0.01" value={r.amount} placeholder="Price $"
+                    onChange={e => setExRows(rs => rs.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))}
+                    style={inputStyle} className={`${inputCls} !w-32 flex-shrink-0`} />
+                  <button type="button" onClick={() => setExRows(rs => rs.filter((_, j) => j !== i))}
+                    className="p-2 rounded-lg text-white/25 hover:text-red-400 hover:bg-red-500/10 transition-colors flex-shrink-0" title="Remove item">
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button type="button" onClick={() => setExRows(rs => [...rs, { item: '', amount: '' }])}
+              className="mt-2 px-3 py-1.5 rounded-lg text-[12px] font-semibold text-white/60 hover:text-white transition-colors"
+              style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+              + Add excluded item
+            </button>
+            {exclusionsTotal > 0 && (
+              <p className="text-[11px] text-white/45 mt-2">
+                Override base: <span className="text-white/70 font-semibold">{fmt(overrideBaseForm)}</span>
+                <span className="text-white/30"> (baseline {fmt(baseForBonus)} − {fmt(exclusionsTotal)} excluded)</span>
+                {baseForBonus > 0 && (
+                  <span className="text-amber-400/90"> · effective: {['manager', 'director', 'vp'].map(role => {
+                    const entered = parseFloat(form[`${role}_override_pct`]) || 0
+                    return entered > 0 && form[`${role}_id`] ? `${role === 'vp' ? 'VP' : role[0].toUpperCase() + role.slice(1)} ${(entered * overrideBaseForm / baseForBonus).toFixed(2)}%` : null
+                  }).filter(Boolean).join(' · ') || '—'}</span>
+                )}
+              </p>
+            )}
           </div>
 
           {/* Rep bonus — several roles can chip in (each % of baseline or $),

@@ -69,6 +69,9 @@ export function SettingsProvider({ children }) {
     paymentMethods: settings.payment_methods ?? [],
     offices: settings.offices ?? [],
     noteNotify: { ...NOTE_NOTIFY_DEFAULT, ...(settings.note_notify || {}) },
+    // Subcontracted line items whose price earns no override (deal editor
+    // dropdown; engine computes overrides off baseline − exclusions).
+    overrideExclusionItems: settings.override_exclusion_items ?? ['Electrical', 'Gas', 'Pergolas'],
   }
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>
 }
@@ -78,4 +81,5 @@ export const useSettings = () => useContext(SettingsContext) ?? {
   statuses: DEFAULTS.deal_statuses, statusLabels: DEFAULTS.deal_statuses.map(s => s.label),
   statusColor: () => '#94a3b8', paymentMethods: DEFAULTS.payment_methods, offices: DEFAULTS.offices,
   siteName: 'Turf Time Dashboard', dataStartDate: '2026-06-01', noteNotify: NOTE_NOTIFY_DEFAULT,
+  overrideExclusionItems: ['Electrical', 'Gas', 'Pergolas'],
 }

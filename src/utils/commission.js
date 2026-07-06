@@ -89,6 +89,14 @@ export function dealAmounts(deal) {
     closerDed = deduction * (1 - dsp)
   }
   else                          closerDed = deduction          // 'closer' (default)
+  // Override exclusions (migration 030): subcontracted line items (Electrical,
+  // Gas, Pergolas, …) whose price earns NO override. Baseline and job price
+  // stay untouched — overrides simply compute off (baseline − exclusions).
+  const exclusionsTotal = Array.isArray(deal.override_exclusions)
+    ? deal.override_exclusions.reduce((s, x) => s + num(x?.amount), 0)
+    : 0
+  const overrideBase = Math.max(baseline - exclusionsTotal, 0)
+
   // Computed-from-rules amounts — what each role SHOULD earn given the split and
   // the override %s, independent of any stored value. The Requires-Audit panel
   // reconciles these against the stored sheet amounts. Director/VP fall back to
@@ -98,9 +106,9 @@ export function dealAmounts(deal) {
   const computed = {
     setter:   rawSetter - setterDed,
     closer:   rawCloser - closerDed,
-    manager:  baseline * num(deal.manager_override_pct),
-    director: baseline * (deal.director_override_pct != null ? num(deal.director_override_pct) : dirVpRate),
-    vp:       baseline * (deal.vp_override_pct       != null ? num(deal.vp_override_pct)       : dirVpRate),
+    manager:  overrideBase * num(deal.manager_override_pct),
+    director: overrideBase * (deal.director_override_pct != null ? num(deal.director_override_pct) : dirVpRate),
+    vp:       overrideBase * (deal.vp_override_pct       != null ? num(deal.vp_override_pct)       : dirVpRate),
   }
 
   // Stored *_amount (sheet sync / manual entry — already NET of deductions) wins
@@ -140,6 +148,7 @@ export function dealAmounts(deal) {
     baseline, job, revenue: baseline, deduction, manualDeduction, dealerFee, financed,
     setter, closer, manager, director, vp,
     repCommission, overrides, totalCommission,
+    exclusionsTotal, overrideBase,
     bonus, bonusFrom: { company: fromCompany, manager: fromManager, director: fromDirector, vp: fromVp },
     computed,
   }

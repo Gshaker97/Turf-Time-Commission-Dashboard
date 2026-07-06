@@ -52,9 +52,13 @@ function myParts(deal, id) {
       detail: `Closer split · ${pct(1 - split)} of rep pool`,
     })
   }
-  if (deal.manager_id  === id) parts.push({ role: 'Manager',  amount: a.manager,  gross: a.manager,  ded: 0, partner: null, detail: `${pct(deal.manager_override_pct)} override of baseline` })
-  if (deal.director_id === id) parts.push({ role: 'Director', amount: a.director, gross: a.director, ded: 0, partner: null, detail: `${pct(deal.director_override_pct)} override of baseline` })
-  if (deal.vp_id       === id) parts.push({ role: 'VP',       amount: a.vp,       gross: a.vp,       ded: 0, partner: null, detail: `${pct(deal.vp_override_pct)} override of baseline` })
+  // Show the EFFECTIVE rate (amount ÷ baseline) — reflects override exclusions
+  // (e.g. reads 2.7% when subcontracted items reduce the override base).
+  const exNote = a.exclusionsTotal > 0 ? ' (after exclusions)' : ''
+  const effPct = (amt) => (a.baseline > 0 ? pct(amt / a.baseline) : pct(0))
+  if (deal.manager_id  === id) parts.push({ role: 'Manager',  amount: a.manager,  gross: a.manager,  ded: 0, partner: null, detail: `${effPct(a.manager)} override of baseline${exNote}` })
+  if (deal.director_id === id) parts.push({ role: 'Director', amount: a.director, gross: a.director, ded: 0, partner: null, detail: `${effPct(a.director)} override of baseline${exNote}` })
+  if (deal.vp_id       === id) parts.push({ role: 'VP',       amount: a.vp,       gross: a.vp,       ded: 0, partner: null, detail: `${effPct(a.vp)} override of baseline${exNote}` })
   return parts
 }
 
@@ -100,6 +104,9 @@ function DealRow({ deal, id, statusColor }) {
               <span>Job price <span className="text-white/70">{fmt(a.job)}</span></span>
               <span>Baseline <span className="text-white/70">{fmt(a.baseline)}</span></span>
               <span>Rep pool <span className="text-white/70">{fmt(repPool)}</span></span>
+              {a.exclusionsTotal > 0 && (
+                <span>Override base <span className="text-white/70">{fmt(a.overrideBase)}</span><span className="text-white/25"> (−{fmt(a.exclusionsTotal)} excluded)</span></span>
+              )}
             </div>
             {parts.map(p => (
               <div key={p.role} className="py-1 border-t border-white/5">
