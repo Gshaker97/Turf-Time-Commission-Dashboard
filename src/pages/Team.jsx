@@ -513,6 +513,23 @@ export default function Team() {
   }, [displayReps, users, isAdmin, ghostIds])
   const groupView = teamGroups.length > 1
 
+  // Weekly Stats roster: the visible sellers PLUS any director/VP who heads a
+  // team in view (e.g. Garrison) — they get their own estimate row on their
+  // team, like a manager does. Deactivated users stay excluded.
+  const weeklyReps = useMemo(() => {
+    const base = visibleReps.filter(u => u.active !== false)
+    const heads = headIdSet(users)
+    const ids = new Set(base.map(u => u.id))
+    const out = [...base]
+    for (const u of users) {
+      if (ids.has(u.id) || u.active === false || !heads.has(u.id)) continue
+      if (u.role !== 'director' && u.role !== 'vp') continue
+      const leadsSomeoneShown = base.some(m => m.manager_id === u.id)
+      if (leadsSomeoneShown || u.id === profile?.id) { out.push(u); ids.add(u.id) }
+    }
+    return out
+  }, [visibleReps, users, profile])
+
   const topPerformer   = displayReps[0]   // ghost reps already excluded for non-admins
   // Coach notes + weekly stats are admin-only edits. Goals are a carve-out:
   // reps set their own personal goal, managers set their team's goals + their
@@ -551,7 +568,7 @@ export default function Team() {
       </div>
 
       {tab === 'weekly' ? (
-        <WeeklyStats deals={deals} reps={visibleReps.filter(u => u.active !== false)} users={users} canEdit={canEditNotes} profileId={profile?.id} />
+        <WeeklyStats deals={deals} reps={weeklyReps} users={users} canEdit={canEditNotes} profileId={profile?.id} />
       ) : (
       <>
       {/* Filter */}
