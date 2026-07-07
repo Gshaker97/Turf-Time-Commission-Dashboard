@@ -5,7 +5,7 @@ import { fetchDeals, fetchUsers, fetchPayrollAdjustments, logClientError } from 
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
-import { dealAmounts, getUserCommission, fmt, activeDeals } from '../utils/commission'
+import { dealAmounts, getUserCommission, fmt, activeDeals, deductionLabel } from '../utils/commission'
 
 const todayISO = () => new Date().toISOString().slice(0, 10)
 // Sunday–Saturday week containing the given date (ISO strings).
@@ -118,7 +118,7 @@ function DealRow({ deal, id, statusColor }) {
                 </div>
                 {p.ded > 0 && (
                   <div className="flex items-center justify-between text-[11px] text-red-400/90 mt-0.5">
-                    <span>− Deduction{deal.deduction_note ? ` (${deal.deduction_note})` : ''}</span>
+                    <span>− Deduction ({deductionLabel(deal, a)})</span>
                     <span>−{fmt(p.ded)}</span>
                   </div>
                 )}
@@ -127,7 +127,7 @@ function DealRow({ deal, id, statusColor }) {
             {a.deduction > 0 && !parts.some(p => p.ded > 0) && (
               <div className="flex items-start gap-1.5 pt-2 mt-1 border-t border-white/5 text-[11px] text-red-400/90">
                 <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
-                <span>This deal has a {fmt(a.deduction)} deduction{deal.deduction_note ? ` — ${deal.deduction_note}` : ''} (already reflected in your take).</span>
+                <span>This deal has a {fmt(a.deduction)} deduction — {deductionLabel(deal, a)} (already reflected in your take).</span>
               </div>
             )}
             <div className="flex items-center justify-between pt-2 mt-1 border-t border-white/10">

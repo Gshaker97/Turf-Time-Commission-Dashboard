@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, X, MessageSquare, BadgeCheck } from 'lucide-react'
-import { calcDealCommissions, fmt, fmtPct, isCanceled, officeOverrideRate } from '../utils/commission'
+import { calcDealCommissions, fmt, fmtPct, isCanceled, officeOverrideRate, deductionBreakdown } from '../utils/commission'
 import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
 import { fetchDealNotes, fetchDealNoteCounts, addDealNote, updateDealNote, deleteDealNote } from '../lib/db'
@@ -251,8 +251,11 @@ function RevenueCell({ baseline, jobPrice }) {
 }
 
 // Red deduction amount that reveals its description on click.
-function DeductionTag({ amount, note }) {
+function DeductionTag({ amount, deal }) {
   const [open, setOpen] = useState(false)
+  // Itemized: names the dealer fee (rate/financed/lender) and the manual
+  // deduction's note, so it never reads as a bare unexplained "Deduction".
+  const parts = deductionBreakdown(deal)
   return (
     <div className="relative">
       <button
@@ -265,10 +268,17 @@ function DeductionTag({ amount, note }) {
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 z-50 mt-1 w-52 rounded-lg p-2.5 text-left shadow-xl"
+          <div className="absolute right-0 z-50 mt-1 w-60 rounded-lg p-2.5 text-left shadow-xl"
             style={{ background: '#2a2a2a', border: '1px solid #3a3a3a' }}>
             <p className="text-[9px] font-bold uppercase tracking-wider text-red-400/80 mb-1">Deduction · {fmt(amount)}</p>
-            <p className="text-[12px] text-white/80 leading-snug">{note || 'No description provided.'}</p>
+            {parts.length === 0 ? (
+              <p className="text-[12px] text-white/80 leading-snug">No description provided.</p>
+            ) : parts.map((x, i) => (
+              <div key={i} className="flex items-start justify-between gap-2 py-0.5">
+                <span className="text-[12px] text-white/80 leading-snug">{x.label}</span>
+                <span className="text-[12px] font-semibold text-red-400 whitespace-nowrap">−{fmt(x.amount)}</span>
+              </div>
+            ))}
           </div>
         </>
       )}
@@ -323,7 +333,7 @@ function CommissionCell({ deal, canVerify, onUpdate }) {
           <span className="text-[10px] text-white/20">{fmtPct(repPct)}</span>
         </div>
       )}
-      {deduction > 0 && <DeductionTag amount={deduction} note={deal.deduction_note} />}
+      {deduction > 0 && <DeductionTag amount={deduction} deal={deal} />}
       </div>
     </div>
   )
