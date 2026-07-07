@@ -212,6 +212,26 @@ export const fmt = (n) =>
 
 export const fmtPct = (n) => ((Number(n) || 0) * 100).toFixed(1) + '%'
 
+// Itemized description of a deal's deduction — names the DEALER FEE explicitly
+// (rate, financed amount, lender) so a bare financing fee never reads as just
+// "Deduction", and pairs it with the manual deduction's note when both exist.
+export function deductionBreakdown(deal, a = dealAmounts(deal)) {
+  const parts = []
+  if (a.dealerFee > 0) {
+    const p = (num(deal.dealer_fee_pct) || 0) * 100
+    const pctStr = (Number.isInteger(p) ? p : +p.toFixed(2)) + '%'
+    parts.push({
+      label: `Dealer fee — ${pctStr} of ${fmt(a.financed)} financed${deal.payment_method ? ` (${deal.payment_method})` : ''}`,
+      amount: a.dealerFee,
+    })
+  }
+  if (a.manualDeduction > 0) parts.push({ label: deal.deduction_note || 'Deduction', amount: a.manualDeduction })
+  return parts
+}
+// One-line version for statements/exports/inline rows.
+export const deductionLabel = (deal, a = dealAmounts(deal)) =>
+  deductionBreakdown(deal, a).map(x => x.label).join(' + ') || 'Deduction'
+
 // A canceled deal is excluded from every aggregate — revenue, commissions,
 // leaderboards, competitions, payroll. It still shows on the Deals page so it
 // can be moved out of "Canceled", at which point it counts again. Tolerates the

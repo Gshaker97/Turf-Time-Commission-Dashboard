@@ -4,7 +4,7 @@ import { format } from 'date-fns'
 import { fetchDeals, fetchUsers, updateDeal, fetchPayrollAdjustments, addPayrollAdjustment, deletePayrollAdjustment, fetchPayrollLocks, lockPayrollRun, unlockPayrollRun } from '../lib/db'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
-import { dealAmounts, fmt, activeDeals } from '../utils/commission'
+import { dealAmounts, fmt, activeDeals, deductionLabel } from '../utils/commission'
 import DealModal from '../components/DealModal'
 
 const todayISO = () => new Date().toISOString().slice(0, 10)
@@ -186,7 +186,7 @@ export default function Payroll() {
         // amount ÷ baseline for every role — for mgmt this is the EFFECTIVE
         // override rate (reflects override exclusions, e.g. 2.7% not 3%).
         pct: a.baseline > 0 ? amount / a.baseline : 0,
-        ded, note: deal.deduction_note || '',
+        ded, note: ded > 0 ? deductionLabel(deal, a) : '',
       })
       p.dealIds.add(deal.id)
     }
@@ -376,7 +376,7 @@ export default function Payroll() {
         rows.push(['', '', p.name, isRep ? p.role : 'Override', asPct(pctRatio), p.amount.toFixed(2), ''])
       }
       if (!repFilterId && a.deduction > 0)
-        rows.push(['', '', '', 'Deduction (already in takes)', '', (-a.deduction).toFixed(2), d.deduction_note || ''])
+        rows.push(['', '', '', 'Deduction (already in takes)', '', (-a.deduction).toFixed(2), deductionLabel(d, a)])
       const dealTotal = repFilterId ? payouts.reduce((s, p) => s + p.amount, 0) : a.totalCommission
       rows.push(['', '', '', 'Deal total', '', dealTotal.toFixed(2), ''])
     }
@@ -849,7 +849,7 @@ export default function Payroll() {
 
                   {a.deduction > 0 && (
                     <p className="text-[11px] text-red-400/90 mt-2 flex items-center gap-1.5">
-                      <AlertTriangle size={12} /> {fmt(a.deduction)} deduction{d.deduction_note ? ` — ${d.deduction_note}` : ''}
+                      <AlertTriangle size={12} /> {fmt(a.deduction)} deduction — {deductionLabel(d, a)}
                     </p>
                   )}
 
