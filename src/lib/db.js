@@ -44,6 +44,14 @@ const DEAL_SELECT = `
 // the matching migration is applied, without breaking deal saves.
 async function writeWithSchemaFallback(run, payload) {
   let res = await run(payload)
+  // Expired-session recovery: an access token that lapsed while the tab sat
+  // idle makes every write bounce with a JWT error. Refresh the session once
+  // and retry before giving up, so "I came back to the tab and nothing saves"
+  // heals itself instead of requiring a reload.
+  if (res?.error && /jwt|token|expired/i.test(res.error.message || '')) {
+    try { await supabase.auth.refreshSession() } catch { /* fall through to the original error */ }
+    res = await run(payload)
+  }
   let guard = 0
   while (res?.error && guard++ < 24) {
     const col = /Could not find the '([^']+)' column/.exec(res.error.message || '')?.[1]
@@ -113,10 +121,19 @@ export async function updateDeal(id, data) {
     )
     return { error: null }
   }
-  return writeWithSchemaFallback(
-    p => supabase.from('deals').update(p).eq('id', id),
+  // `.select('id')` makes PostgREST return the rows it actually updated. An
+  // update that matches ZERO rows (expired session, RLS mismatch) is a
+  // "success" with an empty array — without this check it looked saved in the
+  // UI and silently reverted on the next reload. Turn it into a real error so
+  // callers alert + resync instead of lying.
+  const res = await writeWithSchemaFallback(
+    p => supabase.from('deals').update(p).eq('id', id).select('id'),
     { ...data }
   )
+  if (!res?.error && Array.isArray(res?.data) && res.data.length === 0) {
+    return { ...res, error: { message: 'The change did not reach the database (no row was updated). Your session may have expired — reload the page and sign in again.' } }
+  }
+  return res
 }
 
 export async function deleteDeal(id) {

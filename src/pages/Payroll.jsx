@@ -260,6 +260,9 @@ export default function Payroll() {
   // deal edits, or adjustments (enforced in the DB by migration 028's trigger;
   // this mirrors it in the UI).
   const runLock = view && view !== 'overdue' ? locks.find(l => l.pay_date === view) : null
+  // Per-deal lock check — matters in the Overdue view, which mixes deals from
+  // several pay dates (runLock above only covers a single-date view).
+  const isRunLocked = (payDate) => !!payDate && locks.some(l => l.pay_date === payDate)
 
   // Viewing payroll is leadership (route guard: vp/admin), but CHANGING data
   // (advancing status, editing a deal) is admin-only — non-admins get a
@@ -268,7 +271,7 @@ export default function Payroll() {
   const canPay     = isAdmin && !runLock && statusLabels?.includes(PAID)
   const openEdit   = (deal) => {
     if (!isAdmin) return
-    if (locks.some(l => l.pay_date === deal.pay_date)) { alert('This deal is on a locked pay run — unlock the run first.'); return }
+    if (isRunLocked(deal.pay_date)) { alert('This deal is on a locked pay run — unlock the run first.'); return }
     setEditDeal(deal); setModal(true)
   }
   const viewLabel  = view === 'overdue' ? 'Overdue (unpaid)' : (fmtDay(view) || '—')
@@ -327,6 +330,11 @@ export default function Payroll() {
   })()
 
   async function setStatus(id, status) {
+    const deal = deals.find(d => d.id === id)
+    if (deal && isRunLocked(deal.pay_date)) {
+      alert(`The ${fmtDay(deal.pay_date)} pay run is locked — unlock it first to change this deal.`)
+      return
+    }
     setDeals(ds => ds.map(d => d.id === id ? { ...d, status } : d))   // optimistic
     for (let attempt = 0; ; attempt++) {
       const res = await updateDeal(id, { status })
@@ -338,12 +346,17 @@ export default function Payroll() {
     }
   }
   async function markAll(status) {
-    const ids = shownDeals.filter(d => d.status !== status).map(d => d.id)
+    const ids = shownDeals.filter(d => d.status !== status && !isRunLocked(d.pay_date)).map(d => d.id)
     if (!ids.length) return
     if (!confirm(`Mark ${ids.length} deal${ids.length === 1 ? '' : 's'} as "${status}"?`)) return
     setDeals(ds => ds.map(d => ids.includes(d.id) ? { ...d, status } : d))
     const results = await Promise.all(ids.map(id => updateDeal(id, { status })))
-    if (results.some(r => r?.error)) load()
+    const failed = results.filter(r => r?.error)
+    if (failed.length) {
+      alert(`${failed.length} of ${ids.length} deal${ids.length === 1 ? '' : 's'} could not be updated and were reverted:\n` +
+            (failed[0].error.message || 'unknown error'))
+      load()
+    }
   }
 
   async function handleSave(data) {
@@ -351,7 +364,10 @@ export default function Payroll() {
       setDeals(ds => ds.map(d => d.id === editDeal.id ? { ...d, ...withJoins(data) } : d))
       setModal(false); setEditDeal(null)
       const res = await updateDeal(editDeal.id, data)
-      if (res?.error) load()
+      if (res?.error) {
+        alert('Could not save this deal, so it was reverted:\n' + (res.error.message || 'unknown error'))
+        load()
+      }
     } else {
       setModal(false); setEditDeal(null)
     }
@@ -767,6 +783,7 @@ export default function Payroll() {
                 const a = dealAmounts(d)
                 const color = statusColor(d.status)
                 const isPaid = d.status === PAID
+                const dealLocked = isRunLocked(d.pay_date)
                 return (
                   <div key={d.id} className="flex items-center gap-2.5 px-3 md:px-4 py-2 border-b border-white/5 last:border-0 hover:bg-white/[0.02] transition-colors">
                     <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} title={d.status} />
@@ -779,7 +796,8 @@ export default function Payroll() {
                     <span className="hidden sm:block text-[11px] flex-shrink-0" style={{ color }}>{d.status}</span>
                     <span className="text-[13px] font-bold text-teal flex-shrink-0 w-[88px] text-right">{fmt(a.totalCommission)}</span>
                     <div className="flex items-center gap-1 flex-shrink-0">
-                      {canApprove && !isPaid && d.status !== APPROVED && (
+                      {dealLocked && <Lock size={13} className="text-white/30" title={`The ${fmtDay(d.pay_date)} pay run is locked`} />}
+                      {canApprove && !dealLocked && !isPaid && d.status !== APPROVED && (
                         <button onClick={() => setStatus(d.id, APPROVED)} title={`Move to ${APPROVED}`}
                           className="px-2 py-1 rounded-lg text-[10px] font-semibold text-white/60 hover:text-white transition-colors"
                           style={{ border: '1px solid #3a3a3a' }}>
@@ -788,7 +806,7 @@ export default function Payroll() {
                       )}
                       {canPay && (isPaid ? (
                         <span className="flex items-center text-teal px-1" title="Paid"><CheckCircle2 size={14} /></span>
-                      ) : (
+                      ) : !dealLocked && (
                         <button onClick={() => setStatus(d.id, PAID)} title="Mark paid"
                           className="px-2 py-1 rounded-lg text-[10px] font-bold text-dark transition-colors" style={{ background: '#00b894' }}>
                           Paid
@@ -812,6 +830,7 @@ export default function Payroll() {
               const a = dealAmounts(d)
               const color = statusColor(d.status)
               const isPaid = d.status === PAID
+              const dealLocked = isRunLocked(d.pay_date)
               const payouts = dealPayouts(d)
               return (
                 <div key={d.id} className="rounded-xl p-3 md:p-4" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
@@ -859,11 +878,12 @@ export default function Payroll() {
                       <span className="ml-2 text-[15px] font-bold text-teal">{fmt(a.totalCommission)}</span>
                     </div>
                     <div className="flex items-center gap-1.5">
+                      {dealLocked && <Lock size={13} className="text-white/30" title={`The ${fmtDay(d.pay_date)} pay run is locked`} />}
                       <button onClick={() => openEdit(d)}
                         className="p-2 rounded-lg text-white/40 hover:text-teal hover:bg-teal/10 transition-colors" title="Edit deal">
                         <Pencil size={14} />
                       </button>
-                      {canApprove && !isPaid && d.status !== APPROVED && (
+                      {canApprove && !dealLocked && !isPaid && d.status !== APPROVED && (
                         <button onClick={() => setStatus(d.id, APPROVED)}
                           className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-white/70 hover:text-white transition-colors"
                           style={{ border: '1px solid #3a3a3a' }}>
@@ -873,7 +893,7 @@ export default function Payroll() {
                       {canPay && (
                         isPaid ? (
                           <span className="flex items-center gap-1 text-[12px] font-semibold text-teal px-2"><CheckCircle2 size={14} /> Paid</span>
-                        ) : (
+                        ) : !dealLocked && (
                           <button onClick={() => setStatus(d.id, PAID)}
                             className="px-3 py-1.5 rounded-lg text-[11px] font-bold text-dark transition-colors" style={{ background: '#00b894' }}>
                             Mark paid
