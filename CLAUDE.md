@@ -161,7 +161,10 @@ setup + deploy steps.
   shown as the collapsible "Team change log" on Admin → Users, and the latest
   change stamps "since <date>" on roster rows); `030` adds
   `deals.override_exclusions` (jsonb `[{ item, amount }]` — subcontracted items
-  that earn no override; see the engine rules above). Do not re-run `001`/`002` against a populated database.
+  that earn no override; see the engine rules above); `031` adds
+  `deals.change_alert` (jsonb `{ prev_baseline, prev_job_price, baseline,
+  job_price, at }` — the sync's replacement for automatic change orders; see
+  the sync section). Do not re-run `001`/`002` against a populated database.
 
 ## User management (Admin page)
 
@@ -330,10 +333,11 @@ Settings checklist editor still exist but drive nothing.)
 review** (deals not yet vetted) and **All deals**. A deal graduates out of
 staging when its commission gets the gold check (`commission_verified` —
 `dealNeedsReview`, exported from `src/components/DealTable.jsx`). UNchecking a
-deal (manually, or via a change order clearing `commission_verified`) sends it
-back to staging — even a Paid deal — so the only state-based exclusions are
-Canceled and legacy (`sale_date` before `dataStartDate`). The Needs-review list
-is also scoped by the page's current filters/date range.
+deal sends it back to staging — even a Paid deal — and an undismissed
+`change_alert` (❗) also holds a deal in staging even while gold-checked, so
+the only state-based exclusions are Canceled and legacy (`sale_date` before
+`dataStartDate`). The Needs-review list is also scoped by the page's current
+filters/date range.
 
 **Payroll totals are finalized-only.** The pay-run headline (`Total payout`,
 Remaining, per-payee totals) counts only `Pay Finalized` + `Paid` deals
@@ -349,20 +353,24 @@ protected by name). The **Schedule** tab then layers on install date (+pay
 date), payment, office (detected by VALUE — Tucson/Phoenix/Mesa — since the
 column header is blank; office sets the 3.75%/5% dir+VP rate), and the real
 setter from Lead Source (names resolved leniently: "JC" → "JC Correa" via
-`schResolvePerson_`). A **change order** (baseline or sale price changed;
-matched by project_id with a deal-name fallback for re-signs under a new ID)
-updates the deal, sets status `Change Order`, and clears `checklist` +
-`commission_verified` + stored amounts so everything recomputes and re-verifies.
-**Change orders are driven by the SHEET changing, not by "stored differs."** The
-sync snapshots each deal's sheet financials (`synced_baseline`/`synced_job_price`,
-migration 023); a change order fires only when the sheet's newest numbers differ
-from that snapshot (a real new version of the sale) — it then takes the new
-numbers, un-gold-checks, and flags for review, **regardless of the gold check**.
-A manual in-app baseline/price edit (sheet unchanged) or a duplicate sheet row
-with the same numbers does NOT fire — your edits/verification stay put. The
-SCHEDULE pass (install/pay/payment/office/override %s/setter) is still locked by
-the gold check, so verified schedule edits stick until a change order re-opens
-the deal. (The PAID pass that advances Pay Finalized → Paid still runs.)
+`schResolvePerson_`). **Automatic change orders were RETIRED (migration 031)
+— the sync never rewrites an existing deal's financials.** When the sheet's
+baseline or sale price changes for an already-imported deal (matched by
+project_id with a deal-name fallback for re-signs under a new ID), the sync
+only stamps `deals.change_alert` = `{ prev_baseline, prev_job_price, baseline,
+job_price, at }` and advances the `synced_*` snapshot (migration 023) so each
+sheet version alerts exactly once. Nothing else changes: numbers, status, gold
+check, and stored amounts all stay put. The deal wears a clickable amber ❗
+next to its name (`ChangeAlertTag` in `DealTable.jsx`, both table + mobile
+card) showing old → new figures; admins apply the new numbers by hand if the
+re-sign is real, then **Dismiss** (sets `change_alert` null). An undismissed
+alert also holds the deal in the Needs-review tab (`dealNeedsReview`). The
+detection is still driven by the SHEET changing, not "stored differs" — a
+manual in-app edit or a duplicate sheet row with the same numbers does NOT
+fire. The SCHEDULE pass (install/pay/payment/office/override %s/setter) is
+still locked by the gold check. (The PAID pass that advances Pay Finalized →
+Paid still runs. The `Change Order` status label still exists in
+`app_settings` for manual use only.)
 **CANCELLED schedule rows are IGNORED** — the sync never cancels a deal;
 cancellation is manual in the site. The sync never overrides
 `Pay Finalized`/`Paid`/`Sales Issue`/`Canceled` with schedule info.
