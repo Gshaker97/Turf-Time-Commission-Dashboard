@@ -164,7 +164,12 @@ setup + deploy steps.
   that earn no override; see the engine rules above); `031` adds
   `deals.change_alert` (jsonb `{ prev_baseline, prev_job_price, baseline,
   job_price, at }` — the sync's replacement for automatic change orders; see
-  the sync section). Do not re-run `001`/`002` against a populated database.
+  the sync section); `032` lets trusted SERVICE contexts (`auth.uid() IS NULL`
+  — GoTrue's auto-link trigger, the service key, Studio SQL) through
+  `guard_profile_columns()` so login creation can actually stamp
+  `profiles.auth_id` (the old guard silently reverted it, leaving
+  half-created logins), and bulk-links any orphaned auth users by email. Do
+  not re-run `001`/`002` against a populated database.
 
 ## User management (Admin page)
 
@@ -253,7 +258,11 @@ company-wide revenue goal (separate `monthly_goals` table, admin-only).
 
 - `profiles_update_self` has a `WITH CHECK` plus a `guard_profile_columns()`
   trigger so non-admins cannot change `role`, `email`, `auth_id`, hierarchy,
-  `active`, or timestamps. Do not loosen this.
+  `active`, or timestamps. Do not loosen this for SIGNED-IN users. (Migration
+  032 deliberately bypasses the guard when `auth.uid() IS NULL` — GoTrue's
+  auto-link trigger, service-key calls, Studio SQL — because anon API traffic
+  can't reach a profiles UPDATE anyway and the guard was silently undoing
+  `auth_id` links on login creation.)
 - `deals_update` has a `WITH CHECK` so a rep cannot reassign a deal off
   themselves.
 

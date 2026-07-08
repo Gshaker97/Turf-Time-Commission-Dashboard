@@ -67,8 +67,12 @@ function doPost(e) {
   }
 }
 
-// Create the GoTrue auth login (auto-confirmed). The DB trigger auto-links it to
-// the profile by email. Refuses if a login already exists.
+// Create the GoTrue auth login (auto-confirmed), then link it to the profile
+// explicitly and VERIFY the link stuck (the DB trigger also links by email,
+// but belt-and-braces beats assuming). Self-healing: if the create fails
+// because an auth user with this email already exists (a half-created login
+// from an earlier attempt — GoTrue 500 "Database error creating new user"),
+// it ADOPTS that user instead: sets the requested password on it and links it.
 function uaCreateLogin_(url, key, target, password) {
   if (target.auth_id) return uaErr_(target.name + ' already has a login.');
   const pw = password || uaTempPassword_();
@@ -78,8 +82,57 @@ function uaCreateLogin_(url, key, target, password) {
     payload: JSON.stringify({ email: target.email, password: pw, email_confirm: true }),
     muteHttpExceptions: true,
   });
-  if (resp.getResponseCode() >= 300) return uaErr_('Create failed: ' + resp.getContentText().slice(0, 200));
+
+  let authUser = null;
+  if (resp.getResponseCode() < 300) {
+    authUser = JSON.parse(resp.getContentText());
+  } else {
+    const existing = uaFindAuthUser_(url, key, target.email);
+    if (!existing) return uaErr_('Create failed: ' + resp.getContentText().slice(0, 200));
+    const put = UrlFetchApp.fetch(url + '/auth/v1/admin/users/' + existing.id, {
+      method: 'put', contentType: 'application/json',
+      headers: { apikey: key, Authorization: 'Bearer ' + key },
+      payload: JSON.stringify({ password: pw, email_confirm: true, ban_duration: 'none' }),
+      muteHttpExceptions: true,
+    });
+    if (put.getResponseCode() >= 300) {
+      return uaErr_('A login for this email already exists but its password could not be set: ' + put.getContentText().slice(0, 200));
+    }
+    authUser = existing;
+  }
+
+  // Link the profile and confirm it actually stuck (migration 032 lets this
+  // service-key write through the profiles column guard).
+  UrlFetchApp.fetch(url + '/rest/v1/profiles?id=eq.' + target.id, {
+    method: 'patch', contentType: 'application/json',
+    headers: { apikey: key, Authorization: 'Bearer ' + key, Prefer: 'return=minimal' },
+    payload: JSON.stringify({ auth_id: authUser.id }),
+    muteHttpExceptions: true,
+  });
+  const check = uaGet_(url, key, '/rest/v1/profiles?select=auth_id&id=eq.' + target.id);
+  if (!check[0] || check[0].auth_id !== authUser.id) {
+    return uaErr_('The login exists but the profile would not link to it — run migration 032 (guard service bypass) and click Create login again.');
+  }
   return uaOk_({ created: true, email: target.email, password: pw });
+}
+
+// Find an existing GoTrue user by email via the admin list endpoint (the
+// roster is small, so paging through is fine).
+function uaFindAuthUser_(url, key, email) {
+  const want = String(email).trim().toLowerCase();
+  for (let page = 1; page <= 20; page++) {
+    const resp = UrlFetchApp.fetch(url + '/auth/v1/admin/users?page=' + page + '&per_page=100', {
+      method: 'get', headers: { apikey: key, Authorization: 'Bearer ' + key }, muteHttpExceptions: true,
+    });
+    if (resp.getResponseCode() >= 300) return null;
+    const body = JSON.parse(resp.getContentText());
+    const users = (body && body.users) || (Array.isArray(body) ? body : []);
+    if (!users.length) return null;
+    const hit = users.filter(function (u) { return String(u.email || '').toLowerCase() === want; })[0];
+    if (hit) return hit;
+    if (users.length < 100) return null;
+  }
+  return null;
 }
 
 function uaResetPassword_(url, key, target, password) {
