@@ -210,7 +210,7 @@ export default function UserModal({ user, allUsers = [], onSave, onClose }) {
                 </>
               ) : (
                 <p className="text-[11px] text-white/40">
-                  Set <code className="text-white/60">VITE_USER_ADMIN_URL</code> to manage passwords here, or use
+                  Set <code className="text-white/60">SUPABASE_SERVICE_KEY</code> on the site service to manage passwords here, or use
                   Supabase Studio → Authentication → Users.
                 </p>
               )}

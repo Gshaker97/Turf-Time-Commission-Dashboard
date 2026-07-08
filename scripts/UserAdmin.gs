@@ -1,4 +1,10 @@
 /**
+ * ⚠️ LEGACY — NO LONGER USED. The site now hosts this endpoint ITSELF
+ * (`server.js` → POST /api/user-admin on the frontend Railway service, with
+ * SUPABASE_SERVICE_KEY as a Railway variable), so user management works with
+ * no Apps Script dependency at all. This file is kept only as a reference.
+ * Do not deploy it; VITE_USER_ADMIN_URL is no longer read by the frontend.
+ *
  * Turf Time — User Admin endpoint (Apps Script web app)
  *
  * Lets the dashboard's Admin page create logins, reset passwords, and
