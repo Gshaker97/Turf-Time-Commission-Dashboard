@@ -286,7 +286,7 @@ export default function Admin() {
               <UserPlus size={11} /> {busyUser === u.id ? '…' : 'login'}
             </button>
           ) : (
-            <span className="text-[10px] text-white/20 hidden md:inline" title="No auth login — set VITE_USER_ADMIN_URL or use Studio">no login</span>
+            <span className="text-[10px] text-white/20 hidden md:inline" title="No auth login — use the create-login button or Studio">no login</span>
           )}
           <button onClick={() => toggleActive(u)} title={u.active === false ? 'Deactivated — click to reactivate' : 'Active — click to deactivate'}
             className="w-9 h-5 rounded-full flex items-center px-0.5 transition-colors flex-shrink-0"

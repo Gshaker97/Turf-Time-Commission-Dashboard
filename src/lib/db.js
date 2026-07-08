@@ -356,19 +356,17 @@ export async function logClientError({ message, stack }) {
 
 // ── Privileged user-admin actions (create login / reset password / enable
 // /disable login). These need the service-role key, so they go through the
-// Apps Script web app (VITE_USER_ADMIN_URL), authorized by the caller's own
-// Supabase session token — the endpoint verifies they're an admin. Returns
-// { ok, ... } or { ok:false, error }.
-const USER_ADMIN_URL = import.meta.env.VITE_USER_ADMIN_URL
-export function userAdminConfigured() { return !!USER_ADMIN_URL }
+// The site's OWN user-admin endpoint (/api/user-admin, hosted by server.js on
+// the same Railway service — no Apps Script in the critical path), authorized
+// by the caller's own Supabase session token; the server verifies they're an
+// admin and holds the service key. Returns { ok, ... } or { ok:false, error }.
+export function userAdminConfigured() { return !DEMO_MODE }
 export async function userAdmin(action, payload = {}) {
   if (DEMO_MODE) return { ok: false, error: 'Disabled in demo mode.' }
-  if (!USER_ADMIN_URL) return { ok: false, error: 'User-admin endpoint not configured (set VITE_USER_ADMIN_URL).' }
   const { data: { session } } = await supabase.auth.getSession()
   if (!session?.access_token) return { ok: false, error: 'Not signed in.' }
   try {
-    // text/plain keeps it a "simple" CORS request (no preflight) for Apps Script.
-    const resp = await fetch(USER_ADMIN_URL, {
+    const resp = await fetch('/api/user-admin', {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action, token: session.access_token, ...payload }),

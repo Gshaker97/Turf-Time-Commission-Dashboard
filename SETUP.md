@@ -120,10 +120,14 @@ WHERE lower(a.email) = lower(p.email)
 2. Select this repository and the branch you want to deploy (usually `main`)
 3. Railway detects `railway.json` and runs:
    - **Build:** `npm ci && npm run build`
-   - **Start:** `npm start` (which runs `serve -s dist -l $PORT`)
+   - **Start:** `npm start` (which runs `node server.js` — serves the built app
+     AND hosts the site's own `/api/user-admin` endpoint, so creating logins /
+     setting passwords from Admin → Users needs no external service)
 4. In the new service's **Variables** tab, add:
    - `VITE_SUPABASE_URL` → your Kong public URL from Step 2
    - `VITE_SUPABASE_ANON_KEY` → your `ANON_KEY` from Step 1
+   - `SUPABASE_SERVICE_KEY` → your `SERVICE_ROLE_KEY` from Step 1 (runtime-only,
+     read by `server.js` for user admin — it is never exposed to the browser)
 5. Go to **Settings** → **Networking** → **Generate Domain** to get a public frontend URL
 6. Trigger a redeploy so the env vars get baked into the Vite build (Vite reads env vars at build time, not runtime)
 7. Open the frontend URL and sign in with one of the accounts from Step 4 — you're live 🎉

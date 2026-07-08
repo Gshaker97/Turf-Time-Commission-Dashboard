@@ -12,12 +12,18 @@ see their teams.
 
 ## Stack
 
-- Frontend: Vite + React + Tailwind, React Router, Recharts.
+- Frontend: Vite + React + Tailwind, React Router, Recharts — served in
+  production by `server.js` (Express, `npm start`), which also hosts the
+  site's own `/api/user-admin` endpoint (service key via the
+  `SUPABASE_SERVICE_KEY` Railway variable).
 - Backend: self-hosted Supabase (Postgres + GoTrue + PostgREST) on Railway.
-- A Google Apps Script (`scripts/ScheduleSync.gs`, entry `schSync`, 1-min
-  trigger) imports deals from the ArcSite Jobs/Schedule spreadsheet.
-  `scripts/Backup.gs` does daily Drive backups. `scripts/Sync.gs` is legacy —
-  see the sync section below.
+- **The site is fully standalone** (per Keaton): the Apps Scripts only FEED
+  data in or watch from outside — never host site functionality. If they
+  vanished, everything still works minus the sheet import.
+  `scripts/ScheduleSync.gs` (entry `schSync`, 1-min trigger) imports deals
+  from the ArcSite Jobs/Schedule spreadsheet. `scripts/Backup.gs` does daily
+  Drive backups. `scripts/Sync.gs` and `scripts/UserAdmin.gs` are legacy —
+  see the sync and user-management sections below.
 
 ## Roles (hierarchy, low → high)
 
@@ -174,13 +180,18 @@ setup + deploy steps.
 ## User management (Admin page)
 
 - **Create login / reset password** for roster members happens on Admin → Users,
-  powered by `scripts/UserAdmin.gs` (an Apps Script web app holding the service
-  key). The frontend (`userAdmin()` in `db.js`) calls it with the admin's own
-  Supabase access token — the endpoint verifies the caller is an admin, so
-  there's NO secret in the browser. Set `VITE_USER_ADMIN_URL` to the web-app URL
-  to enable; unset = those buttons hide and you create logins in Studio.
-  Already-linked users are untouched. The Edit User modal also has a **Login
-  Password** field — an admin types a password of their choice and it's set via
+  served by the site's OWN `/api/user-admin` endpoint in `server.js` (the
+  Express server that also serves the SPA — no Apps Script involved). It needs
+  the `SUPABASE_SERVICE_KEY` variable on the frontend Railway service; the key
+  never reaches the browser. The frontend (`userAdmin()` in `db.js`) calls it
+  with the admin's own Supabase access token — the server verifies the caller
+  is an active admin before acting. `create_login` links `profiles.auth_id`
+  explicitly, VERIFIES the link stuck (migration 032's guard bypass makes that
+  possible), and self-heals half-created logins by adopting an existing auth
+  user with that email. (`scripts/UserAdmin.gs` was the old Apps Script
+  version — LEGACY, do not deploy; `VITE_USER_ADMIN_URL` is no longer read.)
+  The Edit User modal also has a **Login Password** field — an admin types a
+  password of their choice and it's set via
   `userAdmin('reset_password'|'create_login', { email, password })` (creates the
   login if none yet), so admins manage known passwords directly.
 - **Users tab layout:** a team-grouped roster (Leadership & Admin → one
@@ -208,7 +219,8 @@ setup + deploy steps.
 - **Deactivation:** the Active toggle flips `profiles.active`. A deactivated
   user is signed out and blocked at login (`AuthContext.fetchProfile` checks
   `active`), but **all their deals/stats stay and still count** — never filter
-  aggregates by `active`. When `VITE_USER_ADMIN_URL` is set, deactivating also
+  aggregates by `active`. When user admin is configured (SUPABASE_SERVICE_KEY
+  on the site service), deactivating also
   bans their auth login so a live token can't keep them in.
 
 ## Permissions model — who can SEE vs CHANGE
