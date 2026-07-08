@@ -1,5 +1,5 @@
 /**
- * Turf Time — Spreadsheet → Supabase sync (Jobs + Schedule, with change orders)
+ * Turf Time — Spreadsheet → Supabase sync (Jobs + Schedule, with change alerts)
  *
  * One trigger drives everything. Paste this file into the scheduler
  * spreadsheet's Apps Script project and run schSync() on a 1-minute timer.
@@ -9,10 +9,12 @@
  *        • Every APPROVED job becomes a deal as soon as it lands (status
  *          "Deal Review"), with the details it has (baseline, sale price, sale
  *          date, Sales Rep as setter+closer). Rhett & Ronnie are never imported.
- *        • Already imported? If the baseline or sale price changed (a change
- *          order / re-sign), the deal is updated to the new numbers, its status
- *          is set to "Change Order", and its checklist + commission sign-off are
- *          cleared so you re-verify. Unchanged jobs are left alone.
+ *        • Already imported? If the sheet's baseline or sale price changed (a
+ *          re-signed agreement), the deal itself is NOT touched — no new
+ *          numbers, no status change, no un-verifying. The sync stamps
+ *          deals.change_alert (migration 031) so the deal wears a clearable
+ *          ❗ flag on the Deals page for manual review. Unchanged jobs are
+ *          left alone.
  *        • Hand-entered deals are protected (matched by customer name).
  *   2) SCHEDULE tab — layers scheduling info onto the matching deal:
  *        • install_date (+ pay_date computed), payment method, office, and the
@@ -44,7 +46,6 @@ const SCH_VP              = 'keaton shaker';
 var SCH_EXCLUDE_REPS    = ['rhett', 'ronnie'];   // never import these reps
 var SCH_SKIP_NAME_CONTAINS = ['test', 'cute'];   // junk/test customers
 const SCH_NEW_STATUS      = 'Deal Review';      // status for a freshly imported deal
-const SCH_CHANGE_STATUS   = 'Change Order';     // a re-signed / changed deal
 // Statuses the sync never touches — finalized pay + manual triage. A deal you
 // mark Sales Issue / Canceled (or that's already paid) won't get schedule info
 // re-applied or its status changed by the sync.
@@ -160,7 +161,7 @@ function schSync() {
     }
   } catch (e) { /* payroll_locks table not created yet (migration 028) — skip quietly */ }
 
-  // ── JOBS PASS — create new deals & catch change orders ──
+  // ── JOBS PASS — create new deals & flag re-signed ones for review ──
   const jobsSheet = ss.getSheetByName(SCH_JOBS_TAB);
   if (jobsSheet) {
     const rows = jobsSheet.getDataRange().getDisplayValues();
@@ -205,7 +206,7 @@ function schSync() {
         const status = String(ix.status >= 0 ? row[ix.status] : '').trim().toUpperCase();
         // Require an exact APPROVED match (when a Status column exists) so a
         // blank/pending row — an unsigned design ArcSite parked on the sheet —
-        // can neither create a deal nor fire a change order.
+        // can neither create a deal nor flag a change for review.
         if (SCH_ONLY_STATUS && ix.status >= 0 && status !== SCH_ONLY_STATUS) { out.skipped++; continue; }
 
         // Stale duplicate (older re-sign row) — the newest row owns this deal.
@@ -223,23 +224,26 @@ function schSync() {
         const saleVal     = schMoney_(row[ix.sale]);
         // Match by Project ID; fall back to customer name so a re-sign that
         // lands under a NEW Project/Proposal ID is still recognized as the same
-        // deal (otherwise the change order is silently skipped).
+        // deal (otherwise the re-sign would be silently missed).
         const existing    = byProject[projectId] || dealByName[customer.toLowerCase()];
 
         if (existing) {
-          // A real CHANGE ORDER = the SHEET's numbers changed since we last
-          // synced this deal (synced_baseline/synced_job_price) — i.e. a new
-          // version of the sale. That fires regardless of the gold check, takes
-          // the new numbers, and UN-gold-checks for re-review. A manual in-app
-          // edit (sheet unchanged) or a duplicate row with the same numbers does
-          // NOT — your edits / verification stay put.
+          // The sheet's numbers changed since we last synced this deal
+          // (synced_baseline/synced_job_price) — a re-signed agreement / new
+          // version of the sale. The sync NO LONGER rewrites the deal for this
+          // (no new numbers, no status flip, no un-gold-checking). It stamps
+          // deals.change_alert (migration 031) with the old → new figures so
+          // the deal wears a clearable ❗ flag on the Deals page; an admin
+          // reviews it and either edits the deal by hand or dismisses it.
+          // A manual in-app edit (sheet unchanged) or a duplicate row with the
+          // same numbers still does nothing.
           const snapMissing  = existing.synced_baseline == null && existing.synced_job_price == null;
           const sheetChanged = !snapMissing &&
             (schChanged_(existing.synced_baseline, baselineVal) || schChanged_(existing.synced_job_price, saleVal));
 
           if (snapMissing) {
             // First time we've tracked this deal's sheet figures — adopt them
-            // silently as the comparison baseline (no change order, no unchecking).
+            // silently as the comparison baseline (no alert).
             if (!SCH_DRY_RUN) {
               try { schPatch_(url, key, '/rest/v1/deals?id=eq.' + existing.id, { synced_baseline: baselineVal, synced_job_price: saleVal });
                     Object.assign(existing, { synced_baseline: baselineVal, synced_job_price: saleVal }); }
@@ -248,19 +252,22 @@ function schSync() {
             continue;
           }
           if (sheetChanged) {
-            // Clear stored commission amounts so everything recomputes off the new
-            // baseline/price + override %s (overrides won't go stale).
-            const patch = { baseline_revenue: baselineVal, job_price: saleVal,
+            const patch = {
+              change_alert: {
+                prev_baseline: existing.synced_baseline, prev_job_price: existing.synced_job_price,
+                baseline: baselineVal, job_price: saleVal,
+                at: new Date().toISOString(),
+              },
+              // Advance the snapshot so this sheet version alerts ONCE — the
+              // flag stays (even across syncs) until an admin dismisses it.
               synced_baseline: baselineVal, synced_job_price: saleVal,
-              status: SCH_CHANGE_STATUS, commission_verified: false, checklist: [],
-              setter_amount: null, closer_amount: null, manager_amount: null, director_amount: null, vp_amount: null };
-            if (customer && existing.deal_name !== customer) patch.deal_name = customer;
+            };
             // Re-point project_id when the re-sign came in under a new ID, so
-            // future syncs match it directly.
+            // future syncs (and the Schedule pass) still match this deal.
             if (projectId && existing.project_id !== projectId) patch.project_id = projectId;
             if (SCH_DRY_RUN) {
               out.changed++;
-              out.details.push('WOULD CHANGE-ORDER — ' + customer + ' (base ' + existing.synced_baseline + '→' + baselineVal + ', sale ' + existing.synced_job_price + '→' + saleVal + ')');
+              out.details.push('WOULD FLAG for review — ' + customer + ' (base ' + existing.synced_baseline + '→' + baselineVal + ', sale ' + existing.synced_job_price + '→' + saleVal + ')');
             } else {
               try { schPatch_(url, key, '/rest/v1/deals?id=eq.' + existing.id, patch); Object.assign(existing, patch); out.changed++; }
               catch (e) { out.errors++; out.details.push(customer + ': ' + e.message); }
@@ -287,7 +294,7 @@ function schSync() {
           director_id: directorId, vp_id: vpId,
           baseline_revenue: baselineVal, job_price: saleVal, project_id: projectId,
           // Snapshot of the sheet figures, so a later sheet change is detected
-          // as a change order (vs. a manual edit).
+          // and flagged for review (vs. a manual edit, which is ignored).
           synced_baseline: baselineVal, synced_job_price: saleVal,
           // Rate-schedule defaults for the deal's sale date (office unknown at
           // sold-time → the era's default; the Schedule pass corrects
@@ -401,7 +408,7 @@ function schSync() {
   }
 
   Logger.log((SCH_DRY_RUN ? '[DRY RUN — nothing written] ' : '') +
-    'Sync — created ' + out.created + ', change-orders ' + out.changed + ', updated ' + out.updated +
+    'Sync — created ' + out.created + ', flagged ' + out.changed + ', updated ' + out.updated +
     ', paid ' + out.paid + ', skipped ' + out.skipped + ', errors ' + out.errors);
   if (out.details.length) Logger.log(out.details.join('\n'));
   schHeartbeat_(url, key, out);
@@ -691,7 +698,7 @@ function schDiagnose(name) {
       const changed = !snapMissing && (schChanged_(existing.synced_baseline, schMoney_(row[ix.baseline])) || schChanged_(existing.synced_job_price, schMoney_(row[ix.sale])));
       log(pfx + 'MATCHED AN EXISTING DEAL by ' + how + ' → deal "' + existing.deal_name + '" (status ' + existing.status + ', project ' + (existing.project_id || 'none') + '). '
         + (snapMissing ? 'No sheet snapshot yet — the sync adopts these numbers silently, no new deal.'
-           : changed ? 'Sheet numbers differ from the snapshot — the sync fires a CHANGE ORDER on that existing deal, no new deal.'
+           : changed ? 'Sheet numbers differ from the snapshot — the sync FLAGS that existing deal for review (❗ on the Deals page), no new deal and nothing on it changes.'
                      : 'Numbers match the snapshot — nothing to do, no new deal.')
         + ' If this is genuinely a DIFFERENT job for the same customer, rename one (e.g. "Juan Martinez 2") or give it a distinct Project ID.');
       continue;

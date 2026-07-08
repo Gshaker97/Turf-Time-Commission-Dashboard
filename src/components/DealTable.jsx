@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, Fragment } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, X, MessageSquare, BadgeCheck } from 'lucide-react'
+import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, X, MessageSquare, BadgeCheck, AlertCircle } from 'lucide-react'
 import { calcDealCommissions, fmt, fmtPct, isCanceled, officeOverrideRate, deductionBreakdown } from '../utils/commission'
 import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
@@ -20,8 +20,12 @@ export const DATE_FIELDS = [
 // Canceled deals are never in review. Legacy deals (sale_date before the
 // data-start cutoff) predate our atomized data and are intentionally left out
 // of staging — they're "it is what it is" until they reach payout.
+// A change alert (❗ — the sheet shows a re-signed agreement, migration 031)
+// also puts the deal in review, even if it's still gold-checked, until the
+// alert is dismissed.
 export const dealNeedsReview = (deal, dataStartDate) =>
-  !isCanceled(deal) && deal.commission_verified !== true &&
+  !isCanceled(deal) &&
+  (deal.commission_verified !== true || deal.change_alert != null) &&
   !(dataStartDate && deal.sale_date && deal.sale_date < dataStartDate)
 
 // Changing a deal's office anywhere re-applies the office-driven Director/VP
@@ -279,6 +283,50 @@ function DeductionTag({ amount, deal }) {
                 <span className="text-[12px] font-semibold text-red-400 whitespace-nowrap">−{fmt(x.amount)}</span>
               </div>
             ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// Amber ❗ on a deal whose sheet row shows a NEW signed agreement (the sync
+// flags it via deals.change_alert instead of rewriting anything — migration
+// 031). Click reveals the old → new figures; an admin dismisses it once the
+// deal has been reviewed (and hand-edited, if the re-sign is real).
+function ChangeAlertTag({ deal, canEdit, onUpdate }) {
+  const [open, setOpen] = useState(false)
+  const ca = deal.change_alert
+  if (!ca) return null
+  const money = (v) => (v == null || v === '' ? '—' : fmt(parseFloat(v) || 0))
+  return (
+    <div className="relative flex-shrink-0">
+      <button onClick={() => setOpen(o => !o)} title="New agreement on the sheet — click for details"
+        className="flex items-center hover:opacity-80 transition-opacity">
+        <AlertCircle size={14} style={{ color: '#f59e0b' }} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 z-50 mt-1 w-64 rounded-lg p-2.5 text-left shadow-xl"
+            style={{ background: '#2a2a2a', border: '1px solid #3a3a3a' }}>
+            <p className="text-[9px] font-bold uppercase tracking-wider mb-1" style={{ color: '#f59e0b' }}>
+              New agreement on the sheet{ca.at ? ` · ${new Date(ca.at).toLocaleDateString()}` : ''}
+            </p>
+            <div className="text-[12px] text-white/80 leading-snug space-y-0.5">
+              <p>Baseline {money(ca.prev_baseline)} → <b className="text-white">{money(ca.baseline)}</b></p>
+              <p>Sale price {money(ca.prev_job_price)} → <b className="text-white">{money(ca.job_price)}</b></p>
+            </div>
+            <p className="text-[10px] text-white/40 mt-1.5 leading-snug">
+              Nothing on the deal was changed — if this re-sign is real, update the numbers yourself, then dismiss.
+            </p>
+            {canEdit && (
+              <button onClick={() => { onUpdate?.(deal.id, { change_alert: null }); setOpen(false) }}
+                className="mt-2 w-full py-1.5 rounded-lg text-[11px] font-bold text-dark transition-opacity hover:opacity-90"
+                style={{ background: '#f59e0b' }}>
+                Dismiss — reviewed
+              </button>
+            )}
           </div>
         </>
       )}
@@ -607,6 +655,7 @@ function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onUpdate, status
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <button onClick={() => setShowNotes(s => !s)} className="text-[14px] font-semibold text-white truncate text-left">{deal.deal_name}</button>
+            <ChangeAlertTag deal={deal} canEdit={canEdit} onUpdate={onUpdate} />
             {(deal.notes || noteCount > 0) && (
               <span className="flex items-center gap-0.5 text-teal/70 flex-shrink-0">
                 <MessageSquare size={12} />
@@ -761,6 +810,7 @@ export default function DealTable({
                       className="text-[13px] font-semibold text-white truncate max-w-[210px] text-left hover:text-teal transition-colors">
                       {deal.deal_name}
                     </button>
+                    <ChangeAlertTag deal={deal} canEdit={canEdit} onUpdate={onUpdate} />
                     {(deal.notes || noteCounts[deal.id] > 0) && (
                       <span className="flex items-center gap-0.5 text-teal/70 flex-shrink-0">
                         <MessageSquare size={12} />
