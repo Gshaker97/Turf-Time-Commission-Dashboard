@@ -21,9 +21,10 @@ see their teams.
   data in or watch from outside — never host site functionality. If they
   vanished, everything still works minus the sheet import.
   `scripts/ScheduleSync.gs` (entry `schSync`, 1-min trigger) imports deals
-  from the ArcSite Jobs/Schedule spreadsheet. `scripts/Backup.gs` does daily
-  Drive backups. `scripts/Sync.gs` and `scripts/UserAdmin.gs` are legacy —
-  see the sync and user-management sections below.
+  from the ArcSite Jobs/Schedule spreadsheet. `scripts/Watchdog.gs` is an
+  hourly outside sentry. `scripts/Sync.gs` and `scripts/UserAdmin.gs` are
+  legacy — see the sync and user-management sections below. (The Drive backup
+  script was retired — DB backups are Railway volume snapshots, per SETUP.md.)
 
 ## Roles (hierarchy, low → high)
 
@@ -403,12 +404,13 @@ silently stops writing.
 `*_amount` fields that override the in-site math and would stomp manually
 corrected per-deal rates. All commission is computed in-site now.
 
-**`scripts/Backup.gs` (`backupNow`, daily trigger).** Dumps every table to a
-dated Google Sheet in the "Turf Time Backups" Drive folder, one tab per table,
-keeping the most recent 30.
+**Database backups are Railway volume snapshots** (Postgres service → Volume →
+Backups → daily schedule; restore from the same list — see SETUP.md). The old
+`scripts/Backup.gs` Drive export was retired; the Watchdog no longer checks a
+backup heartbeat.
 
 **`scripts/Watchdog.gs` (`watchdogRun`, hourly trigger).** A SITE/BACKEND
-sentry only: pings the site, checks sync/backup heartbeats (incl. the DRY_RUN
+sentry only: pings the site, checks the sync heartbeat (incl. the DRY_RUN
 trap), reports recent `client_errors` rows, and watches **permission/roster
 changes** — it snapshots every profile's role + `is_admin` + `active` (stored in
 the `WATCHDOG_PERMS` script property) and alerts (CRIT) when a role flips, admin
