@@ -497,7 +497,7 @@ function schFindOfficeCol_(headers, rows, paymentIx) {
 // Best-effort: a heartbeat failure must never break the sync itself.
 function schHeartbeat_(url, key, out) {
   try {
-    UrlFetchApp.fetch(url + '/rest/v1/app_settings?on_conflict=key', {
+    schFetch_(url + '/rest/v1/app_settings?on_conflict=key', {
       method: 'post', contentType: 'application/json',
       headers: { apikey: key, Authorization: 'Bearer ' + key, Prefer: 'resolution=merge-duplicates,return=minimal' },
       payload: JSON.stringify({ key: 'sync_heartbeat', value: {
@@ -604,17 +604,30 @@ function schPayDate_(iso) {
 }
 
 // ── SUPABASE HELPERS ────────────────────────────────────────
+// All HTTP goes through schFetch_, which retries transient network failures
+// ("Address unavailable", timeouts — Railway/Kong blips) with short backoff.
+// Without this, a one-second blip kills the whole run and Google emails a
+// failure digest, even though the next minute's run succeeds anyway.
+function schFetch_(fullUrl, options) {
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) Utilities.sleep(500 * attempt);   // 0.5s, then 1s
+    try { return UrlFetchApp.fetch(fullUrl, options); }
+    catch (e) { lastErr = e; }                     // network-level failure — retry
+  }
+  throw lastErr;
+}
 function schGet_(url, key, path) {
-  const resp = UrlFetchApp.fetch(url + path, { method: 'get', headers: { apikey: key, Authorization: 'Bearer ' + key }, muteHttpExceptions: true });
+  const resp = schFetch_(url + path, { method: 'get', headers: { apikey: key, Authorization: 'Bearer ' + key }, muteHttpExceptions: true });
   if (resp.getResponseCode() >= 300) throw new Error('GET ' + path + ' failed: ' + resp.getContentText());
   return JSON.parse(resp.getContentText());
 }
 function schPost_(url, key, path, payload) {
-  const resp = UrlFetchApp.fetch(url + path, { method: 'post', contentType: 'application/json', headers: { apikey: key, Authorization: 'Bearer ' + key, Prefer: 'return=minimal' }, payload: JSON.stringify(payload), muteHttpExceptions: true });
+  const resp = schFetch_(url + path, { method: 'post', contentType: 'application/json', headers: { apikey: key, Authorization: 'Bearer ' + key, Prefer: 'return=minimal' }, payload: JSON.stringify(payload), muteHttpExceptions: true });
   if (resp.getResponseCode() >= 300) throw new Error('Insert failed: ' + resp.getContentText());
 }
 function schPatch_(url, key, path, payload) {
-  const resp = UrlFetchApp.fetch(url + path, { method: 'patch', contentType: 'application/json', headers: { apikey: key, Authorization: 'Bearer ' + key, Prefer: 'return=minimal' }, payload: JSON.stringify(payload), muteHttpExceptions: true });
+  const resp = schFetch_(url + path, { method: 'patch', contentType: 'application/json', headers: { apikey: key, Authorization: 'Bearer ' + key, Prefer: 'return=minimal' }, payload: JSON.stringify(payload), muteHttpExceptions: true });
   if (resp.getResponseCode() >= 300) throw new Error('Patch failed: ' + resp.getContentText());
 }
 
