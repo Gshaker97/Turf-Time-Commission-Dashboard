@@ -57,7 +57,24 @@ const SCH_BASELINE_PROP   = 'SCHED_BASELINE_IDS';
 const SCH_DRY_RUN         = true;
 
 // ── ENTRY POINT (put this on the trigger) ───────────────────
+// Wrapped in a script lock: Apps Script will happily start a second schSync
+// while a slow one is still running, and two concurrent runs each fetch the
+// deal list BEFORE the other's inserts land — every new job on the sheet then
+// gets created once per overlapping run (real incident: Luis Gonzalez × 8).
+// If another run holds the lock, this run simply skips; the next minute
+// catches up. Migration 033's unique index on project_id is the DB-level
+// backstop for the same failure.
 function schSync() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(0)) { Logger.log('Another sync run is still going — skipped this tick.'); return { skipped: 'locked' }; }
+  try {
+    return schSyncLocked_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function schSyncLocked_() {
   const props = PropertiesService.getScriptProperties();
   const url = props.getProperty('SUPABASE_URL');
   const key = props.getProperty('SUPABASE_SERVICE_KEY');
@@ -66,7 +83,7 @@ function schSync() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
   // Roster by name → ids + override chain.
-  const profiles = schGet_(url, key, '/rest/v1/profiles?select=id,name,role,manager_id');
+  const profiles = schGetAll_(url, key, '/rest/v1/profiles?select=id,name,role,manager_id');
   const profById = {};
   profiles.forEach(function (p) { profById[p.id] = p; });
   const byName = {};
@@ -97,7 +114,7 @@ function schSync() {
 
   // Existing deals, keyed by project_id; plus the set of customer names (to
   // protect hand-entered deals from being duplicated).
-  const deals = schGet_(url, key,
+  const deals = schGetAll_(url, key,
     '/rest/v1/deals?select=id,project_id,deal_name,status,sale_date,baseline_revenue,job_price,install_date,pay_date,payment_method,office,setter_id,closer_id,manager_override_pct,director_override_pct,vp_override_pct,commission_verified,checklist,synced_baseline,synced_job_price');
   const byProject = {}, namesSeen = new Set(), dealByName = {};
   deals.forEach(d => {
@@ -622,6 +639,21 @@ function schGet_(url, key, path) {
   if (resp.getResponseCode() >= 300) throw new Error('GET ' + path + ' failed: ' + resp.getContentText());
   return JSON.parse(resp.getContentText());
 }
+// Fetch EVERY row, paging past PostgREST's max-rows cap. An un-paged GET is
+// silently truncated once the table outgrows the server cap — the sync then
+// can't see the newest deals and re-creates them every run. Pages until an
+// empty page so it's correct no matter what the server cap is.
+function schGetAll_(url, key, path) {
+  const sep = path.indexOf('?') >= 0 ? '&' : '?';
+  const rows = [];
+  for (let offset = 0; ; ) {
+    const page = schGet_(url, key, path + sep + 'order=id.asc&limit=1000&offset=' + offset);
+    for (let i = 0; i < page.length; i++) rows.push(page[i]);
+    if (!page.length) break;
+    offset += page.length;
+  }
+  return rows;
+}
 function schPost_(url, key, path, payload) {
   const resp = schFetch_(url + path, { method: 'post', contentType: 'application/json', headers: { apikey: key, Authorization: 'Bearer ' + key, Prefer: 'return=minimal' }, payload: JSON.stringify(payload), muteHttpExceptions: true });
   if (resp.getResponseCode() >= 300) throw new Error('Insert failed: ' + resp.getContentText());
@@ -655,10 +687,10 @@ function schDiagnose(name) {
     });
   } catch (e) { /* defaults */ }
 
-  const profiles = schGet_(url, key, '/rest/v1/profiles?select=id,name,role');
+  const profiles = schGetAll_(url, key, '/rest/v1/profiles?select=id,name,role');
   const byName = {};
   profiles.forEach(function (p) { if (p && p.name) byName[String(p.name).trim().toLowerCase()] = p; });
-  const deals = schGet_(url, key, '/rest/v1/deals?select=id,project_id,deal_name,status,synced_baseline,synced_job_price');
+  const deals = schGetAll_(url, key, '/rest/v1/deals?select=id,project_id,deal_name,status,synced_baseline,synced_job_price');
   const byProject = {}, dealByName = {};
   deals.forEach(function (d) {
     if (d.project_id) byProject[String(d.project_id)] = d;

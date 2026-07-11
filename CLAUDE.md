@@ -174,7 +174,12 @@ setup + deploy steps.
   — GoTrue's auto-link trigger, the service key, Studio SQL) through
   `guard_profile_columns()` so login creation can actually stamp
   `profiles.auth_id` (the old guard silently reverted it, leaving
-  half-created logins), and bulk-links any orphaned auth users by email. Do
+  half-created logins), and bulk-links any orphaned auth users by email;
+  `033` deletes sync-created clone deals (same project_id + name, keeping the
+  earliest; verified copies never deleted) and adds a partial UNIQUE index on
+  `deals.project_id` — the DB backstop against duplicate imports (the sync
+  itself now also takes a script lock and pages its deal fetch past
+  PostgREST's max-rows cap). Do
   not re-run `001`/`002` against a populated database.
 
 ## User management (Admin page)
