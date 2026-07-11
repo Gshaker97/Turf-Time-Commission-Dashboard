@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import { dealAmounts, fmt, activeDeals, deductionLabel } from '../utils/commission'
 import DealModal from '../components/DealModal'
+import { toast } from '../lib/toast'
 
 const todayISO = () => new Date().toISOString().slice(0, 10)
 const fmtDay   = (iso) => iso ? format(new Date(iso + 'T12:00:00'), 'EEE, MMM d, yyyy') : null
@@ -125,7 +126,7 @@ export default function Payroll() {
     const amt = parseFloat(adjAmt)
     if (!amt || view === 'overdue' || !view) { setAdjFor(''); return }
     const res = await addPayrollAdjustment({ payeeId, payDate: view, amount: amt, note: adjNote.trim() || null }, profile?.id)
-    if (res?.error) { alert('Could not save adjustment: ' + (res.error.message || 'unknown error')); return }
+    if (res?.error) { toast.error('Could not save adjustment: ' + (res.error.message || 'unknown error')); return }
     setAdjFor(''); setAdjAmt(''); setAdjNote('')
     reloadAdjustments()
   }
@@ -271,7 +272,7 @@ export default function Payroll() {
   const canPay     = isAdmin && !runLock && statusLabels?.includes(PAID)
   const openEdit   = (deal) => {
     if (!isAdmin) return
-    if (isRunLocked(deal.pay_date)) { alert('This deal is on a locked pay run — unlock the run first.'); return }
+    if (isRunLocked(deal.pay_date)) { toast.info('This deal is on a locked pay run — unlock the run first.'); return }
     setEditDeal(deal); setModal(true)
   }
   const viewLabel  = view === 'overdue' ? 'Overdue (unpaid)' : (fmtDay(view) || '—')
@@ -289,14 +290,14 @@ export default function Payroll() {
       deals: runDeals.length,
     }
     const res = await lockPayrollRun(view, snapshot, profile?.id)
-    if (res?.error) { alert('Could not lock the run: ' + (res.error.message || 'unknown error') + '\n(Has migration 028 been run?)'); return }
+    if (res?.error) { toast.error('Could not lock the run: ' + (res.error.message || 'unknown error') + '\n(Has migration 028 been run?)'); return }
     const { data } = await fetchPayrollLocks(); setLocks(data || [])
   }
   async function unlockRun() {
     if (!runLock) return
     if (!confirm(`Unlock the ${viewLabel} run? Its deals become editable again.`)) return
     const res = await unlockPayrollRun(runLock.pay_date)
-    if (res?.error) { alert('Could not unlock: ' + (res.error.message || 'unknown error')); return }
+    if (res?.error) { toast.error('Could not unlock: ' + (res.error.message || 'unknown error')); return }
     const { data } = await fetchPayrollLocks(); setLocks(data || [])
   }
 
@@ -332,7 +333,7 @@ export default function Payroll() {
   async function setStatus(id, status) {
     const deal = deals.find(d => d.id === id)
     if (deal && isRunLocked(deal.pay_date)) {
-      alert(`The ${fmtDay(deal.pay_date)} pay run is locked — unlock it first to change this deal.`)
+      toast.info(`The ${fmtDay(deal.pay_date)} pay run is locked — unlock it first to change this deal.`)
       return
     }
     setDeals(ds => ds.map(d => d.id === id ? { ...d, status } : d))   // optimistic
@@ -340,7 +341,7 @@ export default function Payroll() {
       const res = await updateDeal(id, { status })
       if (!res?.error) return
       if (attempt < 2) { await new Promise(r => setTimeout(r, 500 * (attempt + 1))); continue }
-      alert('Could not save the status change, so it was reverted:\n' + (res.error.message || 'network error'))
+      toast.error('Could not save the status change, so it was reverted:\n' + (res.error.message || 'network error'))
       load()
       return
     }
@@ -353,7 +354,7 @@ export default function Payroll() {
     const results = await Promise.all(ids.map(id => updateDeal(id, { status })))
     const failed = results.filter(r => r?.error)
     if (failed.length) {
-      alert(`${failed.length} of ${ids.length} deal${ids.length === 1 ? '' : 's'} could not be updated and were reverted:\n` +
+      toast.error(`${failed.length} of ${ids.length} deal${ids.length === 1 ? '' : 's'} could not be updated and were reverted:\n` +
             (failed[0].error.message || 'unknown error'))
       load()
     }
@@ -365,7 +366,7 @@ export default function Payroll() {
       setModal(false); setEditDeal(null)
       const res = await updateDeal(editDeal.id, data)
       if (res?.error) {
-        alert('Could not save this deal, so it was reverted:\n' + (res.error.message || 'unknown error'))
+        toast.error('Could not save this deal, so it was reverted:\n' + (res.error.message || 'unknown error'))
         load()
       }
     } else {

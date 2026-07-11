@@ -28,11 +28,13 @@
  *      old ScheduleSync). DISABLE the old ArcSiteImport `importJobs` trigger —
  *      this script now owns creation.
  *   2. Script Properties: SUPABASE_URL, SUPABASE_SERVICE_KEY (already set).
- *   3. Run schSync() once with SCH_DRY_RUN = true and read the Execution log.
+ *   3. Optional preview: set Script Property SCH_DRY_RUN = true, run schSync()
+ *      once, read the Execution log, then DELETE the property (absent = LIVE).
+ *      Re-pasting this file never changes the mode — it lives in properties.
  *      (Heads up: the first real run imports every job on the sheet that isn't
  *      already a deal. To only bring in jobs from now on, run schBaselineNow()
  *      once first.)
- *   4. Set SCH_DRY_RUN = false, then Triggers → schSync → time-driven → every minute.
+ *   4. Triggers → schSync → time-driven → every minute.
  */
 
 // ── CONFIG ──────────────────────────────────────────────────
@@ -53,8 +55,16 @@ const SCH_LOCKED_STATUSES = ['Pay Finalized', 'Paid', 'Sales Issue', 'Canceled']
 const SCH_FINALIZED_STATUS = 'Pay Finalized';  // auto-advances to Paid once its pay date arrives
 const SCH_PAID_STATUS      = 'Paid';
 const SCH_BASELINE_PROP   = 'SCHED_BASELINE_IDS';
-// SAFETY: true = preview only (logs what it WOULD do, writes nothing).
-const SCH_DRY_RUN         = true;
+// Version stamp — reported in the heartbeat and shown on Admin → System
+// Health, so a stale/botched paste is visible at a glance. Bump when editing.
+const SCH_VERSION         = '2026-07-11';
+// SAFETY: preview mode (logs what it WOULD do, writes nothing) now lives in
+// SCRIPT PROPERTIES, not code — so re-pasting this file can never silently
+// disable the sync again. To preview: Project Settings → Script Properties →
+// add SCH_DRY_RUN = true. Absent or anything-but-true = LIVE.
+const SCH_DRY_RUN = String(
+  PropertiesService.getScriptProperties().getProperty('SCH_DRY_RUN') || 'false'
+).trim().toLowerCase() === 'true';
 
 // ── ENTRY POINT (put this on the trigger) ───────────────────
 // Wrapped in a script lock: Apps Script will happily start a second schSync
@@ -98,7 +108,7 @@ function schSyncLocked_() {
   SCH_RATES = null; SCH_PAY_RULE = null;
   SCH_EXCLUDE_REPS = ['rhett', 'ronnie']; SCH_SKIP_NAME_CONTAINS = ['test', 'cute'];
   try {
-    const cfg = schGet_(url, key, '/rest/v1/app_settings?select=key,value&key=in.(override_rates,sync_excluded_reps,sync_skip_names,pay_date_rule)');
+    const cfg = schGet_(url, key, '/rest/v1/app_settings?select=key,value&key=in.(override_rates,sync_excluded_reps,sync_skip_names,pay_date_rule,offices)');
     cfg.forEach(function (row) {
       if (row.key === 'override_rates' && Array.isArray(row.value) && row.value.length) {
         SCH_RATES = row.value.slice().sort(function (a, b) { return String(a.effective || '').localeCompare(String(b.effective || '')); });
@@ -108,6 +118,10 @@ function schSyncLocked_() {
         SCH_SKIP_NAME_CONTAINS = row.value.map(function (s) { return String(s).trim().toLowerCase(); }).filter(Boolean);
       } else if (row.key === 'pay_date_rule' && row.value && Number(row.value.day) >= 1 && Number(row.value.day) <= 7) {
         SCH_PAY_RULE = { day: Number(row.value.day), weeks_after: Math.max(0, Number(row.value.weeks_after) || 0) };
+      } else if (row.key === 'offices' && Array.isArray(row.value) && row.value.length) {
+        // Office detection follows the admin-editable offices list (Admin →
+        // Settings) — opening a new office needs no script change.
+        SCH_KNOWN_OFFICES = row.value.map(function (s) { return String(s).trim().toLowerCase(); }).filter(Boolean);
       }
     });
   } catch (e) { /* settings rows not there yet — use built-in defaults */ }
@@ -127,7 +141,7 @@ function schSyncLocked_() {
   });
 
   const ignoreCreate = new Set((props.getProperty(SCH_BASELINE_PROP) || '').split(',').filter(Boolean));
-  const out = { created: 0, changed: 0, updated: 0, paid: 0, locked: 0, skipped: 0, errors: 0, details: [] };
+  const out = { created: 0, changed: 0, updated: 0, paid: 0, locked: 0, skipped: 0, errors: 0, details: [], sheetIssue: null };
 
   // ── PAID PASS — Pay Finalized → Paid once the pay date has arrived ──
   const todayISO = new Date().toISOString().slice(0, 10);
@@ -190,6 +204,18 @@ function schSyncLocked_() {
         baseline: c('Baseline Cost'), sale: c('Pre-Tax Sale'),
         project: c('Project ID'), proposal: c('Proposal ID'), status: c('Status'),
       };
+      // Sheet-format tripwire: if ArcSite renames/moves a column the sync
+      // would silently import nothing. Flag it loudly instead — the heartbeat
+      // carries sheet_issue to System Health and the Watchdog CRITs on it.
+      const missing = [];
+      if (ix.customer < 0) missing.push('Customer');
+      if (ix.baseline < 0) missing.push('Baseline Cost');
+      if (ix.sale     < 0) missing.push('Pre-Tax Sale');
+      if (ix.project  < 0 && ix.proposal < 0) missing.push('Project ID / Proposal ID');
+      if (missing.length) {
+        out.sheetIssue = 'Jobs tab is missing column(s): ' + missing.join(', ') + ' — imports are stopped until the sheet format is restored';
+        out.details.push(out.sheetIssue);
+      } else {
       // A re-signed job leaves its OLD row on the tab next to the new one, and
       // both stay APPROVED. If both rows drive the deal, they fight: the old
       // row keeps flagging "Change Order" with the old numbers every time you
@@ -328,6 +354,7 @@ function schSyncLocked_() {
           catch (e) { out.errors++; out.details.push(customer + ': ' + e.message); }
         }
       }
+      }   // end sheet-format tripwire else
     }
   }
 
@@ -344,6 +371,11 @@ function schSyncLocked_() {
         status: c('Status'), proposal: c('Proposal ID'), lead: c('Lead Source'),
         payment: c('Payment'), booked: c('Booked At'),
       };
+      if (ix.proposal < 0 || ix.install < 0) {
+        out.sheetIssue = (out.sheetIssue ? out.sheetIssue + ' · ' : '') +
+          'Schedule tab is missing column(s): ' + [ix.proposal < 0 ? 'Proposal ID' : null, ix.install < 0 ? 'Install Date' : null].filter(Boolean).join(', ');
+        out.details.push(out.sheetIssue);
+      }
       const officeIx = schFindOfficeCol_(h, rows, ix.payment);
 
       for (let r = 1; r < rows.length; r++) {
@@ -488,7 +520,7 @@ function schBuildJobsIndex_(ss) {
 //   3. Legacy fallback — the column right after "Payment".
 // If detection misses, office stays null and the Tucson 3.75% rate never gets
 // applied, leaving the deal at the 5% default — which is the bug this fixes.
-const SCH_KNOWN_OFFICES = ['tucson', 'phoenix', 'mesa'];
+var SCH_KNOWN_OFFICES = ['tucson', 'phoenix', 'mesa'];   // default; overridden per run from app_settings.offices
 function schFindOfficeCol_(headers, rows, paymentIx) {
   for (const name of ['Office', 'Location', 'Market', 'Branch', 'Region']) {
     const i = headers.indexOf(name);
@@ -518,9 +550,13 @@ function schHeartbeat_(url, key, out) {
       method: 'post', contentType: 'application/json',
       headers: { apikey: key, Authorization: 'Bearer ' + key, Prefer: 'resolution=merge-duplicates,return=minimal' },
       payload: JSON.stringify({ key: 'sync_heartbeat', value: {
-        at: new Date().toISOString(), dry_run: SCH_DRY_RUN,
+        at: new Date().toISOString(), dry_run: SCH_DRY_RUN, version: SCH_VERSION,
         created: out.created, changed: out.changed, updated: out.updated,
         paid: out.paid, errors: out.errors,
+        // WHY imports had problems — shown on Admin → System Health so bad
+        // imports surface in the site, not just the Apps Script log.
+        issues: (out.details || []).slice(0, 8),
+        sheet_issue: out.sheetIssue || null,
       } }),
       muteHttpExceptions: true,
     });

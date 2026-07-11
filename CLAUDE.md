@@ -400,9 +400,14 @@ Paid still runs. The `Change Order` status label still exists in
 **CANCELLED schedule rows are IGNORED** — the sync never cancels a deal;
 cancellation is manual in the site. The sync never overrides
 `Pay Finalized`/`Paid`/`Sales Issue`/`Canceled` with schedule info.
-⚠️ After pasting any script update into Apps Script, confirm
-`SCH_DRY_RUN = false` — a re-paste resets it to preview mode and the sync
-silently stops writing.
+Preview mode (`SCH_DRY_RUN`) now lives in SCRIPT PROPERTIES, not code —
+re-pasting the script can no longer silently disable the sync (absent
+property = LIVE; set the property to `true` only to preview). The sync also
+reports `version` (SCH_VERSION), an `issues` list (unmatched setters, failed
+writes), and `sheet_issue` (missing sheet columns — the format tripwire) in
+its heartbeat; System Health displays them and the Watchdog CRITs on sheet
+issues. Office detection follows the admin-editable `offices` settings list.
+schSync holds a script lock (no overlapping runs) and pages its deal fetch.
 
 **`scripts/Sync.gs` is LEGACY — never re-enable its trigger.** It writes stored
 `*_amount` fields that override the in-site math and would stomp manually
@@ -438,6 +443,17 @@ error/unhandledrejection handlers report crashes to `client_errors`
 
 - `npm install && npm run build` should pass with zero warnings (prebuild
   runs ESLint with `no-undef` as an error).
+- **The DealModal saves only CHANGED fields** (diff vs the deal it opened
+  with, `saveDeal` in DealModal.jsx) so a save can't stomp fields the sync or
+  an inline edit updated while the modal sat open; stored `*_amount` values
+  are cleared only when a money-relevant field changed. Every db.js UPDATE
+  goes through `requireRow` (zero-row writes = error, never silent success),
+  and reads on deals/users retry once through `readWithAuthRetry` after
+  refreshing an expired session (`tt-session-expired` → the red banner in
+  `Notices.jsx`). Use `toast.error/info/success` from `src/lib/toast.js` for
+  user-facing notices — never `alert()`.
+- `server.js` exposes `GET /api/health` (`{ ok, userAdmin, build }`) — the
+  Watchdog pings it hourly and warns if the user-admin key is missing.
 - Deals are created via the Deals page "+" modal only — the old New Deal page
   and the per-deal checklist were retired. Each deal's edit history (from
   migration 019) shows in the edit modal's collapsible "Edit history" panel.

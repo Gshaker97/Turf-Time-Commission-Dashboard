@@ -6,6 +6,7 @@ import {
   Home, Wallet, Trophy, Upload, ScanSearch,
 } from 'lucide-react'
 import NavBar from './NavBar'
+import Notices from './Notices'
 import ErrorBoundary from './ErrorBoundary'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -115,6 +116,7 @@ export default function Layout() {
             <ErrorBoundary key={pathname}>
               <Outlet />
             </ErrorBoundary>
+            <Notices />
           </Suspense>
         </main>
       </div>

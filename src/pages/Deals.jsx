@@ -10,6 +10,7 @@ import DealTable, { dealNeedsReview } from '../components/DealTable'
 import DealModal from '../components/DealModal'
 import { calcDealCommissions, dealAmounts, fmt, isCanceled } from '../utils/commission'
 import { getPresetRange } from '../utils/dateRanges'
+import { toast } from '../lib/toast'
 
 // Build + download a CSV from an array of rows (first row = header).
 function downloadCsv(name, rows) {
@@ -101,7 +102,7 @@ export default function Deals() {
       const res = await updateDeal(id, data)
       if (!res?.error) return
       if (attempt < 2) { await new Promise(r => setTimeout(r, 500 * (attempt + 1))); continue }
-      alert('Could not save that change, so it was reverted:\n' + (res.error.message || 'network error') +
+      toast.error('Could not save that change, so it was reverted:\n' + (res.error.message || 'network error') +
             '\n\nIf this keeps happening, reload the page (your session may have expired).')
       load(true)
       return
@@ -196,7 +197,7 @@ export default function Deals() {
       setDeals(ds => ds.map(d => d.id === editDeal.id ? { ...d, ...withJoins(data) } : d))
       setModal(false); setEditDeal(null)
       const res = await updateDeal(editDeal.id, data)
-      if (res?.error) alert('Could not save this deal: ' + (res.error.message || 'unknown error'))
+      if (res?.error) toast.error('Could not save this deal: ' + (res.error.message || 'unknown error'))
       load(true)
       return
     }
@@ -205,7 +206,7 @@ export default function Deals() {
     setDeals(ds => [{ ...withJoins(data), id: 'temp-' + Date.now(), created_at: new Date().toISOString() }, ...ds])
     setModal(false); setEditDeal(null)
     const res = await insertDeal(data, profile?.id)
-    if (res?.error) alert('Could not save this deal: ' + (res.error.message || 'unknown error'))
+    if (res?.error) toast.error('Could not save this deal: ' + (res.error.message || 'unknown error'))
     load(true)
   }
 
@@ -215,7 +216,7 @@ export default function Deals() {
     const res = await deleteDeal(id)
     const deletedCount = Array.isArray(res?.data) ? res.data.length : 1
     if (res?.error || deletedCount === 0) {
-      alert('Could not delete this deal — only an admin can delete deals. Sign in with the admin account to delete it, or have VP deletes enabled in the database.')
+      toast.error('Could not delete this deal — only an admin can delete deals. Sign in with the admin account to delete it, or have VP deletes enabled in the database.')
       load(true)                                   // bring the row back so the UI matches reality
     }
   }
