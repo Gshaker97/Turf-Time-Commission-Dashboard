@@ -63,9 +63,24 @@ async function writeWithSchemaFallback(run, payload) {
   return res
 }
 
+// Reads that bounce off an expired session refresh the token once and retry.
+// If the session is truly gone, broadcast it so the Layout shows a "session
+// expired — sign in again" banner instead of quietly-empty pages.
+async function readWithAuthRetry(run) {
+  let res = await run()
+  if (res?.error && /jwt|token|expired/i.test(res.error.message || '')) {
+    try { await supabase.auth.refreshSession() } catch { /* session gone */ }
+    res = await run()
+    if (res?.error && /jwt|token|expired/i.test(res.error.message || '')) {
+      try { window.dispatchEvent(new Event('tt-session-expired')) } catch { /* SSR/test */ }
+    }
+  }
+  return res
+}
+
 export async function fetchDeals() {
   if (DEMO_MODE) return { data: _deals, error: null }
-  return supabase.from('deals').select(DEAL_SELECT).order('sale_date', { ascending: false })
+  return readWithAuthRetry(() => supabase.from('deals').select(DEAL_SELECT).order('sale_date', { ascending: false }))
 }
 
 export async function insertDeal(data, profileId) {
@@ -126,10 +141,15 @@ export async function updateDeal(id, data) {
   // "success" with an empty array — without this check it looked saved in the
   // UI and silently reverted on the next reload. Turn it into a real error so
   // callers alert + resync instead of lying.
-  const res = await writeWithSchemaFallback(
+  return requireRow(await writeWithSchemaFallback(
     p => supabase.from('deals').update(p).eq('id', id).select('id'),
     { ...data }
-  )
+  ))
+}
+
+// Shared zero-row check for every UPDATE path (deals, profiles, competitions,
+// notes): a write that touched no rows must read as a failure, never a success.
+function requireRow(res) {
   if (!res?.error && Array.isArray(res?.data) && res.data.length === 0) {
     return { ...res, error: { message: 'The change did not reach the database (no row was updated). Your session may have expired — reload the page and sign in again.' } }
   }
@@ -172,10 +192,10 @@ export async function updateCompetition(id, data) {
     _competitions = _competitions.map(c => c.id === id ? { ...c, ...data } : c)
     return { error: null }
   }
-  return writeWithSchemaFallback(
-    p => supabase.from('competitions').update(p).eq('id', id),
+  return requireRow(await writeWithSchemaFallback(
+    p => supabase.from('competitions').update(p).eq('id', id).select('id'),
     { ...data }
-  )
+  ))
 }
 
 export async function deleteCompetition(id) {
@@ -228,7 +248,7 @@ export async function insertAuditOverrides(rows) {
 // ── Users / Profiles ──────────────────────────────────────────
 export async function fetchUsers() {
   if (DEMO_MODE) return { data: _users, error: null }
-  return supabase.from('profiles').select('*').order('name')
+  return readWithAuthRetry(() => supabase.from('profiles').select('*').order('name'))
 }
 
 export async function insertUser(data) {
@@ -283,7 +303,7 @@ export async function updateDealNote(id, body) {
     })
     return { error: null }
   }
-  return supabase.from('deal_notes').update({ body }).eq('id', id)
+  return requireRow(await supabase.from('deal_notes').update({ body }).eq('id', id).select('id'))
 }
 
 // Delete a note (RLS enforces admin-only).
@@ -383,7 +403,7 @@ export async function updateUser(id, data) {
     return { error: null }
   }
   const { password, ...rest } = data
-  return writeWithSchemaFallback(p => supabase.from('profiles').update(p).eq('id', id), rest)
+  return requireRow(await writeWithSchemaFallback(p => supabase.from('profiles').update(p).eq('id', id).select('id'), rest))
 }
 
 export async function deleteUser(id) {

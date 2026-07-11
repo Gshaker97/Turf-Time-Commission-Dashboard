@@ -4,6 +4,7 @@ import {
   fetchUsers, insertUser, updateUser, deleteUser,
   userAdmin, userAdminConfigured, fetchTeamChanges,
 } from '../lib/db'
+import { toast } from '../lib/toast'
 import UserModal from '../components/UserModal'
 import { headIdSet } from '../utils/team'
 import SettingsPanel from '../components/SettingsPanel'
@@ -55,14 +56,20 @@ function SystemHealth() {
   const wd = settings?.watchdog_heartbeat
 
   let sync
+  const syncVer = hb?.version ? ` · v${hb.version}` : ''
   if (!hb?.at) sync = { ok: false, color: '#6b7280', text: 'no heartbeat yet — paste the latest ScheduleSync.gs' }
   else {
     const mins = (Date.now() - new Date(hb.at).getTime()) / 60000
     if (hb.dry_run)      sync = { ok: false, color: '#f59e0b', text: `PREVIEW MODE — running but writing nothing (SCH_DRY_RUN=true) · ${agoText(hb.at)}` }
-    else if (mins > 10)  sync = { ok: false, color: '#ef4444', text: `stalled — last ran ${agoText(hb.at)}` }
-    else if (hb.errors > 0) sync = { ok: false, color: '#f59e0b', text: `ran ${agoText(hb.at)} with ${hb.errors} error${hb.errors === 1 ? '' : 's'} — check the Apps Script execution log` }
-    else sync = { ok: true, color: '#00b894', text: `ran ${agoText(hb.at)}` }
+    else if (mins > 10)  sync = { ok: false, color: '#ef4444', text: `stalled — last ran ${agoText(hb.at)}${syncVer}` }
+    else if (hb.sheet_issue) sync = { ok: false, color: '#ef4444', text: `SHEET FORMAT PROBLEM · ran ${agoText(hb.at)}${syncVer}` }
+    else if (hb.errors > 0) sync = { ok: false, color: '#f59e0b', text: `ran ${agoText(hb.at)} with ${hb.errors} error${hb.errors === 1 ? '' : 's'}${syncVer}` }
+    else sync = { ok: true, color: '#00b894', text: `ran ${agoText(hb.at)}${syncVer}` }
   }
+  // WHY the last run had problems (unmatched setters, failed writes, sheet
+  // format issues) — surfaced here so bad imports are visible in the site,
+  // not just the Apps Script execution log.
+  const syncIssues = [hb?.sheet_issue, ...(Array.isArray(hb?.issues) ? hb.issues : [])].filter(Boolean).slice(0, 8)
 
   let backup
   if (!bk?.at) backup = { ok: false, color: '#6b7280', text: 'no heartbeat yet — runs after the next nightly backup' }
@@ -80,6 +87,13 @@ function SystemHealth() {
         <span className="text-[10px] uppercase tracking-wider text-white/30 font-semibold">System health</span>
       </div>
       <HealthRow label="Scheduler sync" {...sync} />
+      {syncIssues.length > 0 && (
+        <div className="ml-[126px] -mt-0.5 pb-1 space-y-0.5">
+          {syncIssues.map((t, i) => (
+            <p key={i} className="text-[11px] text-amber-400/90">{t}</p>
+          ))}
+        </div>
+      )}
       <HealthRow label="Nightly backup" {...backup} />
       {(() => {
         let dog
@@ -146,9 +160,9 @@ export default function Admin() {
       }
     } else {
       const { error } = await insertUser(data)
-      if (error) { alert('Could not create profile: ' + error.message); return }
+      if (error) { toast.error('Could not create profile: ' + error.message); return }
       if (!DEMO_MODE) {
-        alert(
+        toast.info(
           'Profile created.\n\nTo enable their login, go to Supabase Studio → Authentication → Users → Add user, ' +
           'using the SAME email. The auto-link trigger connects the new auth user to this profile.'
         )
@@ -166,7 +180,7 @@ export default function Admin() {
   async function patchUser(id, patch) {
     setUsers(us => us.map(x => x.id === id ? { ...x, ...patch } : x))
     const res = await updateUser(id, patch)
-    if (res?.error) { alert('Could not update: ' + (res.error.message || '')); loadAll() }
+    if (res?.error) { toast.error('Could not update: ' + (res.error.message || '')); loadAll() }
   }
 
   const [busyUser, setBusyUser] = useState('')   // user id mid-action
@@ -178,7 +192,7 @@ export default function Admin() {
     setBusyUser(u.id)
     const r = await userAdmin('create_login', { email: u.email })
     setBusyUser('')
-    if (!r.ok) return alert('Could not create login: ' + (r.error || 'unknown error'))
+    if (!r.ok) return toast.error('Could not create login: ' + (r.error || 'unknown error'))
     loadAll()
     window.prompt(`Login created for ${u.name}. Copy their temporary password and share it securely:`, r.password || '')
   }
@@ -189,7 +203,7 @@ export default function Admin() {
     setBusyUser(u.id)
     const r = await userAdmin('reset_password', { email: u.email })
     setBusyUser('')
-    if (!r.ok) return alert('Could not reset password: ' + (r.error || 'unknown error'))
+    if (!r.ok) return toast.error('Could not reset password: ' + (r.error || 'unknown error'))
     window.prompt(`New temporary password for ${u.name} — copy and share securely:`, r.password || '')
   }
 
@@ -202,7 +216,7 @@ export default function Admin() {
     patchUser(u.id, { active: next })
     if (hasUserAdmin && u.auth_id) {
       const r = await userAdmin('set_active', { email: u.email, active: next })
-      if (!r.ok) alert('Profile updated, but the login toggle failed: ' + (r.error || '') + '\nThey may still be able to sign in until fixed.')
+      if (!r.ok) toast.error('Profile updated, but the login toggle failed: ' + (r.error || '') + '\nThey may still be able to sign in until fixed.')
     }
   }
 

@@ -153,6 +153,18 @@ async function handleUserAdmin(rawBody) {
 const app = express()
 app.use(express.text({ type: '*/*', limit: '16kb' }))
 
+// Health check — pinged hourly by the Watchdog. Reports whether the
+// user-admin key is configured and which build is running, so a broken deploy
+// or missing SUPABASE_SERVICE_KEY is caught within the hour.
+app.get('/api/health', (req, res) => {
+  res.json({
+    ok: true,
+    userAdmin: !!(SUPABASE_URL && SERVICE_KEY),
+    build: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) || null,
+    at: new Date().toISOString(),
+  })
+})
+
 app.post('/api/user-admin', async (req, res) => {
   try { res.json(await handleUserAdmin(req.body)) }
   catch (e) { res.json(err(e.message || 'Server error')) }

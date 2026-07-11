@@ -46,10 +46,21 @@ function watchdogRun() {
   const add = (sev, text) => issues.push({ sev: sev, text: text });
 
   // ── 1. Site up? ───────────────────────────────────────────
+  // Prefers the site's own /api/health (reports whether user admin is
+  // configured too); falls back to the homepage on older deploys.
   if (site) {
     try {
-      const r = UrlFetchApp.fetch(site, { muteHttpExceptions: true, followRedirects: true });
-      if (r.getResponseCode() >= 500) add('CRIT', 'Site returned HTTP ' + r.getResponseCode() + ' — frontend may be down');
+      const base = String(site).replace(/\/+$/, '');
+      const h = UrlFetchApp.fetch(base + '/api/health', { muteHttpExceptions: true, followRedirects: true });
+      if (h.getResponseCode() === 200) {
+        try {
+          const body = JSON.parse(h.getContentText());
+          if (body && body.userAdmin === false) add('WARN', 'Site is up but user admin is NOT configured (SUPABASE_SERVICE_KEY missing on the site service)');
+        } catch (e) { /* non-JSON — treat as up */ }
+      } else {
+        const r = UrlFetchApp.fetch(base, { muteHttpExceptions: true, followRedirects: true });
+        if (r.getResponseCode() >= 500) add('CRIT', 'Site returned HTTP ' + r.getResponseCode() + ' — frontend may be down');
+      }
     } catch (e) {
       add('CRIT', 'Site unreachable: ' + e.message);
     }
@@ -67,6 +78,7 @@ function watchdogRun() {
       const mins = (Date.now() - new Date(hb.at).getTime()) / 60000;
       if (hb.dry_run)     add('CRIT', 'Scheduler sync is in DRY_RUN (preview) mode — running but writing NOTHING');
       else if (mins > 15) add('CRIT', 'Scheduler sync stalled — last ran ' + Math.round(mins) + ' min ago');
+      else if (hb.sheet_issue) add('CRIT', 'Sheet format problem: ' + hb.sheet_issue);
       else if (hb.errors > 0) add('WARN', 'Scheduler sync logged ' + hb.errors + ' error(s) on its last run');
     }
 

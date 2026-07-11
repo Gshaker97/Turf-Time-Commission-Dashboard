@@ -6,6 +6,7 @@ import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
 import { fetchDealNotes, fetchDealNoteCounts, addDealNote, updateDealNote, deleteDealNote } from '../lib/db'
 import DateRangeFilter from './DateRangeFilter'
+import { toast } from '../lib/toast'
 
 // Date columns the Dates header can filter on.
 export const DATE_FIELDS = [
@@ -542,13 +543,13 @@ function NotesThread({ deal, profile, users, onCountChange }) {
     const body = editText.trim()
     if (!body) return
     const { error } = await updateDealNote(id, body)
-    if (error) { alert('Could not save edit: ' + (error.message || '')); return }
+    if (error) { toast.error('Could not save edit: ' + (error.message || '')); return }
     setEditId(null); setEditText(''); reload()
   }
   async function removeNote(id) {
     if (!confirm('Delete this comment? This cannot be undone.')) return
     const { error } = await deleteDealNote(id)
-    if (error) { alert('Could not delete: ' + (error.message || '')); return }
+    if (error) { toast.error('Could not delete: ' + (error.message || '')); return }
     reload()
   }
 
@@ -577,7 +578,7 @@ function NotesThread({ deal, profile, users, onCountChange }) {
       recipientIds,
     })
     setPosting(false)
-    if (error) { alert('Could not post: ' + (error.message || '')); return }
+    if (error) { toast.error('Could not post: ' + (error.message || '')); return }
     setDraft('')
     reload()
   }

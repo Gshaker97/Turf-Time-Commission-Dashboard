@@ -311,13 +311,25 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
     { key: 'bonus_vp',       label: 'VP',       role: 'vp',       id: !!form.vp_id,       gross: overrideGross.vp },
   ]
 
+  // Loose equality for the changed-fields diff: '' / null / undefined are the
+  // same "empty", numeric strings equal their numbers, objects compare by JSON.
+  const sameVal = (a, b) => {
+    const na = a === undefined || a === '' ? null : a
+    const nb = b === undefined || b === '' ? null : b
+    if (na === null || nb === null) return na === nb
+    if (typeof na === 'object' || typeof nb === 'object') return JSON.stringify(na) === JSON.stringify(nb)
+    const numish = (v) => typeof v === 'number' || /^-?\d*\.?\d+$/.test(String(v).trim())
+    if (numish(na) && numish(nb)) return parseFloat(na) === parseFloat(nb)
+    return String(na) === String(nb)
+  }
+
   async function handleSubmit(e) {
     e.preventDefault()
     if (duplicate && !window.confirm(`A deal named "${duplicate.deal_name}" already exists${duplicate.sale_date ? ` (sold ${duplicate.sale_date})` : ''}. Create this one anyway?`)) return
     setSaving(true)
     // bonus_mode is a UI-only toggle (not a column) — don't send it to the DB.
     const { bonus_mode: _bonusMode, ...formCols } = form
-    await onSave({
+    await saveDeal({
       ...formCols,
       baseline_revenue:      parseFloat(form.baseline_revenue) || 0,
       job_price:             parseFloat(form.job_price) || 0,
@@ -349,12 +361,36 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
       bonus_director:  bonus$.director > 0 ? bonus$.director : null,
       bonus_vp:        bonus$.vp       > 0 ? bonus$.vp       : null,
       bonus_recipient: bonusDollars > 0 ? form.bonus_recipient : null,
-      // Any edit recomputes from the current numbers — clear stored sheet amounts
-      // so the engine uses baseline/job + the splits/%s above, not stale values.
-      setter_amount: null, closer_amount: null,
-      manager_amount: null, director_amount: null, vp_amount: null,
     })
     setSaving(false)
+  }
+
+  // Saving an EDIT sends only the fields that actually changed. The modal used
+  // to write every field back, so a save could stomp anything the sync (or an
+  // inline edit) updated while the modal sat open — install dates and setters
+  // silently reverted to the values the modal opened with.
+  async function saveDeal(payload) {
+    if (!deal) {
+      // New deal — full payload, plus null stored amounts for completeness.
+      await onSave({ ...payload, setter_amount: null, closer_amount: null, manager_amount: null, director_amount: null, vp_amount: null })
+      return
+    }
+    const changed = {}
+    for (const k of Object.keys(payload)) {
+      if (!sameVal(payload[k], deal[k])) changed[k] = payload[k]
+    }
+    if (Object.keys(changed).length === 0) { onClose(); return }   // nothing to save
+    // Money inputs changed → clear stored sheet amounts so the engine
+    // recomputes from the new numbers (an unrelated edit — e.g. a date —
+    // leaves stored amounts alone).
+    const MONEY_KEYS = ['baseline_revenue', 'job_price', 'setter_id', 'closer_id', 'setter_split_pct',
+      'manager_id', 'director_id', 'vp_id', 'manager_override_pct', 'director_override_pct', 'vp_override_pct',
+      'deduction_amount', 'financed_amount', 'dealer_fee_pct', 'deduction_paid_by', 'deduction_split_pct',
+      'override_exclusions', 'bonus_company', 'bonus_manager', 'bonus_director', 'bonus_vp', 'bonus_recipient']
+    if (MONEY_KEYS.some(k => k in changed)) {
+      Object.assign(changed, { setter_amount: null, closer_amount: null, manager_amount: null, director_amount: null, vp_amount: null })
+    }
+    await onSave(changed)
   }
 
   // Override dropdowns list people by CURRENT role — but a deal keeps paying
