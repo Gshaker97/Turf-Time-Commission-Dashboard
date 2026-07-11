@@ -257,23 +257,39 @@ function RevenueCell({ baseline, jobPrice }) {
 // Red deduction amount that reveals its description on click.
 function DeductionTag({ amount, deal }) {
   const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState({ top: 0, left: 0 })
+  const btnRef = useRef(null)
   // Itemized: names the dealer fee (rate/financed/lender) and the manual
   // deduction's note, so it never reads as a bare unexplained "Deduction".
   const parts = deductionBreakdown(deal)
+  const WIDTH = 240, EST_H = 120
+  // Portal + fixed positioning so the table's scroll container can't clip it
+  // (same fix as ChangeAlertTag); flips above when there's no room below.
+  const openPopover = () => {
+    if (!open) {
+      const r = btnRef.current.getBoundingClientRect()
+      let left = Math.min(Math.max(8, r.right - WIDTH), window.innerWidth - WIDTH - 8)
+      let top = r.bottom + 4
+      if (top + EST_H > window.innerHeight - 8) top = Math.max(8, r.top - EST_H - 4)
+      setPos({ top, left })
+    }
+    setOpen(o => !o)
+  }
   return (
     <div className="relative">
       <button
-        onClick={() => setOpen(o => !o)}
+        ref={btnRef}
+        onClick={openPopover}
         className="text-[11px] font-bold text-red-400 hover:text-red-300 hover:underline"
         title="View deduction reason"
       >
         −{fmt(amount)}
       </button>
-      {open && (
+      {open && createPortal(
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 z-50 mt-1 w-60 rounded-lg p-2.5 text-left shadow-xl"
-            style={{ background: '#2a2a2a', border: '1px solid #3a3a3a' }}>
+          <div className="fixed inset-0 z-[59]" onClick={() => setOpen(false)} />
+          <div className="fixed z-[60] rounded-lg p-2.5 text-left shadow-2xl"
+            style={{ top: pos.top, left: pos.left, width: WIDTH, background: '#2a2a2a', border: '1px solid #3a3a3a' }}>
             <p className="text-[9px] font-bold uppercase tracking-wider text-red-400/80 mb-1">Deduction · {fmt(amount)}</p>
             {parts.length === 0 ? (
               <p className="text-[12px] text-white/80 leading-snug">No description provided.</p>
@@ -284,7 +300,8 @@ function DeductionTag({ amount, deal }) {
               </div>
             ))}
           </div>
-        </>
+        </>,
+        document.body
       )}
     </div>
   )
@@ -296,20 +313,36 @@ function DeductionTag({ amount, deal }) {
 // deal has been reviewed (and hand-edited, if the re-sign is real).
 function ChangeAlertTag({ deal, canEdit, onUpdate }) {
   const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState({ top: 0, left: 0 })
+  const btnRef = useRef(null)
   const ca = deal.change_alert
   if (!ca) return null
   const money = (v) => (v == null || v === '' ? '—' : fmt(parseFloat(v) || 0))
+  const WIDTH = 256, EST_H = 210
+  // The popover renders in a portal with fixed positioning — inside the row it
+  // gets clipped by the table's scroll container (the Dismiss button became
+  // unreachable on bottom rows). Flip above the icon when there's no room below.
+  const openPopover = () => {
+    if (!open) {
+      const r = btnRef.current.getBoundingClientRect()
+      let left = Math.min(Math.max(8, r.left), window.innerWidth - WIDTH - 8)
+      let top = r.bottom + 4
+      if (top + EST_H > window.innerHeight - 8) top = Math.max(8, r.top - EST_H - 4)
+      setPos({ top, left })
+    }
+    setOpen(o => !o)
+  }
   return (
     <div className="relative flex-shrink-0">
-      <button onClick={() => setOpen(o => !o)} title="New agreement on the sheet — click for details"
+      <button ref={btnRef} onClick={openPopover} title="New agreement on the sheet — click for details"
         className="flex items-center hover:opacity-80 transition-opacity">
         <AlertCircle size={14} style={{ color: '#f59e0b' }} />
       </button>
-      {open && (
+      {open && createPortal(
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 z-50 mt-1 w-64 rounded-lg p-2.5 text-left shadow-xl"
-            style={{ background: '#2a2a2a', border: '1px solid #3a3a3a' }}>
+          <div className="fixed inset-0 z-[59]" onClick={() => setOpen(false)} />
+          <div className="fixed z-[60] rounded-lg p-2.5 text-left shadow-2xl"
+            style={{ top: pos.top, left: pos.left, width: WIDTH, background: '#2a2a2a', border: '1px solid #3a3a3a' }}>
             <p className="text-[9px] font-bold uppercase tracking-wider mb-1" style={{ color: '#f59e0b' }}>
               New agreement on the sheet{ca.at ? ` · ${new Date(ca.at).toLocaleDateString()}` : ''}
             </p>
@@ -328,7 +361,8 @@ function ChangeAlertTag({ deal, canEdit, onUpdate }) {
               </button>
             )}
           </div>
-        </>
+        </>,
+        document.body
       )}
     </div>
   )
