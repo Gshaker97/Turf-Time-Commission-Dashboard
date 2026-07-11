@@ -17,13 +17,15 @@
 
 DELETE FROM deals d
 USING deals k
-WHERE d.project_id IS NOT NULL
+WHERE d.project_id IS NOT NULL AND d.project_id <> ''
   AND d.project_id = k.project_id
   AND d.deal_name  = k.deal_name
   AND d.id <> k.id
   AND d.commission_verified IS NOT TRUE
   AND (k.created_at, k.id) < (d.created_at, d.id);
 
--- Backstop: no two deals may share a project_id (NULLs excluded).
+-- Backstop: no two deals may share a project_id. NULL *and* empty-string ids
+-- are excluded — hand-entered deals have no ArcSite project and often carry
+-- '' rather than NULL; they must never collide with each other.
 CREATE UNIQUE INDEX IF NOT EXISTS deals_project_id_unique
-  ON deals (project_id) WHERE project_id IS NOT NULL;
+  ON deals (project_id) WHERE project_id IS NOT NULL AND project_id <> '';
