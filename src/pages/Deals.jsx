@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Plus, Download } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
@@ -139,28 +139,25 @@ export default function Deals() {
   }, [deals, profile, role, repFilter, search, statusFilter, officeFilter, paymentFilter, dateField, dateFrom, dateTo, sortKey, sortDir])
 
   // Staging workflow: VP/admin (who graduate deals) get a "Needs review" view —
-  // new/re-signed deals whose commission hasn't been gold-checked yet.
-  // Everyone else just sees the normal list.
+  // every deal that needs SOMETHING: unverified commission, an undismissed
+  // change alert (❗), or missing key fields (office/payment/people/dates).
+  // Deliberately computed from ALL deals, not the filtered view — the worklist
+  // ignores search/filters/date range so nothing needing attention can hide.
+  // The page always lands on All deals; review is an explicit toggle.
   const canStage = isAdmin || profile?.role === 'vp'
   const needsReview = useMemo(
-    () => canStage ? filtered.filter(d => dealNeedsReview(d, dataStartDate)) : [],
-    [filtered, canStage, dataStartDate]
+    () => canStage ? deals.filter(d => dealNeedsReview(d, dataStartDate)) : [],
+    [deals, canStage, dataStartDate]
   )
   const [reviewTab, setReviewTab] = useState('all')   // 'review' | 'all'
-  const didInitTab = useRef(false)
-  // On first load, greet VP/admin with the worklist if there's a backlog.
-  useEffect(() => {
-    if (didInitTab.current || loading || !canStage) return
-    didInitTab.current = true
-    if (needsReview.length) setReviewTab('review')
-  }, [loading, canStage, needsReview.length])
-  const shownDeals = canStage && reviewTab === 'review' ? needsReview : filtered
+  const onReview = canStage && reviewTab === 'review'
+  const shownDeals = onReview ? needsReview : filtered
 
   const kpis = useMemo(() => {
     let baseline = 0, totalComm = 0, totalJobPrice = 0, totalMarkupPct = 0
     // KPI totals exclude canceled jobs (they still appear in the table below so
     // they can be moved out of Canceled).
-    const counted = filtered.filter(d => !isCanceled(d))
+    const counted = shownDeals.filter(d => !isCanceled(d))
     for (const d of counted) {
       // Engine-derived so deductions and stored amounts are respected.
       const a = dealAmounts(d)
@@ -168,11 +165,11 @@ export default function Deals() {
       if (a.baseline > 0) totalMarkupPct += ((a.job - a.baseline) / a.baseline) * 100
     }
     const count = counted.length
-    const total = filtered.length                 // all deals in view, incl. canceled
+    const total = shownDeals.length               // all deals in view, incl. canceled
     const canceled = total - count
     const canceledPct = total ? (canceled / total) * 100 : 0
     return { baseline, totalComm, count, total, canceled, canceledPct, avgDeal: count ? totalJobPrice/count : 0, avgComm: count ? totalComm/count : 0, avgMarkupPct: count ? totalMarkupPct/count : 0 }
-  }, [filtered])
+  }, [shownDeals])
 
   function handleSort(key, dir) {
     if (dir) { setSortKey(key); setSortDir(dir); return }   // explicit (from header menu)
@@ -246,7 +243,7 @@ export default function Deals() {
 
   return (
     <div className="space-y-3 pb-32 md:pb-20">
-      <FilterBar
+      {!onReview && <FilterBar
         users={pickUsers}
         repFilter={repFilter}         setRepFilter={setRepFilter}
         search={search}               setSearch={setSearch}
@@ -257,7 +254,7 @@ export default function Deals() {
         dateFrom={dateFrom}           dateTo={dateTo}
         datePreset={datePreset}       setDateRange={setDateRange}
         recordCount={filtered.length}
-      />
+      />}
 
       {/* KPI row — 2-col on mobile */}
       <div className="grid grid-cols-2 gap-2 md:flex md:gap-3">
@@ -294,8 +291,8 @@ export default function Deals() {
           {reviewTab === 'review' && (
             <span className="text-[11px] text-white/40">
               {needsReview.length
-                ? 'Gold-check a deal’s commission to move it into All deals.'
-                : '🎉 Nothing to review — every deal\u2019s commission is verified.'}
+                ? 'Every deal needing anything — unverified, flagged ❗, or missing info. Search & filters don’t apply here.'
+                : '🎉 Nothing to review — every deal is verified and complete.'}
             </span>
           )}
         </div>
