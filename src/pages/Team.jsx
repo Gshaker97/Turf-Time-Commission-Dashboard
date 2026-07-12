@@ -487,9 +487,14 @@ export default function Team() {
     const daysInMonth  = new Date(now.getFullYear(),now.getMonth()+1,0).getDate()
     const dayOfMonth   = now.getDate()
     const repIds       = new Set(visibleReps.map(r=>r.id))
+    // Same scope rule as the KPI strip: admin/VP pace against COMPANY revenue
+    // (every deal — leadership's own sales included, matching the Dashboard);
+    // managers/directors pace their own scope, owner-attributed.
+    const scopeAll = isAdmin || role === 'vp'
     function monthTotal(mk) {
-      const uniq = [...new Map(deals.filter(d=>d.sale_date?.startsWith(mk)&&(repIds.has(d.setter_id)||repIds.has(d.closer_id))).map(d=>[d.id,d])).values()]
-      return uniq.reduce((s,d)=>s+(parseFloat(d.baseline_revenue)||0),0)
+      return deals
+        .filter(d => d.sale_date?.startsWith(mk) && (scopeAll || repIds.has(saleOwnerId(d))))
+        .reduce((s,d)=>s+(parseFloat(d.baseline_revenue)||0),0)
     }
     const mtdRevenue       = monthTotal(curKey)
     const trailing         = [1,2,3].map(i=>monthTotal(format(subMonths(now,i),'yyyy-MM')))
@@ -501,7 +506,7 @@ export default function Team() {
     const paceVsGoal       = expectedByNow>0?(mtdRevenue/expectedByNow)*100:0
     const pctOfGoal        = Math.min((mtdRevenue/goal)*100,100)
     return { mtdRevenue, projectedRevenue, goal, autoGoal, paceVsGoal, pctOfGoal, dayOfMonth, daysInMonth }
-  }, [deals, visibleReps, teamSavedGoal])
+  }, [deals, visibleReps, teamSavedGoal, isAdmin, role])
 
   const recentWins = useMemo(() => {
     const repIds = new Set(visibleReps.map(r=>r.id))
