@@ -354,34 +354,41 @@ export default function Team() {
     const curKey = format(now, 'yyyy-MM')
     const blankAct = { sgEst: 0, ldEst: 0, sgCl: 0, ldCl: 0, sgRate: null, ldRate: null, totEst: 0, totCl: 0, totRate: null }
     const rows = visibleReps.map(rep => {
-      const allRepDeals  = deals.filter(d => d.setter_id === rep.id || d.closer_id === rep.id)
-      const periodDeals  = allRepDeals.filter(d => {
+      // SALE attribution follows the company convention (same as the
+      // Dashboard): a deal belongs to its SETTER — full revenue + the deal
+      // count. A closed lead is NOT an extra sale for the closer; the closer
+      // is paid their split, which shows in COMMISSION below (computed over
+      // every deal the rep touches in any role).
+      const setterDeals   = deals.filter(d => d.setter_id === rep.id)
+      const involvedDeals = deals.filter(d => d.setter_id === rep.id || d.closer_id === rep.id)
+      const inPeriod = (d) => {
         if (dateFrom && (d.sale_date ?? '') < dateFrom) return false
         if (dateTo   && (d.sale_date ?? '') > dateTo)   return false
         return true
-      })
-      const revenue    = periodDeals.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
-      const commission = periodDeals.reduce((s, d) => s + getUserCommission(d, rep.id), 0)
+      }
+      const periodSales  = setterDeals.filter(inPeriod)
+      const revenue    = periodSales.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
+      const commission = involvedDeals.filter(inPeriod).reduce((s, d) => s + getUserCommission(d, rep.id), 0)
       const trailing   = [1,2,3].map(i => {
         const mk = format(subMonths(now, i), 'yyyy-MM')
-        return allRepDeals.filter(d => d.sale_date?.startsWith(mk)).reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
+        return setterDeals.filter(d => d.sale_date?.startsWith(mk)).reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
       })
       const goal           = (trailing.reduce((s,v) => s+v, 0)/3)*1.1 || 10000
-      const mtdRev         = allRepDeals.filter(d => d.sale_date?.startsWith(curKey)).reduce((s,d) => s+(parseFloat(d.baseline_revenue)||0),0)
-      const activePipeline = allRepDeals.filter(d => d.status !== 'Paid')
-      const sortedDates    = allRepDeals.map(d => d.sale_date).filter(Boolean).sort((a,b) => b.localeCompare(a))
+      const mtdRev         = setterDeals.filter(d => d.sale_date?.startsWith(curKey)).reduce((s,d) => s+(parseFloat(d.baseline_revenue)||0),0)
+      const activePipeline = setterDeals.filter(d => d.status !== 'Paid')
+      const sortedDates    = setterDeals.map(d => d.sale_date).filter(Boolean).sort((a,b) => b.localeCompare(a))
       const lastDate       = sortedDates[0] ?? null
       const daysSinceLast  = lastDate ? Math.max(0, Math.floor((now.getTime()-new Date(lastDate+'T12:00:00').getTime())/86400000)) : null
       let streak  = 0
       let weekPtr = startOfWeek(now, { weekStartsOn: 0 })
       const thisWs = format(weekPtr,'yyyy-MM-dd'), thisWe = format(endOfWeek(weekPtr,{weekStartsOn: 0}),'yyyy-MM-dd')
-      if (!allRepDeals.some(d => d.sale_date >= thisWs && d.sale_date <= thisWe)) weekPtr = addDays(weekPtr,-7)
+      if (!setterDeals.some(d => d.sale_date >= thisWs && d.sale_date <= thisWe)) weekPtr = addDays(weekPtr,-7)
       for (let i=0; i<52; i++) {
         const ws = format(weekPtr,'yyyy-MM-dd'), we = format(endOfWeek(weekPtr,{weekStartsOn: 0}),'yyyy-MM-dd')
-        if (!allRepDeals.some(d => d.sale_date >= ws && d.sale_date <= we)) break
+        if (!setterDeals.some(d => d.sale_date >= ws && d.sale_date <= we)) break
         streak++; weekPtr = addDays(weekPtr,-7)
       }
-      return { ...rep, deals: periodDeals.length, revenue, commission, mtdRev, autoGoal: goal, activePipeline, daysSinceLast, streak, ...(activityByRep[rep.id] || blankAct) }
+      return { ...rep, deals: periodSales.length, revenue, commission, mtdRev, autoGoal: goal, activePipeline, daysSinceLast, streak, ...(activityByRep[rep.id] || blankAct) }
     })
     rows.sort((a,b) => b.revenue-a.revenue)
     return rows.map((r,i) => ({...r, rank: i+1}))
@@ -401,14 +408,17 @@ export default function Team() {
       const teamMembers = users.filter(u => u.manager_id === mgr.id && !heads.has(u.id) && isSeller(u))
       const activeReps  = teamMembers.filter(u => u.active !== false)
       const repIds    = new Set([...teamMembers.map(r => r.id), mgr.id])  // include the manager's own sales
-      const teamDeals = deals.filter(d => {
-        const inPeriod = (!dateFrom||(d.sale_date??'')>=dateFrom)&&(!dateTo||(d.sale_date??'')<=dateTo)
-        return inPeriod && (repIds.has(d.setter_id)||repIds.has(d.closer_id))
-      })
+      const inPeriod  = (d) => (!dateFrom||(d.sale_date??'')>=dateFrom)&&(!dateTo||(d.sale_date??'')<=dateTo)
+      // Deal count + revenue attribute by SETTER (company convention — matches
+      // the Dashboard team breakdown): a lead closed by another team's closer
+      // is not this team's sale, so nothing double-counts across teams.
+      const teamDeals = deals.filter(d => inPeriod(d) && repIds.has(d.setter_id))
       const revenue    = teamDeals.reduce((s,d) => s+(parseFloat(d.baseline_revenue)||0), 0)
-      // Only what this team's members actually earn on these deals — not the
+      // Commission = what this team's members actually EARN, over every deal
+      // they touch in any role (incl. closing another team's lead) — not the
       // director/VP overrides or an outside setter/closer's share.
-      const commission = [...repIds].reduce((s, id) => s + getUserCommission(teamDeals, id), 0)
+      const earnDeals  = deals.filter(d => inPeriod(d) && (repIds.has(d.setter_id) || repIds.has(d.closer_id)))
+      const commission = [...repIds].reduce((s, id) => s + getUserCommission(earnDeals, id), 0)
       return { id: mgr.id, name: mgr.name, reps: activeReps.length, deals: teamDeals.length, revenue, commission, revenuePerRep: activeReps.length>0?revenue/activeReps.length:0, isMyTeam: mgr.id===profile.id }
     }).sort((a,b) => b.revenue-a.revenue)
   }, [users, deals, dateFrom, dateTo, role, profile, isAdmin])
