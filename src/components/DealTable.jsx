@@ -24,9 +24,24 @@ export const DATE_FIELDS = [
 // A change alert (❗ — the sheet shows a re-signed agreement, migration 031)
 // also puts the deal in review, even if it's still gold-checked, until the
 // alert is dismissed.
+// Missing key fields hold a deal in review too (even gold-checked): a deal
+// without an office pays the wrong override rate, without a pay date it never
+// reaches payroll, etc. — "needs review" = "needs SOMETHING".
+export const dealMissingInfo = (deal) => {
+  const missing = []
+  if (!deal.office)          missing.push('office')
+  if (!deal.payment_method)  missing.push('payment')
+  if (!deal.setter_id)       missing.push('setter')
+  if (!deal.closer_id)       missing.push('closer')
+  if (!deal.install_date)    missing.push('install date')
+  if (!deal.pay_date)        missing.push('pay date')
+  if (!(parseFloat(deal.baseline_revenue) > 0)) missing.push('baseline')
+  if (!(parseFloat(deal.job_price) > 0))        missing.push('sale price')
+  return missing
+}
 export const dealNeedsReview = (deal, dataStartDate) =>
   !isCanceled(deal) &&
-  (deal.commission_verified !== true || deal.change_alert != null) &&
+  (deal.commission_verified !== true || deal.change_alert != null || dealMissingInfo(deal).length > 0) &&
   !(dataStartDate && deal.sale_date && deal.sale_date < dataStartDate)
 
 // Changing a deal's office anywhere re-applies the office-driven Director/VP
