@@ -272,7 +272,10 @@ export default function Payroll() {
   const canPay     = isAdmin && !runLock && statusLabels?.includes(PAID)
   const openEdit   = (deal) => {
     if (!isAdmin) return
-    if (isRunLocked(deal.pay_date)) { toast.info('This deal is on a locked pay run — unlock the run first.'); return }
+    // Only the locked run's PAYOUT is frozen (finalized/paid deals — matches
+    // migration 034's trigger). A pending / Sales Issue deal parked on a
+    // locked date stays editable so e.g. its install date can be corrected.
+    if (isRunLocked(deal.pay_date) && isFinalized(deal)) { toast.info('This deal is part of a locked pay run — unlock the run first.'); return }
     setEditDeal(deal); setModal(true)
   }
   const viewLabel  = view === 'overdue' ? 'Overdue (unpaid)' : (fmtDay(view) || '—')
@@ -332,8 +335,10 @@ export default function Payroll() {
 
   async function setStatus(id, status) {
     const deal = deals.find(d => d.id === id)
+    // Advancing status makes the deal part of the run's payout (or edits an
+    // already-locked payout) — both are frozen while the run is locked.
     if (deal && isRunLocked(deal.pay_date)) {
-      toast.info(`The ${fmtDay(deal.pay_date)} pay run is locked — unlock it first to change this deal.`)
+      toast.info(`The ${fmtDay(deal.pay_date)} pay run is locked — unlock it first to finalize or pay this deal.`)
       return
     }
     setDeals(ds => ds.map(d => d.id === id ? { ...d, status } : d))   // optimistic
