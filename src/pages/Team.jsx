@@ -464,16 +464,22 @@ export default function Team() {
   }, [users, deals])
 
   const kpis = useMemo(() => {
+    const inPeriod = (d) => (!dateFrom||(d.sale_date??'')>=dateFrom)&&(!dateTo||(d.sale_date??'')<=dateTo)
     const repIds = new Set(visibleReps.map(r=>r.id))
-    const periodDeals = [...new Map(deals.filter(d => {
-      const inPeriod=(!dateFrom||(d.sale_date??'')>=dateFrom)&&(!dateTo||(d.sale_date??'')<=dateTo)
-      return inPeriod&&(repIds.has(d.setter_id)||repIds.has(d.closer_id))
-    }).map(d=>[d.id,d])).values()]
-    // Sum what the visible reps personally earn — not every role on the deal
-    // (which would lump in director/VP overrides and outsiders' shares).
-    const commission = [...repIds].reduce((s, id) => s + getUserCommission(periodDeals, id), 0)
-    return { reps: repStats.length, deals: repStats.reduce((s,r)=>s+r.deals,0), revenue: repStats.reduce((s,r)=>s+r.revenue,0), commission }
-  }, [repStats, visibleReps, deals, dateFrom, dateTo])
+    // Deals + revenue: admin/VP see COMPANY totals (every deal, exactly like
+    // the Dashboard — leadership's own sales and no-rep deals included, which
+    // the rep-card sum silently dropped). Managers/directors see their scope,
+    // attributed by sale owner.
+    const scopeAll = isAdmin || role === 'vp'
+    const periodSales = deals.filter(d => inPeriod(d) && (scopeAll || repIds.has(saleOwnerId(d))))
+    // Commission: what the visible reps personally earn on any deal they touch
+    // — not every role on the deal (that would lump in director/VP overrides
+    // and outsiders' shares).
+    const involved = deals.filter(d => inPeriod(d) && (repIds.has(d.setter_id) || repIds.has(d.closer_id)))
+    const commission = [...repIds].reduce((s, id) => s + getUserCommission(involved, id), 0)
+    return { reps: repStats.length, deals: periodSales.length,
+             revenue: periodSales.reduce((s,d)=>s+(parseFloat(d.baseline_revenue)||0),0), commission }
+  }, [repStats, visibleReps, deals, dateFrom, dateTo, isAdmin, role])
 
   const paceData = useMemo(() => {
     const now          = new Date()
@@ -560,6 +566,23 @@ export default function Team() {
   }, [visibleReps, users, profile])
 
   const topPerformer   = displayReps[0]   // ghost reps already excluded for non-admins
+  // MVP = most revenue CLOSED in the period — self-gens AND leads count; what
+  // matters is who got the deal signed. (Top Self Gen above stays owner/
+  // setter-attributed.) Includes leadership closers; ghosts hidden from
+  // non-admins like everywhere else.
+  const topCloser = useMemo(() => {
+    const inPeriod = (d) => (!dateFrom||(d.sale_date??'')>=dateFrom)&&(!dateTo||(d.sale_date??'')<=dateTo)
+    const map = {}
+    for (const d of deals) {
+      if (!inPeriod(d)) continue
+      const cid = d.closer_id || d.setter_id
+      if (!cid || hideGhost(cid)) continue
+      if (!map[cid]) map[cid] = { id: cid, name: users.find(u => u.id === cid)?.name ?? '—', deals: 0, revenue: 0 }
+      map[cid].deals   += 1
+      map[cid].revenue += parseFloat(d.baseline_revenue) || 0
+    }
+    return Object.values(map).sort((a, b) => b.revenue - a.revenue)[0] ?? null
+  }, [deals, users, dateFrom, dateTo, isAdmin])
   // Coach notes + weekly stats are admin-only edits. Goals are a carve-out:
   // reps set their own personal goal, managers set their team's goals + their
   // own team goal (handled per-card via canEditGoal and the team-goal pencil).
@@ -674,8 +697,8 @@ export default function Team() {
           </div>
         </div>
 
-        {/* MVP */}
-        {topPerformer && (
+        {/* MVP (most revenue CLOSED — self-gens + leads) */}
+        {topCloser && (
           <div className="md:w-56 rounded-xl px-4 py-4 flex items-center gap-3"
             style={{ background: 'linear-gradient(135deg,#fbbf2410,#242424 60%)', border: '1px solid #fbbf2430' }}>
             <div className="w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0"
@@ -684,6 +707,21 @@ export default function Team() {
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-[9px] font-bold uppercase tracking-widest" style={{color:'#fbbf24'}}>MVP · {presetLabel(activePreset)}</p>
+              <p className="text-[14px] font-bold text-white truncate">{topCloser.name}</p>
+              <p className="text-[11px] text-white/50">{topCloser.deals} closed · {fmt(topCloser.revenue)}</p>
+            </div>
+          </div>
+        )}
+        {/* Top Self Gen (owner/setter-attributed — their own generated sales) */}
+        {topPerformer && (
+          <div className="md:w-56 rounded-xl px-4 py-4 flex items-center gap-3"
+            style={{ background: 'linear-gradient(135deg,#2dd4bf10,#242424 60%)', border: '1px solid #2dd4bf30' }}>
+            <div className="w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0"
+              style={{ background: '#2dd4bf20', border: '2px solid #2dd4bf' }}>
+              <Target size={20} className="text-teal"/>
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[9px] font-bold uppercase tracking-widest text-teal">Top Self Gen · {presetLabel(activePreset)}</p>
               <p className="text-[14px] font-bold text-white truncate">{topPerformer.name}</p>
               <p className="text-[11px] text-white/50">{topPerformer.deals} deals · {fmt(topPerformer.revenue)}</p>
             </div>
