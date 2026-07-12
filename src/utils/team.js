@@ -30,3 +30,10 @@ export function teamKeyFor(u, heads) {
   if (u.manager_id && heads.has(u.manager_id)) return u.manager_id
   return 'unassigned'
 }
+
+// Who a SALE belongs to for deal counts / revenue attribution — the setter
+// (company convention: setter gets full revenue credit), falling back to the
+// closer when no setter was recorded. Without the fallback, a deal missing
+// its setter silently vanishes from every leaderboard / team breakdown while
+// still counting in the company totals — the Dashboard-vs-Team mismatch.
+export const saleOwnerId = (d) => d.setter_id || d.closer_id || null
