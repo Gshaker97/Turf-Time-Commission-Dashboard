@@ -5,7 +5,7 @@ import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserCommission, fmt, activeDeals, isCanceled } from '../utils/commission'
 import { getPresetRange, presetLabel, weeksInRange, weekStartOf } from '../utils/dateRanges'
-import { headIdSet, teamKeyFor } from '../utils/team'
+import { headIdSet, teamKeyFor, saleOwnerId } from '../utils/team'
 import DateRangeFilter from '../components/DateRangeFilter'
 import WeeklyStats from '../components/WeeklyStats'
 import { useSettings } from '../contexts/SettingsContext'
@@ -359,7 +359,7 @@ export default function Team() {
       // count. A closed lead is NOT an extra sale for the closer; the closer
       // is paid their split, which shows in COMMISSION below (computed over
       // every deal the rep touches in any role).
-      const setterDeals   = deals.filter(d => d.setter_id === rep.id)
+      const setterDeals   = deals.filter(d => saleOwnerId(d) === rep.id)
       const involvedDeals = deals.filter(d => d.setter_id === rep.id || d.closer_id === rep.id)
       const inPeriod = (d) => {
         if (dateFrom && (d.sale_date ?? '') < dateFrom) return false
@@ -401,7 +401,7 @@ export default function Team() {
     // another team (reports to a lead, no directs) is a MEMBER there, not a
     // team of their own.
     const heads = headIdSet(users)
-    return users.filter(u => heads.has(u.id) && (isAdmin || !u.ghost)).map(mgr => {
+    const rows = users.filter(u => heads.has(u.id) && (isAdmin || !u.ghost)).map(mgr => {
       // ALL members (incl. deactivated) feed the money — an inactive rep's
       // sales still count toward the team. But the "X reps" headcount and
       // rev/rep only reflect ACTIVE members.
@@ -412,7 +412,7 @@ export default function Team() {
       // Deal count + revenue attribute by SETTER (company convention — matches
       // the Dashboard team breakdown): a lead closed by another team's closer
       // is not this team's sale, so nothing double-counts across teams.
-      const teamDeals = deals.filter(d => inPeriod(d) && repIds.has(d.setter_id))
+      const teamDeals = deals.filter(d => inPeriod(d) && repIds.has(saleOwnerId(d)))
       const revenue    = teamDeals.reduce((s,d) => s+(parseFloat(d.baseline_revenue)||0), 0)
       // Commission = what this team's members actually EARN, over every deal
       // they touch in any role (incl. closing another team's lead) — not the
@@ -421,6 +421,25 @@ export default function Team() {
       const commission = [...repIds].reduce((s, id) => s + getUserCommission(earnDeals, id), 0)
       return { id: mgr.id, name: mgr.name, reps: activeReps.length, deals: teamDeals.length, revenue, commission, revenuePerRep: activeReps.length>0?revenue/activeReps.length:0, isMyTeam: mgr.id===profile.id }
     }).sort((a,b) => b.revenue-a.revenue)
+    // Sales owned by nobody on a head's team (unassigned rep, leadership
+    // selling directly, or no setter/closer at all) — explicit bucket so the
+    // team cards sum to the Dashboard's company totals.
+    {
+      const assigned = new Set()
+      users.filter(u => heads.has(u.id)).forEach(mgr => {
+        assigned.add(mgr.id)
+        users.filter(u => u.manager_id === mgr.id).forEach(u => assigned.add(u.id))
+      })
+      const inPeriod = (d) => (!dateFrom||(d.sale_date??'')>=dateFrom)&&(!dateTo||(d.sale_date??'')<=dateTo)
+      const strays = deals.filter(d => inPeriod(d) && !assigned.has(saleOwnerId(d)))
+      if (strays.length) {
+        const revenue = strays.reduce((s,d) => s+(parseFloat(d.baseline_revenue)||0), 0)
+        const owners  = [...new Set(strays.map(saleOwnerId).filter(Boolean))]
+        const commission = owners.reduce((s, id) => s + getUserCommission(strays, id), 0)
+        rows.push({ id: 'unassigned', name: 'Unassigned', reps: 0, deals: strays.length, revenue, commission, revenuePerRep: 0, isMyTeam: false })
+      }
+    }
+    return rows
   }, [users, deals, dateFrom, dateTo, role, profile, isAdmin])
 
   const maxRevenue = teamStats.reduce((m,t) => Math.max(m,t.revenue), 0)

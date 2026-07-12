@@ -7,7 +7,7 @@ import { Check, X, TrendingUp, TrendingDown, Minus, ChevronUp, ChevronDown, Chev
 import { useAuth } from '../contexts/AuthContext'
 import { fetchDeals, fetchUsers, fetchGoal, saveGoal as saveGoalDb, deleteGoal as deleteGoalDb } from '../lib/db'
 import { fmt, dealAmounts, activeDeals } from '../utils/commission'
-import { headIdSet } from '../utils/team'
+import { headIdSet, saleOwnerId } from '../utils/team'
 import { getPresetRange, getPreviousRange } from '../utils/dateRanges'
 import DateRangeFilter from '../components/DateRangeFilter'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
@@ -123,7 +123,7 @@ export default function Dashboard() {
     if (!teamFilter) return rows
     // A manager's team = their reps + the manager's own sales.
     const repIds = new Set([...users.filter(u => u.manager_id === teamFilter).map(u => u.id), teamFilter])
-    return rows.filter(d => repIds.has(d.setter_id))
+    return rows.filter(d => repIds.has(saleOwnerId(d)))
   }
 
   const filtered = useMemo(() => {
@@ -165,7 +165,7 @@ export default function Dashboard() {
       let rows = deals.filter(d => d.sale_date?.startsWith(mk))
       if (teamFilter) {
         const repIds = new Set([...users.filter(u => u.manager_id === teamFilter).map(u => u.id), teamFilter])
-        rows = rows.filter(d => repIds.has(d.setter_id))
+        rows = rows.filter(d => repIds.has(saleOwnerId(d)))
       }
       return rows.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
     }
@@ -200,18 +200,18 @@ export default function Dashboard() {
     // (reports to another lead, no directs) is a member, not their own team.
     const heads = headIdSet(users)
     const mgrs = teamFilter ? users.filter(u => u.id === teamFilter) : users.filter(u => heads.has(u.id))
-    return mgrs.map(mgr => {
+    const rows = mgrs.map(mgr => {
       // ALL members (incl. deactivated) feed the team's money — an inactive
       // rep's sales still count. But the drill-down rows and the headcount
       // only show ACTIVE members (an inactive person isn't on the team).
       const members = [mgr, ...users.filter(u => u.manager_id === mgr.id)]
       const repIds  = new Set(members.map(m => m.id))   // include the manager's own sales
-      const mDeals  = filtered.filter(d => repIds.has(d.setter_id))
+      const mDeals  = filtered.filter(d => repIds.has(saleOwnerId(d)))
       const revenue = mDeals.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
-      const prevRev = prevFiltered.filter(d => repIds.has(d.setter_id)).reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
-      // Per-member breakdown (setter-based; active members only).
+      const prevRev = prevFiltered.filter(d => repIds.has(saleOwnerId(d))).reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
+      // Per-member breakdown (sale-owner-based; active members only).
       const reps = members.filter(m => m.active !== false).map(m => {
-        const md = filtered.filter(d => d.setter_id === m.id)
+        const md = filtered.filter(d => saleOwnerId(d) === m.id)
         return {
           id: m.id, name: m.name, ghost: m.ghost === true, isManager: m.id === mgr.id,
           deals: md.length,
@@ -221,6 +221,31 @@ export default function Dashboard() {
       const repCount = members.filter(m => m.id !== mgr.id && m.active !== false).length
       return { id: mgr.id, name: mgr.name, ghost: mgr.ghost === true, repCount, deals: mDeals.length, revenue, prevRev, reps, pct: (revenue / companyTotalRev) * 100 }
     }).sort((a, b) => b.revenue - a.revenue)
+    // Deals owned by nobody on a head's team (an unassigned rep, leadership
+    // selling directly, or no setter/closer at all) get an explicit bucket so
+    // the breakdown always sums to the company totals above.
+    if (!teamFilter) {
+      const assigned = new Set()
+      users.filter(u => heads.has(u.id)).forEach(mgr => {
+        assigned.add(mgr.id)
+        users.filter(u => u.manager_id === mgr.id).forEach(u => assigned.add(u.id))
+      })
+      const strays = filtered.filter(d => !assigned.has(saleOwnerId(d)))
+      if (strays.length) {
+        const byOwner = {}
+        for (const d of strays) {
+          const oid = saleOwnerId(d) || 'none'
+          if (!byOwner[oid]) byOwner[oid] = { id: oid, name: users.find(u => u.id === oid)?.name ?? 'No rep assigned', ghost: false, isManager: false, deals: 0, revenue: 0 }
+          byOwner[oid].deals += 1
+          byOwner[oid].revenue += parseFloat(d.baseline_revenue) || 0
+        }
+        const revenue = strays.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
+        const prevRev = prevFiltered.filter(d => !assigned.has(saleOwnerId(d))).reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
+        rows.push({ id: 'unassigned', name: 'Unassigned', ghost: false, repCount: 0, deals: strays.length, revenue, prevRev,
+          reps: Object.values(byOwner).sort((a, b) => b.revenue - a.revenue), pct: (revenue / companyTotalRev) * 100 })
+      }
+    }
+    return rows
   }, [users, filtered, prevFiltered, companyTotalRev, teamFilter])
 
   const repData = useMemo(() => {
@@ -235,17 +260,18 @@ export default function Dashboard() {
       return map[id]
     }
     for (const deal of filtered) {
-      const sid = deal.setter_id
+      // Deals + revenue credit the sale owner — the SETTER, falling back to
+      // the closer when no setter was recorded (so no deal vanishes from the
+      // leaderboard while still counting in the totals).
+      const sid = saleOwnerId(deal)
       const cid = deal.closer_id
       const bl  = parseFloat(deal.baseline_revenue) || 0
       const a   = dealAmounts(deal)
-      // Deals + revenue credit the SETTER — the rep who generated the deal.
-      // (Solo deals: setter is also the closer, still credited here.)
       if (sid) {
         const s = ensure(sid)
         s.deals      += 1
         s.revenue    += bl
-        s.commission += a.setter
+        s.commission += deal.setter_id ? a.setter : a.closer
       }
       // Leads + lead revenue credit the CLOSER when they aren't the setter —
       // they closed someone else's lead, and earn their closer share.
