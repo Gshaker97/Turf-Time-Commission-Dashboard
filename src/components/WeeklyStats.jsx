@@ -110,14 +110,19 @@ export default function WeeklyStats({ deals = [], reps = [], users = [], canEdit
       groups[mid].rows.push(rowFor(rep))
     }
     const sum = (rows, k) => rows.reduce((s, r) => s + r[k], 0)
+    // STABLE ordering (alphabetical, Unassigned last) — never by the numbers.
+    // Sorting by close rate made names and whole teams jump around mid-typing
+    // as each estimate keystroke re-ranked the list.
     const list = Object.values(groups).map(g => {
-      g.rows.sort((a, b) => (b.totRate ?? -1) - (a.totRate ?? -1) || b.totCl - a.totCl)
+      g.rows.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
       const sgEst = sum(g.rows, 'sgEst'), sgCl = sum(g.rows, 'sgCl')
       const ldEst = sum(g.rows, 'ldEst'), ldCl = sum(g.rows, 'ldCl')
       return { ...g, sgEst, sgCl, sgRate: rate(sgCl, sgEst), ldEst, ldCl, ldRate: rate(ldCl, ldEst),
         totEst: sgEst + ldEst, totCl: sgCl + ldCl, totRate: rate(sgCl + ldCl, sgEst + ldEst) }
     })
-    list.sort((a, b) => (b.totRate ?? -1) - (a.totRate ?? -1) || b.totCl - a.totCl)
+    list.sort((a, b) =>
+      (a.id === 'unassigned') - (b.id === 'unassigned') ||
+      (a.name || '').localeCompare(b.name || ''))
     return list
   }, [reps, users, weeks, sgEstMap, ldEstMap, sgClosed, ldClosed])
 
