@@ -179,7 +179,12 @@ setup + deploy steps.
   earliest; verified copies never deleted) and adds a partial UNIQUE index on
   `deals.project_id` — the DB backstop against duplicate imports (the sync
   itself now also takes a script lock and pages its deal fetch past
-  PostgREST's max-rows cap). Do
+  PostgREST's max-rows cap); `034` scopes the pay-run lock to the PAYOUT: the
+  `guard_locked_payroll()` trigger freezes only finalized/paid deals (and all
+  adjustments) on a locked date, lets a non-finalized deal parked on a locked
+  date be edited (e.g. a pulled Sales Issue deal whose install date changed),
+  and still rejects any change that would FINALIZE a deal onto a locked run.
+  Payroll's `openEdit` mirrors this (blocks only `isFinalized` deals). Do
   not re-run `001`/`002` against a populated database.
 
 ## User management (Admin page)
