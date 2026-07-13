@@ -44,17 +44,32 @@ function Card({ label, value, color = '#fff', sub }) {
 }
 
 // Per-deal payout breakdown — who earns what on a single deal.
-function dealPayouts(d) {
+function dealPayouts(d, userById = null) {
   const a = dealAmounts(d)
   const out = []
+  // People resolve by ID from the roster first (the embedded join objects are
+  // missing on some rows even when the id is set — real bug: whole payees
+  // vanished from the run), joined object as fallback.
+  const resolve = (joined, id) => {
+    if (id && userById?.[id]) return userById[id]
+    if (joined && joined.id) return joined
+    return id ? { id, name: '(unknown)' } : null
+  }
   // NEGATIVE takes flow through too (a below-baseline deal docks the rep) —
   // dropping them would overstate the payee's total vs the run's Total payout.
-  const push = (person, role, amount) => { if (person && person.id && amount !== 0) out.push({ id: person.id, name: person.name, role, amount }) }
-  push(d.setter, 'Setter', a.setter)
-  if (d.closer_id !== d.setter_id) push(d.closer, 'Closer', a.closer)
-  push(d.manager, 'Manager', a.manager)
-  push(d.director, 'Director', a.director)
-  push(d.vp, 'VP', a.vp)
+  // A share with truly NO person assigned still shows — as an amber
+  // "Unassigned" line — instead of silently vanishing while the money stays
+  // in the deal's Total commission (those deals also sit in Needs review).
+  const push = (person, role, amount) => {
+    if (amount === 0) return
+    if (person && person.id) out.push({ id: person.id, name: person.name, role, amount })
+    else out.push({ id: null, name: 'Unassigned', role, amount, unassigned: true })
+  }
+  push(resolve(d.setter, d.setter_id), 'Setter', a.setter)
+  if (d.closer_id !== d.setter_id) push(resolve(d.closer, d.closer_id), 'Closer', a.closer)
+  push(resolve(d.manager, d.manager_id), 'Manager', a.manager)
+  push(resolve(d.director, d.director_id), 'Director', a.director)
+  push(resolve(d.vp, d.vp_id), 'VP', a.vp)
   return out
 }
 
@@ -171,6 +186,15 @@ export default function Payroll() {
     [runDeals]
   )
 
+  const userById = useMemo(() => Object.fromEntries(users.map(u => [u.id, u])), [users])
+
+  // Deals on this run with commission owed to NOBODY (missing setter/closer) —
+  // that money would fall out of every payee's statement. Flag before payout.
+  const unassignedDeals = useMemo(
+    () => runDeals.filter(d => dealPayouts(d, userById).some(p => p.unassigned)),
+    [runDeals, userById]
+  )
+
   const payees = useMemo(() => {
     const m = {}
     const ensure = (id, name) => (m[id] ||= { id, name, total: 0, lines: [], dealIds: new Set(), adjustments: [] })
@@ -194,11 +218,11 @@ export default function Payroll() {
     for (const d of runDeals) {
       if (!isFinalized(d)) continue   // only finalized deals are being paid out
       const a = dealAmounts(d)
-      add(d.setter, 'Setter', a.setter, d, a)
-      if (d.closer_id !== d.setter_id) add(d.closer, 'Closer', a.closer, d, a)
-      add(d.manager, 'Manager', a.manager, d, a)
-      add(d.director, 'Director', a.director, d, a)
-      add(d.vp, 'VP', a.vp, d, a)
+      // Same id-based person resolution as the deal cards (joins can be
+      // missing even when the ids are set); unassigned shares carry no payee.
+      for (const p of dealPayouts(d, userById)) {
+        if (!p.unassigned) add(p, p.role, p.amount, d, a)
+      }
     }
     // Manual adjustments for this run — folded into each payee's total (a payee
     // can exist on adjustments alone, e.g. a clawback after their deal was paid).
@@ -307,13 +331,13 @@ export default function Payroll() {
   // Optional filter: scope the run to a single payee/rep. Auto-clears if that
   // person isn't in the current run.
   const effFilter = repFilter && payees.some(p => p.id === repFilter) ? repFilter : ''
-  const shownDeals  = effFilter ? runDeals.filter(d => dealPayouts(d).some(p => p.id === effFilter)) : runDeals
+  const shownDeals  = effFilter ? runDeals.filter(d => dealPayouts(d, userById).some(p => p.id === effFilter)) : runDeals
   const shownPayees = effFilter ? payees.filter(p => p.id === effFilter) : payees
   const summary = (() => {
     let total = 0, paid = 0, paidCount = 0, pending = 0, pendingCount = 0, finalizedCount = 0
     for (const d of shownDeals) {
       const amt = effFilter
-        ? dealPayouts(d).filter(p => p.id === effFilter).reduce((s, p) => s + p.amount, 0)
+        ? dealPayouts(d, userById).filter(p => p.id === effFilter).reduce((s, p) => s + p.amount, 0)
         : dealAmounts(d).totalCommission
       if (isFinalized(d)) {
         total += amt; finalizedCount++
@@ -388,7 +412,7 @@ export default function Payroll() {
     for (const d of shownDeals) {
       if (!isFinalized(d)) continue
       const a = dealAmounts(d)
-      let payouts = dealPayouts(d)
+      let payouts = dealPayouts(d, userById)
       if (repFilterId) payouts = payouts.filter(p => p.id === repFilterId)   // rep-scoped export
       if (!payouts.length) continue
       rows.push([d.deal_name || '—', a.baseline.toFixed(2), '', '', '', '', d.office || ''])
@@ -598,6 +622,31 @@ export default function Payroll() {
             <p className="text-[11px] text-white/40 mb-3 -mt-1">
               + {fmt(summary.pending)} across {summary.pendingCount} deal{summary.pendingCount === 1 ? '' : 's'} not yet finalized — excluded from the total until they reach “{APPROVED}”.
             </p>
+          )}
+
+          {/* Unassigned-commission warning — a share of the pool has no person
+              to pay. Assign the setter/closer before this run pays out. */}
+          {unassignedDeals.length > 0 && (
+            <div className="mb-3 rounded-xl p-3" style={{ background: '#f59e0b14', border: '1px solid #f59e0b55' }}>
+              <div className="flex items-center gap-2 mb-1">
+                <AlertTriangle size={14} style={{ color: '#f59e0b' }} />
+                <span className="text-[12px] font-semibold" style={{ color: '#f59e0b' }}>
+                  {unassignedDeals.length} deal{unassignedDeals.length === 1 ? '' : 's'} on this run {unassignedDeals.length === 1 ? 'has' : 'have'} commission with NO rep assigned
+                </span>
+              </div>
+              <p className="text-[11px] text-white/40 mb-2">
+                The setter/closer share exists but there is nobody to pay it to — it will not appear on any pay statement. Click a deal and assign the missing person.
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {unassignedDeals.map(d => (
+                  <button key={d.id} onClick={() => openEdit(d)}
+                    className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-white/80 hover:text-white transition-colors"
+                    style={{ background: '#1e1e1e', border: '1px solid #f59e0b40' }}>
+                    {d.deal_name}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
 
           {/* Missing-office warning — these deals likely have the wrong override
@@ -837,7 +886,7 @@ export default function Payroll() {
               const color = statusColor(d.status)
               const isPaid = d.status === PAID
               const dealLocked = isRunLocked(d.pay_date)
-              const payouts = dealPayouts(d)
+              const payouts = dealPayouts(d, userById)
               return (
                 <div key={d.id} className="rounded-xl p-3 md:p-4" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
                   <div className="flex items-start justify-between gap-3">
@@ -866,8 +915,14 @@ export default function Payroll() {
                       <div className="px-3 py-2 text-[12px] text-white/30">No payouts on this deal.</div>
                     ) : payouts.map((p, i) => (
                       <div key={i} className="flex items-center justify-between px-3 py-1.5 text-[12px] border-b border-white/5 last:border-0">
-                        <span className="text-white/70 truncate mr-2">{p.name} <span className="text-white/30">· {p.role}</span></span>
-                        <span className="font-semibold text-white whitespace-nowrap">{fmt(p.amount)}</span>
+                        {p.unassigned ? (
+                          <span className="text-amber-400 truncate mr-2 flex items-center gap-1.5">
+                            <AlertTriangle size={11} /> Unassigned <span className="text-amber-400/60">· {p.role} — set the {p.role.toLowerCase()} on the deal</span>
+                          </span>
+                        ) : (
+                          <span className="text-white/70 truncate mr-2">{p.name} <span className="text-white/30">· {p.role}</span></span>
+                        )}
+                        <span className={`font-semibold whitespace-nowrap ${p.unassigned ? 'text-amber-400' : 'text-white'}`}>{fmt(p.amount)}</span>
                       </div>
                     ))}
                   </div>
