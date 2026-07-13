@@ -143,7 +143,19 @@ export default function Admin() {
 
   async function saveUser(data) {
     if (editUser) {
-      await updateUser(editUser.id, data)
+      // Email = login. When the email changes, route it through the user-admin
+      // endpoint, which updates the AUTH login first and mirrors the profile —
+      // so whatever email is on the roster is always the email they sign in
+      // with. Everything else saves normally.
+      const { email: newEmail, ...rest } = data
+      if (newEmail && newEmail !== editUser.email) {
+        const r = await userAdmin('change_email', { email: editUser.email, newEmail })
+        if (!r?.ok) {
+          if (DEMO_MODE) await updateUser(editUser.id, { email: newEmail })
+          else toast.error('Could not change the email (their login keeps the old one): ' + (r?.error || 'unknown error'))
+        }
+      }
+      await updateUser(editUser.id, rest)
       // Cascade: if this person's team affiliation changed (new reports-to, or
       // no longer a manager) and people report to THEM, offer to bring those
       // reports along to the new lead — each move is date-stamped in the
@@ -163,8 +175,8 @@ export default function Admin() {
       if (error) { toast.error('Could not create profile: ' + error.message); return }
       if (!DEMO_MODE) {
         toast.info(
-          'Profile created.\n\nTo enable their login, go to Supabase Studio → Authentication → Users → Add user, ' +
-          'using the SAME email. The auto-link trigger connects the new auth user to this profile.'
+          'Profile created.\n\nTo give them a login, open Edit on their row and type a password in the ' +
+          'Login Password field — their email becomes their sign-in.'
         )
       }
     }
