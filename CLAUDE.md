@@ -207,6 +207,11 @@ setup + deploy steps.
   password of their choice and it's set via
   `userAdmin('reset_password'|'create_login', { email, password })` (creates the
   login if none yet), so admins manage known passwords directly.
+- **Email = login, always.** Changing a user's email (Edit modal or the
+  password flow) goes through `userAdmin('change_email', { email, newEmail })`
+  — the server updates the GoTrue login FIRST, then mirrors `profiles.email`,
+  so the roster email and the sign-in email can never diverge. Never write
+  `profiles.email` directly for a user who has an `auth_id`.
 - **Users tab layout:** a team-grouped roster (Leadership & Admin → one
   section per team lead → Unassigned reps) with search; row badges are
   display-only and edits go through the Edit modal (`UserModal`).

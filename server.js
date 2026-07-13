@@ -103,6 +103,28 @@ async function resetPassword(target, password) {
   return ok({ reset: true, email: target.email, password: pw })
 }
 
+// Change a user's email — the LOGIN follows the email. Updates GoTrue first
+// (that's the credential), then mirrors it onto the profile row, so the two
+// can never diverge: whatever email is on the roster is the email they sign
+// in with. Works pre-login too (profile only; the future login adopts it).
+async function changeEmail(target, newEmail) {
+  newEmail = String(newEmail || '').trim().toLowerCase()
+  if (!newEmail || !/^\S+@\S+\.\S+$/.test(newEmail)) return err('That does not look like a valid email address.')
+  if (target.auth_id) {
+    const resp = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${target.auth_id}`, {
+      method: 'PUT', headers: jsonHeaders,
+      body: JSON.stringify({ email: newEmail, email_confirm: true }),
+    })
+    if (!resp.ok) return err('Could not change the login email: ' + (await resp.text()).slice(0, 200))
+  }
+  const patch = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${target.id}`, {
+    method: 'PATCH', headers: { ...jsonHeaders, Prefer: 'return=minimal' },
+    body: JSON.stringify({ email: newEmail }),
+  })
+  if (!patch.ok) return err('The login email changed but the roster row did not — retry the save: ' + (await patch.text()).slice(0, 200))
+  return ok({ changed: true, email: newEmail, login: !!target.auth_id })
+}
+
 // Disable/enable the login at the auth layer (ban). profiles.active is set by
 // the dashboard separately; this makes the block real even for a live token.
 async function setActive(target, active) {
@@ -145,6 +167,7 @@ async function handleUserAdmin(rawBody) {
   switch (body.action) {
     case 'create_login':   return createLogin(target, body.password)
     case 'reset_password': return resetPassword(target, body.password)
+    case 'change_email':   return changeEmail(target, body.newEmail)
     case 'set_active':     return setActive(target, body.active)
     default:               return err('Unknown action')
   }
