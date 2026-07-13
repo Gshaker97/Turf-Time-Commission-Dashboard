@@ -293,7 +293,9 @@ export default function Payroll() {
   // (advancing status, editing a deal) is admin-only — non-admins get a
   // read-only run. A locked run is read-only for everyone.
   const canApprove = isAdmin && !runLock && statusLabels?.includes(APPROVED)
-  const canPay     = isAdmin && !runLock && statusLabels?.includes(PAID)
+  // Marking a FINALIZED deal Paid is allowed even on a locked run (matches
+  // migration 035's trigger — it acknowledges the payout without changing it).
+  const canPay     = isAdmin && statusLabels?.includes(PAID)
   const openEdit   = (deal) => {
     if (!isAdmin) return
     // Only the locked run's PAYOUT is frozen (finalized/paid deals — matches
@@ -360,9 +362,10 @@ export default function Payroll() {
   async function setStatus(id, status) {
     const deal = deals.find(d => d.id === id)
     // Advancing status makes the deal part of the run's payout (or edits an
-    // already-locked payout) — both are frozen while the run is locked.
-    if (deal && isRunLocked(deal.pay_date)) {
-      toast.info(`The ${fmtDay(deal.pay_date)} pay run is locked — unlock it first to finalize or pay this deal.`)
+    // already-locked payout) — frozen while the run is locked, EXCEPT the
+    // payout acknowledgment: Pay Finalized → Paid is always allowed (035).
+    if (deal && isRunLocked(deal.pay_date) && !(status === PAID && deal.status === APPROVED)) {
+      toast.info(`The ${fmtDay(deal.pay_date)} pay run is locked — unlock it first to change this deal.`)
       return
     }
     setDeals(ds => ds.map(d => d.id === id ? { ...d, status } : d))   // optimistic
@@ -376,7 +379,7 @@ export default function Payroll() {
     }
   }
   async function markAll(status) {
-    const ids = shownDeals.filter(d => d.status !== status && !isRunLocked(d.pay_date)).map(d => d.id)
+    const ids = shownDeals.filter(d => d.status !== status && (!isRunLocked(d.pay_date) || (status === PAID && d.status === APPROVED))).map(d => d.id)
     if (!ids.length) return
     if (!confirm(`Mark ${ids.length} deal${ids.length === 1 ? '' : 's'} as "${status}"?`)) return
     setDeals(ds => ds.map(d => ids.includes(d.id) ? { ...d, status } : d))
@@ -861,7 +864,7 @@ export default function Payroll() {
                       )}
                       {canPay && (isPaid ? (
                         <span className="flex items-center text-teal px-1" title="Paid"><CheckCircle2 size={14} /></span>
-                      ) : !dealLocked && (
+                      ) : (!dealLocked || d.status === APPROVED) && (
                         <button onClick={() => setStatus(d.id, PAID)} title="Mark paid"
                           className="px-2 py-1 rounded-lg text-[10px] font-bold text-dark transition-colors" style={{ background: '#00b894' }}>
                           Paid
@@ -954,7 +957,7 @@ export default function Payroll() {
                       {canPay && (
                         isPaid ? (
                           <span className="flex items-center gap-1 text-[12px] font-semibold text-teal px-2"><CheckCircle2 size={14} /> Paid</span>
-                        ) : !dealLocked && (
+                        ) : (!dealLocked || d.status === APPROVED) && (
                           <button onClick={() => setStatus(d.id, PAID)}
                             className="px-3 py-1.5 rounded-lg text-[11px] font-bold text-dark transition-colors" style={{ background: '#00b894' }}>
                             Mark paid
