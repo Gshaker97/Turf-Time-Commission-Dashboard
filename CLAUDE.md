@@ -184,7 +184,10 @@ setup + deploy steps.
   adjustments) on a locked date, lets a non-finalized deal parked on a locked
   date be edited (e.g. a pulled Sales Issue deal whose install date changed),
   and still rejects any change that would FINALIZE a deal onto a locked run.
-  Payroll's `openEdit` mirrors this (blocks only `isFinalized` deals). Do
+  Payroll's `openEdit` mirrors this (blocks only `isFinalized` deals); `035`
+  lets a LOCKED run's deals still go `Pay Finalized` → `Paid` (only when
+  nothing else changes) so the sync's PAID pass and the Mark-paid button keep
+  working after an early lock — the payout itself stays frozen. Do
   not re-run `001`/`002` against a populated database.
 
 ## User management (Admin page)
