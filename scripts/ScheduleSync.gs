@@ -57,7 +57,7 @@ const SCH_PAID_STATUS      = 'Paid';
 const SCH_BASELINE_PROP   = 'SCHED_BASELINE_IDS';
 // Version stamp — reported in the heartbeat and shown on Admin → System
 // Health, so a stale/botched paste is visible at a glance. Bump when editing.
-const SCH_VERSION         = '2026-07-11';
+const SCH_VERSION         = '2026-07-14';
 // SAFETY: preview mode (logs what it WOULD do, writes nothing) now lives in
 // SCRIPT PROPERTIES, not code — so re-pasting this file can never silently
 // disable the sync again. To preview: Project Settings → Script Properties →
@@ -79,6 +79,21 @@ function schSync() {
   if (!lock.tryLock(0)) { Logger.log('Another sync run is still going — skipped this tick.'); return { skipped: 'locked' }; }
   try {
     return schSyncLocked_();
+  } catch (e) {
+    // A hard failure (network outage outlasting the retries, sheet unavailable)
+    // reports through the heartbeat — System Health shows the reason and the
+    // Watchdog alerts — instead of dying as a failed execution and feeding
+    // Google's trigger error-rate/digest emails. If even the heartbeat can't
+    // be written (total outage), it goes stale and the Watchdog CRITs
+    // "stalled" within the hour, so nothing fails silently.
+    const msg = 'RUN FAILED: ' + ((e && e.message) || e);
+    Logger.log(msg);
+    try {
+      const props = PropertiesService.getScriptProperties();
+      schHeartbeat_(props.getProperty('SUPABASE_URL'), props.getProperty('SUPABASE_SERVICE_KEY'),
+        { created: 0, changed: 0, updated: 0, paid: 0, errors: 1, details: [msg], sheetIssue: null });
+    } catch (e2) { /* heartbeat unreachable too — Watchdog stall alarm covers it */ }
+    return { error: msg };
   } finally {
     lock.releaseLock();
   }
@@ -663,8 +678,8 @@ function schPayDate_(iso) {
 // failure digest, even though the next minute's run succeeds anyway.
 function schFetch_(fullUrl, options) {
   let lastErr;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt) Utilities.sleep(500 * attempt);   // 0.5s, then 1s
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt) Utilities.sleep(500 * Math.pow(2, attempt - 1));   // 0.5s, 1s, 2s
     try { return UrlFetchApp.fetch(fullUrl, options); }
     catch (e) { lastErr = e; }                     // network-level failure — retry
   }
