@@ -174,7 +174,11 @@ setup + deploy steps.
   — GoTrue's auto-link trigger, the service key, Studio SQL) through
   `guard_profile_columns()` so login creation can actually stamp
   `profiles.auth_id` (the old guard silently reverted it, leaving
-  half-created logins), and bulk-links any orphaned auth users by email;
+  half-created logins), and bulk-links any orphaned auth users by email
+  (`036` completes the fix: GoTrue runs with `search_path=auth`, so the
+  auto-link trigger and the profile-trigger helpers are pinned to
+  `search_path=public` — without it every GoTrue user INSERT died with 500
+  "Database error creating new user");
   `033` deletes sync-created clone deals (same project_id + name, keeping the
   earliest; verified copies never deleted) and adds a partial UNIQUE index on
   `deals.project_id` — the DB backstop against duplicate imports (the sync
