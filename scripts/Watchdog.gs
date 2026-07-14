@@ -8,7 +8,6 @@
  * What it checks each run:
  *   • Site up?           — fetches the frontend URL.
  *   • Sync healthy?      — sync_heartbeat fresh, not stuck in DRY_RUN, no errors.
- *   • Backup healthy?    — backup_heartbeat within ~26h.
  *   • Frontend crashes   — new rows in client_errors in the last 24h.
  *   • Permission changes — a role / admin flag / active state changed, or an
  *                          account was added/removed (privilege-escalation watch).
@@ -68,7 +67,7 @@ function watchdogRun() {
 
   // ── 2/3. Heartbeats ───────────────────────────────────────
   try {
-    const settings = wdGet_(url, key, '/rest/v1/app_settings?select=key,value&key=in.(sync_heartbeat,backup_heartbeat)');
+    const settings = wdGet_(url, key, '/rest/v1/app_settings?select=key,value&key=in.(sync_heartbeat)');
     const byKey = {};
     settings.forEach(s => { byKey[s.key] = s.value; });
 
@@ -82,12 +81,7 @@ function watchdogRun() {
       else if (hb.errors > 0) add('WARN', 'Scheduler sync logged ' + hb.errors + ' error(s) on its last run');
     }
 
-    const bk = byKey.backup_heartbeat;
-    if (bk && bk.at) {
-      const hrs = (Date.now() - new Date(bk.at).getTime()) / 3600000;
-      if (hrs > 26) add('WARN', 'Nightly backup overdue — last ran ' + Math.round(hrs) + 'h ago');
-      else if (bk.errors > 0) add('WARN', 'Last backup had ' + bk.errors + ' table error(s)');
-    }
+    // (Nightly Drive backup retired — DB backups are Railway volume snapshots now.)
   } catch (e) { add('WARN', 'Could not read heartbeats: ' + e.message); }
 
   // ── 4. Frontend crashes (last 24h) ────────────────────────

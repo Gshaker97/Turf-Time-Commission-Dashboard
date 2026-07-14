@@ -198,11 +198,7 @@ When a new rep joins:
 
 ## Database backups
 
-Two independent layers — keep both.
-
-### 1. Railway volume backups (full DB — disaster recovery)
-
-Snapshots the entire Postgres data volume on a schedule:
+Backups are **Railway volume snapshots** of the whole Postgres database:
 
 1. Railway **project** → click the **Postgres** service (part of the Supabase stack).
 2. Open its **Volume** (the Data/Volume tab on the service, or the attached volume).
@@ -211,12 +207,5 @@ Snapshots the entire Postgres data volume on a schedule:
    - **Enable scheduled backups** → choose **Daily** and a **retention** count (e.g. 7–30).
 4. **Restore:** in the Backups list, pick a snapshot → **Restore**.
 
-This is the real recover-everything backup.
-
-### 2. Logical table export (`scripts/Backup.gs`)
-
-An Apps Script (`backupNow`, daily trigger, in the same project as `ScheduleSync.gs`)
-dumps **every table to a dated Google Sheet** in a "Turf Time Backups" Drive folder,
-keeping the most recent 30. Human-readable; handy for eyeballing or re-importing a
-few rows. Its heartbeat shows on **Admin → System Health** (and the Watchdog flags
-it if a backup is overdue).
+(The old Apps Script Drive export — `scripts/Backup.gs` — was retired; the site
+and Watchdog no longer reference it.)

@@ -20,8 +20,8 @@ const ROLE_COLOR = {
 
 // ── System health — heartbeats written by the Apps Scripts into app_settings.
 // Catches the two silent failure modes that have actually happened: the sync
-// stuck in DRY_RUN (preview) after a re-paste, and the sync/backup not running
-// at all.
+// stuck in DRY_RUN (preview) after a re-paste, and the sync not running at
+// all. (DB backups are Railway volume snapshots now — not monitored here.)
 const agoText = (iso) => {
   if (!iso) return null
   const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
@@ -52,7 +52,6 @@ function SystemHealth() {
   }, [])
 
   const hb = settings?.sync_heartbeat
-  const bk = settings?.backup_heartbeat
   const wd = settings?.watchdog_heartbeat
 
   let sync
@@ -71,14 +70,8 @@ function SystemHealth() {
   // not just the Apps Script execution log.
   const syncIssues = [hb?.sheet_issue, ...(Array.isArray(hb?.issues) ? hb.issues : [])].filter(Boolean).slice(0, 8)
 
-  let backup
-  if (!bk?.at) backup = { ok: false, color: '#6b7280', text: 'no heartbeat yet — runs after the next nightly backup' }
-  else {
-    const hrs = (Date.now() - new Date(bk.at).getTime()) / 3600000
-    if (hrs > 26)           backup = { ok: false, color: '#ef4444', text: `overdue — last backup ${agoText(bk.at)}` }
-    else if (bk.errors > 0) backup = { ok: false, color: '#f59e0b', text: `ran ${agoText(bk.at)} with ${bk.errors} table error${bk.errors === 1 ? '' : 's'}` }
-    else backup = { ok: true, color: '#00b894', text: `ran ${agoText(bk.at)}` }
-  }
+  // (The nightly Drive backup was retired — database backups are Railway
+  // volume snapshots now, managed and monitored in Railway itself.)
 
   return (
     <div className="rounded-xl px-4 py-2.5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
@@ -94,7 +87,6 @@ function SystemHealth() {
           ))}
         </div>
       )}
-      <HealthRow label="Nightly backup" {...backup} />
       {(() => {
         let dog
         if (!wd?.at) dog = { ok: false, color: '#6b7280', text: 'not running yet — set up Watchdog.gs' }
