@@ -904,11 +904,12 @@ export default function Payroll() {
                       style={{ color, border: `1px solid ${color}40` }}>{d.status}</span>
                   </div>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-4 gap-y-2 mt-3 text-[12px]">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-4 gap-y-2 mt-3 text-[12px]">
                     <div><p className="text-white/30 text-[10px] uppercase">Sold</p><p className="text-white/80">{fmtDay(d.sale_date) || '—'}</p></div>
                     <div><p className="text-white/30 text-[10px] uppercase">Baseline</p><p className="text-white/80">{fmt(a.baseline)}</p></div>
                     <div><p className="text-white/30 text-[10px] uppercase">Job price</p><p className="text-white/80">{fmt(a.job)}</p></div>
                     <div><p className="text-white/30 text-[10px] uppercase">Rep pool</p><p className={a.job - a.baseline < 0 ? 'text-red-400' : 'text-white/80'}>{fmt(a.job - a.baseline)}</p></div>
+                    <div><p className="text-white/30 text-[10px] uppercase">Install</p><p className="text-white/80">{fmtDay(d.install_date) || 'TBD'}</p></div>
                     <div><p className="text-white/30 text-[10px] uppercase">Pay date</p><p className="text-white/80">{fmtDay(d.pay_date) || 'TBD'}</p></div>
                   </div>
 
