@@ -389,10 +389,18 @@ export default function Commissions() {
   // regression — log it to client_errors so the Watchdog surfaces it.
   useEffect(() => {
     if (viewUser?.role !== 'rep') return
-    const overrides = allMine.reduce((s, d) =>
-      s + myParts(d, id).filter(p => p.role !== 'Setter' && p.role !== 'Closer').reduce((t, p) => t + p.amount, 0), 0)
-    if (overrides > 0.005) {
-      logClientError({ message: `Permission leak: rep "${viewUser.name}" shows ${overrides.toFixed(2)} in override commission`, stack: '' })
+    // A rep CAN legitimately hold override money: a demoted manager keeps
+    // their manager override on deals sold before the move (Colt), because
+    // their id is still stamped as deal.manager_id there. That's their OWN
+    // pay, not a leak. A real leak = override dollars shown to someone who is
+    // NOT the stamped person for that role on the deal.
+    const ROLE_KEY = { Manager: 'manager_id', Director: 'director_id', VP: 'vp_id' }
+    const leaked = allMine.reduce((s, d) =>
+      s + myParts(d, id)
+        .filter(p => ROLE_KEY[p.role] && d[ROLE_KEY[p.role]] !== id)
+        .reduce((t, p) => t + p.amount, 0), 0)
+    if (leaked > 0.005) {
+      logClientError({ message: `Permission leak: rep "${viewUser.name}" shows ${leaked.toFixed(2)} in override commission not assigned to them`, stack: '' })
     }
   }, [viewUser, allMine, id])
 
