@@ -14,6 +14,12 @@
  * Closer · Baseline · Total Price · Setter Commission · Closer Commission ·
  * Commission % · Manager/% /$ · Director/% /$ · VP/% /$ · Status
  *
+ * Rows are tinted red (Canceled) / green (Paid). Each tab ends with a MONTH
+ * SUMMARY — company totals for baseline, total price, commissions earned and
+ * overrides earned (canceled excluded, matching the site), then the same
+ * stats broken down per rep (sale credit to the setter; commissions to who
+ * earns them; overrides to the stamped manager/director/VP).
+ *
  * Setup (same Apps Script project as ScheduleSync — reuses its properties):
  *   1. Paste this as a file named "DealsExport", save.
  *   2. Script properties needed (Project Settings → Script Properties):
@@ -78,20 +84,35 @@ function dealsExport_() {
     ]);
     sh.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS])
       .setFontWeight('bold').setBackground('#1e3a34').setFontColor('#ffffff');
-    if (rows.length) sh.getRange(2, 1, rows.length, HEADERS.length).setValues(rows);
-    // TOTALS row — live SUM formulas over the money columns.
-    const totalRow = rows.length + 2;
-    sh.getRange(totalRow, 1).setValue('TOTALS (' + rows.length + ' deals)');
     if (rows.length) {
-      MONEY_COLS.forEach(function (c) {
-        const a1 = sh.getRange(2, c).getA1Notation(), a2 = sh.getRange(totalRow - 1, c).getA1Notation();
-        sh.getRange(totalRow, c).setFormula('=SUM(' + a1 + ':' + a2 + ')');
+      sh.getRange(2, 1, rows.length, HEADERS.length).setValues(rows);
+      // Status tint: red = Canceled, green = Paid.
+      const bg = m.rows.map(function (r) {
+        const st = String(r.status || '').toLowerCase();
+        const color = st.indexOf('cancel') === 0 ? '#fce8e6' : st === 'paid' ? '#e2f3e7' : '#ffffff';
+        return new Array(HEADERS.length).fill(color);
       });
+      sh.getRange(2, 1, rows.length, HEADERS.length).setBackgrounds(bg);
+      MONEY_COLS.forEach(c => sh.getRange(2, c, rows.length, 1).setNumberFormat('$#,##0.00'));
+      PCT_COLS.forEach(c => sh.getRange(2, c, rows.length, 1).setNumberFormat('0.00"%"'));
     }
-    sh.getRange(totalRow, 1, 1, HEADERS.length).setFontWeight('bold').setBackground('#243b35').setFontColor('#ffffff');
-    const dataRows = Math.max(rows.length + 1, 1);   // data + totals
-    MONEY_COLS.forEach(c => sh.getRange(2, c, dataRows, 1).setNumberFormat('$#,##0.00'));
-    PCT_COLS.forEach(c => sh.getRange(2, c, dataRows, 1).setNumberFormat('0.00"%"'));
+
+    // MONTH SUMMARY — company totals + per-rep breakdown (canceled excluded,
+    // matching the site's aggregate rule; the red rows above are display-only).
+    const sum = dxSummary_(m.rows);
+    let r0 = rows.length + 3;
+    sh.getRange(r0, 1, 1, 5)
+      .setValues([['MONTH SUMMARY — canceled excluded', 'Baseline', 'Total Price', 'Commissions', 'Overrides']])
+      .setFontWeight('bold').setBackground('#1e3a34').setFontColor('#ffffff');
+    sh.getRange(r0 + 1, 1, 1, 5)
+      .setValues([['Company — ' + sum.count + ' deal' + (sum.count === 1 ? '' : 's'), sum.baseline, sum.total, sum.comm, sum.ovr]])
+      .setFontWeight('bold').setBackground('#eef5f2');
+    if (sum.reps.length) {
+      sh.getRange(r0 + 2, 1, sum.reps.length, 5)
+        .setValues(sum.reps.map(p => [p.name, p.baseline, p.total, p.comm, p.ovr]));
+    }
+    sh.getRange(r0 + 1, 2, sum.reps.length + 1, 4).setNumberFormat('$#,##0.00');
+
     sh.setFrozenRows(1);
     sh.autoResizeColumns(1, HEADERS.length);
     sh.getRange('A1').setNote(updatedNote);
@@ -106,6 +127,38 @@ function dealsExport_() {
   else if (def) def.getRange('A1').setValue('No deals with a closing date on/after ' + DX_SINCE + ' yet.');
 
   Logger.log('Updated "' + ss.getName() + '" — ' + months.reduce((s, m) => s + m.rows.length, 0) + ' deals across ' + months.length + ' month tab(s).');
+}
+
+// Month summary from the row data: company totals + per-rep stats, canceled
+// excluded. Sale credit (baseline/total price) goes to the SETTER (closer when
+// no setter — the site's sale-owner rule); commission dollars go to whoever
+// earns them; overrides go to the stamped manager/director/VP.
+function dxSummary_(rows) {
+  const per = {};
+  const P = function (name) {
+    if (!per[name]) per[name] = { name: name, baseline: 0, total: 0, comm: 0, ovr: 0 };
+    return per[name];
+  };
+  let baseline = 0, total = 0, comm = 0, ovr = 0, count = 0;
+  rows.forEach(function (r) {
+    if (String(r.status || '').toLowerCase().indexOf('cancel') === 0) return;
+    count++;
+    baseline += r.baseline || 0;
+    total    += r.total_price || 0;
+    comm     += (r.setter_commission || 0) + (r.closer_commission || 0);
+    ovr      += (r.manager_amount || 0) + (r.director_amount || 0) + (r.vp_amount || 0);
+    const owner = r.setter || r.closer || '(no rep)';
+    P(owner).baseline += r.baseline || 0;
+    P(owner).total    += r.total_price || 0;
+    if (r.setter) P(r.setter).comm += r.setter_commission || 0;
+    else if (r.closer) P(r.closer).comm += r.setter_commission || 0;
+    if (r.closer_commission != null && r.closer) P(r.closer).comm += r.closer_commission;
+    if (r.manager)  P(r.manager).ovr  += r.manager_amount  || 0;
+    if (r.director) P(r.director).ovr += r.director_amount || 0;
+    if (r.vp)       P(r.vp).ovr       += r.vp_amount       || 0;
+  });
+  return { count: count, baseline: baseline, total: total, comm: comm, ovr: ovr,
+           reps: Object.keys(per).map(k => per[k]).sort((a, b) => b.baseline - a.baseline) };
 }
 
 // The one live spreadsheet: remembered by ID (survives renames/moves), found
