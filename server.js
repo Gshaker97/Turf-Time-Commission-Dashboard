@@ -18,6 +18,7 @@
 import express from 'express'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { dealAmounts, setOverrideRateSchedule } from './src/utils/commission.js'
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), 'dist')
 const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '')
@@ -173,8 +174,84 @@ async function handleUserAdmin(rawBody) {
   }
 }
 
+// ── Deals export (feeds the daily Google Sheets backup) ─────────────────────
+// GET /api/export/deals?since=YYYY-MM-DD  ·  Authorization: Bearer <service key>
+//
+// Serves deal rows COMPUTED BY THE SAME ENGINE the site/payroll uses (stored
+// amounts, override exclusions, bonuses, splits, rate eras all respected) so
+// the spreadsheet backup can never drift from what the site pays. Rows are
+// grouped by closing month; the Apps Script exporter (scripts/DealsExport.gs)
+// formats them into tabs. Auth = the service key itself, which only the Apps
+// Script project holds.
+const money = (v) => Math.round((Number(v) || 0) * 100) / 100
+const pctOf = (amt, base) => (base > 0 ? Math.round((amt / base) * 10000) / 100 : null)
+
+async function exportDeals(since) {
+  // Rate eras from settings so engine defaults match the site.
+  try {
+    const cfg = await restGet(`/rest/v1/app_settings?select=value&key=eq.override_rates`)
+    if (Array.isArray(cfg[0]?.value) && cfg[0].value.length) setOverrideRateSchedule(cfg[0].value)
+  } catch { /* no schedule configured — legacy constants apply */ }
+
+  const select = encodeURIComponent('*,setter:setter_id(name),closer:closer_id(name),manager:manager_id(name),director:director_id(name),vp:vp_id(name)')
+  const deals = []
+  for (let offset = 0; ; ) {
+    const page = await restGet(`/rest/v1/deals?select=${select}&sale_date=gte.${since}&order=sale_date.asc&limit=1000&offset=${offset}`)
+    deals.push(...page)
+    if (!page.length) break
+    offset += page.length
+  }
+
+  const months = {}
+  for (const d of deals) {
+    if (!d.sale_date) continue
+    const a = dealAmounts(d)
+    const solo = !d.closer_id || d.setter_id === d.closer_id
+    const row = {
+      deal: d.deal_name || '—',
+      closing_date: d.sale_date,
+      install_date: d.install_date || '',
+      setter: d.setter?.name || '',
+      closer: solo ? (d.setter?.name || d.closer?.name || '') : (d.closer?.name || ''),
+      baseline: money(a.baseline),
+      total_price: money(a.job),
+      setter_commission: money(a.setter),
+      closer_commission: solo ? null : money(a.closer),
+      commission_pct: pctOf(a.repCommission, a.baseline),
+      manager: d.manager?.name || '',
+      manager_pct: d.manager_id ? pctOf(a.manager, a.baseline) : null,
+      manager_amount: d.manager_id ? money(a.manager) : null,
+      director: d.director?.name || '',
+      director_pct: d.director_id ? pctOf(a.director, a.baseline) : null,
+      director_amount: d.director_id ? money(a.director) : null,
+      vp: d.vp?.name || '',
+      vp_pct: d.vp_id ? pctOf(a.vp, a.baseline) : null,
+      vp_amount: d.vp_id ? money(a.vp) : null,
+      status: d.status || '',
+    }
+    const key = d.sale_date.slice(0, 7)   // YYYY-MM
+    ;(months[key] ||= []).push(row)
+  }
+  const monthName = (key) => new Date(key + '-15T12:00:00Z')
+    .toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+  return {
+    generatedAt: new Date().toISOString(),
+    since,
+    months: Object.keys(months).sort().map(key => ({ key, label: monthName(key), rows: months[key] })),
+  }
+}
+
 const app = express()
 app.use(express.text({ type: '*/*', limit: '16kb' }))
+
+app.get('/api/export/deals', async (req, res) => {
+  if (!SUPABASE_URL || !SERVICE_KEY) return res.status(503).json(err('Export is not configured — SUPABASE_SERVICE_KEY is missing on the site service.'))
+  const auth = String(req.headers.authorization || '')
+  if (auth !== `Bearer ${SERVICE_KEY}`) return res.status(401).json(err('Unauthorized'))
+  const since = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.since)) ? String(req.query.since) : '2026-07-01'
+  try { res.json(await exportDeals(since)) }
+  catch (e) { res.status(500).json(err(e.message || 'Export failed')) }
+})
 
 // Health check — pinged hourly by the Watchdog. Reports whether the
 // user-admin key is configured and which build is running, so a broken deploy
