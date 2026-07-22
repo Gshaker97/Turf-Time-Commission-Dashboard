@@ -211,6 +211,8 @@ async function exportDeals(since) {
       deal: d.deal_name || '—',
       closing_date: d.sale_date,
       install_date: d.install_date || '',
+      office: d.office || '',
+      payment: d.payment_method || '',
       setter: d.setter?.name || '',
       closer: solo ? (d.setter?.name || d.closer?.name || '') : (d.closer?.name || ''),
       baseline: money(a.baseline),
@@ -234,10 +236,14 @@ async function exportDeals(since) {
   }
   const monthName = (key) => new Date(key + '-15T12:00:00Z')
     .toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+  // Newest first, matching the site: tabs order + row order within each tab.
+  for (const key of Object.keys(months)) {
+    months[key].sort((a, b) => b.closing_date.localeCompare(a.closing_date) || a.deal.localeCompare(b.deal))
+  }
   return {
     generatedAt: new Date().toISOString(),
     since,
-    months: Object.keys(months).sort().map(key => ({ key, label: monthName(key), rows: months[key] })),
+    months: Object.keys(months).sort().reverse().map(key => ({ key, label: monthName(key), rows: months[key] })),
   }
 }
 
