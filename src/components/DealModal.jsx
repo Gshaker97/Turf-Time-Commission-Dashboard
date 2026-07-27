@@ -607,7 +607,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                     onChange={e => set('financed_amount', e.target.value)} placeholder="0.00" />
                 </Field>
                 <Field label="Dealer fee %">
-                  <Inp type="number" min="0" max="100" step="0.01" value={form.dealer_fee_pct}
+                  <Inp type="number" min="0" max="100" step="any" value={form.dealer_fee_pct}
                     onChange={e => set('dealer_fee_pct', e.target.value)} placeholder="0" />
                 </Field>
                 <Field label="Dealer fee">
@@ -670,7 +670,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                   </div>
                   <div className="sm:w-28">
                     <Field label="Override %">
-                      <Inp type="number" min="0" max="100" step="0.01"
+                      <Inp type="number" min="0" max="100" step="any"
                         value={form[pctKey]} onChange={e => set(pctKey, e.target.value)}
                         placeholder="0" />
                     </Field>
@@ -758,7 +758,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                   <div key={key} className="flex items-center gap-2">
                     <span className="w-16 text-[12px] font-medium text-white/60 flex-shrink-0">{label}</span>
                     <div className="w-24 flex-shrink-0">
-                      <Inp type="number" min="0" step="0.01" value={form[key]} disabled={!id}
+                      <Inp type="number" min="0" step="any" value={form[key]} disabled={!id}
                         onChange={e => set(key, e.target.value)} placeholder="0" />
                     </div>
                     <span className="text-[11px] text-white/40 min-w-0 flex-1">
