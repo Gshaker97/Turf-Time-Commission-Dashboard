@@ -5,9 +5,9 @@ import {
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { Check, X, TrendingUp, TrendingDown, Minus, ChevronUp, ChevronDown, ChevronsUpDown, Copy } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
-import { fetchDeals, fetchUsers, fetchGoal, saveGoal as saveGoalDb, deleteGoal as deleteGoalDb } from '../lib/db'
+import { fetchDeals, fetchUsers, fetchGoal, saveGoal as saveGoalDb, deleteGoal as deleteGoalDb, fetchTeamChanges } from '../lib/db'
 import { fmt, dealAmounts, activeDeals } from '../utils/commission'
-import { headIdSet, saleOwnerId } from '../utils/team'
+import { headIdSet, saleOwnerId, buildChangesByProfile, teamOfSale } from '../utils/team'
 import { getPresetRange, getPreviousRange } from '../utils/dateRanges'
 import DateRangeFilter from '../components/DateRangeFilter'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
@@ -81,6 +81,7 @@ export default function Dashboard() {
   const [dateTo,       setDateTo]       = useState(getPresetRange('mtd').to)
   const [activePreset, setActivePreset] = useState('mtd')
   const [teamFilter,   setTeamFilter]   = useState('')
+  const [teamChanges,  setTeamChanges]  = useState([])
   const [repSort,      setRepSort]      = useState({ key: 'revenue', dir: 'desc' })  // leaderboard ranking
   const [copied,       setCopied]       = useState(false)
   const [openTeams,    setOpenTeams]    = useState(() => new Set())
@@ -97,9 +98,10 @@ export default function Dashboard() {
   const goalMonth = goalDate.getMonth() + 1
 
   const loadData = () =>
-    Promise.all([fetchDeals(), fetchUsers()]).then(([{ data: d }, { data: u }]) => {
+    Promise.all([fetchDeals(), fetchUsers(), fetchTeamChanges()]).then(([{ data: d }, { data: u }, { data: tc }]) => {
       setDeals(activeDeals(d ?? []))   // canceled jobs never count toward stats
       setUsers(u ?? [])
+      setTeamChanges(tc ?? [])
     })
 
   useEffect(() => { loadData().finally(() => setLoading(false)) }, [])
@@ -119,11 +121,17 @@ export default function Dashboard() {
     [dateFrom, dateTo, activePreset]
   )
 
+  // Date-effective team attribution: a sale belongs to the team its owner was
+  // on AS OF THE SALE DATE (team_changes log) — moving a rep never rewrites
+  // history. Shared by the team filter, team breakdown, and monthly goal.
+  const usersById = useMemo(() => Object.fromEntries(users.map(u => [u.id, u])), [users])
+  const headsSet  = useMemo(() => headIdSet(users), [users])
+  const changesByProfile = useMemo(() => buildChangesByProfile(teamChanges), [teamChanges])
+  const saleTeam = (d) => teamOfSale(saleOwnerId(d), d.sale_date, usersById, headsSet, changesByProfile)
+
   function applyScopeFilters(rows) {
     if (!teamFilter) return rows
-    // A manager's team = their reps + the manager's own sales.
-    const repIds = new Set([...users.filter(u => u.manager_id === teamFilter).map(u => u.id), teamFilter])
-    return rows.filter(d => repIds.has(saleOwnerId(d)))
+    return rows.filter(d => saleTeam(d) === teamFilter)
   }
 
   const filtered = useMemo(() => {
@@ -163,10 +171,7 @@ export default function Dashboard() {
     const curKey = `${String(goalYear).padStart(4,'0')}-${String(goalMonth).padStart(2,'0')}`
     function monthTotal(mk) {
       let rows = deals.filter(d => d.sale_date?.startsWith(mk))
-      if (teamFilter) {
-        const repIds = new Set([...users.filter(u => u.manager_id === teamFilter).map(u => u.id), teamFilter])
-        rows = rows.filter(d => repIds.has(saleOwnerId(d)))
-      }
+      if (teamFilter) rows = rows.filter(d => saleTeam(d) === teamFilter)
       return rows.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
     }
     const curRevenue = monthTotal(curKey)
@@ -200,53 +205,38 @@ export default function Dashboard() {
     // (reports to another lead, no directs) is a member, not their own team.
     const heads = headIdSet(users)
     const mgrs = teamFilter ? users.filter(u => u.id === teamFilter) : users.filter(u => heads.has(u.id))
-    const rows = mgrs.map(mgr => {
-      // ALL members (incl. deactivated) feed the team's money — an inactive
-      // rep's sales still count. But the drill-down rows and the headcount
-      // only show ACTIVE members (an inactive person isn't on the team).
-      const members = [mgr, ...users.filter(u => u.manager_id === mgr.id)]
-      const repIds  = new Set(members.map(m => m.id))   // include the manager's own sales
-      const mDeals  = filtered.filter(d => repIds.has(saleOwnerId(d)))
+    // Group every deal by its DATE-EFFECTIVE team once (owner's team as of the
+    // sale date — team_changes log), then build each team row from its deals.
+    const byTeam = {}, prevByTeam = {}
+    for (const d of filtered)     (byTeam[saleTeam(d)] ||= []).push(d)
+    for (const d of prevFiltered) (prevByTeam[saleTeam(d)] ||= []).push(d)
+    const teamRow = (key, name, ghost, repCount) => {
+      const mDeals  = byTeam[key] || []
       const revenue = mDeals.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
-      const prevRev = prevFiltered.filter(d => repIds.has(saleOwnerId(d))).reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
-      // Per-member breakdown (sale-owner-based; active members only).
-      const reps = members.filter(m => m.active !== false).map(m => {
-        const md = filtered.filter(d => saleOwnerId(d) === m.id)
-        return {
-          id: m.id, name: m.name, ghost: m.ghost === true, isManager: m.id === mgr.id,
-          deals: md.length,
-          revenue: md.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0),
+      const prevRev = (prevByTeam[key] || []).reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
+      // Drill-down rows come from the DEALS, so a moved rep's old sales still
+      // show inside the team they were on when they sold them.
+      const byOwner = {}
+      for (const d of mDeals) {
+        const oid = saleOwnerId(d) || 'none'
+        if (!byOwner[oid]) {
+          const u = users.find(x => x.id === oid)
+          byOwner[oid] = { id: oid, name: u?.name ?? 'No rep assigned', ghost: u?.ghost === true, isManager: oid === key, deals: 0, revenue: 0 }
         }
-      }).sort((a, b) => b.revenue - a.revenue)
-      const repCount = members.filter(m => m.id !== mgr.id && m.active !== false).length
-      return { id: mgr.id, name: mgr.name, ghost: mgr.ghost === true, repCount, deals: mDeals.length, revenue, prevRev, reps, pct: (revenue / companyTotalRev) * 100 }
-    }).sort((a, b) => b.revenue - a.revenue)
-    // Deals owned by nobody on a head's team (an unassigned rep, leadership
-    // selling directly, or no setter/closer at all) get an explicit bucket so
-    // the breakdown always sums to the company totals above.
-    if (!teamFilter) {
-      const assigned = new Set()
-      users.filter(u => heads.has(u.id)).forEach(mgr => {
-        assigned.add(mgr.id)
-        users.filter(u => u.manager_id === mgr.id).forEach(u => assigned.add(u.id))
-      })
-      const strays = filtered.filter(d => !assigned.has(saleOwnerId(d)))
-      if (strays.length) {
-        const byOwner = {}
-        for (const d of strays) {
-          const oid = saleOwnerId(d) || 'none'
-          if (!byOwner[oid]) byOwner[oid] = { id: oid, name: users.find(u => u.id === oid)?.name ?? 'No rep assigned', ghost: false, isManager: false, deals: 0, revenue: 0 }
-          byOwner[oid].deals += 1
-          byOwner[oid].revenue += parseFloat(d.baseline_revenue) || 0
-        }
-        const revenue = strays.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
-        const prevRev = prevFiltered.filter(d => !assigned.has(saleOwnerId(d))).reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
-        rows.push({ id: 'unassigned', name: 'Unassigned', ghost: false, repCount: 0, deals: strays.length, revenue, prevRev,
-          reps: Object.values(byOwner).sort((a, b) => b.revenue - a.revenue), pct: (revenue / companyTotalRev) * 100 })
+        byOwner[oid].deals += 1
+        byOwner[oid].revenue += parseFloat(d.baseline_revenue) || 0
       }
+      return { id: key, name, ghost, repCount, deals: mDeals.length, revenue, prevRev,
+        reps: Object.values(byOwner).sort((a, b) => b.revenue - a.revenue), pct: (revenue / companyTotalRev) * 100 }
+    }
+    const rows = mgrs.map(mgr => teamRow(mgr.id, mgr.name, mgr.ghost === true,
+      users.filter(u => u.manager_id === mgr.id && u.id !== mgr.id && u.active !== false).length
+    )).sort((a, b) => b.revenue - a.revenue)
+    if (!teamFilter && (byTeam.unassigned?.length || prevByTeam.unassigned?.length)) {
+      rows.push(teamRow('unassigned', 'Unassigned', false, 0))
     }
     return rows
-  }, [users, filtered, prevFiltered, companyTotalRev, teamFilter])
+  }, [users, filtered, prevFiltered, companyTotalRev, teamFilter, usersById, headsSet, changesByProfile])
 
   const repData = useMemo(() => {
     const map = {}

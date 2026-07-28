@@ -401,6 +401,7 @@ export default function Admin() {
                 className="w-full px-3 md:px-4 py-2.5 flex items-center justify-between gap-3 hover:bg-white/[0.02] transition-colors"
                 style={{ background: '#1e1e1e' }}>
                 <span className="text-[12px] font-bold text-white">Team change log</span>
+                <span className="text-[10px] text-white/25 hidden md:inline">sales &amp; overrides attribute to teams by these dates</span>
                 <span className="text-[10px] text-white/30">{teamChanges.length} change{teamChanges.length === 1 ? '' : 's'} · {showLog ? 'hide' : 'show'}</span>
               </button>
               {showLog && (

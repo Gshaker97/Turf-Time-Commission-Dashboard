@@ -186,6 +186,26 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
+  // Picking a setter/closer auto-fills a MISSING manager with that person's
+  // current reports-to — only when that person is an actual MANAGER role (a
+  // director/VP-managed rep gets no manager override; stamping the director
+  // would double-pay). Closer wins (the Sales Rep concept), setter fallback.
+  // Never overwrites a manager already on the deal.
+  const pickPerson = (field, id) => {
+    setForm(f => {
+      const next = { ...f, [field]: id }
+      if (!next.manager_id) {
+        const person = users.find(u => u.id === (next.closer_id || next.setter_id))
+        const mgr = person?.manager_id ? users.find(u => u.id === person.manager_id) : null
+        if (mgr && mgr.role === 'manager') {
+          next.manager_id = mgr.id
+          if (!next.manager_override_pct) next.manager_override_pct = asPctStr(managerDefaultRate(next.sale_date || null))
+        }
+      }
+      return next
+    })
+  }
+
   // Switching the bonus entry unit (% ↔ $) converts the typed values so the
   // dollar effect stays the same.
   function setBonusMode(newMode) {
@@ -483,13 +503,13 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
           {/* Setter / Closer */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4">
             <Field label="Setter *">
-              <Sel required value={form.setter_id} onChange={e => set('setter_id', e.target.value)}>
+              <Sel required value={form.setter_id} onChange={e => pickPerson('setter_id', e.target.value)}>
                 <option value="">Select setter…</option>
                 {users.map(u => <option key={u.id} value={u.id}>{u.name} ({u.role})</option>)}
               </Sel>
             </Field>
             <Field label="Closer *">
-              <Sel required value={form.closer_id} onChange={e => set('closer_id', e.target.value)}>
+              <Sel required value={form.closer_id} onChange={e => pickPerson('closer_id', e.target.value)}>
                 <option value="">Select closer…</option>
                 {users.map(u => <option key={u.id} value={u.id}>{u.name} ({u.role})</option>)}
               </Sel>

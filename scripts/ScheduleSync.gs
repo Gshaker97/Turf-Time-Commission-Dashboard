@@ -57,7 +57,7 @@ const SCH_PAID_STATUS      = 'Paid';
 const SCH_BASELINE_PROP   = 'SCHED_BASELINE_IDS';
 // Version stamp — reported in the heartbeat and shown on Admin → System
 // Health, so a stale/botched paste is visible at a glance. Bump when editing.
-const SCH_VERSION         = '2026-07-19';
+const SCH_VERSION         = '2026-07-20';
 // SAFETY: preview mode (logs what it WOULD do, writes nothing) now lives in
 // SCRIPT PROPERTIES, not code — so re-pasting this file can never silently
 // disable the sync again. To preview: Project Settings → Script Properties →
@@ -473,6 +473,16 @@ function schSyncLocked_() {
           // The cell clearly names a setter but the parser couldn't read it —
           // surface the raw text so format drift is visible instead of silent.
           out.details.push('Could not parse setter from Lead Source "' + row[ix.lead] + '" — ' + (existing.deal_name || projectId));
+        }
+
+        // Backfill a MISSING manager from the deal's closer (or setter): their
+        // current reports-to, only when that person is an actual MANAGER role
+        // (a director/VP-managed rep gets no manager override — stamping the
+        // director would double-pay). Never overwrites an assigned manager.
+        if (!existing.manager_id) {
+          const repP = profById[patch.closer_id || existing.closer_id] || profById[patch.setter_id || existing.setter_id] || null;
+          const mgrP = repP && repP.manager_id ? profById[repP.manager_id] : null;
+          if (mgrP && mgrP.role === 'manager') patch.manager_id = mgrP.id;
         }
 
         if (!Object.keys(patch).length) { out.skipped++; continue; }
