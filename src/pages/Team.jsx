@@ -1,11 +1,11 @@
 import { useState, useEffect, useMemo } from 'react'
 import { format, subMonths, startOfWeek, endOfWeek, addDays } from 'date-fns'
-import { fetchDeals, fetchUsers, fetchRepGoals, saveRepGoal, deleteRepGoal, fetchWeeklyStats } from '../lib/db'
+import { fetchDeals, fetchUsers, fetchRepGoals, saveRepGoal, deleteRepGoal, fetchWeeklyStats, fetchTeamChanges } from '../lib/db'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserCommission, fmt, activeDeals, isCanceled } from '../utils/commission'
 import { getPresetRange, presetLabel, weeksInRange, weekStartOf } from '../utils/dateRanges'
-import { headIdSet, teamKeyFor, saleOwnerId } from '../utils/team'
+import { headIdSet, teamKeyFor, saleOwnerId, buildChangesByProfile, teamOfSale } from '../utils/team'
 import DateRangeFilter from '../components/DateRangeFilter'
 import WeeklyStats from '../components/WeeklyStats'
 import { useSettings } from '../contexts/SettingsContext'
@@ -241,6 +241,7 @@ export default function Team() {
   const [deals,           setDeals]           = useState([])
   const [users,           setUsers]           = useState([])
   const [weeklyStats,     setWeeklyStats]     = useState([])
+  const [teamChanges,     setTeamChanges]     = useState([])
   const [loading,         setLoading]         = useState(true)
   const [tab,             setTab]             = useState('overview')
   const [dateFrom,        setDateFrom]        = useState(getPresetRange('mtd').from)
@@ -274,10 +275,11 @@ export default function Team() {
   }
 
   const loadData = () =>
-    Promise.all([fetchDeals(), fetchUsers(), fetchRepGoals(GOAL_YEAR, GOAL_MONTH), fetchWeeklyStats()])
-      .then(([{ data: d }, { data: u }, { data: g }, { data: ws }]) => {
+    Promise.all([fetchDeals(), fetchUsers(), fetchRepGoals(GOAL_YEAR, GOAL_MONTH), fetchWeeklyStats(), fetchTeamChanges()])
+      .then(([{ data: d }, { data: u }, { data: g }, { data: ws }, { data: tc }]) => {
         setDeals(activeDeals(d ?? [])); setUsers(u ?? [])   // exclude canceled jobs
         setWeeklyStats(ws ?? [])
+        setTeamChanges(tc ?? [])
         const m = {}
         for (const row of g ?? []) if (row.target != null) m[`${row.scope}:${row.subject_id}`] = row.target
         setGoalMap(m)
@@ -401,37 +403,33 @@ export default function Team() {
     // another team (reports to a lead, no directs) is a MEMBER there, not a
     // team of their own.
     const heads = headIdSet(users)
+    const usersById = Object.fromEntries(users.map(u => [u.id, u]))
+    const changesByProfile = buildChangesByProfile(teamChanges)
+    const inPeriod  = (d) => (!dateFrom||(d.sale_date??'')>=dateFrom)&&(!dateTo||(d.sale_date??'')<=dateTo)
+    // DATE-EFFECTIVE attribution: a sale belongs to the team its owner was on
+    // AS OF THE SALE DATE (team_changes log) — matches the Dashboard, so
+    // moving a rep never rewrites history.
+    const saleTeam = (d) => teamOfSale(saleOwnerId(d), d.sale_date, usersById, heads, changesByProfile)
+    const byTeam = {}
+    for (const d of deals) { if (inPeriod(d)) (byTeam[saleTeam(d)] ||= []).push(d) }
     const rows = users.filter(u => heads.has(u.id) && (isAdmin || !u.ghost)).map(mgr => {
-      // ALL members (incl. deactivated) feed the money — an inactive rep's
-      // sales still count toward the team. But the "X reps" headcount and
-      // rev/rep only reflect ACTIVE members.
       const teamMembers = users.filter(u => u.manager_id === mgr.id && !heads.has(u.id) && isSeller(u))
       const activeReps  = teamMembers.filter(u => u.active !== false)
-      const repIds    = new Set([...teamMembers.map(r => r.id), mgr.id])  // include the manager's own sales
-      const inPeriod  = (d) => (!dateFrom||(d.sale_date??'')>=dateFrom)&&(!dateTo||(d.sale_date??'')<=dateTo)
-      // Deal count + revenue attribute by SETTER (company convention — matches
-      // the Dashboard team breakdown): a lead closed by another team's closer
-      // is not this team's sale, so nothing double-counts across teams.
-      const teamDeals = deals.filter(d => inPeriod(d) && repIds.has(saleOwnerId(d)))
+      const teamDeals = byTeam[mgr.id] || []
       const revenue    = teamDeals.reduce((s,d) => s+(parseFloat(d.baseline_revenue)||0), 0)
-      // Commission = what this team's members actually EARN, over every deal
-      // they touch in any role (incl. closing another team's lead) — not the
-      // director/VP overrides or an outside setter/closer's share.
-      const earnDeals  = deals.filter(d => inPeriod(d) && (repIds.has(d.setter_id) || repIds.has(d.closer_id)))
-      const commission = [...repIds].reduce((s, id) => s + getUserCommission(earnDeals, id), 0)
+      // Commission = what this team's people EARN on the team's as-of deals
+      // (setter/closer/manager shares on deals attributed to this team) —
+      // former members' earnings on old deals stay with the old team too.
+      const earners = new Set()
+      teamDeals.forEach(d => [d.setter_id, d.closer_id, d.manager_id].forEach(id => id && earners.add(id)))
+      const commission = [...earners].reduce((s, id) => s + getUserCommission(teamDeals, id), 0)
       return { id: mgr.id, name: mgr.name, reps: activeReps.length, deals: teamDeals.length, revenue, commission, revenuePerRep: activeReps.length>0?revenue/activeReps.length:0, isMyTeam: mgr.id===profile.id }
     }).sort((a,b) => b.revenue-a.revenue)
-    // Sales owned by nobody on a head's team (unassigned rep, leadership
-    // selling directly, or no setter/closer at all) — explicit bucket so the
-    // team cards sum to the Dashboard's company totals.
+    // Sales attributed to no current team (unassigned rep, no setter/closer,
+    // or an unresolvable as-of lead) — explicit bucket so the team cards sum
+    // to the Dashboard's company totals.
     {
-      const assigned = new Set()
-      users.filter(u => heads.has(u.id)).forEach(mgr => {
-        assigned.add(mgr.id)
-        users.filter(u => u.manager_id === mgr.id).forEach(u => assigned.add(u.id))
-      })
-      const inPeriod = (d) => (!dateFrom||(d.sale_date??'')>=dateFrom)&&(!dateTo||(d.sale_date??'')<=dateTo)
-      const strays = deals.filter(d => inPeriod(d) && !assigned.has(saleOwnerId(d)))
+      const strays = byTeam.unassigned || []
       if (strays.length) {
         const revenue = strays.reduce((s,d) => s+(parseFloat(d.baseline_revenue)||0), 0)
         const owners  = [...new Set(strays.map(saleOwnerId).filter(Boolean))]
@@ -440,7 +438,7 @@ export default function Team() {
       }
     }
     return rows
-  }, [users, deals, dateFrom, dateTo, role, profile, isAdmin])
+  }, [users, deals, dateFrom, dateTo, role, profile, isAdmin, teamChanges])
 
   const maxRevenue = teamStats.reduce((m,t) => Math.max(m,t.revenue), 0)
 

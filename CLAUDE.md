@@ -166,7 +166,13 @@ setup + deploy steps.
   reports-to moves — a SECURITY DEFINER trigger on `profiles` records old/new
   lead + who changed it whenever `manager_id` changes; read-only for clients;
   shown as the collapsible "Team change log" on Admin → Users, and the latest
-  change stamps "since <date>" on roster rows); `030` adds
+  change stamps "since <date>" on roster rows. **Team attribution is
+  DATE-EFFECTIVE**: a sale belongs to the team its owner was on AS OF THE
+  SALE DATE — `buildChangesByProfile`/`managerAsOf`/`teamOfSale` in
+  `utils/team.js` replay this log, used by the Dashboard team
+  breakdown/filter/goal and the Team page comparison, so moving a rep never
+  rewrites history; deals from a dissolved team follow its old lead's current
+  grouping); `030` adds
   `deals.override_exclusions` (jsonb `[{ item, amount }]` — subcontracted items
   that earn no override; see the engine rules above); `031` adds
   `deals.change_alert` (jsonb `{ prev_baseline, prev_job_price, baseline,
@@ -232,6 +238,11 @@ setup + deploy steps.
   merged into Team Jones), not by rewiring reports. Used by the Admin roster,
   Team page (comparison + card grouping + visibleReps), Dashboard
   breakdown/filter, and Weekly Stats — never re-derive headship inline.
+- **Deal manager auto-fill:** picking a setter/closer in the DealModal (and
+  the sync's schedule pass) backfills a MISSING `manager_id` from that
+  person's current reports-to — ONLY when that person's lead has the
+  `manager` ROLE (a director/VP-managed rep gets none; stamping the director
+  would double-pay). Never overwrites an assigned manager.
 - **"Reports to" (`profiles.manager_id`) can be a manager, DIRECTOR, or VP** —
   some reps are managed directly by Garrison (director). It drives Team-page
   grouping (team heads = managers + anyone with direct reports), goal
