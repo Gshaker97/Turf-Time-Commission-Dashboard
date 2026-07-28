@@ -28,7 +28,7 @@ const BLANK = {
   password: '',
 }
 
-export default function UserModal({ user, allUsers = [], onSave, onClose }) {
+export default function UserModal({ user, allUsers = [], teamChanges = [], onSave, onClose }) {
   const [form, setForm] = useState(BLANK)
   const [saving, setSaving] = useState(false)
   const [pw, setPw] = useState('')
@@ -214,6 +214,42 @@ export default function UserModal({ user, allUsers = [], onSave, onClose }) {
                   Supabase Studio → Authentication → Users.
                 </p>
               )}
+            </div>
+          )}
+
+          {user && (
+            <div className="rounded-lg p-3" style={{ background: '#1a1a1a', border: '1px solid #2e2e2e' }}>
+              <label className="block text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-2">
+                Team History
+              </label>
+              {(() => {
+                const nameOf = (id) => (id ? (allUsers.find(u => u.id === id)?.name ?? '—') : 'Unassigned')
+                const moves = teamChanges
+                  .filter(c => c.profile_id === user.id)
+                  .sort((a, b) => String(b.changed_at).localeCompare(String(a.changed_at)))
+                if (!moves.length) {
+                  return <p className="text-[11px] text-white/35">No team moves recorded — reporting to {nameOf(user.manager_id)} since before the change log began.</p>
+                }
+                return (
+                  <div className="space-y-1.5">
+                    {/* Current state first, then each dated move (newest → oldest).
+                        These dates are what the site's numbers attribute by:
+                        sales before a move stay with the old team. */}
+                    <p className="text-[12px] text-white/70">
+                      <span className="text-teal font-semibold">Now:</span> reports to {nameOf(user.manager_id)}
+                      <span className="text-white/30"> · since {String(moves[0].changed_at).slice(0, 10)}</span>
+                    </p>
+                    {moves.map(c => (
+                      <p key={c.id} className="text-[12px] text-white/55">
+                        <span className="text-white/35">{String(c.changed_at).slice(0, 10)}:</span>{' '}
+                        {nameOf(c.old_manager_id)} <span className="text-white/30">→</span> {nameOf(c.new_manager_id)}
+                        {c.changed_by ? <span className="text-white/30"> · by {nameOf(c.changed_by)}</span> : null}
+                      </p>
+                    ))}
+                    <p className="text-[10px] text-white/25 pt-0.5">Sales and overrides attribute to teams by these dates — deals before a move stay with the old team.</p>
+                  </div>
+                )
+              })()}
             </div>
           )}
 

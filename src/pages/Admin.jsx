@@ -432,7 +432,7 @@ export default function Admin() {
       {/* ── SETTINGS ── */}
       {tab === 'Settings' && <SettingsPanel />}
 
-      {userModal && <UserModal user={editUser} allUsers={users} onSave={saveUser} onClose={() => { setUserModal(false); setEditUser(null) }} />}
+      {userModal && <UserModal user={editUser} allUsers={users} teamChanges={teamChanges} onSave={saveUser} onClose={() => { setUserModal(false); setEditUser(null) }} />}
     </div>
   )
 }
