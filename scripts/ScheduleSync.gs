@@ -57,7 +57,7 @@ const SCH_PAID_STATUS      = 'Paid';
 const SCH_BASELINE_PROP   = 'SCHED_BASELINE_IDS';
 // Version stamp — reported in the heartbeat and shown on Admin → System
 // Health, so a stale/botched paste is visible at a glance. Bump when editing.
-const SCH_VERSION         = '2026-07-14';
+const SCH_VERSION         = '2026-07-17';
 // SAFETY: preview mode (logs what it WOULD do, writes nothing) now lives in
 // SCRIPT PROPERTIES, not code — so re-pasting this file can never silently
 // disable the sync again. To preview: Project Settings → Script Properties →
@@ -301,10 +301,16 @@ function schSyncLocked_() {
 
           if (snapMissing) {
             // First time we've tracked this deal's sheet figures — adopt them
-            // silently as the comparison baseline (no alert).
+            // silently as the comparison baseline (no alert). A hand-entered
+            // deal matched by NAME also gets the sheet's Project ID stamped,
+            // so the Schedule pass can manage it (install/pay/payment/office)
+            // instead of leaving it manual forever.
             if (!SCH_DRY_RUN) {
-              try { schPatch_(url, key, '/rest/v1/deals?id=eq.' + existing.id, { synced_baseline: baselineVal, synced_job_price: saleVal });
-                    Object.assign(existing, { synced_baseline: baselineVal, synced_job_price: saleVal }); }
+              const adopt = { synced_baseline: baselineVal, synced_job_price: saleVal };
+              if (projectId && !existing.project_id) adopt.project_id = projectId;
+              try { schPatch_(url, key, '/rest/v1/deals?id=eq.' + existing.id, adopt);
+                    Object.assign(existing, adopt);
+                    if (adopt.project_id) byProject[String(projectId)] = existing; }
               catch (e) { out.errors++; out.details.push(customer + ': ' + e.message); }
             }
             continue;
