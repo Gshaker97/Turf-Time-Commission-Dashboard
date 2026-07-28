@@ -57,7 +57,7 @@ const SCH_PAID_STATUS      = 'Paid';
 const SCH_BASELINE_PROP   = 'SCHED_BASELINE_IDS';
 // Version stamp — reported in the heartbeat and shown on Admin → System
 // Health, so a stale/botched paste is visible at a glance. Bump when editing.
-const SCH_VERSION         = '2026-07-18';
+const SCH_VERSION         = '2026-07-19';
 // SAFETY: preview mode (logs what it WOULD do, writes nothing) now lives in
 // SCRIPT PROPERTIES, not code — so re-pasting this file can never silently
 // disable the sync again. To preview: Project Settings → Script Properties →
@@ -343,18 +343,23 @@ function schSyncLocked_() {
         // New deal.
         if (ignoreCreate.has(projectId)) { out.skipped++; continue; }
         if (namesSeen.has(customer.toLowerCase())) { out.skipped++; continue; }  // protect hand-entered
-        const rep = byName[repLc];
-        if (!rep) { out.skipped++; out.details.push('Unknown rep "' + repName + '" for ' + customer); continue; }
+        // Resolve the Sales Rep leniently (whitespace-insensitive, unique
+        // first-name). An UNRESOLVED rep no longer blocks the import — the
+        // deal is the money, the name is fixable: it lands with NO
+        // setter/closer (held in Needs review, amber-flagged in Payroll) and
+        // the issue below names exactly who to assign.
+        const rep = byName[repLc] || schResolvePerson_(repName, profiles);
+        if (!rep) out.details.push('Unknown rep "' + repName + '" for ' + customer + ' — imported with no setter/closer; assign them on the deal');
 
         const newSaleDate = schDate_(row[ix.approved]);
         const deal = {
           deal_name: customer, sale_date: newSaleDate, status: SCH_NEW_STATUS,
-          setter_id: rep.id, closer_id: rep.id, setter_split_pct: 1,
+          setter_id: rep ? rep.id : null, closer_id: rep ? rep.id : null, setter_split_pct: rep ? 1 : null,
           // The deal's manager-override recipient — ONLY when the rep's
           // reports-to is an actual MANAGER. A rep managed directly by a
           // director/VP has no manager override (that person already earns
           // their own override; stamping them as manager would double-pay).
-          manager_id: (rep.manager_id && profById[rep.manager_id] && profById[rep.manager_id].role === 'manager') ? rep.manager_id : null,
+          manager_id: (rep && rep.manager_id && profById[rep.manager_id] && profById[rep.manager_id].role === 'manager') ? rep.manager_id : null,
           director_id: directorId, vp_id: vpId,
           baseline_revenue: baselineVal, job_price: saleVal, project_id: projectId,
           // Snapshot of the sheet figures, so a later sheet change is detected
@@ -810,7 +815,7 @@ function schDiagnose(name) {
       continue;
     }
     if (ignoreCreate.indexOf(projectId) !== -1) { log(pfx + 'SKIPPED — Project ID ' + projectId + ' is in the baseline ignore list (schBaselineNow was run after this job landed). Remove it from the SCHED_BASELINE_IDS script property to import.'); continue; }
-    if (!byName[repName.toLowerCase()]) { log(pfx + 'SKIPPED — Sales Rep "' + repName + '" doesn\'t match any roster name. Fix the sheet name or the roster.'); continue; }
+    if (!byName[repName.toLowerCase()] && !schResolvePerson_(repName, profiles)) { log(pfx + 'NOTE — Sales Rep "' + repName + '" doesn\'t match any roster name; the deal imports anyway with NO setter/closer (assign them in the site).'); }
     log(pfx + 'WOULD CREATE ✓ — nothing blocks this row. If it still isn\'t in the site, check System Health (DRY_RUN / sync stalled / errors).');
   }
   if (!found) log('No Jobs row found containing "' + name + '" — check the spelling/tab.');
