@@ -57,7 +57,7 @@ const SCH_PAID_STATUS      = 'Paid';
 const SCH_BASELINE_PROP   = 'SCHED_BASELINE_IDS';
 // Version stamp — reported in the heartbeat and shown on Admin → System
 // Health, so a stale/botched paste is visible at a glance. Bump when editing.
-const SCH_VERSION         = '2026-07-17';
+const SCH_VERSION         = '2026-07-18';
 // SAFETY: preview mode (logs what it WOULD do, writes nothing) now lives in
 // SCRIPT PROPERTIES, not code — so re-pasting this file can never silently
 // disable the sync again. To preview: Project Settings → Script Properties →
@@ -629,12 +629,16 @@ function schCleanRep_(v) { return String(v || '').replace(/\s*\(.*$/, '').trim()
 // "Jean Carlo" → "Jean Carlo Correa". Returns null if nothing matches or the
 // match is ambiguous (more than one candidate) — never guesses.
 function schResolvePerson_(rawName, profiles) {
-  const name = String(rawName || '').trim().toLowerCase();
+  // Whitespace-insensitive: collapse runs of spaces/tabs/nbsp on BOTH sides —
+  // a sheet cell typed "Ricky  Marrugo" (double space) must still match the
+  // roster's "Ricky Marrugo" (real incident: blocked Laura Hiler's import).
+  const norm = function (v) { return String(v || '').replace(/\s+/g, ' ').trim().toLowerCase(); };
+  const name = norm(rawName);
   if (!name) return null;
-  const exact = profiles.find(p => p.name && p.name.trim().toLowerCase() === name);
+  const exact = profiles.find(p => p.name && norm(p.name) === name);
   if (exact) return exact;
   const cands = profiles.filter(p => {
-    const pn = String(p.name || '').trim().toLowerCase();
+    const pn = norm(p.name);
     return pn && (pn.startsWith(name + ' ') || pn.split(' ')[0] === name);
   });
   return cands.length === 1 ? cands[0] : null;
