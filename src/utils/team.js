@@ -58,7 +58,12 @@ export function buildChangesByProfile(teamChanges = []) {
 export function managerAsOf(changesByProfile, user, dateISO) {
   const list = user ? changesByProfile?.[user.id] : null
   if (!list?.length || !dateISO) return user?.manager_id ?? null
-  let mgr = list[0].old_manager_id ?? null
+  // State before the first logged move. A first entry of "Unassigned → X" is
+  // almost always the roster being SET UP (the log only began July 2026), not
+  // a real team change — so pre-log deals follow the first known lead rather
+  // than dumping into Unassigned (real case: Stephen's July 1 deal belonged
+  // to Garrison, whose reports-to was first stamped July 2).
+  let mgr = list[0].old_manager_id ?? list[0].new_manager_id ?? null
   for (const c of list) {
     if (String(dateISO) >= String(c.changed_at).slice(0, 10)) mgr = c.new_manager_id ?? null
     else break
