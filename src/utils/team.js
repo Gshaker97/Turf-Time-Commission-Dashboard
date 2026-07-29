@@ -79,5 +79,12 @@ export function teamOfSale(ownerId, saleDate, usersById, heads, changesByProfile
   if (!mgrId) return 'unassigned'
   if (heads.has(mgrId)) return mgrId
   const mgr = usersById[mgrId]
-  return mgr ? teamKeyFor(mgr, heads) : 'unassigned'
+  if (!mgr) return 'unassigned'
+  const k = teamKeyFor(mgr, heads)
+  // The as-of lead heads nothing today AND wasn't absorbed anywhere (e.g. a
+  // director whose directs all moved away): keep the sale under that lead as
+  // a HISTORICAL team key rather than dumping it into Unassigned — the
+  // breakdowns render such keys as their own row (real case: Stephen's
+  // pre-move deals under Garrison after Garrison's last direct moved).
+  return k === 'unassigned' ? mgrId : k
 }
