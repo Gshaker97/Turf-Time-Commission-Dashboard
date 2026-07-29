@@ -380,7 +380,12 @@ historical Monday+11). Injected into `payDateFromInstall` via
 changed — existing pay dates never move. `note_notify` =
 `{ closer, setter, manager, admins }` booleans — who gets the bell when a deal
 note posts (default closer+admins; exposed as `noteNotify` from
-`useSettings()`, consumed in `NotesThread`). `sync_excluded_reps` +
+`useSettings()`, consumed in `NotesThread`). `weekly_goal` (number or null) —
+the Dashboard's company weekly revenue goal (shown inside the Monthly Goal
+card, always tracking the CURRENT Sun–Sat week regardless of the page's date
+range; null/absent = auto: monthly goal ÷ weeks in the month; admin edits it
+inline on the card via `save('weekly_goal', v)` from `useSettings()`).
+`sync_excluded_reps` +
 `sync_skip_names` (string arrays) — the sync's never-import rep list and
 junk-customer-name substrings (defaults rhett/ronnie + test/cute; read per run,
 lowercased substring match; a SAVED empty list means "no exclusions" while a

@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import {
-  format, subMonths, startOfWeek, endOfWeek, addDays,
+  format, subMonths, startOfWeek, endOfWeek, addDays, getDaysInMonth,
 } from 'date-fns'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { Check, X, TrendingUp, TrendingDown, Minus, ChevronUp, ChevronDown, ChevronsUpDown, Copy } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { useSettings } from '../contexts/SettingsContext'
 import { fetchDeals, fetchUsers, fetchGoal, saveGoal as saveGoalDb, deleteGoal as deleteGoalDb, fetchTeamChanges } from '../lib/db'
 import { fmt, dealAmounts, activeDeals } from '../utils/commission'
 import { headIdSet, saleOwnerId, buildChangesByProfile, teamOfSale } from '../utils/team'
@@ -71,6 +72,7 @@ function StatCard({ label, value, sub, trend }) {
 
 export default function Dashboard() {
   const { isAdmin } = useAuth()
+  const { settings, save: saveSettingCtx } = useSettings()
   // Setting the monthly revenue goal is a data change — admin-only.
   const canEditGoal = isAdmin
 
@@ -92,6 +94,10 @@ export default function Dashboard() {
   const [saveStatus,   setSaveStatus]   = useState('idle')
   const [saveError,    setSaveError]    = useState(null)
   const skipBlurSaveRef = useRef(false)
+  const [editingWeekGoal, setEditingWeekGoal] = useState(false)
+  const [weekGoalInput,   setWeekGoalInput]   = useState('')
+  const [weekSaveStatus,  setWeekSaveStatus]  = useState('idle')
+  const skipWeekBlurRef = useRef(false)
 
   const goalDate  = useMemo(() => dateFrom ? new Date(dateFrom + 'T12:00:00') : new Date(), [dateFrom])
   const goalYear  = goalDate.getFullYear()
@@ -181,6 +187,44 @@ export default function Dashboard() {
     const pct        = Math.min((curRevenue/goal)*100, 100)
     return { curRevenue, goal, pct, isCustom: savedGoal != null, month: format(goalDate, 'MMMM yyyy') }
   }, [deals, users, teamFilter, savedGoal, goalYear, goalMonth, goalDate])
+
+  // Weekly goal: always tracks the CURRENT week (Sun–Sat, same week rule as the
+  // rest of reporting), regardless of the selected date range. A custom $ lives
+  // in app_settings.weekly_goal (admin-set, applies every week until changed);
+  // otherwise auto = monthly goal ÷ weeks in the month.
+  const weeklyGoal = useMemo(() => {
+    const now = new Date()
+    const wkStart = startOfWeek(now, { weekStartsOn: 0 })
+    const wkEnd   = endOfWeek(now,   { weekStartsOn: 0 })
+    const ws = format(wkStart, 'yyyy-MM-dd'), we = format(wkEnd, 'yyyy-MM-dd')
+    let rows = deals.filter(d => d.sale_date >= ws && d.sale_date <= we)
+    if (teamFilter) rows = rows.filter(d => saleTeam(d) === teamFilter)
+    const curRevenue = rows.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
+    const saved    = parseFloat(settings.weekly_goal)
+    const isCustom = Number.isFinite(saved) && saved > 0
+    const autoGoal = monthlyGoal.goal / (getDaysInMonth(goalDate) / 7)
+    const goal     = isCustom ? saved : autoGoal
+    const pct      = Math.min((curRevenue / goal) * 100, 100)
+    return { curRevenue, goal, pct, isCustom, label: `${format(wkStart, 'MMM d')} – ${format(wkEnd, 'MMM d')}` }
+  }, [deals, users, teamFilter, settings.weekly_goal, monthlyGoal.goal, goalDate])
+
+  function startEditWeekGoal() { setWeekGoalInput(weeklyGoal.goal.toFixed(0)); setWeekSaveStatus('idle'); setEditingWeekGoal(true) }
+  function cancelWeekGoalEdit() { skipWeekBlurRef.current = true; setEditingWeekGoal(false) }
+  function handleWeekGoalBlur() { if (skipWeekBlurRef.current) { skipWeekBlurRef.current = false; return } saveWeekGoal() }
+  async function saveWeekGoal() {
+    const v = parseFloat(weekGoalInput)
+    if (!(v > 0)) { setEditingWeekGoal(false); return }
+    setEditingWeekGoal(false)
+    const { error } = await saveSettingCtx('weekly_goal', v)
+    if (error) { setWeekSaveStatus('error'); return }
+    setWeekSaveStatus('saved'); setTimeout(() => setWeekSaveStatus('idle'), 2000)
+  }
+  async function resetWeekGoal() {
+    skipWeekBlurRef.current = true; setEditingWeekGoal(false)
+    const { error } = await saveSettingCtx('weekly_goal', null)
+    if (error) { setWeekSaveStatus('error'); return }
+    setWeekSaveStatus('saved'); setTimeout(() => setWeekSaveStatus('idle'), 2000)
+  }
 
   function startEditGoal() { setGoalInput(monthlyGoal.goal.toFixed(0)); setSaveStatus('idle'); setSaveError(null); setEditingGoal(true) }
   function cancelGoalEdit() { skipBlurSaveRef.current = true; setEditingGoal(false) }
@@ -499,6 +543,78 @@ export default function Dashboard() {
         <div className="h-3 rounded-full overflow-hidden" style={{ background: '#1a1a1a' }}>
           <div className={`h-full rounded-full transition-all duration-700 ${monthlyGoal.pct >= 100 ? 'bg-emerald-400' : 'bg-teal'}`}
             style={{ width: `${monthlyGoal.pct}%` }} />
+        </div>
+
+        {/* ── Weekly Goal (always the current week, Sun–Sat) ── */}
+        <div className="mt-4 pt-4" style={{ borderTop: '1px solid #2e2e2e' }}>
+          <div className="flex items-start justify-between mb-2">
+            <div>
+              <h4 className="text-[12px] md:text-[13px] font-semibold text-white">
+                This Week ({weeklyGoal.label})
+                {selectedTeamName && ` — ${selectedTeamName}`}
+              </h4>
+              <p className="text-[10px] text-white/30 mt-0.5">
+                {weeklyGoal.isCustom ? 'Custom weekly goal' : 'Auto: monthly goal ÷ weeks'}
+              </p>
+            </div>
+            <div className={`text-[20px] md:text-[24px] font-bold leading-none ${weeklyGoal.pct >= 100 ? 'text-emerald-400' : 'text-teal'}`}>
+              {weeklyGoal.pct.toFixed(1)}%
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-end gap-4 md:gap-8 mb-3">
+            <div>
+              <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mb-1">Week Revenue</p>
+              <p className="text-[17px] md:text-[20px] font-bold text-white">{fmt(weeklyGoal.curRevenue)}</p>
+            </div>
+            <div className="text-white/20 text-lg mb-0.5">/</div>
+            <div>
+              <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mb-1">Goal</p>
+              {editingWeekGoal ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-white/40">$</span>
+                  <input autoFocus type="number" value={weekGoalInput}
+                    onChange={e => setWeekGoalInput(e.target.value)}
+                    onBlur={handleWeekGoalBlur}
+                    onKeyDown={e => { if (e.key === 'Enter') saveWeekGoal(); if (e.key === 'Escape') cancelWeekGoalEdit() }}
+                    style={{ background: '#2a2a2a', border: '1px solid rgba(0,184,148,0.4)' }}
+                    className="w-28 rounded-lg px-2 py-1 text-[14px] font-bold text-teal focus:outline-none" />
+                  <button onMouseDown={e => e.preventDefault()} onClick={saveWeekGoal}
+                    className="p-1.5 rounded-lg text-emerald-400 hover:bg-emerald-400/10"><Check size={14} /></button>
+                  <button onMouseDown={e => e.preventDefault()} onClick={cancelWeekGoalEdit}
+                    className="p-1.5 rounded-lg text-white/30 hover:bg-white/5"><X size={14} /></button>
+                  {weeklyGoal.isCustom && (
+                    <button onMouseDown={e => e.preventDefault()} onClick={resetWeekGoal}
+                      className="text-[11px] text-white/30 hover:text-white/60 underline ml-1">reset</button>
+                  )}
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  {canEditGoal ? (
+                    <button onClick={startEditWeekGoal}
+                      className="text-[15px] md:text-[17px] font-bold text-teal hover:bg-teal/5 rounded px-2 -mx-2 py-0.5 transition-colors">
+                      {fmt(weeklyGoal.goal)}
+                    </button>
+                  ) : (
+                    <p className="text-[15px] font-bold text-teal">{fmt(weeklyGoal.goal)}</p>
+                  )}
+                  {weekSaveStatus === 'saved' && <span className="text-[11px] font-semibold text-teal">Saved</span>}
+                  {weekSaveStatus === 'error' && <span className="text-[11px] font-semibold text-red-400">Save failed</span>}
+                </div>
+              )}
+            </div>
+            <div className="ml-auto text-right">
+              <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mb-1">Remaining</p>
+              <p className="text-[14px] font-bold text-white/50">
+                {weeklyGoal.pct >= 100 ? 'Goal Hit! 🎉' : fmt(Math.max(0, weeklyGoal.goal - weeklyGoal.curRevenue))}
+              </p>
+            </div>
+          </div>
+
+          <div className="h-2 rounded-full overflow-hidden" style={{ background: '#1a1a1a' }}>
+            <div className={`h-full rounded-full transition-all duration-700 ${weeklyGoal.pct >= 100 ? 'bg-emerald-400' : 'bg-teal'}`}
+              style={{ width: `${weeklyGoal.pct}%` }} />
+          </div>
         </div>
       </div>
 
