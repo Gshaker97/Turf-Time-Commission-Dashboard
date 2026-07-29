@@ -25,6 +25,16 @@ see their teams.
   hourly outside sentry. `scripts/Sync.gs` and `scripts/UserAdmin.gs` are
   legacy — see the sync and user-management sections below. (The Drive backup
   script was retired — DB backups are Railway volume snapshots, per SETUP.md.)
+- **Deals spreadsheet backup:** `GET /api/export/deals?since=` on `server.js`
+  (auth = the service key as bearer) serves deal rows computed by the SAME
+  commission engine as payroll, grouped by closing month (July 2026+, newest
+  first). `scripts/DealsExport.gs` (daily trigger, entry `dealsExportRun`)
+  writes them into ONE live spreadsheet ("Turf Time Deals — Live Backup" in
+  the "Turf Time Deal Exports" Drive folder, remembered by ID): a tab per
+  month, red tint = Canceled / green = Paid, and a MONTH SUMMARY per tab
+  (company + per-rep baseline/total/commissions/overrides, canceled
+  excluded). Old states = Sheets version history. Never recompute commission
+  in the export script — always feed from the endpoint.
 
 ## Roles (hierarchy, low → high)
 
@@ -75,6 +85,14 @@ setup + deploy steps.
    - `getSetterCommission(deal)` returns ONLY the setter's own share (never the
      closer's portion or overrides). The Dashboard rep leaderboard uses this so
      the setter is credited full revenue but only their split commission.
+   - **Sale ownership (`saleOwnerId` in `utils/team.js`): deal counts + revenue
+     credit the SETTER, falling back to the CLOSER when no setter is recorded**
+     — used by the Dashboard leaderboard/teams and the Team page so no deal
+     can vanish from breakdowns while still counting in company totals. Both
+     team breakdowns append an "Unassigned" bucket (owner on no current team,
+     or no people at all) so they always sum exactly to the company totals.
+     Closed leads are NOT extra sales for the closer — their pay shows in
+     commission columns only.
 
 3. **All data access goes through `src/lib/db.js`.** Never import `supabase`
    directly into a page or component. The gateway is demo-aware: when
@@ -225,7 +243,12 @@ setup + deploy steps.
   `profiles.email` directly for a user who has an `auth_id`.
 - **Users tab layout:** a team-grouped roster (Leadership & Admin → one
   section per team lead → Unassigned reps) with search; row badges are
-  display-only and edits go through the Edit modal (`UserModal`).
+  display-only and edits go through the Edit modal (`UserModal`). The Edit
+  modal shows a **Team History** panel (that user's dated reports-to moves
+  from `team_changes`, newest first, plus current lead + since-date).
+- **Setter/Closer in the DealModal are type-to-search pickers**
+  (`PersonPicker` in DealModal.jsx — the roster outgrew dropdowns); the
+  small selects (manager/director/VP/status/office/payment) stay native.
 - **What teams exist (`src/utils/team.js`, the ONE shared rule — ROLE-based,
   per Keaton):** the `manager` ROLE is what makes a team — having people report
   to you never makes you a head (a rep pointed at by a stale reports-to link is
