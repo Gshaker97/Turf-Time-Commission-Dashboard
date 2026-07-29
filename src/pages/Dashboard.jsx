@@ -231,7 +231,20 @@ export default function Dashboard() {
     }
     const rows = mgrs.map(mgr => teamRow(mgr.id, mgr.name, mgr.ghost === true,
       users.filter(u => u.manager_id === mgr.id && u.id !== mgr.id && u.active !== false).length
-    )).sort((a, b) => b.revenue - a.revenue)
+    ))
+    // HISTORICAL teams: sale keys that aren't a current head (a lead whose
+    // team has since dissolved without being absorbed) still get their own
+    // row, so old deals never dump into Unassigned just because the team
+    // disbanded later.
+    if (!teamFilter) {
+      const known = new Set(mgrs.map(m => m.id))
+      for (const key of Object.keys(byTeam)) {
+        if (key === 'unassigned' || known.has(key)) continue
+        const u = users.find(x => x.id === key)
+        rows.push(teamRow(key, u?.name ?? 'Former team', u?.ghost === true, 0))
+      }
+    }
+    rows.sort((a, b) => b.revenue - a.revenue)
     if (!teamFilter && (byTeam.unassigned?.length || prevByTeam.unassigned?.length)) {
       rows.push(teamRow('unassigned', 'Unassigned', false, 0))
     }

@@ -425,6 +425,24 @@ export default function Team() {
       const commission = [...earners].reduce((s, id) => s + getUserCommission(teamDeals, id), 0)
       return { id: mgr.id, name: mgr.name, reps: activeReps.length, deals: teamDeals.length, revenue, commission, revenuePerRep: activeReps.length>0?revenue/activeReps.length:0, isMyTeam: mgr.id===profile.id }
     }).sort((a,b) => b.revenue-a.revenue)
+    // HISTORICAL teams: sale keys that aren't a current head (a dissolved,
+    // un-absorbed team) get their own row so old deals never dump into
+    // Unassigned just because the team disbanded later.
+    {
+      const known = new Set(rows.map(r => r.id))
+      for (const key of Object.keys(byTeam)) {
+        if (key === 'unassigned' || known.has(key)) continue
+        const lead = users.find(u => u.id === key)
+        if (!isAdmin && lead?.ghost) continue
+        const teamDeals = byTeam[key]
+        const revenue = teamDeals.reduce((s,d) => s+(parseFloat(d.baseline_revenue)||0), 0)
+        const earners = new Set()
+        teamDeals.forEach(d => [d.setter_id, d.closer_id, d.manager_id].forEach(id => id && earners.add(id)))
+        const commission = [...earners].reduce((s, id) => s + getUserCommission(teamDeals, id), 0)
+        rows.push({ id: key, name: lead?.name ?? 'Former team', reps: 0, deals: teamDeals.length, revenue, commission, revenuePerRep: 0, isMyTeam: lead?.id === profile.id })
+      }
+      rows.sort((a,b) => b.revenue - a.revenue)
+    }
     // Sales attributed to no current team (unassigned rep, no setter/closer,
     // or an unresolvable as-of lead) — explicit bucket so the team cards sum
     // to the Dashboard's company totals.
