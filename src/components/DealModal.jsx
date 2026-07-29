@@ -18,6 +18,55 @@ const inputStyle = { background: '#1a1a1a', border: '1px solid #3a3a3a' }
 const Inp = (props) => <input {...props} style={inputStyle} className={inputCls} />
 const Sel = ({ children, ...props }) => <select {...props} style={inputStyle} className={inputCls}>{children}</select>
 
+// Type-to-search person picker — replaces the setter/closer dropdowns, which
+// got unusable as the roster grew. Shows the selected name; typing filters;
+// click or Enter picks the top match. A hidden required input keeps native
+// form validation working.
+function PersonPicker({ value, users = [], onChange, placeholder = 'Search rep…', required = false }) {
+  const [open, setOpen]   = useState(false)
+  const [query, setQuery] = useState('')
+  const selected = users.find(u => u.id === value) || null
+  const sorted = useMemo(() => [...users].sort((a, b) => (a.name || '').localeCompare(b.name || '')), [users])
+  const q = query.trim().toLowerCase()
+  const matches = q ? sorted.filter(u => (u.name || '').toLowerCase().includes(q)) : sorted
+  const pick = (id) => { onChange(id); setOpen(false); setQuery('') }
+  return (
+    <div className="relative">
+      <input
+        type="text"
+        style={inputStyle}
+        className={inputCls}
+        placeholder={placeholder}
+        value={open ? query : (selected?.name || '')}
+        onFocus={() => { setOpen(true); setQuery('') }}
+        onChange={e => { setQuery(e.target.value); setOpen(true) }}
+        onKeyDown={e => {
+          if (e.key === 'Enter') { e.preventDefault(); if (matches.length) pick(matches[0].id) }
+          if (e.key === 'Escape') { setOpen(false); setQuery('') }
+        }}
+        onBlur={() => setTimeout(() => { setOpen(false); setQuery('') }, 150)}
+      />
+      {/* native required validation without blocking typing */}
+      {required && <input tabIndex={-1} aria-hidden className="absolute inset-0 opacity-0 pointer-events-none" required value={value || ''} onChange={() => {}} />}
+      {open && (
+        <div className="absolute left-0 right-0 z-50 mt-1 rounded-lg shadow-2xl overflow-y-auto"
+          style={{ background: '#242424', border: '1px solid #3a3a3a', maxHeight: 208 }}>
+          {matches.length === 0 ? (
+            <p className="px-3 py-2 text-[12px] text-white/30">No one matches “{query}”.</p>
+          ) : matches.map(u => (
+            <button key={u.id} type="button"
+              onMouseDown={e => { e.preventDefault(); pick(u.id) }}
+              className="w-full text-left px-3 py-1.5 text-[13px] hover:bg-white/[0.06] transition-colors flex items-center justify-between gap-2">
+              <span className={u.id === value ? 'text-teal font-semibold' : 'text-white/85'}>{u.name}</span>
+              <span className="text-[10px] text-white/30 uppercase">{u.role}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 const BLANK = {
   deal_name: '', office: '', project_id: '', payment_method: '',
   sale_date: '', install_date: '', pay_date: '',
@@ -503,16 +552,12 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
           {/* Setter / Closer */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4">
             <Field label="Setter *">
-              <Sel required value={form.setter_id} onChange={e => pickPerson('setter_id', e.target.value)}>
-                <option value="">Select setter…</option>
-                {users.map(u => <option key={u.id} value={u.id}>{u.name} ({u.role})</option>)}
-              </Sel>
+              <PersonPicker required users={users} value={form.setter_id}
+                placeholder="Type to search setter…" onChange={id => pickPerson('setter_id', id)} />
             </Field>
             <Field label="Closer *">
-              <Sel required value={form.closer_id} onChange={e => pickPerson('closer_id', e.target.value)}>
-                <option value="">Select closer…</option>
-                {users.map(u => <option key={u.id} value={u.id}>{u.name} ({u.role})</option>)}
-              </Sel>
+              <PersonPicker required users={users} value={form.closer_id}
+                placeholder="Type to search closer…" onChange={id => pickPerson('closer_id', id)} />
             </Field>
           </div>
 
