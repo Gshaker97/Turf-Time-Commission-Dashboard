@@ -190,7 +190,9 @@ setup + deploy steps.
   `utils/team.js` replay this log, used by the Dashboard team
   breakdown/filter/goal and the Team page comparison, so moving a rep never
   rewrites history; deals from a dissolved team follow its old lead's current
-  grouping); `030` adds
+  grouping, a dissolved+unabsorbed lead renders as a HISTORICAL team row, and
+  a first log entry of "Unassigned → X" is treated as roster setup — pre-log
+  deals follow the first known lead, per Keaton); `030` adds
   `deals.override_exclusions` (jsonb `[{ item, amount }]` — subcontracted items
   that earn no override; see the engine rules above); `031` adds
   `deals.change_alert` (jsonb `{ prev_baseline, prev_job_price, baseline,
