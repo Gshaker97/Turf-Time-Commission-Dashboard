@@ -59,11 +59,26 @@ function SortTh({ label, active, dir, onClick, align = 'center', className = '',
   )
 }
 
-function StatCard({ label, value, sub, trend }) {
+// Pass value2 (+ valueLabel/value2Label) to show two figures side by side in
+// one card — e.g. Avg Deal Size's baseline + job price.
+function StatCard({ label, value, sub, trend, value2, valueLabel, value2Label }) {
   return (
     <div className="rounded-xl p-3 md:p-4 min-w-0 flex-1" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
       <p className="text-[9px] md:text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1.5 leading-tight">{label}</p>
-      <p className="text-[16px] md:text-[20px] font-bold text-teal leading-none mb-1.5 truncate">{value}</p>
+      {value2 != null ? (
+        <div className="flex items-start gap-4 md:gap-6 min-w-0 mb-1.5">
+          <div className="min-w-0">
+            <p className="text-[16px] md:text-[20px] font-bold text-teal leading-none truncate">{value}</p>
+            {valueLabel && <p className="text-[8px] md:text-[9px] text-white/30 uppercase tracking-wider mt-1 truncate">{valueLabel}</p>}
+          </div>
+          <div className="min-w-0">
+            <p className="text-[16px] md:text-[20px] font-bold text-white/80 leading-none truncate">{value2}</p>
+            {value2Label && <p className="text-[8px] md:text-[9px] text-white/30 uppercase tracking-wider mt-1 truncate">{value2Label}</p>}
+          </div>
+        </div>
+      ) : (
+        <p className="text-[16px] md:text-[20px] font-bold text-teal leading-none mb-1.5 truncate">{value}</p>
+      )}
       {trend}
       {sub && <p className="hidden md:block text-[10px] text-white/25 mt-1">{sub}</p>}
     </div>
@@ -161,7 +176,7 @@ export default function Dashboard() {
     }
     const totalPrice = rows.reduce((s, d) => s + (parseFloat(d.job_price) || 0), 0)
     const count      = rows.length
-    return { totalPrice, baseline, commission, avgCommPct: baseline > 0 ? (commission / baseline) * 100 : 0, deals: count, avgDeal: count ? baseline / count : 0 }
+    return { totalPrice, baseline, commission, avgCommPct: baseline > 0 ? (commission / baseline) * 100 : 0, deals: count, avgDeal: count ? baseline / count : 0, avgJob: count ? totalPrice / count : 0 }
   }
   const totals     = useMemo(() => computeTotals(filtered),     [filtered])
   const prevTotals = useMemo(() => computeTotals(prevFiltered), [prevFiltered])
@@ -469,8 +484,10 @@ export default function Dashboard() {
         <StatCard label="Total Deals" value={totals.deals.toString()}
           trend={<Trend cur={totals.deals} prev={prevPeriod ? prevTotals.deals : null} />} />
         <div className="col-span-2 md:flex-1">
-          <StatCard label="Avg Deal Size" value={fmt(totals.avgDeal)}
-            trend={<Trend cur={totals.avgDeal} prev={prevPeriod ? prevTotals.avgDeal : null} />} />
+          <StatCard label="Avg Deal Size"
+            value={fmt(totals.avgDeal)} valueLabel="Baseline"
+            value2={fmt(totals.avgJob)} value2Label="Job Price"
+            trend={<Trend cur={totals.avgDeal} prev={prevPeriod ? prevTotals.avgDeal : null} suffix="baseline vs prev" />} />
         </div>
       </div>
 
