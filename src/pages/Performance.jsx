@@ -23,11 +23,6 @@ import { toast } from '../lib/toast'
 const PALETTE = ['#00b894', '#74b9ff', '#a78bfa', '#fbbf24', '#fb923c', '#f87171', '#34d399', '#60a5fa', '#f472b6', '#facc15']
 const CARD = { background: '#242424', border: '1px solid #2e2e2e' }
 
-const estOf = (s) => {
-  const split = (Number(s.self_gen_estimates) || 0) + (Number(s.lead_estimates) || 0)
-  return split || (Number(s.estimates) || 0)
-}
-
 // ── Shared dark tooltip ───────────────────────────────────────
 function ChartTip({ active, payload, label, yFmt }) {
   if (!active || !payload?.length) return null
@@ -482,7 +477,7 @@ export default function Performance() {
   const repGroups = useMemo(() => {
     const statsFor = (range) => {
       const map = {}
-      const row = (id) => (map[id] ??= { revenue: 0, job: 0, deals: 0, canceled: 0, estimates: 0 })
+      const row = (id) => (map[id] ??= { revenue: 0, job: 0, deals: 0, canceled: 0, sgEst: 0, ldEst: 0, leadsClosed: 0, leadRevenue: 0 })
       for (const d of deals) {
         if (!d.sale_date || d.sale_date < range.from || d.sale_date > range.to) continue
         if (!dealInScope(d, scope, teamCtx)) continue
@@ -491,13 +486,23 @@ export default function Performance() {
         const r = row(owner)
         if (isCanceled(d)) { r.canceled += 1; continue }
         const a = dealAmounts(d)
+        // Self-gen credit to the OWNER (setter, closer fallback) — the same
+        // deal ALSO counts as a LEAD for its closer when someone else set it.
+        // Lead credit never subtracts from the setter's self-gen numbers.
         r.revenue += a.baseline; r.job += a.job; r.deals += 1
+        if (d.closer_id && d.setter_id && d.closer_id !== d.setter_id) {
+          const lr = row(d.closer_id)
+          lr.leadsClosed += 1; lr.leadRevenue += a.baseline
+        }
       }
       if (hasEstimates) {
         for (const s of weeklyStats) {
           if (!s.week_start || s.week_start < range.from || s.week_start > range.to) continue
           if (!statInScope(s, scope, teamCtx)) continue
-          row(s.rep_id).estimates += estOf(s)
+          const r = row(s.rep_id)
+          const sg = Number(s.self_gen_estimates) || 0, ld = Number(s.lead_estimates) || 0
+          if (sg || ld) { r.sgEst += sg; r.ldEst += ld }
+          else r.sgEst += Number(s.estimates) || 0   // legacy unsplit weeks count as self-gen
         }
       }
       return map
@@ -529,21 +534,21 @@ export default function Performance() {
     else                            seedIds = seeded.map(u => u.id)
     const activeIds = Object.keys(curMap).filter(id => {
       const r = curMap[id]
-      return r.revenue || r.deals || r.canceled || r.estimates
+      return r.revenue || r.deals || r.canceled || r.sgEst || r.ldEst || r.leadsClosed
     })
     const reps = [...new Set([...activeIds, ...seedIds])]
       .filter(id => isAdmin || !usersById[id]?.ghost)
       .map(id => {
-        const r = curMap[id] ?? { revenue: 0, job: 0, deals: 0, canceled: 0, estimates: 0 }
+        const r = curMap[id] ?? { revenue: 0, job: 0, deals: 0, canceled: 0, sgEst: 0, ldEst: 0, leadsClosed: 0, leadRevenue: 0 }
         const p = prevMap[id]
         const mo = moTotals[id]
         return {
           id, ...r,
           name: usersById[id]?.name ?? 'Unknown',
-          closeRate: r.estimates > 0 ? (r.deals / r.estimates) * 100 : null,
+          sgCloseRate:   r.sgEst > 0 ? (r.deals / r.sgEst) * 100 : null,
+          leadCloseRate: r.ldEst > 0 ? (r.leadsClosed / r.ldEst) * 100 : null,
           markup: r.revenue > 0 ? ((r.job - r.revenue) / r.revenue) * 100 : null,
-          prevRevenue: p?.revenue, prevDeals: p?.deals,
-          prevCloseRate: p && p.estimates > 0 ? (p.deals / p.estimates) * 100 : null,
+          prevRevenue: p?.revenue, prevDeals: p?.deals, prevLeads: p?.leadsClosed,
           moAvgRevenue: mo ? mo.revenue / months.length : null,
           moAvgDeals:   mo ? mo.deals / months.length : null,
         }
@@ -1085,22 +1090,28 @@ export default function Performance() {
         <div className="mb-3">
           <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Rep Breakdown — {curPeriod.label}</h3>
           <p className="text-[10px] text-white/30 mt-0.5">
-            Deal + revenue credit to the setter (closer when no setter), same as the Dashboard
+            Self-gen = deals + revenue credited to the setter (closer when no setter), same as the Dashboard
+            · Leads = deals closed for ANOTHER setter (never subtracted from that setter's self-gen)
+            · Leads Ran from Weekly Stats
             · ▲▼ = vs the same point in the previous {headerGrain} (full period once complete)
-            · Mo Avg = per-month average over the last 3 full months
+            · Mo Avg = per-month self-gen average over the last 3 full months
           </p>
         </div>
         {repGroups.length ? (
           <div className="overflow-x-auto">
-            <table className="w-full text-[12px] min-w-[820px]">
+            <table className="w-full text-[12px] min-w-[1080px]">
               <thead>
                 <tr className="text-left text-[9px] uppercase tracking-widest text-white/30">
                   <th className="pb-2 pr-2 w-8">#</th>
                   <th className="pb-2 pr-3">Rep</th>
                   <th className="pb-2 pr-3 text-right">Revenue</th>
-                  <th className="pb-2 pr-3 text-right">Deals</th>
-                  <th className="pb-2 pr-3 text-right">Estimates</th>
-                  <th className="pb-2 pr-3 text-right">Close %</th>
+                  <th className="pb-2 pr-3 text-right">Self-Gen</th>
+                  <th className="pb-2 pr-3 text-right">SG Est</th>
+                  <th className="pb-2 pr-3 text-right">SG Close %</th>
+                  <th className="pb-2 pr-3 text-right">Leads Closed</th>
+                  <th className="pb-2 pr-3 text-right">Leads Ran</th>
+                  <th className="pb-2 pr-3 text-right">Lead Close %</th>
+                  <th className="pb-2 pr-3 text-right">Lead Rev</th>
                   <th className="pb-2 pr-3 text-right">Cancels</th>
                   <th className="pb-2 pr-3 text-right">Markup %</th>
                   <th className="pb-2 text-right">Mo Avg</th>
@@ -1110,7 +1121,7 @@ export default function Performance() {
                 {repGroups.map(g => (
                   <Fragment key={g.key}>
                     <tr className="border-t" style={{ borderColor: '#2e2e2e', background: '#ffffff05' }}>
-                      <td colSpan={9} className="py-2 pr-3">
+                      <td colSpan={13} className="py-2 pr-3">
                         <span className="flex items-center gap-2">
                           <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: g.color }} />
                           <span className="font-bold text-white text-[12px]">{g.name}</span>
@@ -1130,11 +1141,15 @@ export default function Performance() {
                           <span className="text-white">{r.deals}</span>
                           <div className="h-[13px]"><DeltaTag metric="deals" v={r.deals} pv={r.prevDeals} /></div>
                         </td>
-                        <td className="py-2 pr-3 text-right text-white/60">{hasEstimates ? r.estimates || '—' : '—'}</td>
+                        <td className="py-2 pr-3 text-right text-white/60">{hasEstimates ? r.sgEst || '—' : '—'}</td>
+                        <td className="py-2 pr-3 text-right text-white/60">{r.sgCloseRate != null ? r.sgCloseRate.toFixed(0) + '%' : '—'}</td>
                         <td className="py-2 pr-3 text-right whitespace-nowrap">
-                          <span className="text-white/60">{r.closeRate != null ? r.closeRate.toFixed(0) + '%' : '—'}</span>
-                          <div className="h-[13px]"><DeltaTag metric="close_rate" v={r.closeRate} pv={r.prevCloseRate} /></div>
+                          <span className="text-white">{r.leadsClosed || '—'}</span>
+                          <div className="h-[13px]"><DeltaTag metric="deals" v={r.leadsClosed} pv={r.prevLeads} /></div>
                         </td>
+                        <td className="py-2 pr-3 text-right text-white/60">{hasEstimates ? r.ldEst || '—' : '—'}</td>
+                        <td className="py-2 pr-3 text-right text-white/60">{r.leadCloseRate != null ? r.leadCloseRate.toFixed(0) + '%' : '—'}</td>
+                        <td className="py-2 pr-3 text-right text-white/60">{r.leadRevenue ? fmtMetric('revenue', r.leadRevenue) : '—'}</td>
                         <td className={`py-2 pr-3 text-right ${r.canceled ? 'text-red-400/80' : 'text-white/25'}`}>{r.canceled || '—'}</td>
                         <td className="py-2 pr-3 text-right text-white/60">{r.markup != null ? r.markup.toFixed(1) + '%' : '—'}</td>
                         <td className="py-2 text-right whitespace-nowrap">
