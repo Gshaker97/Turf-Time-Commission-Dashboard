@@ -476,6 +476,22 @@ export default function Performance() {
       .map(r => ({ ...r, share: total > 0 ? (r.revenue / total) * 100 : 0 }))
   }, [offices, deals, curPeriod, headerBuckets, teamCtx])
 
+  // ── Activity chart's By-Team view: one close-rate line per team over the
+  // displayed periods (estimates+closes per team would be unreadable bars —
+  // a rate line answers "who converts best" at a glance). Org scope only,
+  // team colors shared with the Contributions row. No office option —
+  // estimates aren't tracked per office.
+  const activityByTeam = useMemo(() => {
+    if (prefs.activity?.breakdown !== 'team' || scope.type !== 'org' || dayView || !hasEstimates) return null
+    const rows = periods.map(p => ({ label: p.label }))
+    const series = teamCompare.map(t => {
+      const b = bucketize(deals, statsForBuckets, periods, { type: 'team', id: t.key }, teamCtx)
+      periods.forEach((p, i) => { rows[i][t.key] = b[p.key].close_rate })
+      return { key: t.key, name: t.shortName, color: t.color }
+    })
+    return { rows, series }
+  }, [prefs.activity, scope.type, dayView, hasEstimates, teamCompare, deals, statsForBuckets, periods, teamCtx])
+
   // ── Rep breakdown: reps grouped by their CURRENT team, each with the
   // current period's stats, a delta vs the previous period at the same grain
   // ("vs last month" on the monthly view), and their per-month average over
@@ -1091,10 +1107,24 @@ export default function Performance() {
       {/* ── Activity funnel: estimates → closes + close rate ── */}
       {hasEstimates && !dayView && (
         <div className="rounded-xl p-4 md:p-5" style={CARD}>
-          <div className="mb-3">
-            <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Activity — Estimates → Closes</h3>
-            <p className="text-[10px] text-white/30 mt-0.5">Estimates from the Team page's Weekly Stats inputs · close rate = closes ÷ estimates</p>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <div>
+              <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Activity — Estimates → Closes</h3>
+              <p className="text-[10px] text-white/30 mt-0.5">
+                {activityByTeam
+                  ? 'Close rate by team over time · closes ÷ self-gen estimates'
+                  : 'Self-gen estimates (typed in the Rep Breakdown on weekly views) · close rate = closes ÷ estimates'}
+              </p>
+            </div>
+            {scope.type === 'org' && (
+              <Pills small options={[['none', 'Total'], ['team', 'By Team']]}
+                value={prefs.activity?.breakdown ?? 'none'} onChange={v => setPref('activity', { breakdown: v })} />
+            )}
           </div>
+          {activityByTeam ? (
+            <MetricChart rows={activityByTeam.rows} series={activityByTeam.series} type="line"
+              yFmt="percent" goal={closeGoal} height={260} onPointClick={zoomFromChart} />
+          ) : (
           <ResponsiveContainer width="100%" height={260}>
             <ComposedChart data={seriesRows} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
               onClick={zoomFromChart ? (s) => { if (s?.activeLabel != null) zoomFromChart(s.activeLabel) } : undefined}
@@ -1117,6 +1147,7 @@ export default function Performance() {
                 strokeWidth={2} dot={{ fill: '#a78bfa', r: 3 }} connectNulls />
             </ComposedChart>
           </ResponsiveContainer>
+          )}
         </div>
       )}
 
