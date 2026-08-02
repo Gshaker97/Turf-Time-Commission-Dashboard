@@ -474,10 +474,24 @@ export default function Performance() {
         t.revenue += s[id].revenue; t.deals += s[id].deals
       }
     }
-    const reps = Object.entries(curMap)
-      .filter(([, r]) => r.revenue || r.deals || r.canceled || r.estimates)
-      .filter(([id]) => isAdmin || !usersById[id]?.ghost)
-      .map(([id, r]) => {
+    // Every active rep + manager appears even at zero (org/team/rep scope) so
+    // a silent week is visible, not hidden. Office scope stays activity-only —
+    // reps aren't assigned to an office, their deals are.
+    const seeded = users.filter(u =>
+      u.active !== false && (u.role === 'rep' || u.role === 'manager') && (isAdmin || !u.ghost))
+    let seedIds
+    if (scope.type === 'team')      seedIds = seeded.filter(u => teamKeyFor(u, headsSet) === scope.id).map(u => u.id)
+    else if (scope.type === 'rep')  seedIds = seeded.filter(u => u.id === scope.id).map(u => u.id)
+    else if (scope.type === 'office') seedIds = []
+    else                            seedIds = seeded.map(u => u.id)
+    const activeIds = Object.keys(curMap).filter(id => {
+      const r = curMap[id]
+      return r.revenue || r.deals || r.canceled || r.estimates
+    })
+    const reps = [...new Set([...activeIds, ...seedIds])]
+      .filter(id => isAdmin || !usersById[id]?.ghost)
+      .map(id => {
+        const r = curMap[id] ?? { revenue: 0, job: 0, deals: 0, canceled: 0, estimates: 0 }
         const p = prevMap[id]
         const mo = moTotals[id]
         return {
@@ -510,7 +524,7 @@ export default function Performance() {
       }
     }).sort((a, b) =>
       (a.key === 'unassigned') - (b.key === 'unassigned') || b.revenue - a.revenue)
-  }, [deals, weeklyStats, curPeriod, headerBuckets, scope, teamCtx, usersById, isAdmin, hasEstimates, headsSet, teamCompare])
+  }, [deals, weeklyStats, curPeriod, headerBuckets, scope, teamCtx, users, usersById, isAdmin, hasEstimates, headsSet, teamCompare])
 
   // ── Targets editor (admin) ──
   const [showTargets, setShowTargets] = useState(false)
