@@ -411,6 +411,31 @@ export default function Performance() {
     if (p) focusOn(displayGrain, p)
   }
 
+
+  // ── Per-team stats for the current period — ALWAYS org-wide (feeds the
+  // Team Contributions donuts at any scope + the Teams-vs-Goal table at org
+  // scope). Each team keeps one color across every chart in the row.
+  const teamCompare = useMemo(() => {
+    const keys = new Set(heads.map(h => h.id))
+    for (const d of deals) {
+      if (!d.sale_date || d.sale_date < curPeriod.from || d.sale_date > curPeriod.to) continue
+      const k = teamOfSale(saleOwnerId(d), d.sale_date, usersById, headsSet, changesByProfile)
+      if (k !== 'unassigned') keys.add(k)
+    }
+    return [...keys].map(k => {
+      const tScope = { type: 'team', id: k }
+      const b = bucketize(deals, weeklyStats, [curPeriod], tScope, teamCtx)[curPeriod.key]
+      let goal = resolveTarget(targets, { scopeType: 'team', subject: k, metric: 'revenue', grain: headerGrain, periodStart: curPeriod.from })
+      if (goal == null && headerGrain === 'month') goal = repGoals.find(g => g.scope === 'team' && g.subject_id === k)?.target ?? null
+      const u = usersById[k]
+      const name = k === 'unassigned' ? 'Unassigned' : u ? `${u.name}${headsSet.has(k) ? '' : ' (former)'}` : 'Former team'
+      return { key: k, name, shortName: name.split(' ')[0], ...b, goal, goalPct: goal > 0 ? (b.revenue / goal) * 100 : null }
+    })
+      .filter(t => t.revenue || t.deals || t.canceled || t.estimates || t.goal)
+      .sort((a, b) => b.revenue - a.revenue)
+      .map((t, i) => ({ ...t, color: PALETTE[i % PALETTE.length] }))
+  }, [deals, weeklyStats, curPeriod, teamCtx, heads, targets, repGoals, headerGrain, usersById, headsSet, changesByProfile])
+
   // ── Rep breakdown: reps grouped by their CURRENT team, each with the
   // current period's stats, a delta vs the previous period at the same grain
   // ("vs last month" on the monthly view), and their per-month average over
@@ -486,30 +511,6 @@ export default function Performance() {
     }).sort((a, b) =>
       (a.key === 'unassigned') - (b.key === 'unassigned') || b.revenue - a.revenue)
   }, [deals, weeklyStats, curPeriod, headerBuckets, scope, teamCtx, usersById, isAdmin, hasEstimates, headsSet, teamCompare])
-
-  // ── Per-team stats for the current period — ALWAYS org-wide (feeds the
-  // Team Contributions donuts at any scope + the Teams-vs-Goal table at org
-  // scope). Each team keeps one color across every chart in the row.
-  const teamCompare = useMemo(() => {
-    const keys = new Set(heads.map(h => h.id))
-    for (const d of deals) {
-      if (!d.sale_date || d.sale_date < curPeriod.from || d.sale_date > curPeriod.to) continue
-      const k = teamOfSale(saleOwnerId(d), d.sale_date, usersById, headsSet, changesByProfile)
-      if (k !== 'unassigned') keys.add(k)
-    }
-    return [...keys].map(k => {
-      const tScope = { type: 'team', id: k }
-      const b = bucketize(deals, weeklyStats, [curPeriod], tScope, teamCtx)[curPeriod.key]
-      let goal = resolveTarget(targets, { scopeType: 'team', subject: k, metric: 'revenue', grain: headerGrain, periodStart: curPeriod.from })
-      if (goal == null && headerGrain === 'month') goal = repGoals.find(g => g.scope === 'team' && g.subject_id === k)?.target ?? null
-      const u = usersById[k]
-      const name = k === 'unassigned' ? 'Unassigned' : u ? `${u.name}${headsSet.has(k) ? '' : ' (former)'}` : 'Former team'
-      return { key: k, name, shortName: name.split(' ')[0], ...b, goal, goalPct: goal > 0 ? (b.revenue / goal) * 100 : null }
-    })
-      .filter(t => t.revenue || t.deals || t.canceled || t.estimates || t.goal)
-      .sort((a, b) => b.revenue - a.revenue)
-      .map((t, i) => ({ ...t, color: PALETTE[i % PALETTE.length] }))
-  }, [deals, weeklyStats, curPeriod, teamCtx, heads, targets, repGoals, headerGrain, usersById, headsSet, changesByProfile])
 
   // ── Targets editor (admin) ──
   const [showTargets, setShowTargets] = useState(false)
