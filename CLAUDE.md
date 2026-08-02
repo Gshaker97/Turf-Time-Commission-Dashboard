@@ -259,7 +259,12 @@ page, above the scorecard): donuts of each team's share of Revenue/Deals/
 Estimates + a ranked close-rate bar list, ALWAYS org-wide regardless of the
 scope picker, following the current period (grain/zoom); `teamCompare` is
 computed unconditionally (org-wide per-team stats + one stable color per
-team) and feeds both this row and the org-gated Teams-vs-Goal table. Breakdown charts (by team/office)
+team) and feeds both this row and the org-gated Teams-vs-Goal table. **Rep
+Breakdown** groups reps under their CURRENT team (`teamKeyFor`, team header
+rows with the team's color + totals, "No Team" last), each rep showing
+current-period stats with ▲▼ deltas vs the previous period at the same grain
+and a "Mo Avg" column (per-month average over the last 3 full calendar
+months; "new" when no history). Breakdown charts (by team/office)
 group in one pass over ALL deals (incl. historical/former team keys +
 "No office"); goal lines are suppressed on breakdown views. Ghost reps hidden
 from non-admin leaderboards as everywhere else. **Unassigned is EXCLUDED from

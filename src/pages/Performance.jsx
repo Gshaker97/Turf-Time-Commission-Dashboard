@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, Fragment } from 'react'
 import {
   ComposedChart, Bar, Line, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, ReferenceLine, Legend, PieChart, Pie, Cell,
@@ -11,7 +11,7 @@ import {
   fetchTargets, saveTarget, deleteTarget, fetchGoal, fetchRepGoals,
 } from '../lib/db'
 import { dealAmounts, isCanceled } from '../utils/commission'
-import { headIdSet, buildChangesByProfile, saleOwnerId, teamOfSale } from '../utils/team'
+import { headIdSet, buildChangesByProfile, saleOwnerId, teamOfSale, teamKeyFor } from '../utils/team'
 import {
   GRAINS, METRICS, PERCENT_METRICS, SUB_GRAIN, periodsFor, periodsInRange,
   zoomLabel, bucketize, resolveTarget, fmtMetric, scopeHasEstimates,
@@ -411,38 +411,81 @@ export default function Performance() {
     if (p) focusOn(displayGrain, p)
   }
 
-  // ── Leaderboard: reps ranked within the current period + scope ──
-  const leaderboard = useMemo(() => {
-    const map = {}
-    const row = (id) => (map[id] ??= { id, revenue: 0, job: 0, deals: 0, canceled: 0, estimates: 0 })
-    for (const d of deals) {
-      if (!d.sale_date || d.sale_date < curPeriod.from || d.sale_date > curPeriod.to) continue
-      if (!dealInScope(d, scope, teamCtx)) continue
-      const owner = saleOwnerId(d)
-      if (!owner) continue   // no setter/closer — excluded here, flagged in the banner
-      const r = row(owner)
-      if (isCanceled(d)) { r.canceled += 1; continue }
-      const a = dealAmounts(d)
-      r.revenue += a.baseline; r.job += a.job; r.deals += 1
+  // ── Rep breakdown: reps grouped by their CURRENT team, each with the
+  // current period's stats, a delta vs the previous period at the same grain
+  // ("vs last month" on the monthly view), and their per-month average over
+  // the last 3 full calendar months as a baseline.
+  const repGroups = useMemo(() => {
+    const statsFor = (range) => {
+      const map = {}
+      const row = (id) => (map[id] ??= { revenue: 0, job: 0, deals: 0, canceled: 0, estimates: 0 })
+      for (const d of deals) {
+        if (!d.sale_date || d.sale_date < range.from || d.sale_date > range.to) continue
+        if (!dealInScope(d, scope, teamCtx)) continue
+        const owner = saleOwnerId(d)
+        if (!owner) continue   // no setter/closer — excluded here, flagged in the banner
+        const r = row(owner)
+        if (isCanceled(d)) { r.canceled += 1; continue }
+        const a = dealAmounts(d)
+        r.revenue += a.baseline; r.job += a.job; r.deals += 1
+      }
+      if (hasEstimates) {
+        for (const s of weeklyStats) {
+          if (!s.week_start || s.week_start < range.from || s.week_start > range.to) continue
+          if (!statInScope(s, scope, teamCtx)) continue
+          row(s.rep_id).estimates += estOf(s)
+        }
+      }
+      return map
     }
-    if (hasEstimates) {
-      for (const s of weeklyStats) {
-        if (!s.week_start || s.week_start < curPeriod.from || s.week_start > curPeriod.to) continue
-        if (!statInScope(s, scope, teamCtx)) continue
-        row(s.rep_id).estimates += estOf(s)
+    const curMap  = statsFor(curPeriod)
+    const prevMap = statsFor(headerBuckets.ps[0])
+    const months  = periodsFor('month', 4).slice(0, 3)   // last 3 FULL months
+    const moTotals = {}
+    for (const m of months) {
+      const s = statsFor(m)
+      for (const id in s) {
+        const t = (moTotals[id] ??= { revenue: 0, deals: 0 })
+        t.revenue += s[id].revenue; t.deals += s[id].deals
       }
     }
-    return Object.values(map)
-      .filter(r => r.revenue || r.deals || r.canceled || r.estimates)
-      .filter(r => isAdmin || !usersById[r.id]?.ghost)
-      .map(r => ({
-        ...r,
-        name: usersById[r.id]?.name ?? 'Unknown',
-        closeRate: r.estimates > 0 ? (r.deals / r.estimates) * 100 : null,
-        markup: r.revenue > 0 ? ((r.job - r.revenue) / r.revenue) * 100 : null,
-      }))
+    const reps = Object.entries(curMap)
+      .filter(([, r]) => r.revenue || r.deals || r.canceled || r.estimates)
+      .filter(([id]) => isAdmin || !usersById[id]?.ghost)
+      .map(([id, r]) => {
+        const p = prevMap[id]
+        const mo = moTotals[id]
+        return {
+          id, ...r,
+          name: usersById[id]?.name ?? 'Unknown',
+          closeRate: r.estimates > 0 ? (r.deals / r.estimates) * 100 : null,
+          markup: r.revenue > 0 ? ((r.job - r.revenue) / r.revenue) * 100 : null,
+          prevRevenue: p?.revenue, prevDeals: p?.deals,
+          prevCloseRate: p && p.estimates > 0 ? (p.deals / p.estimates) * 100 : null,
+          moAvgRevenue: mo ? mo.revenue / months.length : null,
+          moAvgDeals:   mo ? mo.deals / months.length : null,
+        }
+      })
       .sort((a, b) => b.revenue - a.revenue || b.deals - a.deals)
-  }, [deals, weeklyStats, curPeriod, scope, teamCtx, usersById, isAdmin, hasEstimates])
+    const byTeam = {}
+    for (const r of reps) {
+      const u = usersById[r.id]
+      const tk = u ? teamKeyFor(u, headsSet) : 'unassigned'
+      ;(byTeam[tk] ??= []).push(r)
+    }
+    return Object.entries(byTeam).map(([tk, rows]) => {
+      const lead = usersById[tk]
+      return {
+        key: tk,
+        name: tk === 'unassigned' ? 'No Team' : lead ? `${lead.name}'s Team` : 'Former Team',
+        color: teamCompare.find(t => t.key === tk)?.color ?? '#6b7280',
+        rows,
+        revenue: rows.reduce((s, r) => s + r.revenue, 0),
+        deals:   rows.reduce((s, r) => s + r.deals, 0),
+      }
+    }).sort((a, b) =>
+      (a.key === 'unassigned') - (b.key === 'unassigned') || b.revenue - a.revenue)
+  }, [deals, weeklyStats, curPeriod, headerBuckets, scope, teamCtx, usersById, isAdmin, hasEstimates, headsSet, teamCompare])
 
   // ── Per-team stats for the current period — ALWAYS org-wide (feeds the
   // Team Contributions donuts at any scope + the Teams-vs-Goal table at org
@@ -936,15 +979,18 @@ export default function Performance() {
         </div>
       )}
 
-      {/* ── Rep leaderboard for the current period ── */}
+      {/* ── Rep breakdown: grouped by team, with trend + monthly baseline ── */}
       <div className="rounded-xl p-4 md:p-5" style={CARD}>
         <div className="mb-3">
           <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Rep Breakdown — {curPeriod.label}</h3>
-          <p className="text-[10px] text-white/30 mt-0.5">Deal + revenue credit to the setter (closer when no setter), same as the Dashboard</p>
+          <p className="text-[10px] text-white/30 mt-0.5">
+            Deal + revenue credit to the setter (closer when no setter), same as the Dashboard
+            · ▲▼ = vs the previous {headerGrain} · Mo Avg = per-month average over the last 3 full months
+          </p>
         </div>
-        {leaderboard.length ? (
+        {repGroups.length ? (
           <div className="overflow-x-auto">
-            <table className="w-full text-[12px] min-w-[640px]">
+            <table className="w-full text-[12px] min-w-[820px]">
               <thead>
                 <tr className="text-left text-[9px] uppercase tracking-widest text-white/30">
                   <th className="pb-2 pr-2 w-8">#</th>
@@ -954,21 +1000,52 @@ export default function Performance() {
                   <th className="pb-2 pr-3 text-right">Estimates</th>
                   <th className="pb-2 pr-3 text-right">Close %</th>
                   <th className="pb-2 pr-3 text-right">Cancels</th>
-                  <th className="pb-2 text-right">Markup %</th>
+                  <th className="pb-2 pr-3 text-right">Markup %</th>
+                  <th className="pb-2 text-right">Mo Avg</th>
                 </tr>
               </thead>
               <tbody>
-                {leaderboard.map((r, i) => (
-                  <tr key={r.id} className="border-t" style={{ borderColor: '#2e2e2e' }}>
-                    <td className="py-2.5 pr-2 text-white/30 font-semibold">{i + 1}</td>
-                    <td className="py-2.5 pr-3 font-semibold text-white whitespace-nowrap">{r.name}</td>
-                    <td className="py-2.5 pr-3 text-right text-teal font-semibold">{fmtMetric('revenue', r.revenue)}</td>
-                    <td className="py-2.5 pr-3 text-right text-white">{r.deals}</td>
-                    <td className="py-2.5 pr-3 text-right text-white/60">{hasEstimates ? r.estimates || '—' : '—'}</td>
-                    <td className="py-2.5 pr-3 text-right text-white/60">{r.closeRate != null ? r.closeRate.toFixed(0) + '%' : '—'}</td>
-                    <td className={`py-2.5 pr-3 text-right ${r.canceled ? 'text-red-400/80' : 'text-white/25'}`}>{r.canceled || '—'}</td>
-                    <td className="py-2.5 text-right text-white/60">{r.markup != null ? r.markup.toFixed(1) + '%' : '—'}</td>
-                  </tr>
+                {repGroups.map(g => (
+                  <Fragment key={g.key}>
+                    <tr className="border-t" style={{ borderColor: '#2e2e2e', background: '#ffffff05' }}>
+                      <td colSpan={9} className="py-2 pr-3">
+                        <span className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: g.color }} />
+                          <span className="font-bold text-white text-[12px]">{g.name}</span>
+                          <span className="text-[11px] text-white/35">{fmtMetric('revenue', g.revenue)} · {g.deals} deal{g.deals === 1 ? '' : 's'}</span>
+                        </span>
+                      </td>
+                    </tr>
+                    {g.rows.map((r, i) => (
+                      <tr key={r.id} className="border-t" style={{ borderColor: '#2e2e2e' }}>
+                        <td className="py-2 pr-2 text-white/30 font-semibold">{i + 1}</td>
+                        <td className="py-2 pr-3 font-semibold text-white whitespace-nowrap">{r.name}</td>
+                        <td className="py-2 pr-3 text-right whitespace-nowrap">
+                          <span className="text-teal font-semibold">{fmtMetric('revenue', r.revenue)}</span>
+                          <div className="h-[13px]"><DeltaTag metric="revenue" v={r.revenue} pv={r.prevRevenue} /></div>
+                        </td>
+                        <td className="py-2 pr-3 text-right whitespace-nowrap">
+                          <span className="text-white">{r.deals}</span>
+                          <div className="h-[13px]"><DeltaTag metric="deals" v={r.deals} pv={r.prevDeals} /></div>
+                        </td>
+                        <td className="py-2 pr-3 text-right text-white/60">{hasEstimates ? r.estimates || '—' : '—'}</td>
+                        <td className="py-2 pr-3 text-right whitespace-nowrap">
+                          <span className="text-white/60">{r.closeRate != null ? r.closeRate.toFixed(0) + '%' : '—'}</span>
+                          <div className="h-[13px]"><DeltaTag metric="close_rate" v={r.closeRate} pv={r.prevCloseRate} /></div>
+                        </td>
+                        <td className={`py-2 pr-3 text-right ${r.canceled ? 'text-red-400/80' : 'text-white/25'}`}>{r.canceled || '—'}</td>
+                        <td className="py-2 pr-3 text-right text-white/60">{r.markup != null ? r.markup.toFixed(1) + '%' : '—'}</td>
+                        <td className="py-2 text-right whitespace-nowrap">
+                          {r.moAvgRevenue != null ? (
+                            <>
+                              <span className="text-white/70 font-semibold">{fmtMetric('revenue', r.moAvgRevenue)}</span>
+                              <div className="text-[10px] text-white/30">{r.moAvgDeals.toFixed(1)} deals/mo</div>
+                            </>
+                          ) : <span className="text-white/20">new</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
