@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, Fragment } from 'react'
+import { useState, useEffect, useMemo, useRef, Fragment } from 'react'
 import {
   ComposedChart, Bar, Line, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, ReferenceLine, Legend, PieChart, Pie, Cell,
@@ -577,6 +577,32 @@ export default function Performance() {
       (a.key === 'unassigned') - (b.key === 'unassigned') || b.revenue - a.revenue)
   }, [deals, weeklyStats, curPeriod, headerBuckets, scope, teamCtx, users, usersById, isAdmin, hasEstimates, headsSet, teamCompare])
 
+  // ── Inline team-goal editing (Teams vs Goal table, admin) ──
+  // Writes a targets row for the DISPLAYED grain, effective from the current
+  // period's start — editing an existing era row updates it in place.
+  const [editingTeamGoal, setEditingTeamGoal] = useState(null)   // team key
+  const [teamGoalInput,   setTeamGoalInput]   = useState('')
+  const skipTeamGoalRef = useRef(false)
+  function startTeamGoalEdit(t) {
+    setEditingTeamGoal(t.key)
+    setTeamGoalInput(t.goal != null ? String(Math.round(t.goal)) : '')
+  }
+  async function saveTeamGoal(teamKey) {
+    const v = parseFloat(teamGoalInput)
+    setEditingTeamGoal(null)
+    if (!(v > 0)) return
+    const existing = targets.find(t =>
+      t.scope === 'team' && (t.subject ?? '') === teamKey && t.metric === 'revenue' &&
+      t.period === headerGrain && String(t.effective).slice(0, 10) === curPeriod.from)
+    const row = existing
+      ? { id: existing.id, value: v }
+      : { scope: 'team', subject: teamKey, metric: 'revenue', period: headerGrain, value: v, effective: curPeriod.from }
+    const res = await saveTarget(row, profile?.id)
+    if (res?.error) { toast.error('Could not save the goal: ' + (res.error.message || 'unknown error')); return }
+    const { data } = await fetchTargets(); setTargets(data ?? [])
+    toast.success('Goal saved.')
+  }
+
   // ── Targets editor (admin) ──
   const [showTargets, setShowTargets] = useState(false)
   const emptyTarget = { scope: 'org', subject: '', metric: 'revenue', period: 'month', value: '', effective: new Date().toISOString().slice(0, 10) }
@@ -886,6 +912,82 @@ export default function Performance() {
         </div>
       )}
 
+      {/* ── Team comparison vs goals (org scope) ── */}
+      {scope.type === 'org' && teamCompare.length > 0 && (
+        <div className="rounded-xl p-4 md:p-5" style={CARD}>
+          <div className="mb-3">
+            <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Teams vs Goal — {curPeriod.label}</h3>
+            <p className="text-[10px] text-white/30 mt-0.5">Set team revenue targets (or Team-page goals) to fill the Goal column</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px] min-w-[720px]">
+              <thead>
+                <tr className="text-left text-[9px] uppercase tracking-widest text-white/30">
+                  <th className="pb-2 pr-3">Team</th>
+                  <th className="pb-2 pr-3 text-right">Revenue</th>
+                  <th className="pb-2 pr-3 text-right">Goal</th>
+                  <th className="pb-2 pr-3 w-[140px]">Progress</th>
+                  <th className="pb-2 pr-3 text-right">Deals</th>
+                  <th className="pb-2 pr-3 text-right">Estimates</th>
+                  <th className="pb-2 pr-3 text-right">Close %</th>
+                  <th className="pb-2 pr-3 text-right">Cancel %</th>
+                  <th className="pb-2 text-right">Markup %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {teamCompare.map(t => (
+                  <tr key={t.key} className="border-t" style={{ borderColor: '#2e2e2e' }}>
+                    <td className="py-2.5 pr-3 font-semibold text-white whitespace-nowrap">{t.name}</td>
+                    <td className="py-2.5 pr-3 text-right text-teal font-semibold">{fmtMetric('revenue', t.revenue)}</td>
+                    <td className="py-2.5 pr-3 text-right whitespace-nowrap">
+                      {isAdmin ? (
+                        editingTeamGoal === t.key ? (
+                          <span className="inline-flex items-center gap-1">
+                            <span className="text-white/40">$</span>
+                            <input autoFocus type="number" value={teamGoalInput}
+                              onChange={e => setTeamGoalInput(e.target.value)}
+                              onBlur={() => { if (skipTeamGoalRef.current) { skipTeamGoalRef.current = false; return } saveTeamGoal(t.key) }}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') e.currentTarget.blur()
+                                if (e.key === 'Escape') { skipTeamGoalRef.current = true; setEditingTeamGoal(null) }
+                              }}
+                              style={{ background: '#2a2a2a', border: '1px solid rgba(0,184,148,0.4)' }}
+                              className="w-24 rounded px-1.5 py-0.5 text-[12px] font-semibold text-teal focus:outline-none text-right" />
+                          </span>
+                        ) : (
+                          <button onClick={() => startTeamGoalEdit(t)} title="Click to set this team's goal"
+                            className={`rounded px-1.5 -mx-1.5 py-0.5 hover:bg-teal/10 transition-colors ${t.goal != null ? 'text-white/50' : 'text-white/25 underline decoration-dotted'}`}>
+                            {t.goal != null ? fmtMetric('revenue', t.goal) : 'set goal'}
+                          </button>
+                        )
+                      ) : (
+                        <span className="text-white/50">{t.goal != null ? fmtMetric('revenue', t.goal) : '—'}</span>
+                      )}
+                    </td>
+                    <td className="py-2.5 pr-3">
+                      {t.goalPct != null ? (
+                        <div className="flex items-center gap-2">
+                          <div className="h-1.5 rounded-full overflow-hidden flex-1" style={{ background: '#1a1a1a' }}>
+                            <div className={`h-full rounded-full ${t.goalPct >= 100 ? 'bg-emerald-400' : 'bg-teal'}`}
+                              style={{ width: `${Math.min(t.goalPct, 100)}%` }} />
+                          </div>
+                          <span className={`text-[10px] font-semibold ${t.goalPct >= 100 ? 'text-emerald-400' : 'text-white/40'}`}>{t.goalPct.toFixed(0)}%</span>
+                        </div>
+                      ) : <span className="text-white/20 text-[10px]">no goal</span>}
+                    </td>
+                    <td className="py-2.5 pr-3 text-right text-white">{t.deals}</td>
+                    <td className="py-2.5 pr-3 text-right text-white/60">{t.estimates ?? '—'}</td>
+                    <td className="py-2.5 pr-3 text-right text-white/60">{t.close_rate != null ? t.close_rate.toFixed(0) + '%' : '—'}</td>
+                    <td className="py-2.5 pr-3 text-right text-white/60">{t.cancel_rate != null ? t.cancel_rate.toFixed(0) + '%' : '—'}</td>
+                    <td className="py-2.5 text-right text-white/60">{t.markup_pct != null ? t.markup_pct.toFixed(1) + '%' : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* ── Scorecard header ── */}
       <div>
         <div className="flex items-baseline gap-2 mb-2">
@@ -1036,57 +1138,6 @@ export default function Performance() {
         </div>
       </div>
 
-      {/* ── Team comparison vs goals (org scope) ── */}
-      {scope.type === 'org' && teamCompare.length > 0 && (
-        <div className="rounded-xl p-4 md:p-5" style={CARD}>
-          <div className="mb-3">
-            <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Teams vs Goal — {curPeriod.label}</h3>
-            <p className="text-[10px] text-white/30 mt-0.5">Set team revenue targets (or Team-page goals) to fill the Goal column</p>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-[12px] min-w-[720px]">
-              <thead>
-                <tr className="text-left text-[9px] uppercase tracking-widest text-white/30">
-                  <th className="pb-2 pr-3">Team</th>
-                  <th className="pb-2 pr-3 text-right">Revenue</th>
-                  <th className="pb-2 pr-3 text-right">Goal</th>
-                  <th className="pb-2 pr-3 w-[140px]">Progress</th>
-                  <th className="pb-2 pr-3 text-right">Deals</th>
-                  <th className="pb-2 pr-3 text-right">Estimates</th>
-                  <th className="pb-2 pr-3 text-right">Close %</th>
-                  <th className="pb-2 pr-3 text-right">Cancel %</th>
-                  <th className="pb-2 text-right">Markup %</th>
-                </tr>
-              </thead>
-              <tbody>
-                {teamCompare.map(t => (
-                  <tr key={t.key} className="border-t" style={{ borderColor: '#2e2e2e' }}>
-                    <td className="py-2.5 pr-3 font-semibold text-white whitespace-nowrap">{t.name}</td>
-                    <td className="py-2.5 pr-3 text-right text-teal font-semibold">{fmtMetric('revenue', t.revenue)}</td>
-                    <td className="py-2.5 pr-3 text-right text-white/50">{t.goal != null ? fmtMetric('revenue', t.goal) : '—'}</td>
-                    <td className="py-2.5 pr-3">
-                      {t.goalPct != null ? (
-                        <div className="flex items-center gap-2">
-                          <div className="h-1.5 rounded-full overflow-hidden flex-1" style={{ background: '#1a1a1a' }}>
-                            <div className={`h-full rounded-full ${t.goalPct >= 100 ? 'bg-emerald-400' : 'bg-teal'}`}
-                              style={{ width: `${Math.min(t.goalPct, 100)}%` }} />
-                          </div>
-                          <span className={`text-[10px] font-semibold ${t.goalPct >= 100 ? 'text-emerald-400' : 'text-white/40'}`}>{t.goalPct.toFixed(0)}%</span>
-                        </div>
-                      ) : <span className="text-white/20 text-[10px]">no goal</span>}
-                    </td>
-                    <td className="py-2.5 pr-3 text-right text-white">{t.deals}</td>
-                    <td className="py-2.5 pr-3 text-right text-white/60">{t.estimates ?? '—'}</td>
-                    <td className="py-2.5 pr-3 text-right text-white/60">{t.close_rate != null ? t.close_rate.toFixed(0) + '%' : '—'}</td>
-                    <td className="py-2.5 pr-3 text-right text-white/60">{t.cancel_rate != null ? t.cancel_rate.toFixed(0) + '%' : '—'}</td>
-                    <td className="py-2.5 text-right text-white/60">{t.markup_pct != null ? t.markup_pct.toFixed(1) + '%' : '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
 
       {/* ── Rep breakdown: grouped by team, with trend + monthly baseline ── */}
       <div className="rounded-xl p-4 md:p-5" style={CARD}>
