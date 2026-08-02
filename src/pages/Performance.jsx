@@ -514,10 +514,14 @@ export default function Performance() {
       }
     }
     // Every active rep + manager appears even at zero (org/team/rep scope) so
-    // a silent week is visible, not hidden. Office scope stays activity-only —
-    // reps aren't assigned to an office, their deals are.
+    // a silent week is visible, not hidden. Team HEADS are seeded regardless
+    // of title — a director/VP who heads a team (Garrison) belongs under his
+    // own team like any manager. Office scope stays activity-only — reps
+    // aren't assigned to an office, their deals are.
     const seeded = users.filter(u =>
-      u.active !== false && (u.role === 'rep' || u.role === 'manager') && (isAdmin || !u.ghost))
+      u.active !== false &&
+      (u.role === 'rep' || u.role === 'manager' || headsSet.has(u.id)) &&
+      (isAdmin || !u.ghost))
     let seedIds
     if (scope.type === 'team')      seedIds = seeded.filter(u => teamKeyFor(u, headsSet) === scope.id).map(u => u.id)
     else if (scope.type === 'rep')  seedIds = seeded.filter(u => u.id === scope.id).map(u => u.id)
