@@ -254,8 +254,14 @@ one at the SAME grain, chart goal lines re-resolve at the displayed sub-grain
 (never scaled to days), and week-zooms hide estimates (weekly inputs can't
 split into days). A "Change Over Time" table shows every displayed period vs
 the one before (relative % for $/counts, percentage-point deltas for rates;
-green/red with cancel-rate inverted). **Contributions row** (top of the
-page, above the scorecard): donuts of each team's share of Revenue/Deals/
+green/red with cancel-rate inverted). Page order: scorecard first, then the
+Contributions row, then Teams-vs-Goal (admin: click a Goal cell to edit
+inline — writes a targets row at the displayed grain effective from the
+current period), charts, Change table, Rep Breakdown. Admin buttons up top:
+"Estimates" (a collapsible weekly-estimates entry panel — per rep per Sun–Sat
+week with ‹ › week nav, writes `weekly_stats` via `upsertWeeklyStat` and
+updates the page's state instantly; same store as Team → Weekly Stats) and
+"Targets". **Contributions row**: donuts of each team's share of Revenue/Deals/
 Estimates + a ranked close-rate bar list + a "By Office" strip (per-office
 revenue/deals/share-of-company with pace deltas; "No office" only when such
 deals exist), ALWAYS org-wide regardless of the

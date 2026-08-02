@@ -3,13 +3,16 @@ import {
   ComposedChart, Bar, Line, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, ReferenceLine, Legend, PieChart, Pie, Cell,
 } from 'recharts'
-import { ChevronDown, ChevronRight, Plus, Trash2, Target, X, ZoomIn } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronLeft, Plus, Trash2, Target, X, ZoomIn, ClipboardList } from 'lucide-react'
+import { format, addDays } from 'date-fns'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import {
   fetchDeals, fetchUsers, fetchTeamChanges, fetchWeeklyStats,
   fetchTargets, saveTarget, deleteTarget, fetchGoal, fetchRepGoals,
+  upsertWeeklyStat,
 } from '../lib/db'
+import { weekStartOf } from '../utils/dateRanges'
 import { dealAmounts, isCanceled } from '../utils/commission'
 import { headIdSet, buildChangesByProfile, saleOwnerId, teamOfSale, teamKeyFor } from '../utils/team'
 import {
@@ -603,6 +606,55 @@ export default function Performance() {
     toast.success('Goal saved.')
   }
 
+  // ── Weekly-estimates entry (admin) — writes the SAME weekly_stats store as
+  // the Team page's Weekly Stats tab, one week (Sun–Sat) at a time, and
+  // updates this page's numbers instantly on save.
+  const [showEstimates, setShowEstimates] = useState(false)
+  const curWeekStart = weekStartOf(new Date().toISOString().slice(0, 10))
+  const [estWeek, setEstWeek] = useState(curWeekStart)
+  const shiftEstWeek = (days) => setEstWeek(w => format(addDays(new Date(w + 'T12:00:00'), days), 'yyyy-MM-dd'))
+  const estValue = (repId, field) => {
+    const s = weeklyStats.find(x => x.rep_id === repId && x.week_start === estWeek)
+    return Number(s?.[field]) || 0
+  }
+  async function saveEstimate(repId, which, raw) {
+    const v = Math.max(0, parseInt(raw, 10) || 0)
+    const cur = weeklyStats.find(s => s.rep_id === repId && s.week_start === estWeek) || {}
+    const sg = which === 'sg' ? v : Number(cur.self_gen_estimates) || 0
+    const ld = which === 'ld' ? v : Number(cur.lead_estimates) || 0
+    if (sg === (Number(cur.self_gen_estimates) || 0) && ld === (Number(cur.lead_estimates) || 0)) return
+    setWeeklyStats(prev => [
+      ...prev.filter(s => !(s.rep_id === repId && s.week_start === estWeek)),
+      { ...cur, rep_id: repId, week_start: estWeek, self_gen_estimates: sg, lead_estimates: ld, estimates: sg + ld },
+    ])
+    const { error } = await upsertWeeklyStat(
+      { rep_id: repId, week_start: estWeek, self_gen_estimates: sg, lead_estimates: ld }, profile?.id)
+    if (error) toast.error("Couldn't save the estimate: " + (error.message || 'unknown error'))
+  }
+  // Active reps grouped by current team for the entry grid (alphabetical,
+  // No Team last) — same seeding rule as the Rep Breakdown.
+  const estTeams = useMemo(() => {
+    const people = users.filter(u =>
+      u.active !== false &&
+      (u.role === 'rep' || u.role === 'manager' || headsSet.has(u.id)) &&
+      (isAdmin || !u.ghost))
+    const groups = {}
+    for (const u of people) {
+      const tk = teamKeyFor(u, headsSet)
+      ;(groups[tk] ??= []).push(u)
+    }
+    return Object.entries(groups).map(([tk, rows]) => {
+      const lead = usersById[tk]
+      rows.sort((a, b) => a.name.localeCompare(b.name))
+      return {
+        key: tk,
+        name: tk === 'unassigned' ? 'No Team' : lead ? `${lead.name}'s Team` : 'Former Team',
+        color: teamCompare.find(t => t.key === tk)?.color ?? '#6b7280',
+        rows,
+      }
+    }).sort((a, b) => (a.key === 'unassigned') - (b.key === 'unassigned') || a.name.localeCompare(b.name))
+  }, [users, headsSet, usersById, isAdmin, teamCompare])
+
   // ── Targets editor (admin) ──
   const [showTargets, setShowTargets] = useState(false)
   const emptyTarget = { scope: 'org', subject: '', metric: 'revenue', period: 'month', value: '', effective: new Date().toISOString().slice(0, 10) }
@@ -696,13 +748,78 @@ export default function Performance() {
           </div>
         </div>
         {isAdmin && (
-          <button onClick={() => setShowTargets(s => !s)}
-            className="flex items-center gap-1.5 h-9 px-3 rounded-lg text-[12px] font-semibold text-amber-300 hover:bg-amber-400/10 transition-colors self-start"
-            style={{ border: '1px solid rgba(251,191,36,0.35)' }}>
-            <Target size={14} /> Targets {showTargets ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-          </button>
+          <div className="flex gap-2 self-start">
+            <button onClick={() => setShowEstimates(s => !s)}
+              className="flex items-center gap-1.5 h-9 px-3 rounded-lg text-[12px] font-semibold text-teal hover:bg-teal/10 transition-colors"
+              style={{ border: '1px solid rgba(0,184,148,0.35)' }}>
+              <ClipboardList size={14} /> Estimates {showEstimates ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            </button>
+            <button onClick={() => setShowTargets(s => !s)}
+              className="flex items-center gap-1.5 h-9 px-3 rounded-lg text-[12px] font-semibold text-amber-300 hover:bg-amber-400/10 transition-colors"
+              style={{ border: '1px solid rgba(251,191,36,0.35)' }}>
+              <Target size={14} /> Targets {showTargets ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            </button>
+          </div>
         )}
       </div>
+
+      {/* ── Weekly-estimates entry (admin) ── */}
+      {isAdmin && showEstimates && (
+        <div className="rounded-xl p-4 md:p-5 space-y-3" style={CARD}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-[13px] font-semibold text-white">Enter Weekly Estimates</h3>
+              <p className="text-[11px] text-white/35 mt-0.5">
+                Per rep, per week (Sun–Sat) — the same store as the Team page's Weekly Stats.
+                Saves as you tab out of a box, and this page's numbers update instantly.
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => shiftEstWeek(-7)} title="Previous week"
+                className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/5"><ChevronLeft size={15} /></button>
+              <span className="text-[12px] font-semibold text-white whitespace-nowrap">
+                Week of {format(new Date(estWeek + 'T12:00:00'), 'MMM d, yyyy')}
+              </span>
+              <button onClick={() => shiftEstWeek(7)} title="Next week"
+                className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/5"><ChevronRight size={15} /></button>
+              {estWeek !== curWeekStart && (
+                <button onClick={() => setEstWeek(curWeekStart)}
+                  className="text-[11px] text-teal hover:underline ml-1">This week</button>
+              )}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {estTeams.map(g => (
+              <div key={g.key} className="rounded-lg p-3" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+                <div className="flex items-center gap-1.5 mb-2">
+                  <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: g.color }} />
+                  <p className="text-[11px] font-bold text-white truncate">{g.name}</p>
+                </div>
+                <div className="grid grid-cols-[1fr_56px_56px] gap-x-1.5 gap-y-1 items-center">
+                  <span />
+                  <span className="text-[8px] font-semibold text-white/30 uppercase tracking-wider text-center">SG Est</span>
+                  <span className="text-[8px] font-semibold text-white/30 uppercase tracking-wider text-center">Leads Ran</span>
+                  {g.rows.map(u => (
+                    <Fragment key={u.id}>
+                      <p className="text-[12px] text-white/80 truncate pr-1">{u.name}</p>
+                      <input type="number" min="0" key={`${u.id}-sg-${estWeek}`}
+                        defaultValue={estValue(u.id, 'self_gen_estimates') || ''}
+                        onBlur={e => saveEstimate(u.id, 'sg', e.target.value)}
+                        className="w-full rounded px-1.5 py-1 text-[12px] font-semibold text-teal text-center focus:outline-none"
+                        style={{ background: '#1a1a1a', border: '1px solid rgba(0,184,148,0.35)' }} />
+                      <input type="number" min="0" key={`${u.id}-ld-${estWeek}`}
+                        defaultValue={estValue(u.id, 'lead_estimates') || ''}
+                        onBlur={e => saveEstimate(u.id, 'ld', e.target.value)}
+                        className="w-full rounded px-1.5 py-1 text-[12px] font-semibold text-[#74b9ff] text-center focus:outline-none"
+                        style={{ background: '#1a1a1a', border: '1px solid rgba(116,185,255,0.35)' }} />
+                    </Fragment>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── Targets editor (admin) ── */}
       {isAdmin && showTargets && (
@@ -829,6 +946,34 @@ export default function Performance() {
           </button>
         </div>
       )}
+
+      {/* ── Scorecard header ── */}
+      <div>
+        <div className="flex items-baseline gap-2 mb-2">
+          <h2 className="text-[14px] md:text-[15px] font-semibold text-white">{scopeName}</h2>
+          <p className="text-[11px] text-white/35">
+            {focus ? focus.label
+              : `${grain === 'week' ? 'This week' : grain === 'month' ? 'This month' : grain === 'quarter' ? 'This quarter' : 'This year'} · ${curPeriod.label}`}
+          </p>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 md:gap-3">
+          <ScoreTile label="Revenue"     metric="revenue"     value={cur.revenue}     prev={prev?.revenue}     goal={goalFor('revenue')} />
+          <ScoreTile label="Deals"       metric="deals"       value={cur.deals}       prev={prev?.deals}       goal={goalFor('deals')} />
+          <ScoreTile label="Estimates"   metric="estimates"   value={cur.estimates}   prev={prev?.estimates}   goal={goalFor('estimates')} />
+          <ScoreTile label="Close Rate"  metric="close_rate"  value={cur.close_rate}  prev={prev?.close_rate}  goal={goalFor('close_rate')} />
+          <ScoreTile label="Cancel Rate" metric="cancel_rate" value={cur.cancel_rate} prev={prev?.cancel_rate} goal={goalFor('cancel_rate')} lowerIsBetter />
+          <ScoreTile label="Markup %"    metric="markup_pct"  value={cur.markup_pct}  prev={prev?.markup_pct}  goal={goalFor('markup_pct')} />
+        </div>
+        <p className="text-[10px] text-white/25 mt-1.5">
+          ▲▼ compare to the <span className="text-white/40">same point</span> in the previous {headerGrain} while it's in progress — full period once complete.
+        </p>
+        {!hasEstimates && (
+          <p className="text-[10px] text-white/25 mt-1.5">Estimates aren't tracked per office, so estimate + close-rate figures show "—" at office scope.</p>
+        )}
+        {(grain === 'quarter' || grain === 'year') && (
+          <p className="text-[10px] text-white/25 mt-1.5">Heads up: data starts June 2026, so early {grain === 'quarter' ? 'quarters' : 'years'} are partial.</p>
+        )}
+      </div>
 
       {/* ── Contributions: team + office share of the company, at a glance.
           Always rendered — an empty period shows placeholders, never hides. ── */}
@@ -988,33 +1133,6 @@ export default function Performance() {
         </div>
       )}
 
-      {/* ── Scorecard header ── */}
-      <div>
-        <div className="flex items-baseline gap-2 mb-2">
-          <h2 className="text-[14px] md:text-[15px] font-semibold text-white">{scopeName}</h2>
-          <p className="text-[11px] text-white/35">
-            {focus ? focus.label
-              : `${grain === 'week' ? 'This week' : grain === 'month' ? 'This month' : grain === 'quarter' ? 'This quarter' : 'This year'} · ${curPeriod.label}`}
-          </p>
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 md:gap-3">
-          <ScoreTile label="Revenue"     metric="revenue"     value={cur.revenue}     prev={prev?.revenue}     goal={goalFor('revenue')} />
-          <ScoreTile label="Deals"       metric="deals"       value={cur.deals}       prev={prev?.deals}       goal={goalFor('deals')} />
-          <ScoreTile label="Estimates"   metric="estimates"   value={cur.estimates}   prev={prev?.estimates}   goal={goalFor('estimates')} />
-          <ScoreTile label="Close Rate"  metric="close_rate"  value={cur.close_rate}  prev={prev?.close_rate}  goal={goalFor('close_rate')} />
-          <ScoreTile label="Cancel Rate" metric="cancel_rate" value={cur.cancel_rate} prev={prev?.cancel_rate} goal={goalFor('cancel_rate')} lowerIsBetter />
-          <ScoreTile label="Markup %"    metric="markup_pct"  value={cur.markup_pct}  prev={prev?.markup_pct}  goal={goalFor('markup_pct')} />
-        </div>
-        <p className="text-[10px] text-white/25 mt-1.5">
-          ▲▼ compare to the <span className="text-white/40">same point</span> in the previous {headerGrain} while it's in progress — full period once complete.
-        </p>
-        {!hasEstimates && (
-          <p className="text-[10px] text-white/25 mt-1.5">Estimates aren't tracked per office, so estimate + close-rate figures show "—" at office scope.</p>
-        )}
-        {(grain === 'quarter' || grain === 'year') && (
-          <p className="text-[10px] text-white/25 mt-1.5">Heads up: data starts June 2026, so early {grain === 'quarter' ? 'quarters' : 'years'} are partial.</p>
-        )}
-      </div>
 
       {/* ── Revenue ── */}
       <div className="rounded-xl p-4 md:p-5" style={CARD}>
