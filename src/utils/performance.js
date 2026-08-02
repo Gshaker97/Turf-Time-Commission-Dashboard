@@ -106,6 +106,19 @@ export function zoomLabel(grain, fromISO) {
   return format(d, 'yyyy')
 }
 
+// While a period is still IN PROGRESS, vs-previous comparisons should be
+// pace-based — against the SAME elapsed point of the previous period ("Aug
+// 1–2 vs Jul 1–2"), not the previous period's whole run. Returns prevP
+// clamped to the current period's elapsed length; unchanged once the current
+// period is complete, so finished periods still compare full-to-full.
+export function pacePrevPeriod(prevP, curP, todayISO = format(new Date(), 'yyyy-MM-dd')) {
+  if (!prevP || !curP || curP.to < todayISO) return prevP
+  const elapsed = Math.max(0, Math.round(
+    (new Date(todayISO + 'T12:00:00') - new Date(curP.from + 'T12:00:00')) / 86400000))
+  const pTo = f(addDays(new Date(prevP.from + 'T12:00:00'), elapsed))
+  return pTo < prevP.to ? { ...prevP, to: pTo } : prevP
+}
+
 // ── Scope filters ─────────────────────────────────────────────
 // scope = { type: 'org' } | { type: 'team', id } | { type: 'office', name }
 //       | { type: 'rep', id }
