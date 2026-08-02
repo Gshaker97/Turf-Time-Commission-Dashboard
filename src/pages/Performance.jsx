@@ -514,8 +514,9 @@ export default function Performance() {
     for (const m of months) {
       const s = statsFor(m)
       for (const id in s) {
-        const t = (moTotals[id] ??= { revenue: 0, deals: 0 })
+        const t = (moTotals[id] ??= { revenue: 0, deals: 0, leadsClosed: 0, leadRevenue: 0 })
         t.revenue += s[id].revenue; t.deals += s[id].deals
+        t.leadsClosed += s[id].leadsClosed; t.leadRevenue += s[id].leadRevenue
       }
     }
     // Every active rep + manager appears even at zero (org/team/rep scope) so
@@ -551,6 +552,8 @@ export default function Performance() {
           prevRevenue: p?.revenue, prevDeals: p?.deals, prevLeads: p?.leadsClosed,
           moAvgRevenue: mo ? mo.revenue / months.length : null,
           moAvgDeals:   mo ? mo.deals / months.length : null,
+          moAvgLeadRevenue: mo ? mo.leadRevenue / months.length : null,
+          moAvgLeads:       mo ? mo.leadsClosed / months.length : null,
         }
       })
       .sort((a, b) => b.revenue - a.revenue || b.deals - a.deals)
@@ -1099,7 +1102,7 @@ export default function Performance() {
         </div>
         {repGroups.length ? (
           <div className="overflow-x-auto">
-            <table className="w-full text-[12px] min-w-[1080px]">
+            <table className="w-full text-[12px] min-w-[1180px]">
               <thead>
                 <tr className="text-left text-[9px] uppercase tracking-widest text-white/30">
                   <th className="pb-2 pr-2 w-8">#</th>
@@ -1114,14 +1117,15 @@ export default function Performance() {
                   <th className="pb-2 pr-3 text-right">Lead Rev</th>
                   <th className="pb-2 pr-3 text-right">Cancels</th>
                   <th className="pb-2 pr-3 text-right">Markup %</th>
-                  <th className="pb-2 text-right">Mo Avg</th>
+                  <th className="pb-2 pr-3 text-right">Mo Avg</th>
+                  <th className="pb-2 text-right">Lead Mo Avg</th>
                 </tr>
               </thead>
               <tbody>
                 {repGroups.map(g => (
                   <Fragment key={g.key}>
                     <tr className="border-t" style={{ borderColor: '#2e2e2e', background: '#ffffff05' }}>
-                      <td colSpan={13} className="py-2 pr-3">
+                      <td colSpan={14} className="py-2 pr-3">
                         <span className="flex items-center gap-2">
                           <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: g.color }} />
                           <span className="font-bold text-white text-[12px]">{g.name}</span>
@@ -1152,11 +1156,19 @@ export default function Performance() {
                         <td className="py-2 pr-3 text-right text-white/60">{r.leadRevenue ? fmtMetric('revenue', r.leadRevenue) : '—'}</td>
                         <td className={`py-2 pr-3 text-right ${r.canceled ? 'text-red-400/80' : 'text-white/25'}`}>{r.canceled || '—'}</td>
                         <td className="py-2 pr-3 text-right text-white/60">{r.markup != null ? r.markup.toFixed(1) + '%' : '—'}</td>
-                        <td className="py-2 text-right whitespace-nowrap">
+                        <td className="py-2 pr-3 text-right whitespace-nowrap">
                           {r.moAvgRevenue != null ? (
                             <>
                               <span className="text-white/70 font-semibold">{fmtMetric('revenue', r.moAvgRevenue)}</span>
                               <div className="text-[10px] text-white/30">{r.moAvgDeals.toFixed(1)} deals/mo</div>
+                            </>
+                          ) : <span className="text-white/20">new</span>}
+                        </td>
+                        <td className="py-2 text-right whitespace-nowrap">
+                          {r.moAvgLeadRevenue != null ? (
+                            <>
+                              <span className="text-white/70 font-semibold">{fmtMetric('revenue', r.moAvgLeadRevenue)}</span>
+                              <div className="text-[10px] text-white/30">{r.moAvgLeads.toFixed(1)} leads/mo</div>
                             </>
                           ) : <span className="text-white/20">new</span>}
                         </td>
