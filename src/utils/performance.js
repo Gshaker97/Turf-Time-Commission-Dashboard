@@ -146,9 +146,14 @@ export const scopeHasEstimates = (scope) => !scope || scope.type !== 'office'
 
 // ── Aggregation ───────────────────────────────────────────────
 
+// The "Estimates" metric counts SELF-GEN estimates only (per Keaton) — leads
+// ran are tracked separately in the Rep Breakdown and never inflate the
+// estimate totals. Legacy unsplit weeks fall back to their combined number.
 const estOf = (s) => {
-  const split = (Number(s.self_gen_estimates) || 0) + (Number(s.lead_estimates) || 0)
-  return split || (Number(s.estimates) || 0)
+  const sg = Number(s.self_gen_estimates) || 0
+  const ld = Number(s.lead_estimates) || 0
+  if (sg || ld) return sg
+  return Number(s.estimates) || 0
 }
 
 function newBucket() {
