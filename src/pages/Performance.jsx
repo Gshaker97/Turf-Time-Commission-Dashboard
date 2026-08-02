@@ -437,14 +437,18 @@ export default function Performance() {
       const k = teamOfSale(saleOwnerId(d), d.sale_date, usersById, headsSet, changesByProfile)
       if (k !== 'unassigned') keys.add(k)
     }
+    const months = periodsFor('month', 4).slice(0, 3)   // last 3 FULL months
     return [...keys].map(k => {
       const tScope = { type: 'team', id: k }
       const b = bucketize(deals, weeklyStats, [curPeriod], tScope, teamCtx)[curPeriod.key]
+      const moB = bucketize(deals, weeklyStats, months, tScope, teamCtx)
+      const moAvgRevenue = months.reduce((s, m) => s + moB[m.key].revenue, 0) / months.length
+      const moAvgDeals   = months.reduce((s, m) => s + moB[m.key].deals, 0) / months.length
       let goal = resolveTarget(targets, { scopeType: 'team', subject: k, metric: 'revenue', grain: headerGrain, periodStart: curPeriod.from })
       if (goal == null && headerGrain === 'month') goal = repGoals.find(g => g.scope === 'team' && g.subject_id === k)?.target ?? null
       const u = usersById[k]
       const name = k === 'unassigned' ? 'Unassigned' : u ? `${u.name}${headsSet.has(k) ? '' : ' (former)'}` : 'Former team'
-      return { key: k, name, shortName: name.split(' ')[0], ...b, goal, goalPct: goal > 0 ? (b.revenue / goal) * 100 : null }
+      return { key: k, name, shortName: name.split(' ')[0], ...b, moAvgRevenue, moAvgDeals, goal, goalPct: goal > 0 ? (b.revenue / goal) * 100 : null }
     })
       // Current head teams always stay (zeros included) so the row never
       // vanishes on a quiet period; historical keys only appear with activity.
@@ -995,7 +999,14 @@ export default function Performance() {
               <tbody>
                 {teamCompare.map(t => (
                   <tr key={t.key} className="border-t" style={{ borderColor: '#2e2e2e' }}>
-                    <td className="py-2.5 pr-3 font-semibold text-white whitespace-nowrap">{t.name}</td>
+                    <td className="py-2.5 pr-3 whitespace-nowrap">
+                      <span className="font-semibold text-white">{t.name}</span>
+                      <div className="text-[10px] text-white/30">
+                        {t.moAvgRevenue > 0
+                          ? `3-mo avg ${fmtMetric('revenue', t.moAvgRevenue)} · ${t.moAvgDeals.toFixed(1)} deals/mo`
+                          : 'no history'}
+                      </div>
+                    </td>
                     <td className="py-2.5 pr-3 text-right text-teal font-semibold">{fmtMetric('revenue', t.revenue)}</td>
                     <td className="py-2.5 pr-3 text-right whitespace-nowrap">
                       {isAdmin ? (
