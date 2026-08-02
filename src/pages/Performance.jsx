@@ -291,7 +291,6 @@ export default function Performance() {
   const [focus, setFocus] = useState(null)   // { key, label, from, to, grain }
   const changeGrain = (g) => { setFocus(null); setGrain(g) }
   const focusOn = (periodGrain, p) => setFocus({ ...p, grain: periodGrain, label: zoomLabel(periodGrain, p.from) })
-  const focusNow = (g) => focusOn(g, periodsFor(g, 1)[0])
 
   const displayGrain = focus ? SUB_GRAIN[focus.grain] : grain
   const periods = useMemo(
@@ -642,10 +641,15 @@ export default function Performance() {
           </select>
           <Pills options={GRAINS.map(g => [g.key, g.label])} value={focus ? '' : grain} onChange={changeGrain} />
           <div className="flex gap-1 p-1 rounded-xl w-fit" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-            {[['month', 'MTD'], ['quarter', 'QTD'], ['year', 'YTD']].map(([g, l]) => {
-              const active = focus && focus.grain === g && focus.key === periodsFor(g, 1)[0].key
+            {[
+              ['month', 'MTD', 0], ['quarter', 'QTD', 0], ['year', 'YTD', 0],
+              ['week', 'Last Wk', 1], ['month', 'Last Mo', 1],
+            ].map(([g, l, back]) => {
+              const p = periodsFor(g, back + 1)[0]
+              const active = focus && focus.grain === g && focus.key === p.key
               return (
-                <button key={g} onClick={() => focusNow(g)} title={`Zoom into the current ${g}`}
+                <button key={l} onClick={() => focusOn(g, p)}
+                  title={back ? `Zoom into last ${g}` : `Zoom into the current ${g}`}
                   className={`px-2.5 py-1.5 rounded-lg text-[12px] font-semibold transition-colors ${active ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
                   {l}
                 </button>
