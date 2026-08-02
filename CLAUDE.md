@@ -246,9 +246,15 @@ goals FALL BACK to the legacy stores when no target row matches: org+month →
 `rep_goals` (current month only). Chart-type/breakdown picks persist per
 browser (`tt_perf_prefs` localStorage). Breakdown charts (by team/office)
 group in one pass over ALL deals (incl. historical/former team keys +
-"No office") so series always sum to company totals; goal lines are
-suppressed on breakdown views. Ghost reps hidden from non-admin leaderboards
-as everywhere else.
+"No office"); goal lines are suppressed on breakdown views. Ghost reps hidden
+from non-admin leaderboards as everywhere else. **Unassigned is EXCLUDED from
+every team view on this page** (scope picker, team breakdown, teams-vs-goal
+table; ownerless deals also skip the rep table) — per Keaton, unlike the
+Dashboard/Team pages which keep their Unassigned bucket. Instead an amber
+data-quality banner flags the FIXABLE cases: a rep who currently HAS a
+reports-to but whose deals resolve to no team (broken attribution), and deals
+with no setter/closer. Reps with no reports-to are unmanaged by design — no
+alert, their deals still count in org totals + rep scope.
 
 ## User management (Admin page)
 

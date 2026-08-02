@@ -247,6 +247,29 @@ export default function Performance() {
   const seriesRows = useMemo(() => periods.map(p => ({ label: p.label, ...buckets[p.key] })), [periods, buckets])
   const hasEstimates = scopeHasEstimates(scope)
 
+  // Unassigned is EXCLUDED from every team view on this page (per Keaton) —
+  // but silently dropping data hides problems, so flag the FIXABLE cases:
+  // a rep who currently HAS a lead whose deals still resolve to no team
+  // (broken attribution — stale reports-to, lead missing the manager role),
+  // and deals with no setter or closer at all. Genuinely unmanaged reps
+  // (no reports-to) are expected and not alerted.
+  const unassignedIssues = useMemo(() => {
+    const byOwner = {}
+    let ownerless = 0
+    for (const d of deals) {
+      if (isCanceled(d) || !d.sale_date) continue
+      const owner = saleOwnerId(d)
+      if (!owner) { ownerless += 1; continue }
+      if (teamOfSale(owner, d.sale_date, usersById, headsSet, changesByProfile) !== 'unassigned') continue
+      const u = usersById[owner]
+      if (!u?.manager_id) continue                 // unmanaged by design — expected
+      if (!isAdmin && u.ghost) continue
+      const e = (byOwner[owner] ??= { id: owner, name: u.name, lead: usersById[u.manager_id]?.name ?? 'someone', count: 0 })
+      e.count += 1
+    }
+    return { reps: Object.values(byOwner).sort((a, b) => b.count - a.count), ownerless }
+  }, [deals, usersById, headsSet, changesByProfile, isAdmin])
+
   // Team/office breakdown for the revenue + deals charts (org scope only).
   // Grouped in ONE pass by the same date-effective team key as the Dashboard so
   // the stacked series always sum exactly to the company totals.
@@ -261,6 +284,7 @@ export default function Performance() {
       const p = periods.find(x => d.sale_date >= x.from && d.sale_date <= x.to)
       if (!p) continue
       const k = entKey(d)
+      if (mode === 'team' && k === 'unassigned') continue   // excluded from team views
       byEnt[k] = true
       const v = field === 'revenue' ? dealAmounts(d).baseline : 1
       rowByPeriod[p.key][k] = (rowByPeriod[p.key][k] || 0) + v
@@ -295,7 +319,8 @@ export default function Performance() {
     for (const d of deals) {
       if (!d.sale_date || d.sale_date < curPeriod.from || d.sale_date > curPeriod.to) continue
       if (!dealInScope(d, scope, teamCtx)) continue
-      const owner = saleOwnerId(d) ?? '_none'
+      const owner = saleOwnerId(d)
+      if (!owner) continue   // no setter/closer — excluded here, flagged in the banner
       const r = row(owner)
       if (isCanceled(d)) { r.canceled += 1; continue }
       const a = dealAmounts(d)
@@ -313,7 +338,7 @@ export default function Performance() {
       .filter(r => isAdmin || !usersById[r.id]?.ghost)
       .map(r => ({
         ...r,
-        name: r.id === '_none' ? 'No rep assigned' : (usersById[r.id]?.name ?? 'Unknown'),
+        name: usersById[r.id]?.name ?? 'Unknown',
         closeRate: r.estimates > 0 ? (r.deals / r.estimates) * 100 : null,
         markup: r.revenue > 0 ? ((r.job - r.revenue) / r.revenue) * 100 : null,
       }))
@@ -323,10 +348,11 @@ export default function Performance() {
   // ── Team comparison: every team vs its goal, current period (org scope) ──
   const teamCompare = useMemo(() => {
     if (scope.type !== 'org') return []
-    const keys = new Set([...heads.map(h => h.id), 'unassigned'])
+    const keys = new Set(heads.map(h => h.id))
     for (const d of deals) {
       if (!d.sale_date || d.sale_date < curPeriod.from || d.sale_date > curPeriod.to) continue
-      keys.add(teamOfSale(saleOwnerId(d), d.sale_date, usersById, headsSet, changesByProfile))
+      const k = teamOfSale(saleOwnerId(d), d.sale_date, usersById, headsSet, changesByProfile)
+      if (k !== 'unassigned') keys.add(k)
     }
     return [...keys].map(k => {
       const tScope = { type: 'team', id: k }
@@ -407,7 +433,6 @@ export default function Performance() {
             <option value="org">Entire Company</option>
             <optgroup label="Teams">
               {heads.map(h => <option key={h.id} value={`team:${h.id}`}>{h.name}'s Team</option>)}
-              <option value="team:unassigned">Unassigned</option>
             </optgroup>
             <optgroup label="Offices">
               {offices.map(o => <option key={o} value={`office:${o.toLowerCase()}`}>{o}</option>)}
@@ -512,6 +537,28 @@ export default function Performance() {
           ) : (
             <p className="text-[11px] text-white/25">No targets yet — revenue goals from the Dashboard/Team pages are used as a fallback until you add some.</p>
           )}
+        </div>
+      )}
+
+      {/* ── Data-quality alert: fixable attribution problems ── */}
+      {(unassignedIssues.reps.length > 0 || unassignedIssues.ownerless > 0) && (
+        <div className="rounded-xl p-3.5 md:p-4 space-y-1.5"
+          style={{ background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.35)' }}>
+          <p className="text-[12px] font-semibold text-amber-300">⚠ Some deals aren't counting toward any team</p>
+          {unassignedIssues.reps.map(r => (
+            <p key={r.id} className="text-[11px] text-amber-200/80">
+              <span className="font-semibold text-amber-200">{r.name}</span> — {r.count} deal{r.count === 1 ? '' : 's'} outside
+              any team, but they currently report to <span className="font-semibold text-amber-200">{r.lead}</span>. Their lead
+              may be missing the manager role, or their Team History (Admin → Users → Edit) doesn't cover those sale dates.
+            </p>
+          ))}
+          {unassignedIssues.ownerless > 0 && (
+            <p className="text-[11px] text-amber-200/80">
+              {unassignedIssues.ownerless} deal{unassignedIssues.ownerless === 1 ? ' has' : 's have'} no setter or closer —
+              assign people on the Deals page so they count toward a rep and team.
+            </p>
+          )}
+          <p className="text-[10px] text-amber-200/50">These deals still count in company totals — they're just missing from team breakdowns until fixed.</p>
         </div>
       )}
 
