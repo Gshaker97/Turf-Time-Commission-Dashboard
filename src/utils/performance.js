@@ -6,7 +6,7 @@
 import {
   format, startOfWeek, endOfWeek, startOfMonth, endOfMonth,
   startOfQuarter, endOfQuarter, startOfYear, endOfYear,
-  subWeeks, subMonths, subQuarters, subYears,
+  subWeeks, subMonths, subQuarters, subYears, addDays, addMonths,
 } from 'date-fns'
 import { dealAmounts, isCanceled } from './commission'
 import { saleOwnerId, teamOfSale } from './team'
@@ -65,6 +65,45 @@ export function periodsFor(grain, count, now = new Date()) {
     out.push({ key, label, from: f(s), to: f(e) })
   }
   return out
+}
+
+// What a zoomed-in period breaks down into: a week shows days, a month shows
+// weeks, a quarter/year shows months.
+export const SUB_GRAIN = { week: 'day', month: 'week', quarter: 'month', year: 'month' }
+
+// Sub-periods covering [fromISO, toISO], CLAMPED to the range so partial edge
+// weeks/months never pull in neighboring days — the zoomed view always sums
+// exactly to the parent period. grain: 'day' | 'week' | 'month'.
+export function periodsInRange(grain, fromISO, toISO) {
+  const out = []
+  const from = new Date(fromISO + 'T12:00:00')
+  if (grain === 'day') {
+    for (let d = from; f(d) <= toISO; d = addDays(d, 1))
+      out.push({ key: f(d), label: format(d, 'EEE d'), from: f(d), to: f(d) })
+    return out
+  }
+  let ptr = grain === 'week' ? startOfWeek(from, WEEK) : startOfMonth(from)
+  while (f(ptr) <= toISO) {
+    const end = grain === 'week' ? f(endOfWeek(ptr, WEEK)) : f(endOfMonth(ptr))
+    const s = f(ptr) < fromISO ? fromISO : f(ptr)
+    const e = end > toISO ? toISO : end
+    out.push({
+      key: s,
+      label: grain === 'week' ? format(new Date(s + 'T12:00:00'), 'MMM d') : format(ptr, 'MMM yy'),
+      from: s, to: e,
+    })
+    ptr = grain === 'week' ? addDays(ptr, 7) : addMonths(ptr, 1)
+  }
+  return out
+}
+
+// Human label for a zoomed period ("June 2026", "Week of Jul 27", "Q3 2026").
+export function zoomLabel(grain, fromISO) {
+  const d = new Date(fromISO + 'T12:00:00')
+  if (grain === 'week')    return `Week of ${format(startOfWeek(d, WEEK), 'MMM d, yyyy')}`
+  if (grain === 'month')   return format(d, 'MMMM yyyy')
+  if (grain === 'quarter') return `Q${Math.floor(d.getMonth() / 3) + 1} ${format(d, 'yyyy')}`
+  return format(d, 'yyyy')
 }
 
 // ── Scope filters ─────────────────────────────────────────────
@@ -171,8 +210,9 @@ export function resolveTarget(targets, { scopeType, subject, metric, grain, peri
     return any ? Number(any.value) : null
   }
   // Scale a count/$ target from its stored grain to the requested one.
+  // (No scaling to 'day' — a daily goal line would just be noise.)
   const any = pick(mine)
-  if (!any) return null
+  if (!any || !WEEKS_PER[grain]) return null
   return Number(any.value) * (WEEKS_PER[grain] / WEEKS_PER[any.period])
 }
 
