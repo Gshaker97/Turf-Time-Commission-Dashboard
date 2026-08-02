@@ -14,8 +14,8 @@ import { dealAmounts, isCanceled } from '../utils/commission'
 import { headIdSet, buildChangesByProfile, saleOwnerId, teamOfSale, teamKeyFor } from '../utils/team'
 import {
   GRAINS, METRICS, PERCENT_METRICS, SUB_GRAIN, periodsFor, periodsInRange,
-  zoomLabel, bucketize, resolveTarget, fmtMetric, scopeHasEstimates,
-  dealInScope, statInScope,
+  zoomLabel, pacePrevPeriod, bucketize, resolveTarget, fmtMetric,
+  scopeHasEstimates, dealInScope, statInScope,
 } from '../utils/performance'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { toast } from '../lib/toast'
@@ -309,6 +309,9 @@ export default function Performance() {
     const ps = focus
       ? periodsFor(focus.grain, 2, new Date(focus.from + 'T12:00:00'))
       : periodsFor(grain, 2)
+    // Pace comparison: while the current period is in progress, the previous
+    // period is clamped to the same elapsed point (Aug 1–2 vs Jul 1–2).
+    ps[0] = pacePrevPeriod(ps[0], ps[1])
     return { ps, b: bucketize(deals, weeklyStats, ps, scope, teamCtx) }
   }, [focus, grain, deals, weeklyStats, scope, teamCtx])
   const curPeriod = focus ?? headerBuckets.ps[1]
@@ -338,6 +341,18 @@ export default function Performance() {
   const chartGoal = (metric) => goalFor(metric, displayGrain, periods[0]?.from ?? curPeriod.from)
 
   const seriesRows = useMemo(() => periods.map(p => ({ label: p.label, ...buckets[p.key] })), [periods, buckets])
+
+  // For the Change table's in-progress row: the previous period clamped to
+  // the same elapsed point, so a 2-day-old month isn't judged against a full
+  // one. Null when the newest period is already complete (no clamp needed).
+  const paceBucket = useMemo(() => {
+    if (periods.length < 2) return null
+    const last = periods[periods.length - 1]
+    const todayISO = new Date().toISOString().slice(0, 10)
+    if (last.to < todayISO) return null
+    const clamped = pacePrevPeriod(periods[periods.length - 2], last, todayISO)
+    return bucketize(deals, statsForBuckets, [clamped], scope, teamCtx)[clamped.key]
+  }, [periods, deals, statsForBuckets, scope, teamCtx])
   const hasEstimates = scopeHasEstimates(scope)
 
   // Unassigned is EXCLUDED from every team view on this page (per Keaton) —
@@ -815,6 +830,9 @@ export default function Performance() {
           <ScoreTile label="Cancel Rate" metric="cancel_rate" value={cur.cancel_rate} prev={prev?.cancel_rate} goal={goalFor('cancel_rate')} lowerIsBetter />
           <ScoreTile label="Markup %"    metric="markup_pct"  value={cur.markup_pct}  prev={prev?.markup_pct}  goal={goalFor('markup_pct')} />
         </div>
+        <p className="text-[10px] text-white/25 mt-1.5">
+          ▲▼ compare to the <span className="text-white/40">same point</span> in the previous {headerGrain} while it's in progress — full period once complete.
+        </p>
         {!hasEstimates && (
           <p className="text-[10px] text-white/25 mt-1.5">Estimates aren't tracked per office, so estimate + close-rate figures show "—" at office scope.</p>
         )}
@@ -895,7 +913,8 @@ export default function Performance() {
         <div className="mb-3">
           <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Change Over Time — {scopeName}</h3>
           <p className="text-[10px] text-white/30 mt-0.5">
-            Each period vs the one before it · green = improving, red = declining{dayView ? '' : ' · click a row to zoom in'}
+            Each period vs the one before it · green = improving, red = declining ·
+            the "(so far)" row compares to the same point in the prior period{dayView ? '' : ' · click a row to zoom in'}
           </p>
         </div>
         <div className="overflow-x-auto">
@@ -914,8 +933,9 @@ export default function Performance() {
             <tbody>
               {periods.map((p, i) => ({ p, i })).reverse().map(({ p, i }) => {
                 const b  = buckets[p.key]
-                const pb = i > 0 ? buckets[periods[i - 1].key] : null
                 const inProgress = i === periods.length - 1 && p.to >= new Date().toISOString().slice(0, 10)
+                // In-progress row compares to the SAME point of the prior period.
+                const pb = i > 0 ? ((inProgress && paceBucket) || buckets[periods[i - 1].key]) : null
                 const cell = (metric, v, pv) => (
                   <td className="py-2 pr-3 text-right whitespace-nowrap">
                     <span className={metric === 'revenue' ? 'text-teal font-semibold' : 'text-white/80'}>{fmtMetric(metric, v)}</span>
@@ -1000,7 +1020,8 @@ export default function Performance() {
           <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Rep Breakdown — {curPeriod.label}</h3>
           <p className="text-[10px] text-white/30 mt-0.5">
             Deal + revenue credit to the setter (closer when no setter), same as the Dashboard
-            · ▲▼ = vs the previous {headerGrain} · Mo Avg = per-month average over the last 3 full months
+            · ▲▼ = vs the same point in the previous {headerGrain} (full period once complete)
+            · Mo Avg = per-month average over the last 3 full months
           </p>
         </div>
         {repGroups.length ? (
