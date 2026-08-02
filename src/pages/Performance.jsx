@@ -451,6 +451,25 @@ export default function Performance() {
       .map((t, i) => ({ ...t, color: PALETTE[i % PALETTE.length] }))
   }, [deals, weeklyStats, curPeriod, teamCtx, heads, targets, repGoals, headerGrain, usersById, headsSet, changesByProfile])
 
+  // ── Per-office revenue + deals for the current period — always visible in
+  // the Contributions card, org-wide, with a pace delta vs the previous
+  // period and each office's share of company revenue. "No office" only
+  // appears when such deals exist.
+  const officeStats = useMemo(() => {
+    const list = [...offices.map(o => ({ key: o.toLowerCase(), name: o })), { key: '', name: 'No office' }]
+    const prevP = headerBuckets.ps[0]
+    const rows = list.map((o, i) => {
+      const oScope = { type: 'office', name: o.key }
+      const b = bucketize(deals, [], [curPeriod], oScope, teamCtx)[curPeriod.key]
+      const p = bucketize(deals, [], [prevP], oScope, teamCtx)[prevP.key]
+      return { ...o, revenue: b.revenue, deals: b.deals, prevRevenue: p.revenue, prevDeals: p.deals, color: PALETTE[i % PALETTE.length] }
+    })
+    const total = rows.reduce((s, r) => s + r.revenue, 0)
+    return rows
+      .filter(r => r.key !== '' || r.revenue || r.deals)
+      .map(r => ({ ...r, share: total > 0 ? (r.revenue / total) * 100 : 0 }))
+  }, [offices, deals, curPeriod, headerBuckets, teamCtx])
+
   // ── Rep breakdown: reps grouped by their CURRENT team, each with the
   // current period's stats, a delta vs the previous period at the same grain
   // ("vs last month" on the monthly view), and their per-month average over
@@ -763,13 +782,13 @@ export default function Performance() {
         </div>
       )}
 
-      {/* ── Team Contributions: each team's share of the company, at a glance ── */}
-      {teamCompare.length > 0 && (
+      {/* ── Contributions: team + office share of the company, at a glance ── */}
+      {(teamCompare.length > 0 || officeStats.some(o => o.revenue || o.deals)) && (
         <div className="rounded-xl p-4 md:p-5" style={CARD}>
           <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
             <div>
-              <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Team Contributions — {curPeriod.label}</h3>
-              <p className="text-[10px] text-white/30 mt-0.5">Each team's share of the company total · follows the date view (grain, zoom, MTD/QTD/YTD)</p>
+              <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Contributions — {curPeriod.label}</h3>
+              <p className="text-[10px] text-white/30 mt-0.5">Each team's and office's share of the company total · follows the date view (grain, zoom, MTD/QTD/YTD)</p>
             </div>
             <div className="flex flex-wrap gap-x-3 gap-y-1">
               {teamCompare.map(t => (
@@ -810,6 +829,37 @@ export default function Performance() {
               )}
             </div>
           </div>
+
+          {/* By Office: revenue + deals per office, share of company revenue */}
+          {officeStats.length > 0 && (
+            <div className="mt-4 pt-4" style={{ borderTop: '1px solid #2e2e2e' }}>
+              <p className="text-[10px] font-semibold text-white/40 uppercase tracking-widest mb-2">By Office</p>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                {officeStats.map(o => (
+                  <div key={o.key || 'none'} className="rounded-lg p-3" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: o.color }} />
+                      <p className="text-[11px] font-semibold text-white truncate">{o.name}</p>
+                      <span className="ml-auto text-[10px] text-white/35 flex-shrink-0">{o.share.toFixed(0)}%</span>
+                    </div>
+                    <div className="flex items-end justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-[15px] font-bold text-teal leading-none truncate">{fmtMetric('revenue', o.revenue)}</p>
+                        <div className="h-[13px] mt-0.5"><DeltaTag metric="revenue" v={o.revenue} pv={o.prevRevenue} /></div>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p className="text-[14px] font-bold text-white/80 leading-none">{o.deals}</p>
+                        <p className="text-[9px] text-white/30 uppercase tracking-wider mt-0.5">deals</p>
+                      </div>
+                    </div>
+                    <div className="h-1 rounded-full overflow-hidden mt-2" style={{ background: '#151515' }}>
+                      <div className="h-full rounded-full" style={{ width: `${Math.min(o.share, 100)}%`, background: o.color }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
