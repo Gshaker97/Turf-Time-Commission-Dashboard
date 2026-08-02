@@ -593,6 +593,37 @@ export async function upsertWeeklyStat({ rep_id, week_start, self_gen_estimates 
   )
 }
 
+// ── Performance targets (migration 037) ───────────────────────
+// "What we should be doing" — scoped, per-grain, effective-dated target values
+// read by the Performance page. Resolution logic lives in utils/performance.js.
+let _targets = []   // demo-mode store
+
+export async function fetchTargets() {
+  if (DEMO_MODE) return { data: _targets.map(t => ({ ...t })), error: null }
+  return supabase.from('targets').select('*').order('effective', { ascending: true })
+}
+
+export async function saveTarget(row, profileId) {
+  if (DEMO_MODE) {
+    if (row.id) {
+      _targets = _targets.map(t => t.id === row.id ? { ...t, ...row } : t)
+    } else {
+      _targets = [..._targets, { ...row, id: 'tgt-' + Date.now() }]
+    }
+    return { error: null }
+  }
+  if (row.id) {
+    const { id, ...patch } = row
+    return requireRow(await supabase.from('targets').update(patch).eq('id', id).select('id'))
+  }
+  return supabase.from('targets').insert({ ...row, created_by: profileId })
+}
+
+export async function deleteTarget(id) {
+  if (DEMO_MODE) { _targets = _targets.filter(t => t.id !== id); return { error: null } }
+  return supabase.from('targets').delete().eq('id', id)
+}
+
 // ── App settings (admin-editable config lists) ────────────────
 export async function fetchSettings() {
   if (DEMO_MODE) return { data: JSON.parse(JSON.stringify(_settings)), error: null }

@@ -11,6 +11,7 @@ const TITLES = {
   '/dashboard':   'Dashboard',
   '/commissions': 'Commissions',
   '/team':        'Team',
+  '/performance': 'Performance',
   '/admin':       'Admin Panel',
   '/audit':       'Requires Audit',
 }

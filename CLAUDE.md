@@ -221,6 +221,35 @@ setup + deploy steps.
   working after an early lock — the payout itself stays frozen. Do
   not re-run `001`/`002` against a populated database.
 
+## Performance page (`src/pages/Performance.jsx`, manager+)
+
+Phase 1 of the Team-section overhaul (per Keaton; Phase 2 = custom saved
+reports, Phase 3 = Home "My Card"/"Team Card" toggle + Team page retirement —
+Team page untouched until then). Route `/performance`, guarded
+manager/director/vp/admin. Engine in `src/utils/performance.js` (pure):
+`periodsFor` (week Sun–Sat / month / quarter / year buckets), `bucketize`
+(scoped metric aggregation), `resolveTarget`, `fmtMetric`. Scope =
+org | team (date-effective, same `teamOfSale`/`saleOwnerId` attribution as the
+Dashboard — numbers must always match) | office (by `deal.office`; estimates
+aren't office-tracked so estimate/close-rate show "—") | rep (owner-credited).
+Metrics: revenue (baseline), deals (net), estimates (from `weekly_stats`),
+close_rate (closes ÷ estimates), cancel_rate (canceled ÷ all sold, the one
+place canceled deals are counted — the page fetches deals UNFILTERED),
+markup_pct ((job − baseline) ÷ baseline). **`targets` table (migration 037)**:
+scope ('org'|'team'|'office'|'rep') + subject (lead id / office lc / rep id /
+null) + metric + period grain + value + effective date (era-style; percents
+stored human, 40 = 40%). Count/$ targets scale across grains via weeks-per
+(week ×13 → quarter); percent targets apply as-is. RLS anyone-reads /
+admin-writes; admin edits via the amber "Targets" panel on the page. Revenue
+goals FALL BACK to the legacy stores when no target row matches: org+month →
+`monthly_goals`, org+week → `weekly_goal` setting, team/rep+month →
+`rep_goals` (current month only). Chart-type/breakdown picks persist per
+browser (`tt_perf_prefs` localStorage). Breakdown charts (by team/office)
+group in one pass over ALL deals (incl. historical/former team keys +
+"No office") so series always sum to company totals; goal lines are
+suppressed on breakdown views. Ghost reps hidden from non-admin leaderboards
+as everywhere else.
+
 ## User management (Admin page)
 
 - **Create login / reset password** for roster members happens on Admin → Users,
