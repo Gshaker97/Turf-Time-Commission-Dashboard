@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import {
   ComposedChart, Bar, Line, Area, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, ReferenceLine, Legend,
+  Tooltip, ResponsiveContainer, ReferenceLine, Legend, PieChart, Pie, Cell,
 } from 'recharts'
 import { ChevronDown, ChevronRight, Plus, Trash2, Target, X, ZoomIn } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
@@ -108,6 +108,47 @@ function DeltaTag({ metric, v, pv }) {
     text = `${pct > 0 ? '▲' : '▼'} ${Math.abs(pct).toFixed(Math.abs(pct) >= 100 ? 0 : 1)}%`
   }
   return <span className={`text-[10px] font-semibold ${good ? 'text-emerald-400' : 'text-red-400'}`}>{text}</span>
+}
+
+// Donut: each team's share of one metric, total in the middle.
+function DonutCard({ title, data, metric }) {
+  const rows = data.filter(t => (t[metric] ?? 0) > 0)
+  const total = rows.reduce((s, t) => s + t[metric], 0)
+  return (
+    <div className="min-w-0">
+      <p className="text-[10px] font-semibold text-white/40 uppercase tracking-widest text-center">{title}</p>
+      {rows.length ? (
+        <div className="relative h-[150px] md:h-[170px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie data={rows} dataKey={metric} nameKey="shortName" innerRadius="60%" outerRadius="88%"
+                strokeWidth={0} paddingAngle={2}>
+                {rows.map(t => <Cell key={t.key} fill={t.color} />)}
+              </Pie>
+              <Tooltip content={({ active, payload }) => {
+                if (!active || !payload?.length) return null
+                const p = payload[0]
+                const share = total > 0 ? (p.value / total) * 100 : 0
+                return (
+                  <div style={{ background: '#2a2a2a', border: '1px solid #3a3a3a', borderRadius: 10, padding: '8px 12px' }}>
+                    <p style={{ color: p.payload?.color ?? '#fff', fontWeight: 600, fontSize: 12 }}>{p.name}</p>
+                    <p style={{ color: '#fff', fontSize: 12 }}>{fmtMetric(metric, p.value)} · {share.toFixed(0)}%</p>
+                  </div>
+                )
+              }} />
+            </PieChart>
+          </ResponsiveContainer>
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <p className="text-[13px] md:text-[14px] font-bold text-white">{fmtMetric(metric, total)}</p>
+          </div>
+        </div>
+      ) : (
+        <div className="h-[150px] md:h-[170px] flex items-center justify-center">
+          <p className="text-[11px] text-white/20">No data</p>
+        </div>
+      )}
+    </div>
+  )
 }
 
 // Pill-button group (grain picker, chart-type picker, breakdown picker).
@@ -403,9 +444,10 @@ export default function Performance() {
       .sort((a, b) => b.revenue - a.revenue || b.deals - a.deals)
   }, [deals, weeklyStats, curPeriod, scope, teamCtx, usersById, isAdmin, hasEstimates])
 
-  // ── Team comparison: every team vs its goal, current period (org scope) ──
+  // ── Per-team stats for the current period — ALWAYS org-wide (feeds the
+  // Team Contributions donuts at any scope + the Teams-vs-Goal table at org
+  // scope). Each team keeps one color across every chart in the row.
   const teamCompare = useMemo(() => {
-    if (scope.type !== 'org') return []
     const keys = new Set(heads.map(h => h.id))
     for (const d of deals) {
       if (!d.sale_date || d.sale_date < curPeriod.from || d.sale_date > curPeriod.to) continue
@@ -419,11 +461,12 @@ export default function Performance() {
       if (goal == null && headerGrain === 'month') goal = repGoals.find(g => g.scope === 'team' && g.subject_id === k)?.target ?? null
       const u = usersById[k]
       const name = k === 'unassigned' ? 'Unassigned' : u ? `${u.name}${headsSet.has(k) ? '' : ' (former)'}` : 'Former team'
-      return { key: k, name, ...b, goal, goalPct: goal > 0 ? (b.revenue / goal) * 100 : null }
+      return { key: k, name, shortName: name.split(' ')[0], ...b, goal, goalPct: goal > 0 ? (b.revenue / goal) * 100 : null }
     })
       .filter(t => t.revenue || t.deals || t.canceled || t.estimates || t.goal)
       .sort((a, b) => b.revenue - a.revenue)
-  }, [scope.type, deals, weeklyStats, curPeriod, teamCtx, heads, targets, repGoals, headerGrain, usersById, headsSet, changesByProfile])
+      .map((t, i) => ({ ...t, color: PALETTE[i % PALETTE.length] }))
+  }, [deals, weeklyStats, curPeriod, teamCtx, heads, targets, repGoals, headerGrain, usersById, headsSet, changesByProfile])
 
   // ── Targets editor (admin) ──
   const [showTargets, setShowTargets] = useState(false)
@@ -644,6 +687,56 @@ export default function Performance() {
             className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/10 flex-shrink-0">
             <X size={15} />
           </button>
+        </div>
+      )}
+
+      {/* ── Team Contributions: each team's share of the company, at a glance ── */}
+      {teamCompare.length > 0 && (
+        <div className="rounded-xl p-4 md:p-5" style={CARD}>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <div>
+              <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Team Contributions — {curPeriod.label}</h3>
+              <p className="text-[10px] text-white/30 mt-0.5">Each team's share of the company total · follows the date view (grain, zoom, MTD/QTD/YTD)</p>
+            </div>
+            <div className="flex flex-wrap gap-x-3 gap-y-1">
+              {teamCompare.map(t => (
+                <span key={t.key} className="flex items-center gap-1.5 text-[10px] text-white/60">
+                  <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: t.color }} />
+                  {t.shortName}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <DonutCard title="Revenue"   data={teamCompare} metric="revenue" />
+            <DonutCard title="Deals"     data={teamCompare} metric="deals" />
+            <DonutCard title="Estimates" data={teamCompare} metric="estimates" />
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold text-white/40 uppercase tracking-widest text-center">Close Rate</p>
+              {teamCompare.some(t => t.close_rate != null) ? (
+                <div className="space-y-2 mt-3 px-1">
+                  {[...teamCompare].filter(t => t.close_rate != null).sort((a, b) => b.close_rate - a.close_rate).map(t => (
+                    <div key={t.key}>
+                      <div className="flex items-center justify-between text-[10px] mb-0.5">
+                        <span className="flex items-center gap-1.5 text-white/60 truncate">
+                          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: t.color }} />
+                          {t.shortName}
+                        </span>
+                        <span className="font-semibold text-white/80 flex-shrink-0">{t.close_rate.toFixed(0)}%</span>
+                      </div>
+                      <div className="h-1.5 rounded-full overflow-hidden" style={{ background: '#1a1a1a' }}>
+                        <div className="h-full rounded-full" style={{ width: `${Math.min(t.close_rate, 100)}%`, background: t.color }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="h-[150px] md:h-[170px] flex items-center justify-center">
+                  <p className="text-[11px] text-white/20">No estimates entered</p>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

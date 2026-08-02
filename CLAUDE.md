@@ -254,7 +254,12 @@ one at the SAME grain, chart goal lines re-resolve at the displayed sub-grain
 (never scaled to days), and week-zooms hide estimates (weekly inputs can't
 split into days). A "Change Over Time" table shows every displayed period vs
 the one before (relative % for $/counts, percentage-point deltas for rates;
-green/red with cancel-rate inverted). Breakdown charts (by team/office)
+green/red with cancel-rate inverted). **Team Contributions row** (top of the
+page, above the scorecard): donuts of each team's share of Revenue/Deals/
+Estimates + a ranked close-rate bar list, ALWAYS org-wide regardless of the
+scope picker, following the current period (grain/zoom); `teamCompare` is
+computed unconditionally (org-wide per-team stats + one stable color per
+team) and feeds both this row and the org-gated Teams-vs-Goal table. Breakdown charts (by team/office)
 group in one pass over ALL deals (incl. historical/former team keys +
 "No office"); goal lines are suppressed on breakdown views. Ghost reps hidden
 from non-admin leaderboards as everywhere else. **Unassigned is EXCLUDED from
