@@ -3,7 +3,7 @@ import {
   ComposedChart, Bar, Line, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, ReferenceLine, Legend,
 } from 'recharts'
-import { ChevronDown, ChevronRight, Plus, Trash2, Target } from 'lucide-react'
+import { ChevronDown, ChevronRight, Plus, Trash2, Target, X, ZoomIn } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import {
@@ -13,8 +13,9 @@ import {
 import { dealAmounts, isCanceled } from '../utils/commission'
 import { headIdSet, buildChangesByProfile, saleOwnerId, teamOfSale } from '../utils/team'
 import {
-  GRAINS, METRICS, PERCENT_METRICS, periodsFor, bucketize,
-  resolveTarget, fmtMetric, scopeHasEstimates, dealInScope, statInScope,
+  GRAINS, METRICS, PERCENT_METRICS, SUB_GRAIN, periodsFor, periodsInRange,
+  zoomLabel, bucketize, resolveTarget, fmtMetric, scopeHasEstimates,
+  dealInScope, statInScope,
 } from '../utils/performance'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { toast } from '../lib/toast'
@@ -50,11 +51,13 @@ function ChartTip({ active, payload, label, yFmt }) {
 }
 
 // ── Generic time-series chart: one metric, optional multi-series ─
-function MetricChart({ rows, series, type, yFmt, goal, height = 220 }) {
+function MetricChart({ rows, series, type, yFmt, goal, height = 220, onPointClick }) {
   const yTick = (v) => yFmt === 'money' ? `$${(v / 1000).toFixed(0)}k` : yFmt === 'percent' ? `${v}%` : v
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <ComposedChart data={rows} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+      <ComposedChart data={rows} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
+        onClick={onPointClick ? (s) => { if (s?.activeLabel != null) onPointClick(s.activeLabel) } : undefined}
+        style={onPointClick ? { cursor: 'pointer' } : undefined}>
         <defs>
           {series.map((s, i) => (
             <linearGradient key={s.key} id={`perfGrad${i}`} x1="0" y1="0" x2="0" y2="1">
@@ -84,6 +87,27 @@ function MetricChart({ rows, series, type, yFmt, goal, height = 220 }) {
       </ComposedChart>
     </ResponsiveContainer>
   )
+}
+
+// Tiny period-over-period readout: relative % for $/counts, percentage-point
+// delta for rates. Green = improving (lower is better for cancel rate).
+function DeltaTag({ metric, v, pv }) {
+  if (v == null || pv == null) return null
+  const lower = metric === 'cancel_rate'
+  let text, good
+  if (PERCENT_METRICS.has(metric)) {
+    const d = v - pv
+    if (Math.abs(d) < 0.05) return <span className="text-[10px] text-white/20">— even</span>
+    good = lower ? d < 0 : d > 0
+    text = `${d > 0 ? '▲' : '▼'} ${Math.abs(d).toFixed(1)}pt`
+  } else {
+    if (pv === 0) return null
+    const pct = ((v - pv) / pv) * 100
+    if (Math.abs(pct) < 0.05) return <span className="text-[10px] text-white/20">— even</span>
+    good = lower ? pct < 0 : pct > 0
+    text = `${pct > 0 ? '▲' : '▼'} ${Math.abs(pct).toFixed(Math.abs(pct) >= 100 ? 0 : 1)}%`
+  }
+  return <span className={`text-[10px] font-semibold ${good ? 'text-emerald-400' : 'text-red-400'}`}>{text}</span>
 }
 
 // Pill-button group (grain picker, chart-type picker, breakdown picker).
@@ -215,34 +239,62 @@ export default function Performance() {
     : (usersById[scope.id]?.name ? (scope.type === 'team' ? `${usersById[scope.id].name}'s Team` : usersById[scope.id].name) : '—')
 
   const grainDef = GRAINS.find(g => g.key === grain) ?? GRAINS[1]
-  const periods  = useMemo(() => periodsFor(grain, grainDef.count), [grain])
-  const curPeriod  = periods[periods.length - 1]
-  const prevPeriod = periods[periods.length - 2]
+
+  // Zoom: clicking a period on any chart (or MTD/QTD/YTD) focuses that single
+  // period — the whole page narrows to it, broken into sub-periods (month →
+  // weeks, quarter/year → months, week → days). X clears back to normal.
+  const [focus, setFocus] = useState(null)   // { key, label, from, to, grain }
+  const changeGrain = (g) => { setFocus(null); setGrain(g) }
+  const focusOn = (periodGrain, p) => setFocus({ ...p, grain: periodGrain, label: zoomLabel(periodGrain, p.from) })
+  const focusNow = (g) => focusOn(g, periodsFor(g, 1)[0])
+
+  const displayGrain = focus ? SUB_GRAIN[focus.grain] : grain
+  const periods = useMemo(
+    () => focus ? periodsInRange(displayGrain, focus.from, focus.to) : periodsFor(grain, grainDef.count),
+    [focus, displayGrain, grain, grainDef.count])
+
+  // Weekly estimates can't be split into days, so a week-zoom hides them.
+  const dayView = displayGrain === 'day'
+  const statsForBuckets = dayView ? [] : weeklyStats
 
   const buckets = useMemo(
-    () => bucketize(deals, weeklyStats, periods, scope, teamCtx),
-    [deals, weeklyStats, periods, scope, teamCtx])
-  const cur  = buckets[curPeriod.key]
-  const prev = prevPeriod ? buckets[prevPeriod.key] : null
+    () => bucketize(deals, statsForBuckets, periods, scope, teamCtx),
+    [deals, statsForBuckets, periods, scope, teamCtx])
+
+  // Scorecard period: the focused period itself (vs the one before it at the
+  // SAME grain), or the newest period of the picked grain.
+  const headerGrain = focus ? focus.grain : grain
+  const headerBuckets = useMemo(() => {
+    const ps = focus
+      ? periodsFor(focus.grain, 2, new Date(focus.from + 'T12:00:00'))
+      : periodsFor(grain, 2)
+    return { ps, b: bucketize(deals, weeklyStats, ps, scope, teamCtx) }
+  }, [focus, grain, deals, weeklyStats, scope, teamCtx])
+  const curPeriod = focus ?? headerBuckets.ps[1]
+  const cur  = headerBuckets.b[headerBuckets.ps[1].key]
+  const prev = headerBuckets.b[headerBuckets.ps[0].key]
 
   // Goal for a metric at the current scope+grain: targets table first, then the
   // legacy goal stores for revenue (company monthly goal, weekly_goal setting,
   // rep/team monthly goals) so goal lines work before any targets are entered.
-  const goalFor = (metric, periodStart = curPeriod.from) => {
-    const t = resolveTarget(targets, { scopeType: scope.type, subject: scopeSubject, metric, grain, periodStart })
+  const goalFor = (metric, g = headerGrain, periodStart = curPeriod.from) => {
+    const t = resolveTarget(targets, { scopeType: scope.type, subject: scopeSubject, metric, grain: g, periodStart })
     if (t != null) return t
     if (metric !== 'revenue') return null
-    if (grain === 'month') {
+    if (g === 'month') {
       if (scope.type === 'org')  return companyGoal
-      if (scope.type === 'team') return repGoals.find(g => g.scope === 'team' && g.subject_id === scope.id)?.target ?? null
-      if (scope.type === 'rep')  return repGoals.find(g => g.scope === 'rep'  && g.subject_id === scope.id)?.target ?? null
+      if (scope.type === 'team') return repGoals.find(x => x.scope === 'team' && x.subject_id === scope.id)?.target ?? null
+      if (scope.type === 'rep')  return repGoals.find(x => x.scope === 'rep'  && x.subject_id === scope.id)?.target ?? null
     }
-    if (grain === 'week' && scope.type === 'org') {
+    if (g === 'week' && scope.type === 'org') {
       const wg = parseFloat(settings.weekly_goal)
       if (Number.isFinite(wg) && wg > 0) return wg
     }
     return null
   }
+  // Goal lines on charts follow the DISPLAYED grain (a month zoom shows the
+  // weekly goal line against its weeks).
+  const chartGoal = (metric) => goalFor(metric, displayGrain, periods[0]?.from ?? curPeriod.from)
 
   const seriesRows = useMemo(() => periods.map(p => ({ label: p.label, ...buckets[p.key] })), [periods, buckets])
   const hasEstimates = scopeHasEstimates(scope)
@@ -308,8 +360,14 @@ export default function Performance() {
     return {
       rows: seriesRows,
       series: [{ key: field, name: METRICS.find(m => m.key === metricKey)?.label ?? field, color: '#00b894' }],
-      type: p.type ?? 'bar', yFmt, goal: goalFor(metricKey),
+      type: p.type ?? 'bar', yFmt, goal: chartGoal(metricKey),
     }
+  }
+
+  // Click-to-zoom from any chart x-position (day view is the floor).
+  const zoomFromChart = dayView ? undefined : (label) => {
+    const p = periods.find(x => x.label === label)
+    if (p) focusOn(displayGrain, p)
   }
 
   // ── Leaderboard: reps ranked within the current period + scope ──
@@ -357,15 +415,15 @@ export default function Performance() {
     return [...keys].map(k => {
       const tScope = { type: 'team', id: k }
       const b = bucketize(deals, weeklyStats, [curPeriod], tScope, teamCtx)[curPeriod.key]
-      let goal = resolveTarget(targets, { scopeType: 'team', subject: k, metric: 'revenue', grain, periodStart: curPeriod.from })
-      if (goal == null && grain === 'month') goal = repGoals.find(g => g.scope === 'team' && g.subject_id === k)?.target ?? null
+      let goal = resolveTarget(targets, { scopeType: 'team', subject: k, metric: 'revenue', grain: headerGrain, periodStart: curPeriod.from })
+      if (goal == null && headerGrain === 'month') goal = repGoals.find(g => g.scope === 'team' && g.subject_id === k)?.target ?? null
       const u = usersById[k]
       const name = k === 'unassigned' ? 'Unassigned' : u ? `${u.name}${headsSet.has(k) ? '' : ' (former)'}` : 'Former team'
       return { key: k, name, ...b, goal, goalPct: goal > 0 ? (b.revenue / goal) * 100 : null }
     })
       .filter(t => t.revenue || t.deals || t.canceled || t.estimates || t.goal)
       .sort((a, b) => b.revenue - a.revenue)
-  }, [scope.type, deals, weeklyStats, curPeriod, teamCtx, heads, targets, repGoals, grain, usersById, headsSet, changesByProfile])
+  }, [scope.type, deals, weeklyStats, curPeriod, teamCtx, heads, targets, repGoals, headerGrain, usersById, headsSet, changesByProfile])
 
   // ── Targets editor (admin) ──
   const [showTargets, setShowTargets] = useState(false)
@@ -413,13 +471,13 @@ export default function Performance() {
       </div>
       <MetricChart rows={seriesRows}
         series={[{ key: metricKey, name: METRICS.find(m => m.key === metricKey)?.label ?? metricKey, color: metricKey === 'cancel_rate' ? '#f87171' : '#00b894' }]}
-        type={prefs[block]?.type ?? 'line'} yFmt="percent" goal={goalFor(metricKey)} />
+        type={prefs[block]?.type ?? 'line'} yFmt="percent" goal={chartGoal(metricKey)} onPointClick={zoomFromChart} />
     </div>
   )
 
   const rev  = chartFor('revenue', 'revenue', 'money', 'revenue')
   const dls  = chartFor('deals', 'deals', 'count', 'deals')
-  const closeGoal = goalFor('close_rate')
+  const closeGoal = chartGoal('close_rate')
 
   return (
     <div className="space-y-4 pb-6">
@@ -441,7 +499,18 @@ export default function Performance() {
               {activeReps.map(u => <option key={u.id} value={`rep:${u.id}`}>{u.name}</option>)}
             </optgroup>
           </select>
-          <Pills options={GRAINS.map(g => [g.key, g.label])} value={grain} onChange={setGrain} />
+          <Pills options={GRAINS.map(g => [g.key, g.label])} value={focus ? '' : grain} onChange={changeGrain} />
+          <div className="flex gap-1 p-1 rounded-xl w-fit" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+            {[['month', 'MTD'], ['quarter', 'QTD'], ['year', 'YTD']].map(([g, l]) => {
+              const active = focus && focus.grain === g && focus.key === periodsFor(g, 1)[0].key
+              return (
+                <button key={g} onClick={() => focusNow(g)} title={`Zoom into the current ${g}`}
+                  className={`px-2.5 py-1.5 rounded-lg text-[12px] font-semibold transition-colors ${active ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
+                  {l}
+                </button>
+              )
+            })}
+          </div>
         </div>
         {isAdmin && (
           <button onClick={() => setShowTargets(s => !s)}
@@ -562,13 +631,29 @@ export default function Performance() {
         </div>
       )}
 
+      {/* ── Zoom banner ── */}
+      {focus && (
+        <div className="flex items-center justify-between gap-3 rounded-xl px-4 py-2.5"
+          style={{ background: 'rgba(0,184,148,0.08)', border: '1px solid rgba(0,184,148,0.35)' }}>
+          <p className="text-[12px] text-white/80 flex items-center gap-2 min-w-0">
+            <ZoomIn size={14} className="text-teal flex-shrink-0" />
+            <span className="truncate">Zoomed into <span className="font-bold text-teal">{focus.label}</span>
+              <span className="text-white/40"> — shown by {displayGrain}{dayView ? '' : ', click again to go deeper'}</span></span>
+          </p>
+          <button onClick={() => setFocus(null)} title="Back to the full view"
+            className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/10 flex-shrink-0">
+            <X size={15} />
+          </button>
+        </div>
+      )}
+
       {/* ── Scorecard header ── */}
       <div>
         <div className="flex items-baseline gap-2 mb-2">
           <h2 className="text-[14px] md:text-[15px] font-semibold text-white">{scopeName}</h2>
           <p className="text-[11px] text-white/35">
-            {grain === 'week' ? 'This week' : grain === 'month' ? 'This month' : grain === 'quarter' ? 'This quarter' : 'This year'}
-            {' '}· {curPeriod.label}{grain === 'week' ? '' : ''}
+            {focus ? focus.label
+              : `${grain === 'week' ? 'This week' : grain === 'month' ? 'This month' : grain === 'quarter' ? 'This quarter' : 'This year'} · ${curPeriod.label}`}
           </p>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 md:gap-3">
@@ -592,14 +677,14 @@ export default function Performance() {
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <div>
             <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Revenue</h3>
-            <p className="text-[10px] text-white/30 mt-0.5">Baseline revenue by {grainDef.label.toLowerCase().replace('ly', '')}{rev.goal != null ? ' · goal line in amber' : ''}</p>
+            <p className="text-[10px] text-white/30 mt-0.5">Baseline revenue by {displayGrain}{rev.goal != null ? ' · goal line in amber' : ''}{dayView ? '' : ' · click a bar to zoom in'}</p>
           </div>
           <div className="flex flex-wrap gap-2">
             {scope.type === 'org' && <Pills small options={BREAKDOWNS} value={prefs.revenue?.breakdown ?? 'none'} onChange={v => setPref('revenue', { breakdown: v })} />}
             <Pills small options={CHART_TYPES} value={prefs.revenue?.type ?? 'bar'} onChange={v => setPref('revenue', { type: v })} />
           </div>
         </div>
-        <MetricChart rows={rev.rows} series={rev.series} type={rev.type} yFmt="money" goal={rev.goal} height={260} />
+        <MetricChart rows={rev.rows} series={rev.series} type={rev.type} yFmt="money" goal={rev.goal} height={260} onPointClick={zoomFromChart} />
       </div>
 
       {/* ── Deals ── */}
@@ -614,18 +699,20 @@ export default function Performance() {
             <Pills small options={CHART_TYPES} value={prefs.deals?.type ?? 'bar'} onChange={v => setPref('deals', { type: v })} />
           </div>
         </div>
-        <MetricChart rows={dls.rows} series={dls.series} type={dls.type} yFmt="count" goal={dls.goal} />
+        <MetricChart rows={dls.rows} series={dls.series} type={dls.type} yFmt="count" goal={dls.goal} onPointClick={zoomFromChart} />
       </div>
 
       {/* ── Activity funnel: estimates → closes + close rate ── */}
-      {hasEstimates && (
+      {hasEstimates && !dayView && (
         <div className="rounded-xl p-4 md:p-5" style={CARD}>
           <div className="mb-3">
             <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Activity — Estimates → Closes</h3>
             <p className="text-[10px] text-white/30 mt-0.5">Estimates from the Team page's Weekly Stats inputs · close rate = closes ÷ estimates</p>
           </div>
           <ResponsiveContainer width="100%" height={260}>
-            <ComposedChart data={seriesRows} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+            <ComposedChart data={seriesRows} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
+              onClick={zoomFromChart ? (s) => { if (s?.activeLabel != null) zoomFromChart(s.activeLabel) } : undefined}
+              style={zoomFromChart ? { cursor: 'pointer' } : undefined}>
               <CartesianGrid strokeDasharray="3 3" stroke="#2e2e2e" vertical={false} />
               <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#666' }} axisLine={false} tickLine={false} />
               <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#666' }} axisLine={false} tickLine={false} width={32} />
@@ -650,6 +737,58 @@ export default function Performance() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-5">
         {pctBlock('cancel', 'cancel_rate', 'Cancel Rate', 'Canceled ÷ all deals sold that period')}
         {pctBlock('markup', 'markup_pct', 'Markup %', '(Job price − baseline) ÷ baseline')}
+      </div>
+
+      {/* ── Change over time: each period vs the one before it ── */}
+      <div className="rounded-xl p-4 md:p-5" style={CARD}>
+        <div className="mb-3">
+          <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Change Over Time — {scopeName}</h3>
+          <p className="text-[10px] text-white/30 mt-0.5">
+            Each period vs the one before it · green = improving, red = declining{dayView ? '' : ' · click a row to zoom in'}
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12px] min-w-[760px]">
+            <thead>
+              <tr className="text-left text-[9px] uppercase tracking-widest text-white/30">
+                <th className="pb-2 pr-3">Period</th>
+                <th className="pb-2 pr-3 text-right">Revenue</th>
+                <th className="pb-2 pr-3 text-right">Deals</th>
+                <th className="pb-2 pr-3 text-right">Estimates</th>
+                <th className="pb-2 pr-3 text-right">Close %</th>
+                <th className="pb-2 pr-3 text-right">Cancel %</th>
+                <th className="pb-2 text-right">Markup %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {periods.map((p, i) => ({ p, i })).reverse().map(({ p, i }) => {
+                const b  = buckets[p.key]
+                const pb = i > 0 ? buckets[periods[i - 1].key] : null
+                const inProgress = i === periods.length - 1 && p.to >= new Date().toISOString().slice(0, 10)
+                const cell = (metric, v, pv) => (
+                  <td className="py-2 pr-3 text-right whitespace-nowrap">
+                    <span className={metric === 'revenue' ? 'text-teal font-semibold' : 'text-white/80'}>{fmtMetric(metric, v)}</span>
+                    <div className="h-[13px]"><DeltaTag metric={metric} v={v} pv={pv} /></div>
+                  </td>
+                )
+                return (
+                  <tr key={p.key} onClick={dayView ? undefined : () => focusOn(displayGrain, p)}
+                    className={`border-t ${dayView ? '' : 'cursor-pointer hover:bg-white/[0.03]'}`} style={{ borderColor: '#2e2e2e' }}>
+                    <td className="py-2 pr-3 font-semibold text-white whitespace-nowrap">
+                      {p.label}{inProgress && <span className="text-[9px] text-white/30 font-normal"> (so far)</span>}
+                    </td>
+                    {cell('revenue',     b.revenue,     pb?.revenue)}
+                    {cell('deals',       b.deals,       pb?.deals)}
+                    {cell('estimates',   dayView ? null : b.estimates, dayView ? null : pb?.estimates)}
+                    {cell('close_rate',  b.close_rate,  pb?.close_rate)}
+                    {cell('cancel_rate', b.cancel_rate, pb?.cancel_rate)}
+                    {cell('markup_pct',  b.markup_pct,  pb?.markup_pct)}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* ── Team comparison vs goals (org scope) ── */}

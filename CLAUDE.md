@@ -244,7 +244,17 @@ admin-writes; admin edits via the amber "Targets" panel on the page. Revenue
 goals FALL BACK to the legacy stores when no target row matches: org+month →
 `monthly_goals`, org+week → `weekly_goal` setting, team/rep+month →
 `rep_goals` (current month only). Chart-type/breakdown picks persist per
-browser (`tt_perf_prefs` localStorage). Breakdown charts (by team/office)
+browser (`tt_perf_prefs` localStorage). **Zoom/drill-down:** clicking a
+period on any chart or Change-table row (or the MTD/QTD/YTD quick buttons)
+focuses that single period — the whole page narrows to it, broken into
+sub-periods (`SUB_GRAIN`: month → weeks, quarter/year → months, week → days;
+`periodsInRange` clamps edge weeks so a zoom always sums to its parent), with
+an X banner to exit; scorecard compares the focused period to the previous
+one at the SAME grain, chart goal lines re-resolve at the displayed sub-grain
+(never scaled to days), and week-zooms hide estimates (weekly inputs can't
+split into days). A "Change Over Time" table shows every displayed period vs
+the one before (relative % for $/counts, percentage-point deltas for rates;
+green/red with cancel-rate inverted). Breakdown charts (by team/office)
 group in one pass over ALL deals (incl. historical/former team keys +
 "No office"); goal lines are suppressed on breakdown views. Ghost reps hidden
 from non-admin leaderboards as everywhere else. **Unassigned is EXCLUDED from
