@@ -69,7 +69,8 @@ function MetricChart({ rows, series, type, yFmt, goal, height = 220, onPointClic
         <CartesianGrid strokeDasharray="3 3" stroke="#2e2e2e" vertical={false} />
         <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#666' }} axisLine={false} tickLine={false} />
         <YAxis tick={{ fontSize: 10, fill: '#666' }} axisLine={false} tickLine={false} tickFormatter={yTick} width={40} />
-        <Tooltip content={<ChartTip yFmt={yFmt} />} cursor={{ fill: '#ffffff08' }} />
+        <Tooltip content={<ChartTip yFmt={yFmt} />} cursor={{ fill: '#ffffff08' }}
+          wrapperStyle={{ zIndex: 40, pointerEvents: 'none' }} />
         {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
         {goal != null && (
           <ReferenceLine y={goal} stroke="#fbbf24" strokeDasharray="5 4" strokeWidth={1.5}
@@ -125,17 +126,20 @@ function DonutCard({ title, data, metric }) {
                 strokeWidth={0} paddingAngle={2}>
                 {rows.map(t => <Cell key={t.key} fill={t.color} />)}
               </Pie>
-              <Tooltip content={({ active, payload }) => {
-                if (!active || !payload?.length) return null
-                const p = payload[0]
-                const share = total > 0 ? (p.value / total) * 100 : 0
-                return (
-                  <div style={{ background: '#2a2a2a', border: '1px solid #3a3a3a', borderRadius: 10, padding: '8px 12px' }}>
-                    <p style={{ color: p.payload?.color ?? '#fff', fontWeight: 600, fontSize: 12 }}>{p.name}</p>
-                    <p style={{ color: '#fff', fontSize: 12 }}>{fmtMetric(metric, p.value)} · {share.toFixed(0)}%</p>
-                  </div>
-                )
-              }} />
+              <Tooltip
+                allowEscapeViewBox={{ x: true, y: true }}
+                wrapperStyle={{ zIndex: 40, pointerEvents: 'none' }}
+                content={({ active, payload }) => {
+                  if (!active || !payload?.length) return null
+                  const p = payload[0]
+                  const share = total > 0 ? (p.value / total) * 100 : 0
+                  return (
+                    <div style={{ background: '#222', border: '1px solid #3a3a3a', borderRadius: 10, padding: '8px 12px', boxShadow: '0 4px 16px rgba(0,0,0,0.6)', whiteSpace: 'nowrap' }}>
+                      <p style={{ color: p.payload?.color ?? '#fff', fontWeight: 600, fontSize: 12 }}>{p.name}</p>
+                      <p style={{ color: '#fff', fontSize: 12 }}>{fmtMetric(metric, p.value)} · {share.toFixed(0)}%</p>
+                    </div>
+                  )
+                }} />
             </PieChart>
           </ResponsiveContainer>
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -446,7 +450,9 @@ export default function Performance() {
       const name = k === 'unassigned' ? 'Unassigned' : u ? `${u.name}${headsSet.has(k) ? '' : ' (former)'}` : 'Former team'
       return { key: k, name, shortName: name.split(' ')[0], ...b, goal, goalPct: goal > 0 ? (b.revenue / goal) * 100 : null }
     })
-      .filter(t => t.revenue || t.deals || t.canceled || t.estimates || t.goal)
+      // Current head teams always stay (zeros included) so the row never
+      // vanishes on a quiet period; historical keys only appear with activity.
+      .filter(t => headsSet.has(t.key) || t.revenue || t.deals || t.canceled || t.estimates || t.goal)
       .sort((a, b) => b.revenue - a.revenue)
       .map((t, i) => ({ ...t, color: PALETTE[i % PALETTE.length] }))
   }, [deals, weeklyStats, curPeriod, teamCtx, heads, targets, repGoals, headerGrain, usersById, headsSet, changesByProfile])
@@ -782,8 +788,9 @@ export default function Performance() {
         </div>
       )}
 
-      {/* ── Contributions: team + office share of the company, at a glance ── */}
-      {(teamCompare.length > 0 || officeStats.some(o => o.revenue || o.deals)) && (
+      {/* ── Contributions: team + office share of the company, at a glance.
+          Always rendered — an empty period shows placeholders, never hides. ── */}
+      {(
         <div className="rounded-xl p-4 md:p-5" style={CARD}>
           <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
             <div>
@@ -937,7 +944,8 @@ export default function Performance() {
               <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#666' }} axisLine={false} tickLine={false} width={32} />
               <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: '#666' }} axisLine={false} tickLine={false}
                 tickFormatter={v => `${v}%`} width={40} />
-              <Tooltip content={<ChartTip yFmt="count" />} cursor={{ fill: '#ffffff08' }} />
+              <Tooltip content={<ChartTip yFmt="count" />} cursor={{ fill: '#ffffff08' }}
+                wrapperStyle={{ zIndex: 40, pointerEvents: 'none' }} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               {closeGoal != null && (
                 <ReferenceLine yAxisId="right" y={closeGoal} stroke="#fbbf24" strokeDasharray="5 4" strokeWidth={1.5}
