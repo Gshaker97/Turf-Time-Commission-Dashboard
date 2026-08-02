@@ -71,6 +71,27 @@ export function managerAsOf(changesByProfile, user, dateISO) {
   return mgr
 }
 
+// Everyone who ever had people reporting to them — union of both sides of the
+// team-change log plus every current reports-to link. Used to recognize a
+// FORMER team lead (e.g. a deactivated ex-manager) whose own sales should
+// stay under their own historical team rather than fall into Unassigned.
+// Cached per (changes, roster) object pair — both are stable page memos.
+const _pastLeadsCache = new WeakMap()
+export function pastLeadIds(changesByProfile = {}, usersById = {}) {
+  const hit = _pastLeadsCache.get(changesByProfile)
+  if (hit && hit.usersById === usersById) return hit.set
+  const s = new Set()
+  for (const list of Object.values(changesByProfile)) {
+    for (const c of list) {
+      if (c.old_manager_id) s.add(c.old_manager_id)
+      if (c.new_manager_id) s.add(c.new_manager_id)
+    }
+  }
+  for (const u of Object.values(usersById)) if (u.manager_id) s.add(u.manager_id)
+  _pastLeadsCache.set(changesByProfile, { usersById, set: s })
+  return s
+}
+
 // The team (head id, or 'unassigned') a sale belongs to: the owner's team as
 // of the sale date. A current head always owns their team (headship history
 // isn't tracked — only reports-to moves are). If the as-of lead no longer
@@ -81,7 +102,10 @@ export function teamOfSale(ownerId, saleDate, usersById, heads, changesByProfile
   if (!owner) return 'unassigned'
   if (heads.has(owner.id)) return owner.id
   const mgrId = managerAsOf(changesByProfile, owner, saleDate)
-  if (!mgrId) return 'unassigned'
+  // No lead as of this date — but a FORMER LEAD's own sales (a deactivated
+  // ex-manager, e.g. Danny Jones) stay under their own historical team, the
+  // same way their old reps' sales do, instead of dumping into Unassigned.
+  if (!mgrId) return pastLeadIds(changesByProfile, usersById).has(owner.id) ? owner.id : 'unassigned'
   if (heads.has(mgrId)) return mgrId
   const mgr = usersById[mgrId]
   if (!mgr) return 'unassigned'
