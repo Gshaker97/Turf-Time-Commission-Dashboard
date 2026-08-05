@@ -168,7 +168,7 @@ export default function Deals() {
     const total = shownDeals.length               // all deals in view, incl. canceled
     const canceled = total - count
     const canceledPct = total ? (canceled / total) * 100 : 0
-    return { baseline, totalComm, count, total, canceled, canceledPct, avgDeal: count ? totalJobPrice/count : 0, avgBaseline: count ? baseline/count : 0, avgComm: count ? totalComm/count : 0, avgMarkupPct: count ? totalMarkupPct/count : 0 }
+    return { baseline, totalJobPrice, totalComm, count, total, canceled, canceledPct, avgDeal: count ? totalJobPrice/count : 0, avgBaseline: count ? baseline/count : 0, avgComm: count ? totalComm/count : 0, avgMarkupPct: count ? totalMarkupPct/count : 0 }
   }, [shownDeals])
 
   function handleSort(key, dir) {
@@ -258,7 +258,9 @@ export default function Deals() {
 
       {/* KPI row — 2-col on mobile */}
       <div className="grid grid-cols-2 gap-2 md:flex md:gap-3">
-        <KpiCard label="Baseline Rev"  value={fmt(kpis.baseline)} />
+        <KpiCard label="Revenue"
+          value={fmt(kpis.baseline)}       valueLabel="Baseline"
+          value2={fmt(kpis.totalJobPrice)} value2Label="Job Price" />
         <KpiCard label="Commissions"   value={fmt(kpis.totalComm)} />
         <KpiCard label="Deals"         value={kpis.total}
           sub={kpis.canceled > 0 ? `${kpis.canceled} canceled · ${kpis.canceledPct.toFixed(kpis.canceledPct < 10 ? 1 : 0)}%` : undefined} />

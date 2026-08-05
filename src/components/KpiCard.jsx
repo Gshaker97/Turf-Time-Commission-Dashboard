@@ -10,7 +10,7 @@ export default function KpiCard({ label, value, sub, accent = true, value2, valu
         {label}
       </p>
       {value2 != null ? (
-        <div className="flex items-start gap-4 md:gap-6 min-w-0">
+        <div className="flex flex-wrap items-start gap-x-4 md:gap-x-6 gap-y-1 min-w-0">
           <div className="min-w-0">
             <p className={`text-[17px] md:text-[22px] font-bold leading-tight truncate ${accent ? 'text-teal' : 'text-white'}`}>
               {value}
