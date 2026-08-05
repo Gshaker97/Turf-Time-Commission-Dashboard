@@ -3,8 +3,13 @@ import { Trophy, Plus, Pencil, Trash2, ChevronDown, Download, Copy, Check } from
 import { format } from 'date-fns'
 import { toPng, toBlob } from 'html-to-image'
 import { useAuth } from '../contexts/AuthContext'
-import { fetchCompetitions, fetchDeals, fetchUsers, insertCompetition, updateCompetition, deleteCompetition } from '../lib/db'
-import { competitionStandings, competitionStatus, competitionEntryDeals, typeLabel, metricLabel, creditLabel, fmtScore } from '../utils/competition'
+import { fetchCompetitions, fetchDeals, fetchUsers, fetchTeamChanges, insertCompetition, updateCompetition, deleteCompetition } from '../lib/db'
+import {
+  competitionStandings, competitionStatus, competitionEntryDeals,
+  compRounds, roundStatus, roundStandings, roundWinner,
+  typeLabel, metricLabel, creditLabel, fmtScore,
+} from '../utils/competition'
+import { headIdSet, teamKeyFor, buildChangesByProfile } from '../utils/team'
 import CompetitionModal from '../components/CompetitionModal'
 
 const todayISO = () => new Date().toISOString().slice(0, 10)
@@ -21,7 +26,7 @@ const STATUS = {
 }
 const RANK_COLOR = { 1: '#fbbf24', 2: '#cbd5e1', 3: '#fb923c' }
 
-function StandRow({ e, comp, deals, users, canManage, mine }) {
+function StandRow({ e, comp, deals, users, canManage, mine, teamCtx }) {
   const metric = comp.metric
   const [open, setOpen] = useState(false)
   const rc = RANK_COLOR[e.rank]
@@ -29,8 +34,8 @@ function StandRow({ e, comp, deals, users, canManage, mine }) {
   // Admins can drill into a (computed, non-manual) entry to verify its deals.
   const clickable = canManage && !e.manual
   const entryDeals = useMemo(
-    () => (open ? competitionEntryDeals(comp, e.id, deals, users) : []),
-    [open, comp, e.id, deals, users]
+    () => (open ? competitionEntryDeals(comp, e.id, deals, users, { teamCtx }) : []),
+    [open, comp, e.id, deals, users, teamCtx]
   )
   const fmtDate = (d) => d ? format(new Date(d + 'T12:00:00'), 'MMM d') : '—'
 
@@ -94,18 +99,42 @@ function StandRow({ e, comp, deals, users, canManage, mine }) {
   )
 }
 
-function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, onEdit, onDelete, onExport, onCopy, copied, exporting }) {
+const ROUND_ST = { active: '#00b894', upcoming: '#fdcb6e', ended: '#94a3b8' }
+
+function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, teamCtx, onEdit, onDelete, onExport, onCopy, onRoundWinner, copied, exporting }) {
   const [open, setOpen] = useState(false)
   const ghostIds = useMemo(() => new Set(users.filter(u => u.ghost).map(u => u.id)), [users])
+  const opts = useMemo(() => ({ hiddenIds: isAdmin ? null : ghostIds, teamCtx }), [isAdmin, ghostIds, teamCtx])
+
+  // Rounds: default view = the currently active round, else Overall. Every
+  // round is a fresh race; Overall spans the whole competition window.
+  const rounds = compRounds(comp)
+  const [roundSel, setRoundSel] = useState(null)
+  const activeRound = rounds.find(r => roundStatus(r, todayISO()) === 'active')
+  const sel = roundSel ?? (activeRound?.id ?? 'overall')
+  const selRound = rounds.find(r => r.id === sel) || null
+
   const standings = useMemo(
-    () => competitionStandings(comp, deals, users, { hiddenIds: isAdmin ? null : ghostIds }),
-    [comp, deals, users, isAdmin, ghostIds]
+    () => selRound
+      ? roundStandings(comp, selRound, deals, users, opts)
+      : competitionStandings(comp, deals, users, opts),
+    [comp, selRound, deals, users, opts]
   )
+  // The comp used for drill-downs must carry the displayed window.
+  const dispComp = selRound ? { ...comp, start_date: selRound.start, end_date: selRound.end, manual_scores: {} } : comp
   const status = competitionStatus(comp, todayISO())
   const st = STATUS[status]
-  const isMine = (e) => e.id === profileId || (comp.type === 'team' && users.find(u => u.id === profileId)?.manager_id === e.id)
+  const me = users.find(u => u.id === profileId)
+  const myTeamKey = me ? teamKeyFor(me, teamCtx?.heads ?? new Set()) : null
+  const isMine = (e) =>
+    e.id === profileId ||
+    (comp.type === 'team' && me?.manager_id === e.id) ||
+    (comp.type === 'squads' && (comp.sides || []).some(s => s.id === e.id &&
+      ((s.rep_ids || []).includes(profileId) || (s.team_ids || []).includes(myTeamKey))))
   const myEntry = standings.find(isMine)
   const top = open ? standings : standings.slice(0, 5)
+  const selWinner = selRound && roundStatus(selRound, todayISO()) === 'ended'
+    ? roundWinner(comp, selRound, deals, users, opts) : null
 
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
@@ -135,18 +164,70 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, on
           )}
         </div>
 
+        {/* Rounds strip — pick which round's race to view (fresh scores each) */}
+        {rounds.length > 0 && (
+          <div className="mt-3">
+            <div className="flex flex-wrap gap-1.5">
+              <button onClick={() => setRoundSel('overall')}
+                className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors ${sel === 'overall' ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}
+                style={sel === 'overall' ? undefined : { border: '1px solid #333' }}>
+                Overall
+              </button>
+              {rounds.map(r => {
+                const rs = roundStatus(r, todayISO())
+                const w = rs === 'ended' ? roundWinner(comp, r, deals, users, opts) : null
+                const on = sel === r.id
+                return (
+                  <button key={r.id} onClick={() => setRoundSel(r.id)}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors ${on ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}
+                    style={on ? undefined : { border: `1px solid ${ROUND_ST[rs]}40` }}
+                    title={`${fmtRange(r.start, r.end)}${r.prize ? ` · ${r.prize}` : ''}`}>
+                    {r.name}{rs === 'active' && !on ? ' ·' : ''}{w ? ` 🏆 ${w.name.split(' ')[0]}` : ''}
+                  </button>
+                )
+              })}
+            </div>
+            {selRound && (
+              <div className="mt-2 rounded-lg px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]"
+                style={{ background: '#171717', border: '1px solid #262626' }}>
+                <span className="font-bold text-white">{selRound.name}</span>
+                <span className="text-white/40">{fmtRange(selRound.start, selRound.end)}</span>
+                <span className="font-semibold" style={{ color: ROUND_ST[roundStatus(selRound, todayISO())] }}>
+                  {STATUS[roundStatus(selRound, todayISO())].label}
+                </span>
+                {selRound.prize && <span className="text-amber-300">🎁 {selRound.prize}</span>}
+                {selWinner && (
+                  <span className="text-white/70">🏆 <span className="font-semibold text-white">{selWinner.name}</span>
+                    {selWinner.overridden && <span className="text-white/30"> (set by admin)</span>}
+                  </span>
+                )}
+                {canManage && selRound && roundStatus(selRound, todayISO()) === 'ended' && (
+                  <select value={selRound.winner_id ?? ''}
+                    onChange={e => onRoundWinner(comp, selRound.id, e.target.value || null)}
+                    style={{ background: '#1e1e1e', border: '1px solid #333' }}
+                    className="ml-auto px-2 py-1 rounded-lg text-[11px] text-white focus:outline-none"
+                    title="Override the round winner (ties, adjustments)">
+                    <option value="">Winner: auto</option>
+                    {standings.map(s => <option key={s.id} value={s.id}>Winner: {s.name}</option>)}
+                  </select>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Standings */}
         <div className="mt-3 space-y-0.5">
           {standings.length === 0 ? (
             <p className="text-[12px] text-white/30 px-3 py-2">No participants yet.</p>
           ) : (
-            top.map(e => <StandRow key={e.id} e={e} comp={comp} deals={deals} users={users} canManage={canManage} mine={isMine(e)} />)
+            top.map(e => <StandRow key={e.id} e={e} comp={dispComp} deals={deals} users={users} canManage={canManage} mine={isMine(e)} teamCtx={teamCtx} />)
           )}
           {/* If the viewer is outside the visible top and not shown, pin their row */}
           {!open && myEntry && myEntry.rank > 5 && (
             <>
               <p className="text-center text-white/20 text-[11px]">···</p>
-              <StandRow e={myEntry} comp={comp} deals={deals} users={users} canManage={canManage} mine />
+              <StandRow e={myEntry} comp={dispComp} deals={deals} users={users} canManage={canManage} mine teamCtx={teamCtx} />
             </>
           )}
         </div>
@@ -174,9 +255,9 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, on
 // live card, minus the admin buttons / drill-downs — captured to a PNG for
 // dropping into Canva, slides, etc. Rendered off-screen only while exporting.
 const exHeadCol  = 'rgba(255,255,255,0.3)'
-function CompetitionExportCard({ comp, deals, users, ghostIds }) {
+function CompetitionExportCard({ comp, deals, users, ghostIds, teamCtx }) {
   // Hide ghost names (this image is a team-facing artifact, like what non-admins see).
-  const standings = competitionStandings(comp, deals, users, { hiddenIds: ghostIds })
+  const standings = competitionStandings(comp, deals, users, { hiddenIds: ghostIds, teamCtx })
   const status = competitionStatus(comp, todayISO())
   const st = STATUS[status]
   return (
@@ -240,6 +321,39 @@ function CompetitionExportCard({ comp, deals, users, ghostIds }) {
 
 const slugName = (s) => String(s || 'competition').replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '') || 'competition'
 
+// A finished competition, minimized: one compact strip (name · dates · winner)
+// that expands to the full card for reference.
+function PastCompRow(props) {
+  const { comp, deals, users, isAdmin, teamCtx } = props
+  const [expand, setExpand] = useState(false)
+  const ghostIds = useMemo(() => new Set(users.filter(u => u.ghost).map(u => u.id)), [users])
+  const winner = useMemo(
+    () => competitionStandings(comp, deals, users, { hiddenIds: isAdmin ? null : ghostIds, teamCtx })[0] ?? null,
+    [comp, deals, users, isAdmin, ghostIds, teamCtx]
+  )
+  return (
+    <div>
+      <button onClick={() => setExpand(e => !e)}
+        className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-left hover:bg-white/[0.03] transition-colors"
+        style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+        <Trophy size={14} className="text-white/25 flex-shrink-0" />
+        <span className="min-w-0 flex-1">
+          <span className="text-[13px] font-semibold text-white/85 truncate block">{comp.name}</span>
+          <span className="text-[10px] text-white/30">{typeLabel(comp.type)} · {fmtRange(comp.start_date, comp.end_date)}</span>
+        </span>
+        {winner && winner.score > 0 && (
+          <span className="text-[12px] text-white/60 whitespace-nowrap">
+            🏆 <span className="font-semibold text-white/85">{winner.name}</span>
+            <span className="text-white/35"> · {fmtScore(winner.score, comp.metric)}</span>
+          </span>
+        )}
+        <ChevronDown size={13} className={`text-white/25 flex-shrink-0 transition-transform ${expand ? 'rotate-180' : ''}`} />
+      </button>
+      {expand && <div className="mt-2"><CompetitionCard {...props} /></div>}
+    </div>
+  )
+}
+
 export default function Competitions() {
   const { profile, isAdmin } = useAuth()
   // Everyone can VIEW competitions/standings; only admins create/edit/delete.
@@ -247,6 +361,8 @@ export default function Competitions() {
   const [comps, setComps] = useState([])
   const [deals, setDeals] = useState([])
   const [users, setUsers] = useState([])
+  const [teamChanges, setTeamChanges] = useState([])
+  const [showPast, setShowPast] = useState(false)
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(false)
   const [editComp, setEditComp] = useState(null)
@@ -317,14 +433,37 @@ export default function Competitions() {
 
   useEffect(() => { load() }, [])
   async function load() {
-    const [{ data: c }, { data: d }, { data: u }] = await Promise.all([fetchCompetitions(), fetchDeals(), fetchUsers()])
-    setComps(c || []); setDeals(d || []); setUsers(u || []); setLoading(false)
+    const [{ data: c }, { data: d }, { data: u }, { data: tc }] = await Promise.all([
+      fetchCompetitions(), fetchDeals(), fetchUsers(), fetchTeamChanges()])
+    setComps(c || []); setDeals(d || []); setUsers(u || []); setTeamChanges(tc || []); setLoading(false)
   }
+
+  // Date-effective team membership for squads scoring — same rule as the
+  // Dashboard/Performance attribution.
+  const teamCtx = useMemo(() => ({
+    usersById: Object.fromEntries(users.map(u => [u.id, u])),
+    heads: headIdSet(users),
+    changesByProfile: buildChangesByProfile(teamChanges),
+  }), [users, teamChanges])
 
   const sorted = useMemo(() => {
     const rank = { active: 0, upcoming: 1, ended: 2 }
     return [...comps].sort((a, b) => rank[competitionStatus(a, todayISO())] - rank[competitionStatus(b, todayISO())])
   }, [comps])
+  // Finished comps auto-collapse into the Past section; live ones show full.
+  const liveComps = useMemo(() => sorted.filter(c => competitionStatus(c, todayISO()) !== 'ended'), [sorted])
+  const pastComps = useMemo(() => {
+    return sorted.filter(c => competitionStatus(c, todayISO()) === 'ended')
+      .sort((a, b) => String(b.end_date ?? '').localeCompare(String(a.end_date ?? '')))
+  }, [sorted])
+
+  // Round winner override: null = back to auto. Saved on the rounds jsonb.
+  async function handleRoundWinner(comp, roundId, winnerId) {
+    const rounds = (comp.rounds || []).map(r => r.id === roundId ? { ...r, winner_id: winnerId } : r)
+    setComps(cs => cs.map(c => c.id === comp.id ? { ...c, rounds } : c))
+    const res = await updateCompetition(comp.id, { rounds })
+    if (res?.error) load()
+  }
 
   async function handleSave(data) {
     if (editComp) {
@@ -374,21 +513,52 @@ export default function Competitions() {
           No competitions yet.{canManage ? ' Click “New” to start one.' : ' Check back soon!'}
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          {sorted.map(comp => (
-            <CompetitionCard key={comp.id} comp={comp} deals={deals} users={users}
-              profileId={profile?.id} canManage={canManage} isAdmin={isAdmin}
-              onEdit={(c) => { setEditComp(c); setModal(true) }} onDelete={handleDelete}
-              onExport={exportOne} onCopy={copyOne} copied={copiedId === comp.id} exporting={exporting} />
-          ))}
-        </div>
+        <>
+          {liveComps.length === 0 ? (
+            <div className="rounded-xl p-8 text-center text-white/40 text-[13px]" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+              No active competitions right now.{canManage ? ' Click “New” to start one.' : ''}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+              {liveComps.map(comp => (
+                <CompetitionCard key={comp.id} comp={comp} deals={deals} users={users}
+                  profileId={profile?.id} canManage={canManage} isAdmin={isAdmin} teamCtx={teamCtx}
+                  onEdit={(c) => { setEditComp(c); setModal(true) }} onDelete={handleDelete}
+                  onExport={exportOne} onCopy={copyOne} onRoundWinner={handleRoundWinner}
+                  copied={copiedId === comp.id} exporting={exporting} />
+              ))}
+            </div>
+          )}
+
+          {/* Finished competitions — auto-minimized, expandable for reference */}
+          {pastComps.length > 0 && (
+            <div className="mt-6">
+              <button onClick={() => setShowPast(s => !s)}
+                className="flex items-center gap-1.5 text-[12px] font-semibold text-white/40 hover:text-white transition-colors mb-2">
+                <ChevronDown size={14} className={`transition-transform ${showPast ? 'rotate-180' : ''}`} />
+                Past competitions ({pastComps.length})
+              </button>
+              {showPast && (
+                <div className="space-y-2">
+                  {pastComps.map(comp => (
+                    <PastCompRow key={comp.id} comp={comp} deals={deals} users={users}
+                      profileId={profile?.id} canManage={canManage} isAdmin={isAdmin} teamCtx={teamCtx}
+                      onEdit={(c) => { setEditComp(c); setModal(true) }} onDelete={handleDelete}
+                      onExport={exportOne} onCopy={copyOne} onRoundWinner={handleRoundWinner}
+                      copied={copiedId === comp.id} exporting={exporting} />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
 
       {/* Off-screen render used only to snapshot a competition to a PNG. */}
       {exportComp && (
         <div style={{ position: 'fixed', left: -99999, top: 0, pointerEvents: 'none', zIndex: -1 }} aria-hidden>
           <div ref={exportRef}>
-            <CompetitionExportCard comp={exportComp} deals={deals} users={users} ghostIds={ghostIds} />
+            <CompetitionExportCard comp={exportComp} deals={deals} users={users} ghostIds={ghostIds} teamCtx={teamCtx} />
           </div>
         </div>
       )}

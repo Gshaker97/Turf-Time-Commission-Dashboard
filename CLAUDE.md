@@ -218,7 +218,17 @@ setup + deploy steps.
   Payroll's `openEdit` mirrors this (blocks only `isFinalized` deals); `035`
   lets a LOCKED run's deals still go `Pay Finalized` → `Paid` (only when
   nothing else changes) so the sync's PAID pass and the Mark-paid button keep
-  working after an early lock — the payout itself stays frozen. Do
+  working after an early lock — the payout itself stays frozen; `038` adds
+  competition `sides` + `rounds` jsonb — type `squads` ("Grouped Teams"):
+  named sides mixing whole teams + individual reps (`[{ id, name, team_ids,
+  rep_ids }]`, membership DATE-EFFECTIVE via `teamOfSale`; scoring fns take
+  `opts.teamCtx`), and `rounds` on ANY comp type (`[{ id, name, start, end,
+  prize, winner_id }]` — each round a fresh race with its own prize;
+  `winner_id` null = auto-crowned top scorer, set = admin override via the
+  select on the card; Overall/round chips pick the displayed race, defaulting
+  to the active round; the modal has an "Auto-split into weeks" button).
+  Finished comps auto-minimize into the collapsed "Past competitions" section
+  (compact strips: name/dates/winner, expandable to the full card). Do
   not re-run `001`/`002` against a populated database.
 
 ## Performance page (`src/pages/Performance.jsx`, manager+)

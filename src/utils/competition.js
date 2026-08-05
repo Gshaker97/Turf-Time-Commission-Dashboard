@@ -13,10 +13,12 @@
 //                  closer share it by credit_split_pct = the closer's share).
 // ============================================================
 import { fmt, isCanceled } from './commission'
+import { teamOfSale } from './team'
 
 export const COMP_TYPES = [
   { key: 'individual', label: 'Individual' },
   { key: 'team',       label: 'Team' },
+  { key: 'squads',     label: 'Grouped Teams' },
   { key: 'company',    label: 'Company-wide' },
   { key: 'matchup',    label: 'Head-to-head' },
 ]
@@ -123,20 +125,101 @@ function teamCounts(deal, ids, comp) {
   }
 }
 
+// ── Squads ("Grouped Teams") — sides mixing whole teams + individual reps ──
+// Membership is DATE-EFFECTIVE: a person belongs to a side on a given date if
+// they're named directly (rep_ids) or their team AS OF THAT DATE is one of the
+// side's team_ids (same teamOfSale rule as every dashboard — a mid-contest
+// roster move never swings the contest retroactively). Requires opts.teamCtx
+// = { usersById, heads, changesByProfile }; without it, team_ids fall back to
+// current-roster membership.
+function personInSide(personId, saleDate, side, teamCtx) {
+  if (!personId) return false
+  if ((side.rep_ids || []).includes(personId)) return true
+  const teams = side.team_ids || []
+  if (!teams.length) return false
+  if (teamCtx) {
+    const k = teamOfSale(personId, saleDate, teamCtx.usersById, teamCtx.heads, teamCtx.changesByProfile)
+    return teams.includes(k)
+  }
+  return false
+}
+
+// Whether a side is credited for a deal under the chosen mode (like teamCounts).
+function sideCounts(deal, side, comp, teamCtx) {
+  const setterIn = personInSide(deal.setter_id, deal.sale_date, side, teamCtx)
+  const solo     = !deal.closer_id || deal.setter_id === deal.closer_id
+  const closerIn = personInSide(deal.closer_id ?? deal.setter_id, deal.sale_date, side, teamCtx)
+  switch (comp.credit_mode || 'both') {
+    case 'self_gen': return solo && setterIn
+    case 'setter':   return setterIn
+    case 'closer':   return closerIn
+    default:         return setterIn || closerIn
+  }
+}
+
+function sideScore(side, deals, comp, teamCtx) {
+  let total = 0
+  for (const d of deals) {
+    if (!inWindow(d, comp) || isCanceled(d)) continue
+    if (sideCounts(d, side, comp, teamCtx)) total += dealValue(d, comp.metric)
+  }
+  return total
+}
+
+// ── Rounds ────────────────────────────────────────────────────
+// Normalized, chronologically sorted rounds (only rows with both dates count).
+export function compRounds(comp) {
+  return (comp.rounds || [])
+    .filter(r => r && r.start && r.end)
+    .slice()
+    .sort((a, b) => String(a.start).localeCompare(String(b.start)))
+}
+
+export function roundStatus(round, todayISO) {
+  if (todayISO < round.start) return 'upcoming'
+  if (todayISO > round.end) return 'ended'
+  return 'active'
+}
+
+// Standings for ONE round: same competition rules, the round's window, scores
+// reset (manual competition-level overrides don't apply — rounds are computed;
+// the admin override for a round is its winner_id, not its scores).
+export function roundStandings(comp, round, deals = [], users = [], opts = {}) {
+  return competitionStandings(
+    { ...comp, start_date: round.start, end_date: round.end, manual_scores: {} },
+    deals, users, opts)
+}
+
+// The round's winner entrant (or null while nobody has scored / pre-round):
+// winner_id override wins; otherwise the top of the round's standings.
+export function roundWinner(comp, round, deals = [], users = [], opts = {}) {
+  const standings = roundStandings(comp, round, deals, users, opts)
+  if (round.winner_id) {
+    const w = standings.find(e => e.id === round.winner_id)
+    if (w) return { ...w, overridden: true }
+    return { id: round.winner_id, name: '—', score: 0, overridden: true }
+  }
+  const top = standings[0]
+  return top && top.score > 0 ? top : null
+}
+
 // The deals that make up an entrant's score, for the admin drill-down:
 // [{ deal, value, credit, contribution }] newest-first. `value` is the deal's
 // metric (baseline or 1), `credit` the fraction earned, `contribution` the
 // product that's added to the score.
-export function competitionEntryDeals(comp, entrantId, deals = [], users = []) {
+export function competitionEntryDeals(comp, entrantId, deals = [], users = [], opts = {}) {
   const out = []
   const ids = comp.type === 'team'
     ? new Set([entrantId, ...users.filter(u => u.manager_id === entrantId).map(u => u.id)])
     : null
+  const side = comp.type === 'squads' ? (comp.sides || []).find(s => s.id === entrantId) : null
   for (const d of deals) {
     if (!inWindow(d, comp)) continue
     const credit = comp.type === 'team'
       ? (teamCounts(d, ids, comp) ? 1 : 0)
-      : personCredit(d, entrantId, comp)
+      : comp.type === 'squads'
+        ? (side && sideCounts(d, side, comp, opts.teamCtx) ? 1 : 0)
+        : personCredit(d, entrantId, comp)
     if (!credit) continue
     // Include canceled deals too, but flagged & worth 0 — they show struck-out
     // so an admin can see what WOULD count if the job weren't canceled.
@@ -167,6 +250,8 @@ export function competitionStandings(comp, deals = [], users = [], opts = {}) {
     entrants = users.filter(u => ['rep', 'manager', 'director', 'vp'].includes(u.role)).map(u => ({ id: u.id, name: u.name }))
   } else if (comp.type === 'team') {
     entrants = (comp.participant_ids || []).map(id => ({ id, name: `${nameOf(id)}'s Team` }))
+  } else if (comp.type === 'squads') {
+    entrants = (comp.sides || []).map(s => ({ id: s.id, name: s.name || 'Unnamed side' }))
   } else {
     entrants = (comp.participant_ids || []).map(id => ({ id, name: nameOf(id) }))
   }
@@ -180,7 +265,9 @@ export function competitionStandings(comp, deals = [], users = [], opts = {}) {
       const hasManual = override != null && override !== ''
       const computed = comp.type === 'team'
         ? teamScore(e.id, deals, users, comp)
-        : personScore(e.id, deals, comp)
+        : comp.type === 'squads'
+          ? sideScore((comp.sides || []).find(s => s.id === e.id) || {}, deals, comp, opts.teamCtx)
+          : personScore(e.id, deals, comp)
       return { ...e, score: hasManual ? Number(override) : computed, manual: hasManual }
     })
     .sort((a, b) => b.score - a.score)
