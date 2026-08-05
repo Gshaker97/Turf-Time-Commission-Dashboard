@@ -167,7 +167,7 @@ function Pills({ options, value, onChange, small }) {
 }
 
 // Scorecard tile: value + trend vs previous period + goal readout.
-function ScoreTile({ label, metric, value, prev, goal, lowerIsBetter }) {
+function ScoreTile({ label, metric, value, prev, goal, lowerIsBetter, subValue }) {
   const has = value != null
   const trendPct = has && prev != null && prev !== 0 ? ((value - prev) / Math.abs(prev)) * 100 : null
   const trendGood = trendPct == null ? null : (lowerIsBetter ? trendPct <= 0 : trendPct >= 0)
@@ -182,6 +182,7 @@ function ScoreTile({ label, metric, value, prev, goal, lowerIsBetter }) {
       <p className={`text-[16px] md:text-[20px] font-bold leading-none truncate ${onTrack === true ? 'text-emerald-400' : 'text-teal'}`}>
         {fmtMetric(metric, value)}
       </p>
+      {subValue && <p className="text-[10px] text-white/45 mt-1 truncate">{subValue}</p>}
       <div className="mt-1.5 space-y-0.5">
         {trendPct != null && (
           <p className={`text-[10px] font-semibold ${trendGood ? 'text-emerald-400' : 'text-red-400'}`}>
@@ -890,7 +891,8 @@ export default function Performance() {
           </p>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 md:gap-3">
-          <ScoreTile label="Revenue"     metric="revenue"     value={cur.revenue}     prev={prev?.revenue}     goal={goalFor('revenue')} />
+          <ScoreTile label="Revenue"     metric="revenue"     value={cur.revenue}     prev={prev?.revenue}     goal={goalFor('revenue')}
+            subValue={`Job ${fmtMetric('revenue', cur.job)}`} />
           <ScoreTile label="Deals"       metric="deals"       value={cur.deals}       prev={prev?.deals}       goal={goalFor('deals')} />
           <ScoreTile label="Estimates"   metric="estimates"   value={cur.estimates}   prev={prev?.estimates}   goal={goalFor('estimates')} />
           <ScoreTile label="Close Rate"  metric="close_rate"  value={cur.close_rate}  prev={prev?.close_rate}  goal={goalFor('close_rate')} />

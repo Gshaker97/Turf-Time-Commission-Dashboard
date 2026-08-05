@@ -66,7 +66,7 @@ function StatCard({ label, value, sub, trend, value2, valueLabel, value2Label })
     <div className="rounded-xl p-3 md:p-4 min-w-0 flex-1" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
       <p className="text-[9px] md:text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1.5 leading-tight">{label}</p>
       {value2 != null ? (
-        <div className="flex items-start gap-4 md:gap-6 min-w-0 mb-1.5">
+        <div className="flex flex-wrap items-start gap-x-4 md:gap-x-6 gap-y-1 min-w-0 mb-1.5">
           <div className="min-w-0">
             <p className="text-[16px] md:text-[20px] font-bold text-teal leading-none truncate">{value}</p>
             {valueLabel && <p className="text-[8px] md:text-[9px] text-white/30 uppercase tracking-wider mt-1 truncate">{valueLabel}</p>}
@@ -475,8 +475,11 @@ export default function Dashboard() {
 
       {/* ── KPI cards — 2-col on mobile, row on md+ ── */}
       <div className="grid grid-cols-2 gap-2 md:flex md:gap-3">
-        <StatCard label="Baseline Revenue" value={fmt(totals.baseline)} sub="Company's cost basis"
-          trend={<Trend cur={totals.baseline} prev={prevPeriod ? prevTotals.baseline : null} />} />
+        <StatCard label="Revenue"
+          value={fmt(totals.baseline)}    valueLabel="Baseline"
+          value2={fmt(totals.totalPrice)} value2Label="Job Price"
+          sub="Baseline = company's cost basis"
+          trend={<Trend cur={totals.baseline} prev={prevPeriod ? prevTotals.baseline : null} suffix="baseline vs prev" />} />
         <StatCard label="Commissions" value={fmt(totals.commission)} sub="Total price − baseline"
           trend={<Trend cur={totals.commission} prev={prevPeriod ? prevTotals.commission : null} />} />
         <StatCard label="Avg Comm %" value={`${totals.avgCommPct.toFixed(1)}%`}
