@@ -494,7 +494,8 @@ export default function Team() {
     const involved = deals.filter(d => inPeriod(d) && (repIds.has(d.setter_id) || repIds.has(d.closer_id)))
     const commission = [...repIds].reduce((s, id) => s + getUserCommission(involved, id), 0)
     return { reps: repStats.length, deals: periodSales.length,
-             revenue: periodSales.reduce((s,d)=>s+(parseFloat(d.baseline_revenue)||0),0), commission }
+             revenue: periodSales.reduce((s,d)=>s+(parseFloat(d.baseline_revenue)||0),0),
+             jobTotal: periodSales.reduce((s,d)=>s+(parseFloat(d.job_price)||0),0), commission }
   }, [repStats, visibleReps, deals, dateFrom, dateTo, isAdmin, role])
 
   const paceData = useMemo(() => {
@@ -652,13 +653,26 @@ export default function Team() {
         {[
           { label: 'Reps',       value: kpis.reps.toString() },
           { label: 'Deals',      value: kpis.deals.toString() },
-          { label: 'Revenue',    value: fmt(kpis.revenue) },
+          { label: 'Revenue',    value: fmt(kpis.revenue), value2: fmt(kpis.jobTotal), valueLabel: 'Baseline', value2Label: 'Job Price' },
           { label: 'Comm Earned',value: fmt(kpis.commission) },
-        ].map(({ label, value }) => (
+        ].map(({ label, value, value2, valueLabel, value2Label }) => (
           <div key={label} className="rounded-xl p-3 md:p-4 min-w-0 md:flex-1"
             style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
             <p className="text-[9px] md:text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1">{label}</p>
-            <p className="text-[16px] md:text-[20px] font-bold text-teal leading-none truncate">{value}</p>
+            {value2 != null ? (
+              <div className="flex flex-wrap items-start gap-x-4 gap-y-1 min-w-0">
+                <div className="min-w-0">
+                  <p className="text-[16px] md:text-[20px] font-bold text-teal leading-none truncate">{value}</p>
+                  <p className="text-[8px] md:text-[9px] text-white/30 uppercase tracking-wider mt-1 truncate">{valueLabel}</p>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[16px] md:text-[20px] font-bold text-white/80 leading-none truncate">{value2}</p>
+                  <p className="text-[8px] md:text-[9px] text-white/30 uppercase tracking-wider mt-1 truncate">{value2Label}</p>
+                </div>
+              </div>
+            ) : (
+              <p className="text-[16px] md:text-[20px] font-bold text-teal leading-none truncate">{value}</p>
+            )}
           </div>
         ))}
       </div>
