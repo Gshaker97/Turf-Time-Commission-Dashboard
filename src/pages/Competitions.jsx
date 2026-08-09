@@ -78,17 +78,25 @@ function StandRow({ e, comp, deals, users, canManage, mine, teamCtx }) {
                 <span>{entryDeals.filter(x => !x.canceled).length} deal{entryDeals.filter(x => !x.canceled).length === 1 ? '' : 's'} counted</span>
                 <span>Counts toward score</span>
               </div>
-              {entryDeals.map(({ deal, value, credit, contribution, canceled }) => (
-                <div key={deal.id} className={`flex items-center gap-2 px-1 py-1 text-[11px] ${canceled ? 'opacity-60' : ''}`}>
-                  <span className={`flex-1 min-w-0 truncate ${canceled ? 'line-through text-white/40' : 'text-white/75'}`}>{deal.deal_name || '—'}</span>
-                  {canceled && <span className="text-[8px] font-bold uppercase tracking-wide text-red-400 whitespace-nowrap">canceled</span>}
-                  <span className={`whitespace-nowrap ${canceled ? 'text-white/25' : 'text-white/30'}`}>{fmtDate(deal.sale_date)}</span>
-                  {credit !== 1 && <span className={`whitespace-nowrap ${canceled ? 'text-white/25' : 'text-white/30'}`}>{Math.round(credit * 100)}%</span>}
-                  <span className={`font-semibold whitespace-nowrap w-20 text-right ${canceled ? 'line-through text-red-400/60' : 'text-white/80'}`}>
-                    {fmtScore(canceled ? value * credit : contribution, metric)}
-                  </span>
-                </div>
-              ))}
+              {entryDeals.map(({ deal, value, credit, contribution, canceled }) => {
+                const personName = (joined, id) => joined?.name ?? users.find(u => u.id === id)?.name ?? '—'
+                return (
+                  <div key={deal.id} className={`px-1 py-1 ${canceled ? 'opacity-60' : ''}`}>
+                    <div className="flex items-center gap-2 text-[11px]">
+                      <span className={`flex-1 min-w-0 truncate ${canceled ? 'line-through text-white/40' : 'text-white/75'}`}>{deal.deal_name || '—'}</span>
+                      {canceled && <span className="text-[8px] font-bold uppercase tracking-wide text-red-400 whitespace-nowrap">canceled</span>}
+                      {credit !== 1 && <span className={`whitespace-nowrap ${canceled ? 'text-white/25' : 'text-white/30'}`}>{Math.round(credit * 100)}%</span>}
+                      <span className={`font-semibold whitespace-nowrap w-20 text-right ${canceled ? 'line-through text-red-400/60' : 'text-white/80'}`}>
+                        {fmtScore(canceled ? value * credit : contribution, metric)}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-white/30 truncate">
+                      Set: {personName(deal.setter, deal.setter_id)} · Closed: {personName(deal.closer, deal.closer_id)}
+                      {' '}· Sold {fmtDate(deal.sale_date)} · Install {fmtDate(deal.install_date)}
+                    </p>
+                  </div>
+                )
+              })}
               <div className="flex items-center justify-between px-1 pt-1.5 mt-1 border-t border-white/5 text-[11px]">
                 <span className="font-bold text-white/50 uppercase tracking-wider text-[9px]">Total</span>
                 <span className="font-bold text-teal">{fmtScore(e.score, metric)}</span>
