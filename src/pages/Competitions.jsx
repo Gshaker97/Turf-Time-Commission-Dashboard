@@ -10,6 +10,7 @@ import {
   typeLabel, metricLabel, creditLabel, fmtScore,
 } from '../utils/competition'
 import { headIdSet, teamKeyFor, buildChangesByProfile } from '../utils/team'
+import { fmt } from '../utils/commission'
 import CompetitionModal from '../components/CompetitionModal'
 
 // LOCAL date, never UTC — .toISOString() flips to tomorrow at 5pm Arizona,
@@ -55,7 +56,10 @@ function StandRow({ e, comp, deals, users, canManage, mine, teamCtx }) {
           <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full"
             style={{ color: '#00b894', border: '1px solid #00b89455' }}>🎉 Earned</span>
         )}
-        <span className="text-[13px] font-bold text-white whitespace-nowrap">{fmtScore(e.score, metric)}</span>
+        <span className="text-[13px] font-bold text-white whitespace-nowrap">
+          {fmtScore(e.score, metric)}
+          {metric === 'deals' && e.revenue > 0 && <span className="text-white/40 font-normal text-[11px]"> · {fmt(e.revenue)}</span>}
+        </span>
         {clickable && <ChevronDown size={12} className={`text-white/25 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />}
       </div>
       {hasTarget && (
@@ -86,6 +90,9 @@ function StandRow({ e, comp, deals, users, canManage, mine, teamCtx }) {
                       <span className={`flex-1 min-w-0 truncate ${canceled ? 'line-through text-white/40' : 'text-white/75'}`}>{deal.deal_name || '—'}</span>
                       {canceled && <span className="text-[8px] font-bold uppercase tracking-wide text-red-400 whitespace-nowrap">canceled</span>}
                       {credit !== 1 && <span className={`whitespace-nowrap ${canceled ? 'text-white/25' : 'text-white/30'}`}>{Math.round(credit * 100)}%</span>}
+                      {metric === 'deals' && (
+                        <span className={`whitespace-nowrap ${canceled ? 'line-through text-white/25' : 'text-white/40'}`}>{fmt(Number(deal.baseline_revenue) || 0)}</span>
+                      )}
                       <span className={`font-semibold whitespace-nowrap w-20 text-right ${canceled ? 'line-through text-red-400/60' : 'text-white/80'}`}>
                         {fmtScore(canceled ? value * credit : contribution, metric)}
                       </span>
@@ -99,7 +106,12 @@ function StandRow({ e, comp, deals, users, canManage, mine, teamCtx }) {
               })}
               <div className="flex items-center justify-between px-1 pt-1.5 mt-1 border-t border-white/5 text-[11px]">
                 <span className="font-bold text-white/50 uppercase tracking-wider text-[9px]">Total</span>
-                <span className="font-bold text-teal">{fmtScore(e.score, metric)}</span>
+                <span className="font-bold text-teal">
+                  {fmtScore(e.score, metric)}
+                  {metric === 'deals' && (
+                    <span className="text-white/50 font-semibold"> · {fmt(entryDeals.reduce((s, x) => s + (x.canceled ? 0 : (Number(x.deal.baseline_revenue) || 0) * x.credit), 0))}</span>
+                  )}
+                </span>
               </div>
             </>
           )}
@@ -303,7 +315,10 @@ function CompetitionExportCard({ comp, deals, users, ghostIds, teamCtx }) {
                   </span>
                   <span style={{ flex: 1, fontSize: 14, color: 'rgba(255,255,255,0.9)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.name}</span>
                   {e.earned && <span style={{ fontSize: 10, fontWeight: 700, color: '#00b894', border: '1px solid #00b89455', borderRadius: 999, padding: '2px 8px' }}>🎉 Earned</span>}
-                  <span style={{ fontSize: 14, fontWeight: 700, color: '#fff', whiteSpace: 'nowrap' }}>{fmtScore(e.score, comp.metric)}</span>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: '#fff', whiteSpace: 'nowrap' }}>
+                    {fmtScore(e.score, comp.metric)}
+                    {comp.metric === 'deals' && e.revenue > 0 && <span style={{ color: 'rgba(255,255,255,0.45)', fontWeight: 400, fontSize: 12 }}> · {fmt(e.revenue)}</span>}
+                  </span>
                 </div>
                 {hasTarget && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 12px 6px' }}>

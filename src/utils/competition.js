@@ -80,36 +80,35 @@ function personCredit(deal, userId, comp) {
   }
 }
 
+// Every scoring fn returns { score, revenue } — revenue is the credited
+// baseline $ regardless of the competition metric, so a deal-count contest
+// can display the money its deals represent alongside the count.
 function personScore(userId, deals, comp) {
-  let total = 0
+  let total = 0, revenue = 0
   for (const d of deals) {
     if (!inWindow(d, comp) || isCanceled(d)) continue   // canceled jobs don't count
     const credit = personCredit(d, userId, comp)
-    if (credit) total += dealValue(d, comp.metric) * credit
+    if (credit) {
+      total   += dealValue(d, comp.metric) * credit
+      revenue += (Number(d.baseline_revenue) || 0) * credit
+    }
   }
-  return total
+  return { score: total, revenue }
 }
 
 // A team's score: deals in the window the team is credited for under the chosen
 // credit_mode (split behaves like 'both' at the team level — counted once).
 function teamScore(managerId, deals, users, comp) {
   const ids = new Set([managerId, ...users.filter(u => u.manager_id === managerId).map(u => u.id)])
-  let total = 0
+  let total = 0, revenue = 0
   for (const d of deals) {
     if (!inWindow(d, comp) || isCanceled(d)) continue   // canceled jobs don't count
-    const setterIn  = ids.has(d.setter_id)
-    const solo      = !d.closer_id || d.setter_id === d.closer_id
-    const closerIn  = ids.has(d.closer_id ?? d.setter_id)
-    let counts
-    switch (comp.credit_mode || 'both') {
-      case 'self_gen': counts = solo && setterIn; break
-      case 'setter':   counts = setterIn; break
-      case 'closer':   counts = closerIn; break
-      default:         counts = setterIn || closerIn; break  // both / split
+    if (teamCounts(d, ids, comp)) {
+      total   += dealValue(d, comp.metric)
+      revenue += Number(d.baseline_revenue) || 0
     }
-    if (counts) total += dealValue(d, comp.metric)
   }
-  return total
+  return { score: total, revenue }
 }
 
 // Whether a team is credited for a deal under the chosen mode (ignores cancel).
@@ -158,12 +157,15 @@ function sideCounts(deal, side, comp, teamCtx) {
 }
 
 function sideScore(side, deals, comp, teamCtx) {
-  let total = 0
+  let total = 0, revenue = 0
   for (const d of deals) {
     if (!inWindow(d, comp) || isCanceled(d)) continue
-    if (sideCounts(d, side, comp, teamCtx)) total += dealValue(d, comp.metric)
+    if (sideCounts(d, side, comp, teamCtx)) {
+      total   += dealValue(d, comp.metric)
+      revenue += Number(d.baseline_revenue) || 0
+    }
   }
-  return total
+  return { score: total, revenue }
 }
 
 // ── Rounds ────────────────────────────────────────────────────
@@ -268,7 +270,8 @@ export function competitionStandings(comp, deals = [], users = [], opts = {}) {
         : comp.type === 'squads'
           ? sideScore((comp.sides || []).find(s => s.id === e.id) || {}, deals, comp, opts.teamCtx)
           : personScore(e.id, deals, comp)
-      return { ...e, score: hasManual ? Number(override) : computed, manual: hasManual }
+      // revenue stays computed even under a manual score override.
+      return { ...e, score: hasManual ? Number(override) : computed.score, revenue: computed.revenue, manual: hasManual }
     })
     .sort((a, b) => b.score - a.score)
     .map((e, i) => ({
