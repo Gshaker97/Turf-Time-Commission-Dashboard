@@ -12,7 +12,9 @@ import {
 import { headIdSet, teamKeyFor, buildChangesByProfile } from '../utils/team'
 import CompetitionModal from '../components/CompetitionModal'
 
-const todayISO = () => new Date().toISOString().slice(0, 10)
+// LOCAL date, never UTC — .toISOString() flips to tomorrow at 5pm Arizona,
+// which ended rounds/comps 7 hours early.
+const todayISO = () => format(new Date(), 'yyyy-MM-dd')
 const fmtRange = (a, b) => {
   const f = (d) => d ? format(new Date(d + 'T12:00:00'), 'MMM d') : null
   if (!a && !b) return 'No date range'

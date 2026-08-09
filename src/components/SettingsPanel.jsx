@@ -1,5 +1,11 @@
 import { useState, useEffect } from 'react'
 import { Plus, Trash2, GripVertical, Check, AlertTriangle } from 'lucide-react'
+
+// Local date, never UTC — toISOString() rolls to tomorrow at 5pm Arizona.
+const localDateISO = () => {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 import { useSettings } from '../contexts/SettingsContext'
 import { DEMO_MODE } from '../lib/supabase'
 
@@ -343,7 +349,7 @@ function OverrideRatesEditor() {
 
   function addEra() {
     const last = rows[rows.length - 1] || LEGACY_ERA
-    setRows(rs => [...rs, { ...last, byOffice: { ...(last.byOffice || {}) }, effective: new Date().toISOString().slice(0, 10) }])
+    setRows(rs => [...rs, { ...last, byOffice: { ...(last.byOffice || {}) }, effective: localDateISO() }])
   }
   async function onSave() {
     setError(''); setSaving(true)
