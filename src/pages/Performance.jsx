@@ -4,6 +4,7 @@ import {
   Tooltip, ResponsiveContainer, ReferenceLine, Legend, PieChart, Pie, Cell,
 } from 'recharts'
 import { ChevronDown, ChevronRight, Plus, Trash2, Target, X, ZoomIn } from 'lucide-react'
+import { format } from 'date-fns'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import {
@@ -24,6 +25,8 @@ import { toast } from '../lib/toast'
 
 const PALETTE = ['#00b894', '#74b9ff', '#a78bfa', '#fbbf24', '#fb923c', '#f87171', '#34d399', '#60a5fa', '#f472b6', '#facc15']
 const CARD = { background: '#242424', border: '1px solid #2e2e2e' }
+// LOCAL date, never UTC — .toISOString() rolls to tomorrow at 5pm Arizona.
+const localTodayISO = () => format(new Date(), 'yyyy-MM-dd')
 
 // ── Shared dark tooltip ───────────────────────────────────────
 function ChartTip({ active, payload, label, yFmt }) {
@@ -349,7 +352,7 @@ export default function Performance() {
   const paceBucket = useMemo(() => {
     if (periods.length < 2) return null
     const last = periods[periods.length - 1]
-    const todayISO = new Date().toISOString().slice(0, 10)
+    const todayISO = localTodayISO()
     if (last.to < todayISO) return null
     const clamped = pacePrevPeriod(periods[periods.length - 2], last, todayISO)
     return bucketize(deals, statsForBuckets, [clamped], scope, teamCtx)[clamped.key]
@@ -656,7 +659,7 @@ export default function Performance() {
 
   // ── Targets editor (admin) ──
   const [showTargets, setShowTargets] = useState(false)
-  const emptyTarget = { scope: 'org', subject: '', metric: 'revenue', period: 'month', value: '', effective: new Date().toISOString().slice(0, 10) }
+  const emptyTarget = { scope: 'org', subject: '', metric: 'revenue', period: 'month', value: '', effective: localTodayISO() }
   const [tForm, setTForm] = useState(emptyTarget)
   async function addTarget() {
     const v = parseFloat(tForm.value)
@@ -1184,7 +1187,7 @@ export default function Performance() {
             <tbody>
               {periods.map((p, i) => ({ p, i })).reverse().map(({ p, i }) => {
                 const b  = buckets[p.key]
-                const inProgress = i === periods.length - 1 && p.to >= new Date().toISOString().slice(0, 10)
+                const inProgress = i === periods.length - 1 && p.to >= localTodayISO()
                 // In-progress row compares to the SAME point of the prior period.
                 const pb = i > 0 ? ((inProgress && paceBucket) || buckets[periods[i - 1].key]) : null
                 const cell = (metric, v, pv) => (

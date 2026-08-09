@@ -166,7 +166,7 @@ export default function Home() {
 
   // Active competitions the rep is entered in.
   const myComps = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = dfFormat(new Date(), "yyyy-MM-dd");   // local, not UTC
     const hiddenIds = isAdmin ? null : ghostIds;
     return comps
       .filter(c => competitionStatus(c, today) === "active")

@@ -7,14 +7,15 @@ import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import { dealAmounts, getUserCommission, fmt, activeDeals, deductionLabel } from '../utils/commission'
 
-const todayISO = () => new Date().toISOString().slice(0, 10)
+// LOCAL dates, never UTC — .toISOString() rolls to tomorrow at 5pm Arizona.
+const todayISO = () => format(new Date(), 'yyyy-MM-dd')
 // Sunday–Saturday week containing the given date (ISO strings).
 const isoWeek = (dateStr) => {
   const d = dateStr ? new Date(dateStr + 'T12:00:00') : new Date()
   const dow = d.getDay()                                  // 0 = Sunday
   const sun = new Date(d); sun.setDate(d.getDate() - dow)
   const sat = new Date(sun); sat.setDate(sun.getDate() + 6)
-  const iso = (x) => x.toISOString().slice(0, 10)
+  const iso = (x) => format(x, 'yyyy-MM-dd')
   return { from: iso(sun), to: iso(sat) }
 }
 const PAID = 'Paid'                 // status that means the commission has been paid out

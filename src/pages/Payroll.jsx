@@ -8,7 +8,8 @@ import { dealAmounts, fmt, activeDeals, deductionLabel } from '../utils/commissi
 import DealModal from '../components/DealModal'
 import { toast } from '../lib/toast'
 
-const todayISO = () => new Date().toISOString().slice(0, 10)
+// LOCAL date, never UTC — .toISOString() rolls to tomorrow at 5pm Arizona.
+const todayISO = () => format(new Date(), 'yyyy-MM-dd')
 const fmtDay   = (iso) => iso ? format(new Date(iso + 'T12:00:00'), 'EEE, MMM d, yyyy') : null
 const APPROVED = 'Pay Finalized'
 const PAID     = 'Paid'

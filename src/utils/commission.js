@@ -37,7 +37,12 @@ export function setOverrideRateSchedule(rows) {
 }
 export function rateEraFor(saleDate) {
   if (!RATE_SCHEDULE) return null
-  const d = saleDate || new Date().toISOString().slice(0, 10)
+  // Local date fallback (manual build — this file is shared with server.js,
+  // so it stays dependency-free). toISOString() would flip to tomorrow at
+  // 5pm Arizona and could pick a new rate era hours early.
+  const now = new Date()
+  const d = saleDate ||
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
   let era = RATE_SCHEDULE[0]
   for (const r of RATE_SCHEDULE) { if (String(r.effective || '') <= d) era = r; else break }
   return era
