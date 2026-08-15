@@ -31,6 +31,17 @@ const pct = (n) => { const v = (Number(n) || 0) * 100; return (Number.isInteger(
 const REP_ROLES = ['Setter', 'Closer']
 const OVERRIDE_ROLES = ['Manager', 'Director', 'VP']
 
+// Which date the Earned tab measures a deal on. Sale is the default because
+// "what did I earn" is a question about when the work was sold, not when
+// payroll happens to run. The DB column is `sale_date` (001_schema.sql) —
+// the Deals page surfaces the same field as "Closing date".
+const EARNED_BASES = [
+  { key: 'sale',    label: 'Sale Date' },
+  { key: 'install', label: 'Install Date' },
+  { key: 'pay',     label: 'Pay Date' },
+]
+const basisLabel = (key) => EARNED_BASES.find(b => b.key === key)?.label || 'Sale Date'
+
 function myParts(deal, id) {
   const a = dealAmounts(deal)
   const repPool = num(deal.job_price) - num(deal.baseline_revenue)
@@ -396,7 +407,7 @@ export default function Commissions() {
   // Deliberately status-blind apart from Sales Issue: Scheduled, Pay Finalized
   // and Paid all count, because this tab measures EARNINGS, not payment state.
   // The Paid / Not-yet-paid split below is what surfaces payment state.
-  const [earnedBasis, setEarnedBasis] = useState('pay')      // 'pay' | 'install'
+  const [earnedBasis, setEarnedBasis] = useState('sale')     // 'sale' | 'install' | 'pay'
   const [earnedFrom, setEarnedFrom]     = useState(getPresetRange('mtd').from)
   const [earnedTo, setEarnedTo]         = useState(getPresetRange('mtd').to)
   const [earnedPreset, setEarnedPreset] = useState('mtd')
@@ -404,24 +415,32 @@ export default function Commissions() {
     setEarnedFrom(from); setEarnedTo(to); setEarnedPreset(preset)
   }
 
-  // The date a deal is measured on under the active basis. Install basis falls
-  // back to sale_date so a sold-but-not-yet-scheduled deal still lands in a
-  // period instead of vanishing from the tab.
-  const earnedDateOf = (d) => earnedBasis === 'pay'
-    ? (d.pay_date || null)
-    : (d.install_date || d.sale_date || null)
+  // The date a deal is measured on under the active basis.
+  //   sale    → sale_date, no fallback. A deal with no sale date is dropped
+  //             rather than silently counted on some other date; the count is
+  //             surfaced under the table so the omission is never invisible.
+  //   install → install_date, falling back to sale_date so a sold-but-not-yet-
+  //             scheduled deal still lands in a period.
+  //   pay     → pay_date, no fallback.
+  const earnedDateOf = (d) => {
+    if (earnedBasis === 'sale')    return d.sale_date || null
+    if (earnedBasis === 'install') return d.install_date || d.sale_date || null
+    return d.pay_date || null
+  }
 
-  const earnedRows = useMemo(() => {
+  const { earnedRows, earnedMissingDates } = useMemo(() => {
     const inRange = (dt) => {
-      if (!dt) return false
       if (earnedFrom && dt < earnedFrom) return false
       if (earnedTo   && dt > earnedTo)   return false
       return true
     }
-    return allMine
-      .filter(d => d.status !== ISSUE)
+    const candidates = allMine.filter(d => d.status !== ISSUE)
+    // Range-independent: deals that carry no date at all on this basis, so the
+    // note doesn't flicker as the user scrubs the date range.
+    const missing = candidates.filter(d => !earnedDateOf(d)).length
+    const rows = candidates
       .map(d => ({ deal: d, date: earnedDateOf(d) }))
-      .filter(r => inRange(r.date))
+      .filter(r => r.date && inRange(r.date))
       .map(r => {
         const parts = myParts(r.deal, id)
         const sum = (roles) => parts.filter(p => roles.includes(p.role)).reduce((s, p) => s + p.amount, 0)
@@ -432,7 +451,8 @@ export default function Commissions() {
           total: getUserCommission(r.deal, id),
         }
       })
-      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))   // newest first
+      .sort((a, b) => b.date.localeCompare(a.date))   // active basis, newest first
+    return { earnedRows: rows, earnedMissingDates: missing }
   }, [allMine, id, earnedBasis, earnedFrom, earnedTo])
 
   const earnedTotals = useMemo(() => {
@@ -609,7 +629,7 @@ export default function Commissions() {
                   ? 'grouped by pay week · tap a week'
                   : tab === 'paid'
                     ? 'grouped by pay date · tap a deal'
-                    : `${earnedBasis === 'pay' ? 'by pay date' : 'by install date'} · ${presetLabel(earnedPreset)}`}
+                    : `by ${basisLabel(earnedBasis)} · ${presetLabel(earnedPreset)}`}
               </span>
             </div>
 
@@ -652,22 +672,26 @@ export default function Commissions() {
                   onChange={handleEarnedRangeChange} />
 
                 {/* Date basis */}
-                <div className="flex gap-1 p-1 rounded-xl w-fit" style={{ background: '#171717', border: '1px solid #262626' }}>
-                  {[['pay', 'By Pay Date'], ['install', 'By Install Date']].map(([k, label]) => (
-                    <button key={k} onClick={() => setEarnedBasis(k)}
-                      className={`px-3 py-1 rounded-lg text-[11px] font-semibold transition-colors ${earnedBasis === k ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
-                      {label}
+                <div className="flex flex-wrap gap-1 p-1 rounded-xl w-fit" style={{ background: '#171717', border: '1px solid #262626' }}>
+                  {EARNED_BASES.map(b => (
+                    <button key={b.key} onClick={() => setEarnedBasis(b.key)}
+                      className={`px-3 py-1 rounded-lg text-[11px] font-semibold transition-colors ${earnedBasis === b.key ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
+                      {b.label}
                     </button>
                   ))}
                 </div>
 
-                {/* Summary cards */}
+                {/* Summary cards — every one names the active basis, so a
+                    number can never be read against the wrong date. */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3">
-                  <Card label="Rep Commission" value={fmt(earnedTotals.rep)} color="#00b894" sub="setter + closer" />
-                  <Card label="Override" value={fmt(earnedTotals.override)} color="#a78bfa" sub="manager · director · VP" />
-                  <Card label="Total Earned" value={fmt(earnedTotals.total)} color="#fdcb6e" sub={presetLabel(earnedPreset)} />
+                  <Card label="Rep Commission" value={fmt(earnedTotals.rep)} color="#00b894"
+                    sub={`setter + closer · by ${basisLabel(earnedBasis)}`} />
+                  <Card label="Override" value={fmt(earnedTotals.override)} color="#a78bfa"
+                    sub={`mgr · dir · VP · by ${basisLabel(earnedBasis)}`} />
+                  <Card label={`Total Earned — by ${basisLabel(earnedBasis)}`} value={fmt(earnedTotals.total)} color="#fdcb6e"
+                    sub={presetLabel(earnedPreset)} />
                   <Card label="Deal Count" value={String(earnedTotals.count)} color="#74b9ff"
-                    sub={earnedBasis === 'pay' ? 'by pay date' : 'by install date'} />
+                    sub={`by ${basisLabel(earnedBasis)}`} />
                 </div>
 
                 {/* Paid vs not-yet-paid split of Total Earned */}
@@ -684,17 +708,31 @@ export default function Commissions() {
                   <span className="text-[11px] text-white/25">of {fmt(earnedTotals.total)} earned</span>
                 </div>
 
-                {/* Detail table */}
+                {/* Detail table — header states the basis, and the column the
+                    rows are sorted/filtered on is highlighted. */}
+                <div className="flex items-baseline justify-between gap-3 flex-wrap pt-1">
+                  <span className="text-[11px] uppercase tracking-wider text-white/40 font-semibold">
+                    Detail — by {basisLabel(earnedBasis)}
+                  </span>
+                  <span className="text-[11px] text-white/25">newest first · {presetLabel(earnedPreset)}</span>
+                </div>
+
                 {earnedRows.length === 0 ? (
                   <div className="px-4 py-8 text-white/30 text-sm text-center">
-                    Nothing earned in this range.
+                    Nothing earned in this range by {basisLabel(earnedBasis)}.
                   </div>
                 ) : (
                   <div className="rounded-xl overflow-x-auto" style={{ border: '1px solid #2a2a2a' }}>
-                    <table className="w-full min-w-[820px]">
+                    <table className="w-full min-w-[920px]">
                       <thead>
                         <tr style={{ background: '#00b894' }}>
-                          {['Customer', 'Install Date', 'Pay Date', 'Setter', 'Closer'].map(h => (
+                          <th className="px-3 py-3 text-[11px] font-bold text-dark uppercase tracking-wider text-left whitespace-nowrap">Customer</th>
+                          {[['sale', 'Sale Date'], ['install', 'Install Date'], ['pay', 'Pay Date']].map(([k, h]) => (
+                            <th key={k} className="px-3 py-3 text-[11px] font-bold text-dark uppercase tracking-wider text-left whitespace-nowrap">
+                              {h}{earnedBasis === k ? ' ▾' : ''}
+                            </th>
+                          ))}
+                          {['Setter', 'Closer'].map(h => (
                             <th key={h} className="px-3 py-3 text-[11px] font-bold text-dark uppercase tracking-wider text-left whitespace-nowrap">{h}</th>
                           ))}
                           {['Rep $', 'Override $', 'Total $'].map(h => (
@@ -709,6 +747,9 @@ export default function Commissions() {
                           const color = statusColor(d.status)
                           const setterUser = users.find(u => u.id === d.setter_id)
                           const closerUser = users.find(u => u.id === d.closer_id)
+                          // The active basis column reads brighter than the others.
+                          const dateCls = (k) => `px-3 py-3 text-[12px] whitespace-nowrap ${
+                            earnedBasis === k ? 'text-white/85 font-semibold' : 'text-white/55'}`
                           return (
                             <tr key={d.id}
                               style={{ background: i % 2 === 0 ? '#242424' : '#262626' }}
@@ -716,12 +757,11 @@ export default function Commissions() {
                               <td className="px-3 py-3">
                                 <div className="text-[13px] font-semibold text-white truncate max-w-[220px]">{d.deal_name}</div>
                               </td>
-                              <td className="px-3 py-3 text-[12px] text-white/55 whitespace-nowrap">
-                                {fmtDay(d.install_date || d.sale_date) || '—'}
+                              <td className={dateCls('sale')}>{fmtDay(d.sale_date) || '—'}</td>
+                              <td className={dateCls('install')}>
+                                {fmtDay(earnedBasis === 'install' ? (d.install_date || d.sale_date) : d.install_date) || '—'}
                               </td>
-                              <td className="px-3 py-3 text-[12px] text-white/55 whitespace-nowrap">
-                                {fmtDay(d.pay_date) || '—'}
-                              </td>
+                              <td className={dateCls('pay')}>{fmtDay(d.pay_date) || '—'}</td>
                               <td className="px-3 py-3 text-[12px] text-white/55 whitespace-nowrap">{setterUser?.name || '—'}</td>
                               <td className="px-3 py-3 text-[12px] text-white/55 whitespace-nowrap">{closerUser?.name || '—'}</td>
                               <td className="px-3 py-3 text-[13px] text-right font-semibold text-white/85 whitespace-nowrap">{fmt(r.rep)}</td>
@@ -740,8 +780,8 @@ export default function Commissions() {
                       </tbody>
                       <tfoot>
                         <tr style={{ background: '#1b1b1b', borderTop: '1px solid #333' }}>
-                          <td className="px-3 py-3 text-[12px] font-semibold text-white/50 whitespace-nowrap" colSpan={5}>
-                            {earnedTotals.count} deal{earnedTotals.count === 1 ? '' : 's'}
+                          <td className="px-3 py-3 text-[12px] font-semibold text-white/50 whitespace-nowrap" colSpan={6}>
+                            {earnedTotals.count} deal{earnedTotals.count === 1 ? '' : 's'} · by {basisLabel(earnedBasis)}
                           </td>
                           <td className="px-3 py-3 text-[13px] text-right font-bold text-white/85 whitespace-nowrap">{fmt(earnedTotals.rep)}</td>
                           <td className="px-3 py-3 text-[13px] text-right font-bold text-white/85 whitespace-nowrap">{fmt(earnedTotals.override)}</td>
@@ -751,6 +791,14 @@ export default function Commissions() {
                       </tfoot>
                     </table>
                   </div>
+                )}
+
+                {/* Deals this basis can't place on the timeline at all. */}
+                {earnedMissingDates > 0 && (
+                  <p className="text-[11px] text-white/30">
+                    {earnedMissingDates} deal{earnedMissingDates === 1 ? '' : 's'} excluded
+                    {' '}(no {basisLabel(earnedBasis).toLowerCase()})
+                  </p>
                 )}
               </div>
             )}
