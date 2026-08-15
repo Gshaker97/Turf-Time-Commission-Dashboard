@@ -6,6 +6,8 @@ import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import { dealAmounts, getUserCommission, fmt, activeDeals, deductionLabel } from '../utils/commission'
+import { getPresetRange, presetLabel } from '../utils/dateRanges'
+import DateRangeFilter from '../components/DateRangeFilter'
 
 // LOCAL dates, never UTC — .toISOString() rolls to tomorrow at 5pm Arizona.
 const todayISO = () => format(new Date(), 'yyyy-MM-dd')
@@ -23,6 +25,11 @@ const ISSUE = 'Sales Issue'         // status that means the deal is in trouble
 const fmtDay = (iso) => iso ? format(new Date(iso + 'T12:00:00'), 'EEE, MMM d') : null
 const num = (v) => Number(v) || 0
 const pct = (n) => { const v = (Number(n) || 0) * 100; return (Number.isInteger(v) ? v : v.toFixed(2)) + '%' }
+
+// Roles that pay a rep directly vs. roles that pay an override on someone
+// else's deal. Used by the Earned tab to split a person's take.
+const REP_ROLES = ['Setter', 'Closer']
+const OVERRIDE_ROLES = ['Manager', 'Director', 'VP']
 
 function myParts(deal, id) {
   const a = dealAmounts(deal)
@@ -237,7 +244,7 @@ export default function Commissions() {
   const id = viewId || profile?.id
   const [paydayIdx, setPaydayIdx] = useState(0)
   const [payOpen, setPayOpen] = useState(false)
-  const [tab, setTab] = useState('owed')            // 'owed' | 'paid'
+  const [tab, setTab] = useState('owed')            // 'owed' | 'paid' | 'earned'
 
   const [allDeals, setAllDeals] = useState([])
   const [users, setUsers] = useState([])
@@ -385,6 +392,58 @@ export default function Commissions() {
     })
   }, [paidDeals, id])
 
+  // ── Earned ("what did I actually earn in this window") ────────
+  // Deliberately status-blind apart from Sales Issue: Scheduled, Pay Finalized
+  // and Paid all count, because this tab measures EARNINGS, not payment state.
+  // The Paid / Not-yet-paid split below is what surfaces payment state.
+  const [earnedBasis, setEarnedBasis] = useState('pay')      // 'pay' | 'install'
+  const [earnedFrom, setEarnedFrom]     = useState(getPresetRange('mtd').from)
+  const [earnedTo, setEarnedTo]         = useState(getPresetRange('mtd').to)
+  const [earnedPreset, setEarnedPreset] = useState('mtd')
+  function handleEarnedRangeChange({ from, to, preset }) {
+    setEarnedFrom(from); setEarnedTo(to); setEarnedPreset(preset)
+  }
+
+  // The date a deal is measured on under the active basis. Install basis falls
+  // back to sale_date so a sold-but-not-yet-scheduled deal still lands in a
+  // period instead of vanishing from the tab.
+  const earnedDateOf = (d) => earnedBasis === 'pay'
+    ? (d.pay_date || null)
+    : (d.install_date || d.sale_date || null)
+
+  const earnedRows = useMemo(() => {
+    const inRange = (dt) => {
+      if (!dt) return false
+      if (earnedFrom && dt < earnedFrom) return false
+      if (earnedTo   && dt > earnedTo)   return false
+      return true
+    }
+    return allMine
+      .filter(d => d.status !== ISSUE)
+      .map(d => ({ deal: d, date: earnedDateOf(d) }))
+      .filter(r => inRange(r.date))
+      .map(r => {
+        const parts = myParts(r.deal, id)
+        const sum = (roles) => parts.filter(p => roles.includes(p.role)).reduce((s, p) => s + p.amount, 0)
+        return {
+          ...r,
+          rep: sum(REP_ROLES),
+          override: sum(OVERRIDE_ROLES),
+          total: getUserCommission(r.deal, id),
+        }
+      })
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))   // newest first
+  }, [allMine, id, earnedBasis, earnedFrom, earnedTo])
+
+  const earnedTotals = useMemo(() => {
+    let rep = 0, override = 0, total = 0, paid = 0, unpaid = 0
+    for (const r of earnedRows) {
+      rep += r.rep; override += r.override; total += r.total
+      if (r.deal.status === PAID) paid += r.total; else unpaid += r.total
+    }
+    return { rep, override, total, paid, unpaid, count: earnedRows.length }
+  }, [earnedRows])
+
   // Permission tripwire: a plain rep must never see override $ (overrides are
   // siloed to the role-holder in myParts). If one ever does, it's a gating
   // regression — log it to client_errors so the Watchdog surfaces it.
@@ -528,10 +587,10 @@ export default function Commissions() {
               sub={`all time · ${fmt(paidTotals.mtd)} this month`} />
           </div>
 
-          {/* Owed / Paid deal lists */}
+          {/* Owed / Paid / Earned deal lists */}
           <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12, overflow: 'hidden' }}>
             <div className="px-4 py-2.5 border-b border-white/5 flex items-center justify-between gap-3 flex-wrap">
-              <div className="flex gap-1 p-1 rounded-xl" style={{ background: '#171717', border: '1px solid #262626' }}>
+              <div className="flex flex-wrap gap-1 p-1 rounded-xl" style={{ background: '#171717', border: '1px solid #262626' }}>
                 <button onClick={() => setTab('owed')}
                   className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors ${tab === 'owed' ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
                   To be paid ({pipelineDeals.length})
@@ -540,9 +599,17 @@ export default function Commissions() {
                   className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors ${tab === 'paid' ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
                   Paid ({paidDeals.length})
                 </button>
+                <button onClick={() => setTab('earned')}
+                  className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors ${tab === 'earned' ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
+                  Earned
+                </button>
               </div>
               <span className="text-[11px] text-white/30">
-                {tab === 'owed' ? 'grouped by pay week · tap a week' : 'grouped by pay date · tap a deal'}
+                {tab === 'owed'
+                  ? 'grouped by pay week · tap a week'
+                  : tab === 'paid'
+                    ? 'grouped by pay date · tap a deal'
+                    : `${earnedBasis === 'pay' ? 'by pay date' : 'by install date'} · ${presetLabel(earnedPreset)}`}
               </span>
             </div>
 
@@ -558,7 +625,7 @@ export default function Commissions() {
                   <PipelineWeekGroup key={week.key} week={week} id={id} users={users} statusColor={statusColor} />
                 ))
               )
-            ) : (
+            ) : tab === 'paid' ? (
               paidGroups.length === 0 ? (
                 <div className="px-4 py-8 text-white/30 text-sm text-center">Nothing paid out yet.</div>
               ) : (
@@ -577,6 +644,115 @@ export default function Commissions() {
                   </div>
                 ))
               )
+            ) : (
+              /* ── Earned ─────────────────────────────────────────── */
+              <div className="p-3 md:p-4 space-y-3">
+                {/* Date range — same shared filter every other page uses */}
+                <DateRangeFilter from={earnedFrom} to={earnedTo} preset={earnedPreset}
+                  onChange={handleEarnedRangeChange} />
+
+                {/* Date basis */}
+                <div className="flex gap-1 p-1 rounded-xl w-fit" style={{ background: '#171717', border: '1px solid #262626' }}>
+                  {[['pay', 'By Pay Date'], ['install', 'By Install Date']].map(([k, label]) => (
+                    <button key={k} onClick={() => setEarnedBasis(k)}
+                      className={`px-3 py-1 rounded-lg text-[11px] font-semibold transition-colors ${earnedBasis === k ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Summary cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3">
+                  <Card label="Rep Commission" value={fmt(earnedTotals.rep)} color="#00b894" sub="setter + closer" />
+                  <Card label="Override" value={fmt(earnedTotals.override)} color="#a78bfa" sub="manager · director · VP" />
+                  <Card label="Total Earned" value={fmt(earnedTotals.total)} color="#fdcb6e" sub={presetLabel(earnedPreset)} />
+                  <Card label="Deal Count" value={String(earnedTotals.count)} color="#74b9ff"
+                    sub={earnedBasis === 'pay' ? 'by pay date' : 'by install date'} />
+                </div>
+
+                {/* Paid vs not-yet-paid split of Total Earned */}
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-3 py-2 rounded-lg"
+                  style={{ background: '#171717', border: '1px solid #262626' }}>
+                  <span className="text-[11px] text-white/35">
+                    Already Paid
+                    <span className="text-[13px] font-bold ml-1.5" style={{ color: '#74b9ff' }}>{fmt(earnedTotals.paid)}</span>
+                  </span>
+                  <span className="text-[11px] text-white/35">
+                    Not Yet Paid
+                    <span className="text-[13px] font-bold ml-1.5" style={{ color: '#fdcb6e' }}>{fmt(earnedTotals.unpaid)}</span>
+                  </span>
+                  <span className="text-[11px] text-white/25">of {fmt(earnedTotals.total)} earned</span>
+                </div>
+
+                {/* Detail table */}
+                {earnedRows.length === 0 ? (
+                  <div className="px-4 py-8 text-white/30 text-sm text-center">
+                    Nothing earned in this range.
+                  </div>
+                ) : (
+                  <div className="rounded-xl overflow-x-auto" style={{ border: '1px solid #2a2a2a' }}>
+                    <table className="w-full min-w-[820px]">
+                      <thead>
+                        <tr style={{ background: '#00b894' }}>
+                          {['Customer', 'Install Date', 'Pay Date', 'Setter', 'Closer'].map(h => (
+                            <th key={h} className="px-3 py-3 text-[11px] font-bold text-dark uppercase tracking-wider text-left whitespace-nowrap">{h}</th>
+                          ))}
+                          {['Rep $', 'Override $', 'Total $'].map(h => (
+                            <th key={h} className="px-3 py-3 text-[11px] font-bold text-dark uppercase tracking-wider text-right whitespace-nowrap">{h}</th>
+                          ))}
+                          <th className="px-3 py-3 text-[11px] font-bold text-dark uppercase tracking-wider text-left whitespace-nowrap">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {earnedRows.map((r, i) => {
+                          const d = r.deal
+                          const color = statusColor(d.status)
+                          const setterUser = users.find(u => u.id === d.setter_id)
+                          const closerUser = users.find(u => u.id === d.closer_id)
+                          return (
+                            <tr key={d.id}
+                              style={{ background: i % 2 === 0 ? '#242424' : '#262626' }}
+                              className="hover:bg-white/[0.03] transition-colors">
+                              <td className="px-3 py-3">
+                                <div className="text-[13px] font-semibold text-white truncate max-w-[220px]">{d.deal_name}</div>
+                              </td>
+                              <td className="px-3 py-3 text-[12px] text-white/55 whitespace-nowrap">
+                                {fmtDay(d.install_date || d.sale_date) || '—'}
+                              </td>
+                              <td className="px-3 py-3 text-[12px] text-white/55 whitespace-nowrap">
+                                {fmtDay(d.pay_date) || '—'}
+                              </td>
+                              <td className="px-3 py-3 text-[12px] text-white/55 whitespace-nowrap">{setterUser?.name || '—'}</td>
+                              <td className="px-3 py-3 text-[12px] text-white/55 whitespace-nowrap">{closerUser?.name || '—'}</td>
+                              <td className="px-3 py-3 text-[13px] text-right font-semibold text-white/85 whitespace-nowrap">{fmt(r.rep)}</td>
+                              <td className="px-3 py-3 text-[13px] text-right font-semibold text-white/85 whitespace-nowrap">{fmt(r.override)}</td>
+                              <td className="px-3 py-3 text-[13px] text-right font-bold whitespace-nowrap"
+                                style={{ color: r.total < 0 ? '#f87171' : d.status === PAID ? '#74b9ff' : '#fff' }}>
+                                {fmt(r.total)}
+                              </td>
+                              <td className="px-3 py-3 whitespace-nowrap">
+                                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                                  style={{ color, border: `1px solid ${color}40` }}>{d.status}</span>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{ background: '#1b1b1b', borderTop: '1px solid #333' }}>
+                          <td className="px-3 py-3 text-[12px] font-semibold text-white/50 whitespace-nowrap" colSpan={5}>
+                            {earnedTotals.count} deal{earnedTotals.count === 1 ? '' : 's'}
+                          </td>
+                          <td className="px-3 py-3 text-[13px] text-right font-bold text-white/85 whitespace-nowrap">{fmt(earnedTotals.rep)}</td>
+                          <td className="px-3 py-3 text-[13px] text-right font-bold text-white/85 whitespace-nowrap">{fmt(earnedTotals.override)}</td>
+                          <td className="px-3 py-3 text-[13px] text-right font-bold text-teal whitespace-nowrap">{fmt(earnedTotals.total)}</td>
+                          <td className="px-3 py-3" />
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </>
