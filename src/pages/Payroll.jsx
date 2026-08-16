@@ -219,15 +219,12 @@ export default function Payroll() {
         note = deductionLabel(deal, a)
         if ((deal.deduction_paid_by || 'closer') === 'split' && a.deduction > ded + 0.005) {
           const shareFrac = ded / a.deduction
-          const otherId = role === 'Setter' ? deal.closer_id : deal.setter_id
-          const otherFull = (otherId && userById?.[otherId]?.name) || (role === 'Setter' ? deal.closer?.name : deal.setter?.name) || 'the other rep'
-          const other = otherFull.split(' ')[0]
           const pctStr = (v) => { const n = +v.toFixed(2); return (Number.isInteger(n) ? n : n) + '%' }
           if (a.dealerFee > 0 && !a.manualDeduction) {
             const feePct = (Number(deal.dealer_fee_pct) || 0) * 100
-            note = `Dealer fee: ${pctStr(feePct)} (split with ${other}, your ${pctStr(feePct * shareFrac)})`
+            note = `Dealer fee: ${pctStr(feePct)} (split), ${pctStr(feePct * shareFrac)}`
           } else {
-            note = `${note} (split with ${other}, your ${Math.round(shareFrac * 100)}%)`
+            note = `${note} (split), ${Math.round(shareFrac * 100)}%`
           }
         }
       }
