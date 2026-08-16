@@ -228,7 +228,11 @@ setup + deploy steps.
   select on the card; Overall/round chips pick the displayed race, defaulting
   to the active round; the modal has an "Auto-split into weeks" button).
   Finished comps auto-minimize into the collapsed "Past competitions" section
-  (compact strips: name/dates/winner, expandable to the full card). Do
+  (compact strips: name/dates/winner, expandable to the full card); `039`
+  lets a LOCKED run's deals still move their change-alert lifecycle — an
+  UPDATE whose only changed columns are `change_alert`/`synced_baseline`/
+  `synced_job_price` passes the guard (admin dismiss + sync stamping both
+  work on locked runs; the dismiss button also asks for confirmation). Do
   not re-run `001`/`002` against a populated database.
 
 ## Performance page (`src/pages/Performance.jsx`, manager+)
