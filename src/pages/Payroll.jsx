@@ -211,16 +211,24 @@ export default function Payroll() {
       p.total += amount
       const ded = roleDeduction(deal, role, a)
       // Deduction note: when the deduction is SPLIT between setter and closer,
-      // spell out this rep's share vs the other payer's — a rep reading their
-      // statement must never think they absorbed the whole thing.
+      // a short share breakdown — "Dealer fee: 6% (split with Jordan, your 3%)"
+      // — so a rep never reads the full fee as theirs. Single-payer keeps the
+      // standard label (they do pay it all).
       let note = ''
       if (ded > 0) {
         note = deductionLabel(deal, a)
         if ((deal.deduction_paid_by || 'closer') === 'split' && a.deduction > ded + 0.005) {
-          const share = Math.round((ded / a.deduction) * 100)
+          const shareFrac = ded / a.deduction
           const otherId = role === 'Setter' ? deal.closer_id : deal.setter_id
-          const otherName = (otherId && userById?.[otherId]?.name) || (role === 'Setter' ? deal.closer?.name : deal.setter?.name) || 'the other rep'
-          note = `your ${share}% share of the ${fmt(a.deduction)} total — ${note} — ${otherName} pays the other ${fmt(a.deduction - ded)}`
+          const otherFull = (otherId && userById?.[otherId]?.name) || (role === 'Setter' ? deal.closer?.name : deal.setter?.name) || 'the other rep'
+          const other = otherFull.split(' ')[0]
+          const pctStr = (v) => { const n = +v.toFixed(2); return (Number.isInteger(n) ? n : n) + '%' }
+          if (a.dealerFee > 0 && !a.manualDeduction) {
+            const feePct = (Number(deal.dealer_fee_pct) || 0) * 100
+            note = `Dealer fee: ${pctStr(feePct)} (split with ${other}, your ${pctStr(feePct * shareFrac)})`
+          } else {
+            note = `${note} (split with ${other}, your ${Math.round(shareFrac * 100)}%)`
+          }
         }
       }
       p.lines.push({
@@ -481,7 +489,7 @@ export default function Payroll() {
     const items = []
     for (const l of sorted) {
       items.push({ deal: l.deal, baseline: fmt(l.baseline || 0), role: roleLabel(l), pct: asPct(l.pct), amount: l.amount })
-      if (l.ded > 0) items.push({ deal: '', baseline: '', role: `Deduction${l.note ? ` (${l.note})` : ''}`, pct: '', amount: -l.ded, dim: true })
+      if (l.ded > 0) items.push({ deal: '', baseline: '', role: l.note || 'Deduction', pct: '', amount: -l.ded, dim: true })
     }
     for (const adj of p.adjustments) items.push({ deal: 'Adjustment', baseline: '', role: adj.note || '—', pct: '', amount: Number(adj.amount) })
     const text = `Pay statement — ${p.name} — ${viewLabel}\n\n`
