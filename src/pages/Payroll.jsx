@@ -61,12 +61,16 @@ function dealPayouts(d, userById = null) {
   // A share with truly NO person assigned still shows — as an amber
   // "Unassigned" line — instead of silently vanishing while the money stays
   // in the deal's Total commission (those deals also sit in Needs review).
-  const push = (person, role, amount) => {
+  const push = (person, role, amount, extra) => {
     if (amount === 0) return
-    if (person && person.id) out.push({ id: person.id, name: person.name, role, amount })
-    else out.push({ id: null, name: 'Unassigned', role, amount, unassigned: true })
+    if (person && person.id) out.push({ id: person.id, name: person.name, role, amount, ...extra })
+    else out.push({ id: null, name: 'Unassigned', role, amount, unassigned: true, ...extra })
   }
-  push(resolve(d.setter, d.setter_id), 'Setter', a.setter)
+  // A solo deal (setter closed their own) is flagged self-gen — exports label
+  // it "Self-Gen" instead of "Setter" (the role string itself stays 'Setter'
+  // because roleDeduction and the engine key off it).
+  const solo = !d.closer_id || d.setter_id === d.closer_id
+  push(resolve(d.setter, d.setter_id), 'Setter', a.setter, solo ? { selfGen: true } : undefined)
   if (d.closer_id !== d.setter_id) push(resolve(d.closer, d.closer_id), 'Closer', a.closer)
   push(resolve(d.manager, d.manager_id), 'Manager', a.manager)
   push(resolve(d.director, d.director_id), 'Director', a.director)
@@ -199,20 +203,33 @@ export default function Payroll() {
   const payees = useMemo(() => {
     const m = {}
     const ensure = (id, name) => (m[id] ||= { id, name, total: 0, lines: [], dealIds: new Set(), adjustments: [] })
-    const add = (person, role, amount, deal, a) => {
+    const add = (person, role, amount, deal, a, selfGen) => {
       // amount !== 0 (not > 0): a NEGATIVE take from a below-baseline deal must
       // dock the payee's total, or the payee rows overstate vs Total payout.
       if (!person || !person.id || !amount) return
       const p = ensure(person.id, person.name)
       p.total += amount
       const ded = roleDeduction(deal, role, a)
+      // Deduction note: when the deduction is SPLIT between setter and closer,
+      // spell out this rep's share vs the other payer's — a rep reading their
+      // statement must never think they absorbed the whole thing.
+      let note = ''
+      if (ded > 0) {
+        note = deductionLabel(deal, a)
+        if ((deal.deduction_paid_by || 'closer') === 'split' && a.deduction > ded + 0.005) {
+          const share = Math.round((ded / a.deduction) * 100)
+          const otherId = role === 'Setter' ? deal.closer_id : deal.setter_id
+          const otherName = (otherId && userById?.[otherId]?.name) || (role === 'Setter' ? deal.closer?.name : deal.setter?.name) || 'the other rep'
+          note = `your ${share}% share of the ${fmt(a.deduction)} total — ${note} — ${otherName} pays the other ${fmt(a.deduction - ded)}`
+        }
+      }
       p.lines.push({
-        deal: deal.deal_name, role, amount, baseline: a.baseline,
+        deal: deal.deal_name, role, amount, baseline: a.baseline, selfGen: !!selfGen,
         // setter/closer: % of baseline they net; mgmt: their override %
         // amount ÷ baseline for every role — for mgmt this is the EFFECTIVE
         // override rate (reflects override exclusions, e.g. 2.7% not 3%).
         pct: a.baseline > 0 ? amount / a.baseline : 0,
-        ded, note: ded > 0 ? deductionLabel(deal, a) : '',
+        ded, note,
       })
       p.dealIds.add(deal.id)
     }
@@ -222,7 +239,7 @@ export default function Payroll() {
       // Same id-based person resolution as the deal cards (joins can be
       // missing even when the ids are set); unassigned shares carry no payee.
       for (const p of dealPayouts(d, userById)) {
-        if (!p.unassigned) add(p, p.role, p.amount, d, a)
+        if (!p.unassigned) add(p, p.role, p.amount, d, a, p.selfGen)
       }
     }
     // Manual adjustments for this run — folded into each payee's total (a payee
@@ -422,8 +439,9 @@ export default function Payroll() {
       rows.push([d.deal_name || '—', a.baseline.toFixed(2), '', '', '', '', d.office || ''])
       for (const p of payouts) {
         const isRep = p.role === 'Setter' || p.role === 'Closer'
+        const roleCell = p.selfGen ? 'Self-Gen' : isRep ? p.role : 'Override'
         const pctRatio = a.baseline > 0 ? p.amount / a.baseline : 0   // effective rate (reflects exclusions)
-        rows.push(['', '', p.name, isRep ? p.role : 'Override', asPct(pctRatio), p.amount.toFixed(2), ''])
+        rows.push(['', '', p.name, roleCell, asPct(pctRatio), p.amount.toFixed(2), ''])
       }
       if (!repFilterId && a.deduction > 0)
         rows.push(['', '', '', 'Deduction (already in takes)', '', (-a.deduction).toFixed(2), deductionLabel(d, a)])
@@ -453,15 +471,16 @@ export default function Payroll() {
   // pastes into email/Sheets/Docs) plus a plain-text version. Admin only.
   async function copyPayee(p) {
     const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    const roleLabel = (r) => (r === 'Setter' || r === 'Closer') ? r : 'Override'
-    const ORDER = { Setter: 0, Closer: 1, Override: 2 }
+    // Self-gen deals (rep set AND closed it) read "Self-Gen", not "Setter".
+    const roleLabel = (l) => l.selfGen ? 'Self-Gen' : (l.role === 'Setter' || l.role === 'Closer') ? l.role : 'Override'
+    const ORDER = { 'Self-Gen': 0, Setter: 1, Closer: 2, Override: 3 }
     const sorted = [...p.lines].sort((a, b) =>
-      (ORDER[roleLabel(a.role)] ?? 9) - (ORDER[roleLabel(b.role)] ?? 9) || b.amount - a.amount)
+      (ORDER[roleLabel(a)] ?? 9) - (ORDER[roleLabel(b)] ?? 9) || b.amount - a.amount)
     // Flat rows: each pay line (with its % + $), a deduction sub-line where one
     // applied, then any manual adjustments. Net total is authoritative (p.total).
     const items = []
     for (const l of sorted) {
-      items.push({ deal: l.deal, baseline: fmt(l.baseline || 0), role: roleLabel(l.role), pct: asPct(l.pct), amount: l.amount })
+      items.push({ deal: l.deal, baseline: fmt(l.baseline || 0), role: roleLabel(l), pct: asPct(l.pct), amount: l.amount })
       if (l.ded > 0) items.push({ deal: '', baseline: '', role: `Deduction${l.note ? ` (${l.note})` : ''}`, pct: '', amount: -l.ded, dim: true })
     }
     for (const adj of p.adjustments) items.push({ deal: 'Adjustment', baseline: '', role: adj.note || '—', pct: '', amount: Number(adj.amount) })
