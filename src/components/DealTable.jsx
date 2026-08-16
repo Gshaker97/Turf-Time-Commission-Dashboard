@@ -370,7 +370,10 @@ function ChangeAlertTag({ deal, canEdit, onUpdate }) {
               Nothing on the deal was changed — if this re-sign is real, update the numbers yourself, then dismiss.
             </p>
             {canEdit && (
-              <button onClick={() => { onUpdate?.(deal.id, { change_alert: null }); setOpen(false) }}
+              <button onClick={() => {
+                  if (!confirm('Dismiss this change alert?\n\nMake sure the deal\'s numbers are right first — if the re-sign is real, apply the new figures before dismissing. This clears the ❗ for good (it only returns if the sheet changes again).')) return
+                  onUpdate?.(deal.id, { change_alert: null }); setOpen(false)
+                }}
                 className="mt-2 w-full py-1.5 rounded-lg text-[11px] font-bold text-dark transition-opacity hover:opacity-90"
                 style={{ background: '#f59e0b' }}>
                 Dismiss — reviewed
