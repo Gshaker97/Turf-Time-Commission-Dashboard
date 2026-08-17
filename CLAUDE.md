@@ -115,7 +115,7 @@ setup + deploy steps.
   `006_settings.sql`, then `007_backfill_pay_dates.sql`.** All idempotent. `004` adds the
   `deduction_amount` / `deduction_note` columns and re-applies the hardened RLS
   policies; `005` adds the `weekly_stats` table (estimates per rep per week)
-  behind the Team → Weekly Stats tab; `006` adds the `app_settings` table
+  (entered on the Performance page's weekly views); `006` adds the `app_settings` table
   (admin-editable statuses / payment methods / offices), the `payment_method`
   column on `deals`, and **drops the fixed `deals.status` CHECK** so statuses
   are admin-configurable; `007` is a one-time backfill of `deals.pay_date` from
@@ -232,7 +232,11 @@ setup + deploy steps.
   lets a LOCKED run's deals still move their change-alert lifecycle — an
   UPDATE whose only changed columns are `change_alert`/`synced_baseline`/
   `synced_job_price` passes the guard (admin dismiss + sync stamping both
-  work on locked runs; the dismiss button also asks for confirmation). Do
+  work on locked runs; the dismiss button also asks for confirmation); `040`
+  adds `personal_goals` (weekly + monthly commitments per rep — period
+  'week'|'month' + `period_start` Sunday/1st, `est_target` (SELF-GEN
+  estimates) / `deals_target` / `revenue_target`; RLS mirrors 024: anyone
+  reads, writes by admins, the rep, or their direct manager). Do
   not re-run `001`/`002` against a populated database.
 
 ## Records & big moments (`src/utils/records.js`)
@@ -256,8 +260,10 @@ per record+period in `tt_rec_dismissed` localStorage).
 ## Performance page (`src/pages/Performance.jsx`, manager+)
 
 Phase 1 of the Team-section overhaul (per Keaton; Phase 2 = custom saved
-reports, Phase 3 = Home "My Card"/"Team Card" toggle + Team page retirement —
-Team page untouched until then). Route `/performance`, guarded
+reports still open. The TEAM PAGE IS RETIRED — `/team` redirects to the
+Goals page, `src/pages/Team.jsx` + `WeeklyStats.jsx` are deleted; weekly
+estimates entry lives on this page's weekly views, comparison/KPIs live
+here, MVP/Recent Wins/coach notes retired outright). Route `/performance`, guarded
 manager/director/vp/admin. Engine in `src/utils/performance.js` (pure):
 `periodsFor` (week Sun–Sat / month / quarter / year buckets), `bucketize`
 (scoped metric aggregation), `resolveTarget`, `fmtMetric`. Scope =
@@ -396,20 +402,33 @@ data-mutation affordance is gated on `isAdmin`, NOT on sales title:
 When adding a new edit/mutate control, gate it on `isAdmin` — never on `role`.
 
 **GOALS are the one carve-out** (they're personal/team targets, not commission
-data): reps set their OWN personal goal, managers set their team's reps' goals
-AND their own team goal, admins set any. Goals are DB-backed in `rep_goals`
-(migration 024) and shared across devices/users — `fetchRepGoals`/`saveRepGoal`/
-`deleteRepGoal` in `db.js`, scoped to the current calendar month. On `Team.jsx`
-the per-rep card uses `canEditGoal = isAdmin || profile.id===rep.id ||
-rep.manager_id===profile.id`, and the team-goal pencil shows for `role==='manager'`;
-RLS in 024 enforces the same on the server. The Dashboard's goal is the
-company-wide revenue goal (separate `monthly_goals` table, admin-only).
-(Coach notes on the Team page are still per-browser localStorage — not yet shared.)
+data): reps set their OWN goals, managers set their team's reps' goals, admins
+set any. **The GOALS PAGE (`src/pages/Goals.jsx`, route `/goals`, all roles)
+REPLACED the Team page** (`/team` redirects; `Team.jsx` + `WeeklyStats.jsx`
+deleted; MVP/Recent Wins/coach notes retired). It's the commitment workspace:
+roster grouped by current team, each rep card = Week + Month blocks with three
+goals (SG Estimates — self-gen only, Deals, Revenue — owner-credited; leads
+ran/closed display alongside, never goaled), progress bars with pace status
+(done/ahead/behind vs elapsed fraction), an estimate-goal streak flame, a
+"No goals set" amber flag, and a goal-math helper (monthly revenue target →
+suggested weekly/monthly deals + estimates from the rep's own trailing
+3-month avg deal + close rate, "Use as targets" writes both rows). Engine =
+`src/utils/goals.js` (pure): `currentPeriods`/`resolveGoal` (a period with no
+row INHERITS the latest earlier row of the same period type — "carried"; any
+save materializes the full current-period row)/`repProduction`/
+`periodElapsed`/`metricProgress`/`suggestFromRevenue`/`estimateStreak`. Store
+= `personal_goals` (migration 040; `fetchPersonalGoals`/`upsertPersonalGoal`
+in db.js); saving a MONTHLY revenue goal also mirrors into `rep_goals` so the
+Performance page's rep-goal fallback stays in sync. The Home "My Card" shows
+a read-only "My goals" mirror (same engine) + a "Set goals →" link. Legacy
+`rep_goals` (024) remains for team-scope goals + Performance fallbacks. The
+Dashboard's goal is the company-wide revenue goal (separate `monthly_goals`
+table, admin-only).
 
 **Visibility (view scoping, NOT edit) by sales title:**
 - **Rep:** their own deals only (`role === 'rep'` filter in `Deals.jsx`); NEVER
-  any override amounts. Reps DO have Team-page access (to set their personal
-  goal and view the team), consistent with the company-wide Dashboard.
+  any override amounts. Reps DO have Goals-page access (to set their own
+  goals and see the roster), consistent with the company-wide Dashboard.
 - **Manager/Director/VP:** their deals + their team's deals, and their OWN
   override on the Commissions page. The Commissions page is siloed by identity
   (`myParts(deal, id)` only emits roles the viewer personally holds), so nobody
