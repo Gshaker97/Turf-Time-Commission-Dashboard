@@ -9,6 +9,7 @@ import { useSettings } from '../contexts/SettingsContext'
 import { fetchDeals, fetchUsers, fetchGoal, saveGoal as saveGoalDb, deleteGoal as deleteGoalDb, fetchTeamChanges } from '../lib/db'
 import { fmt, dealAmounts, activeDeals } from '../utils/commission'
 import { headIdSet, saleOwnerId, buildChangesByProfile, teamOfSale } from '../utils/team'
+import { buildRecordBook, periodEnd } from '../utils/records'
 import { getPresetRange, getPreviousRange } from '../utils/dateRanges'
 import DateRangeFilter from '../components/DateRangeFilter'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
@@ -87,7 +88,7 @@ function StatCard({ label, value, sub, trend, value2, valueLabel, value2Label })
 
 export default function Dashboard() {
   const { isAdmin } = useAuth()
-  const { settings, save: saveSettingCtx } = useSettings()
+  const { settings, save: saveSettingCtx, dataStartDate } = useSettings()
   // Setting the monthly revenue goal is a data change — admin-only.
   const canEditGoal = isAdmin
 
@@ -187,6 +188,51 @@ export default function Dashboard() {
     if (dateTo)   r = r.filter(d => d.sale_date <= dateTo)
     return r.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0) || 1
   }, [deals, dateFrom, dateTo])
+
+  // ── Record moments: banner when a company record breaks ──
+  // Fires while a record is being beaten in progress, and for up to 7 days
+  // after a completed period sets a new all-time best. Dismissals stick per
+  // record per period (localStorage).
+  const [dismissedRecs, setDismissedRecs] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('tt_rec_dismissed') || '[]')) } catch { return new Set() }
+  })
+  const dismissRec = (id) => {
+    setDismissedRecs(prev => {
+      const next = new Set(prev); next.add(id)
+      try { localStorage.setItem('tt_rec_dismissed', JSON.stringify([...next].slice(-40))) } catch { /* ignore */ }
+      return next
+    })
+  }
+  const recordMoments = useMemo(() => {
+    if (!deals.length) return []
+    const today = format(new Date(), 'yyyy-MM-dd')
+    const { company } = buildRecordBook(deals, { users, isAdmin, dataStartDate, todayISO: today })
+    const NAMES = {
+      revMonth: ['month', 'biggest month'], revWeek: ['week', 'biggest week'], revDay: ['day', 'biggest day'],
+      dealsMonth: ['month', 'most deals in a month'], dealsWeek: ['week', 'most deals in a week'], dealsDay: ['day', 'most deals in a day'],
+    }
+    const cutoff = new Date(today + 'T12:00:00'); cutoff.setDate(cutoff.getDate() - 7)
+    const cutISO = format(cutoff, 'yyyy-MM-dd')
+    const val = (key, v) => key.startsWith('deals') ? `${v} deals` : fmt(v)
+    const out = []
+    for (const [key, rec] of Object.entries(company)) {
+      const [grain, label] = NAMES[key]
+      // In-progress: the current period has already passed the all-time best.
+      if (rec.status === 'new' && rec.best) {
+        out.push({
+          id: `rec-${key}-${rec.current.key}`,
+          text: <>🔥 <b>NEW COMPANY RECORD in progress</b> — {label}: <b>{val(key, rec.current.value)}</b> and counting (previous best: {val(key, rec.best.value)}, {rec.best.label})</>,
+        })
+      // Recently completed: the reigning record was set within the last week.
+      } else if (rec.best && rec.prev && periodEnd(grain, rec.best.key) >= cutISO) {
+        out.push({
+          id: `rec-${key}-${rec.best.key}`,
+          text: <>🔥 <b>NEW COMPANY RECORD</b> — {label}: <b>{val(key, rec.best.value)}</b> ({rec.best.label}; previous: {val(key, rec.prev.value)})</>,
+        })
+      }
+    }
+    return out.filter(m => !dismissedRecs.has(m.id)).slice(0, 2)
+  }, [deals, users, isAdmin, dataStartDate, dismissedRecs])
 
   const monthlyGoal = useMemo(() => {
     const curKey = `${String(goalYear).padStart(4,'0')}-${String(goalMonth).padStart(2,'0')}`
@@ -472,6 +518,16 @@ export default function Dashboard() {
           {managers.map(m => <option key={m.id} value={m.id}>{m.name}'s Team</option>)}
         </select>
       </div>
+
+      {/* ── Record moments — a company record is falling (or just fell) ── */}
+      {recordMoments.map(m => (
+        <div key={m.id} className="flex items-center gap-3 rounded-xl px-4 py-3"
+          style={{ background: 'linear-gradient(90deg, rgba(251,191,36,0.12), rgba(251,191,36,0.03))', border: '1px solid rgba(251,191,36,0.45)' }}>
+          <p className="text-[13px] text-white/85 min-w-0">{m.text}</p>
+          <button onClick={() => dismissRec(m.id)} title="Dismiss"
+            className="ml-auto p-1 rounded text-white/40 hover:text-white flex-shrink-0"><X size={14} /></button>
+        </div>
+      ))}
 
       {/* ── KPI cards — 2-col on mobile, row on md+ ── */}
       <div className="grid grid-cols-2 gap-2 md:flex md:gap-3">

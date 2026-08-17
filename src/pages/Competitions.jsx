@@ -11,6 +11,8 @@ import {
 } from '../utils/competition'
 import { headIdSet, teamKeyFor, buildChangesByProfile } from '../utils/team'
 import { fmt } from '../utils/commission'
+import { buildRecordBook } from '../utils/records'
+import { useSettings } from '../contexts/SettingsContext'
 import CompetitionModal from '../components/CompetitionModal'
 
 // LOCAL date, never UTC — .toISOString() flips to tomorrow at 5pm Arizona,
@@ -346,6 +348,76 @@ function CompetitionExportCard({ comp, deals, users, ghostIds, teamCtx }) {
 
 const slugName = (s) => String(s || 'competition').replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '') || 'competition'
 
+// One record tile: value (gold = company, teal = rep), holder, when — plus a
+// live chip when the current period is chasing (watch) or beating (new) it.
+function RecordTile({ label, value, holder, when, teal, rec, metric }) {
+  const fmtVal = (v) => metric === 'deals' ? `${v} deal${v === 1 ? '' : 's'}` : fmt(v)
+  const chip = rec?.status === 'new'
+    ? `🔥 NEW RECORD — ${fmtVal(rec.current.value)} in progress`
+    : rec?.status === 'watch'
+      ? `🔥 RECORD WATCH — now ${fmtVal(rec.current.value)}`
+      : null
+  return (
+    <div className="rounded-lg p-3 relative" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
+      <p className="text-[8.5px] font-bold uppercase tracking-widest text-white/30 pr-2">{label}</p>
+      <p className="text-[18px] font-extrabold mt-1 leading-tight" style={{ color: teal ? '#00b894' : '#fbbf24' }}>
+        {value != null ? fmtVal(value) : '—'}
+      </p>
+      {holder && <p className="text-[11px] text-white/55 mt-0.5"><span className="font-semibold text-white/85">{holder}</span></p>}
+      {when && <p className="text-[10px] text-white/30 mt-0.5">{when}</p>}
+      {chip && (
+        <p className="text-[8.5px] font-extrabold tracking-wide mt-1.5 px-2 py-0.5 rounded-full inline-block"
+          style={{ color: '#fbbf24', border: '1px solid rgba(251,191,36,0.45)', background: 'rgba(251,191,36,0.08)' }}>
+          {chip}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// The all-time Record Book — company bests (with live record-watch) + rep
+// bests. Sits at the bottom of the page; visible to everyone.
+function RecordBook({ deals, users, isAdmin, dataStartDate }) {
+  const book = useMemo(
+    () => buildRecordBook(deals, { users, isAdmin, dataStartDate, todayISO: todayISO() }),
+    [deals, users, isAdmin, dataStartDate]
+  )
+  const c = book.company, r = book.reps
+  const hasAny = Object.values(c).some(x => x.best || x.current) || Object.values(r).some(Boolean)
+  if (!hasAny) return null
+  return (
+    <div className="mt-6 rounded-xl p-4 md:p-5" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+      <div className="flex items-baseline gap-2.5 flex-wrap">
+        <h2 className="text-[15px] font-extrabold text-white">📖 Record Book</h2>
+        <p className="text-[11px] text-white/35">All-time bests · completed periods only · since {dataStartDate ? format(new Date(dataStartDate + 'T12:00:00'), 'MMMM yyyy') : 'the beginning'}</p>
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-3">
+        <div>
+          <p className="text-[9px] font-bold uppercase tracking-widest text-white/30 mb-2">Company records</p>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5">
+            <RecordTile label="Biggest Month — Revenue" value={c.revMonth.best?.value} when={c.revMonth.best?.label} rec={c.revMonth} />
+            <RecordTile label="Biggest Week — Revenue"  value={c.revWeek.best?.value}  when={c.revWeek.best?.label}  rec={c.revWeek} />
+            <RecordTile label="Biggest Day — Revenue"   value={c.revDay.best?.value}   when={c.revDay.best?.label}   rec={c.revDay} />
+            <RecordTile label="Most Deals — Month" metric="deals" value={c.dealsMonth.best?.value} when={c.dealsMonth.best?.label} rec={c.dealsMonth} />
+            <RecordTile label="Most Deals — Week"  metric="deals" value={c.dealsWeek.best?.value}  when={c.dealsWeek.best?.label}  rec={c.dealsWeek} />
+            <RecordTile label="Most Deals — Day"   metric="deals" value={c.dealsDay.best?.value}   when={c.dealsDay.best?.label}   rec={c.dealsDay} />
+          </div>
+        </div>
+        <div>
+          <p className="text-[9px] font-bold uppercase tracking-widest text-white/30 mb-2">Rep records</p>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5">
+            <RecordTile teal label="Biggest Rep Month" value={r.revMonth?.value} holder={r.revMonth?.holderName} when={r.revMonth?.label} />
+            <RecordTile teal label="Biggest Rep Week"  value={r.revWeek?.value}  holder={r.revWeek?.holderName}  when={r.revWeek?.label} />
+            <RecordTile teal label="Biggest Single Deal" value={r.biggestDeal?.value} holder={r.biggestDeal?.holderName} when={r.biggestDeal?.when} />
+            <RecordTile teal label="Most Deals — Rep Month" metric="deals" value={r.dealsMonth?.value} holder={r.dealsMonth?.holderName} when={r.dealsMonth?.label} />
+            <RecordTile teal label="Most Deals — Rep Week"  metric="deals" value={r.dealsWeek?.value}  holder={r.dealsWeek?.holderName}  when={r.dealsWeek?.label} />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // A finished competition, minimized: one compact strip (name · dates · winner)
 // that expands to the full card for reference.
 function PastCompRow(props) {
@@ -381,6 +453,7 @@ function PastCompRow(props) {
 
 export default function Competitions() {
   const { profile, isAdmin } = useAuth()
+  const { dataStartDate } = useSettings()
   // Everyone can VIEW competitions/standings; only admins create/edit/delete.
   const canManage = isAdmin
   const [comps, setComps] = useState([])
@@ -578,6 +651,9 @@ export default function Competitions() {
           )}
         </>
       )}
+
+      {/* All-time Record Book — company + rep bests, visible to everyone. */}
+      {!loading && <RecordBook deals={deals} users={users} isAdmin={isAdmin} dataStartDate={dataStartDate} />}
 
       {/* Off-screen render used only to snapshot a competition to a PNG. */}
       {exportComp && (
