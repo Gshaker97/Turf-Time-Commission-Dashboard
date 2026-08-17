@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { format } from 'date-fns'
-import { Target, Flame, AlertTriangle } from 'lucide-react'
+import { Target, Flame, Pencil, Check } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchDeals, fetchUsers, fetchWeeklyStats, fetchPersonalGoals, upsertPersonalGoal, saveRepGoal } from '../lib/db'
 import { fmt } from '../utils/commission'
@@ -15,38 +15,42 @@ const todayISO = () => format(new Date(), 'yyyy-MM-dd')
 const PALETTE = ['#00b894', '#74b9ff', '#a78bfa', '#fbbf24', '#fb923c', '#f87171', '#34d399', '#60a5fa']
 const STATUS_COLOR = { done: '#4ade80', ahead: '#00b894', behind: '#fbbf24' }
 
-// One metric row: label, goal (input when editable), progress bar + pace.
-function MetricRow({ label, value, prog, editable, inputValue, onSave, money, inputKey }) {
-  const color = prog ? STATUS_COLOR[prog.status] : '#6b7280'
+// One metric line. View mode: "value / goal" over a slim bar, pace shown as a
+// small colored word. Edit mode: the goal number becomes an input in place.
+function MetricRow({ label, value, prog, editing, inputValue, onSave, money, inputKey }) {
+  const color = prog ? STATUS_COLOR[prog.status] : 'rgba(255,255,255,0.14)'
   const fmtV = (v) => money ? fmt(v) : String(v)
+  const pace = !prog ? null
+    : prog.status === 'done' ? '✓ hit'
+    : prog.status === 'ahead' ? 'on pace'
+    : money ? `−${fmt(prog.gap)}` : `−${Math.ceil(prog.gap)}`
   return (
-    <div className="py-1.5">
-      <div className="flex items-center gap-2 text-[12px]">
-        <span className="w-[86px] flex-shrink-0 text-white/45">{label}</span>
-        <span className="font-bold text-white num">{money ? fmt(value) : value}</span>
-        <span className="text-white/25">/</span>
-        {editable ? (
-          <input type="number" min="0" step={money ? 'any' : 1} key={inputKey}
-            defaultValue={inputValue ?? ''}
-            placeholder="—"
-            onBlur={e => onSave(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }}
-            className="w-[76px] rounded px-1.5 py-0.5 text-[12px] font-semibold text-teal text-center focus:outline-none"
-            style={{ background: '#1a1a1a', border: '1px solid rgba(0,184,148,0.35)' }} />
-        ) : (
-          <span className="text-white/55 font-semibold">{inputValue != null ? fmtV(inputValue) : '—'}</span>
-        )}
+    <div className="py-[7px]">
+      <div className="flex items-baseline gap-2 text-[12px] leading-none">
+        <span className="text-white/40">{label}</span>
         {prog && (
-          <span className="ml-auto text-[10px] font-semibold whitespace-nowrap" style={{ color }}>
-            {prog.status === 'done' ? '✓ hit' : prog.status === 'ahead' ? 'on pace' : `behind${money ? ` ${fmt(prog.gap)}` : ` by ${Math.ceil(prog.gap)}`}`}
-          </span>
+          <span className="text-[10px] font-semibold" style={{ color }} title={prog.status === 'behind' ? 'behind pace' : undefined}>{pace}</span>
         )}
+        <span className="ml-auto whitespace-nowrap">
+          <span className="font-bold text-white">{money ? fmt(value) : value}</span>
+          {editing ? (
+            <>
+              <span className="text-white/25 mx-1">/</span>
+              <input type="number" min="0" step={money ? 'any' : 1} key={inputKey}
+                defaultValue={inputValue ?? ''} placeholder="goal"
+                onBlur={e => onSave(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                className="w-[70px] rounded-md px-1.5 py-0.5 text-[12px] font-semibold text-teal text-right focus:outline-none"
+                style={{ background: '#1a1a1a', border: '1px solid rgba(0,184,148,0.4)' }} />
+            </>
+          ) : (
+            <span className="text-white/35"> / {inputValue != null ? fmtV(inputValue) : '—'}</span>
+          )}
+        </span>
       </div>
-      {prog && (
-        <div className="h-1 rounded-full overflow-hidden mt-1" style={{ background: '#1a1a1a' }}>
-          <div className="h-full rounded-full transition-all" style={{ width: `${prog.frac * 100}%`, background: color }} />
-        </div>
-      )}
+      <div className="h-[5px] rounded-full overflow-hidden mt-1.5" style={{ background: 'rgba(255,255,255,0.06)' }}>
+        <div className="h-full rounded-full transition-all duration-500" style={{ width: `${(prog?.frac ?? 0) * 100}%`, background: color }} />
+      </div>
     </div>
   )
 }
@@ -145,6 +149,7 @@ export default function Goals() {
 
   function RepCard({ rep }) {
     const editable = canEditRep(rep)
+    const [editing, setEditing] = useState(false)
     const wGoal = resolveGoal(goals, rep.id, 'week', periods.week.start)
     const mGoal = resolveGoal(goals, rep.id, 'month', periods.month.start)
     const wProd = repProduction(deals, weeklyStats, rep.id, periods.week)
@@ -153,63 +158,70 @@ export default function Goals() {
     const mEl = periodElapsed(periods.month, today)
     const streak = estimateStreak(goals, deals, weeklyStats, rep.id, today)
     const noGoals = !goalIsSet(wGoal) && !goalIsSet(mGoal)
-    const sug = editable && mGoal?.revenue_target > 0
+    const sug = editing && mGoal?.revenue_target > 0
       ? suggestFromRevenue(deals, weeklyStats, rep.id, Number(mGoal.revenue_target), today) : null
 
     const block = (title, p, prod, goal, elapsed, periodKey) => (
-      <div className="rounded-lg p-3 flex-1 min-w-0" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
-        <div className="flex items-baseline justify-between gap-2">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-white/40">{title}</p>
-          <p className="text-[10px] text-white/25">{p.sub}{goal?.carried ? ' · carried' : ''}</p>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-baseline justify-between gap-2 mb-0.5">
+          <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-white/35">{title}</p>
+          <p className="text-[9px] text-white/20">{goal?.carried ? 'carried · ' : ''}{p.sub}</p>
         </div>
-        <MetricRow label="SG Estimates" value={prod.sgEst}
+        <MetricRow label="SG Est" value={prod.sgEst}
           prog={metricProgress(prod.sgEst, goal?.est_target, elapsed)}
-          editable={editable} inputValue={goal?.est_target}
+          editing={editing} inputValue={goal?.est_target}
           inputKey={`${rep.id}-${periodKey}-est-${goal?.est_target ?? ''}`}
           onSave={v => saveGoalField(rep, periodKey, 'est_target', v)} />
         <MetricRow label="Deals" value={prod.deals}
           prog={metricProgress(prod.deals, goal?.deals_target, elapsed)}
-          editable={editable} inputValue={goal?.deals_target}
+          editing={editing} inputValue={goal?.deals_target}
           inputKey={`${rep.id}-${periodKey}-deals-${goal?.deals_target ?? ''}`}
           onSave={v => saveGoalField(rep, periodKey, 'deals_target', v)} />
         <MetricRow label="Revenue" money value={prod.revenue}
           prog={metricProgress(prod.revenue, goal?.revenue_target, elapsed)}
-          editable={editable} inputValue={goal?.revenue_target}
+          editing={editing} inputValue={goal?.revenue_target}
           inputKey={`${rep.id}-${periodKey}-rev-${goal?.revenue_target ?? ''}`}
           onSave={v => saveGoalField(rep, periodKey, 'revenue_target', v)} />
-        <p className="text-[10px] text-white/30 mt-1.5">
+        <p className="text-[10px] text-white/25 mt-1">
           Leads: {prod.leadsRan} ran · {prod.leadsClosed} closed{prod.leadRevenue > 0 ? ` (${fmt(prod.leadRevenue)})` : ''}
         </p>
       </div>
     )
 
     return (
-      <div className="rounded-xl p-3.5" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-        <div className="flex items-center gap-2 mb-2">
-          <p className="text-[13px] font-bold text-white truncate">{rep.name}</p>
+      <div className="rounded-xl px-4 py-3.5 transition-colors"
+        style={{ background: '#1e1e1e', border: editing ? '1px solid rgba(0,184,148,0.45)' : '1px solid #282828' }}>
+        <div className="flex items-center gap-2 mb-2.5">
+          <p className="text-[13px] font-semibold text-white truncate">{rep.name}</p>
           {streak > 1 && (
-            <span className="flex items-center gap-1 text-[10px] font-bold text-amber-300 whitespace-nowrap"
+            <span className="flex items-center gap-0.5 text-[10px] font-bold text-amber-300 whitespace-nowrap"
               title={`${streak} straight weeks hitting the estimate goal`}>
-              <Flame size={11} /> {streak}-week streak
+              <Flame size={11} /> {streak}
             </span>
           )}
-          {noGoals && (
-            <span className="flex items-center gap-1 text-[10px] font-semibold text-amber-400/90 ml-auto whitespace-nowrap">
-              <AlertTriangle size={11} /> No goals set
-            </span>
+          {noGoals && !editing && (
+            <span className="text-[10px] font-semibold text-amber-400/80 whitespace-nowrap">· no goals set</span>
+          )}
+          {editable && (
+            <button onClick={() => setEditing(e => !e)}
+              title={editing ? 'Done editing' : 'Edit goals'}
+              className={`ml-auto p-1.5 rounded-lg transition-colors ${editing ? 'text-teal bg-teal/10' : 'text-white/25 hover:text-teal hover:bg-teal/10'}`}>
+              {editing ? <Check size={13} /> : <Pencil size={12} />}
+            </button>
           )}
         </div>
-        <div className="flex flex-col sm:flex-row gap-2.5">
+        <div className="flex flex-col sm:flex-row gap-x-7 gap-y-3">
           {block('Week', periods.week, wProd, wGoal, wEl, 'week')}
+          <div className="hidden sm:block w-px self-stretch" style={{ background: '#2a2a2a' }} />
           {block('Month', periods.month, mProd, mGoal, mEl, 'month')}
         </div>
         {sug && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 rounded-lg px-3 py-2 text-[11px]"
-            style={{ background: 'rgba(0,184,148,0.06)', border: '1px solid rgba(0,184,148,0.25)' }}>
-            <span className="text-white/55">
-              {fmt(Number(mGoal.revenue_target))}/mo ≈ <b className="text-white/85">{sug.month.deals} deals</b> · <b className="text-white/85">{sug.month.est} estimates</b>
-              <span className="text-white/30"> (their avg {fmt(sug.avgDeal)} · {Math.round(sug.closeRate * 100)}% close)</span>
-              {' '}→ <b className="text-white/85">{sug.week.est} est / {sug.week.deals} deals</b> a week
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mt-3 rounded-lg px-3 py-2 text-[11px]"
+            style={{ background: 'rgba(0,184,148,0.06)', border: '1px solid rgba(0,184,148,0.22)' }}>
+            <span className="text-white/50">
+              {fmt(Number(mGoal.revenue_target))}/mo ≈ <b className="text-white/80">{sug.month.deals} deals · {sug.month.est} est</b>
+              <span className="text-white/30"> ({Math.round(sug.closeRate * 100)}% close · {fmt(sug.avgDeal)} avg)</span>
+              {' '}→ <b className="text-white/80">{sug.week.est} est / wk</b>
             </span>
             <button onClick={() => applySuggestion(rep, sug, mGoal)}
               className="ml-auto px-2.5 py-1 rounded-lg text-[11px] font-bold text-dark bg-teal hover:opacity-90 whitespace-nowrap">
