@@ -3,7 +3,9 @@ import { Link } from "react-router-dom";
 import { startOfWeek, endOfWeek, addDays, format as dfFormat } from "date-fns";
 import { Trophy, TrendingUp, Award, Target, ClipboardList, Percent, DollarSign, Wallet, Layers, Flame, Clock, Share2, Check, X } from "lucide-react";
 import { fetchDeals, fetchCompetitions, fetchUsers, fetchWeeklyStats } from "../lib/db";
-import { getUserCommission, isCanceled } from "../utils/commission";
+import { getUserCommission, isCanceled, fmt } from "../utils/commission";
+import { personalBests } from "../utils/records";
+import { useSettings } from "../contexts/SettingsContext";
 import { useAuth } from "../contexts/AuthContext";
 import { competitionStandings, competitionStatus, fmtScore } from "../utils/competition";
 
@@ -62,6 +64,14 @@ export default function Home() {
 
   const mr = months[selected];
   const me = viewId || profile?.id;
+  const { dataStartDate } = useSettings();
+
+  // Personal bests (owner-credited, completed periods) + how close the
+  // current month is to the rep's best — the "beat yourself" nudge.
+  const bests = useMemo(() => {
+    if (!me || !allDeals.length) return null;
+    return personalBests(allDeals, me, { dataStartDate, todayISO: dfFormat(new Date(), "yyyy-MM-dd") });
+  }, [allDeals, me, dataStartDate]);
   const viewUser = useMemo(() => users.find(u => u.id === me) || profile, [users, me, profile]);
   const viewingOther = !!viewId && viewId !== profile?.id;
 
@@ -423,6 +433,43 @@ export default function Home() {
         <StatTile icon={Wallet}     label="Commission" value={money(stats.commission)} sub="your total earnings · tap" color="#34d399" onClick={() => toggleDrill("commission")} />
         <StatTile icon={TrendingUp} label="Avg Deal"   value={money(stats.avgDeal)} sub="per self-gen deal · tap" color="#fff" onClick={() => toggleDrill("avgDeal")} />
       </div>
+
+      {/* Personal bests — all-time, owner-credited, completed periods only */}
+      {bests && (bests.bestMonth.best || bests.biggestDeal) && (<>
+        <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold mb-2">Personal bests</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mb-2">
+          {[
+            { label: "Best Month", v: bests.bestMonth.best ? fmt(bests.bestMonth.best.value) : "—", sub: bests.bestMonth.best?.label },
+            { label: "Best Week", v: bests.bestWeek.best ? fmt(bests.bestWeek.best.value) : "—", sub: bests.bestWeek.best?.label },
+            { label: "Most Deals / Mo", v: bests.mostDealsMonth.best ? String(bests.mostDealsMonth.best.value) : "—", sub: bests.mostDealsMonth.best?.label },
+            { label: "Biggest Deal", v: bests.biggestDeal ? fmt(bests.biggestDeal.value) : "—", sub: bests.biggestDeal?.when },
+          ].map(t => (
+            <div key={t.label} className="rounded-xl p-3" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
+              <p className="text-[9px] uppercase tracking-widest text-white/30 font-semibold">{t.label}</p>
+              <p className="text-[16px] md:text-[18px] font-bold mt-1" style={{ color: "#fbbf24" }}>{t.v}</p>
+              {t.sub && <p className="text-[10px] text-white/30 mt-0.5">{t.sub}</p>}
+            </div>
+          ))}
+        </div>
+        {(() => {
+          const bm = bests.bestMonth;
+          if (!bm.best || !bm.current || bm.current.value <= 0) return null;
+          const gap = bm.best.value - bm.current.value;
+          if (gap <= 0) return (
+            <div className="flex items-center gap-2 rounded-xl px-3.5 py-2.5 mb-3 text-[12px]"
+              style={{ background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.3)", color: "#fde68a" }}>
+              <Flame size={14} /> <span><b>{fmt(bm.current.value)} this month</b> — a new personal best, and the month isn't over.</span>
+            </div>
+          );
+          if (bm.current.value >= bm.best.value * 0.8) return (
+            <div className="flex items-center gap-2 rounded-xl px-3.5 py-2.5 mb-3 text-[12px]"
+              style={{ background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.3)", color: "#fde68a" }}>
+              <Flame size={14} /> <span><b>{fmt(bm.current.value)} this month</b> — {fmt(gap)} away from your best month ever.</span>
+            </div>
+          );
+          return null;
+        })()}
+      </>)}
 
       {/* Stat drill-down — inline, subtle */}
       {drill && drillData && (

@@ -235,6 +235,24 @@ setup + deploy steps.
   work on locked runs; the dismiss button also asks for confirmation). Do
   not re-run `001`/`002` against a populated database.
 
+## Records & big moments (`src/utils/records.js`)
+
+All-time bests computed straight from deals — no storage, no manual entry.
+`buildRecordBook(deals, { users, isAdmin, dataStartDate, todayISO })` →
+company records (biggest revenue month/week/day + most deals month/week/day)
+and rep records (biggest rep month/week, most deals rep month/week, biggest
+single deal — owner-credited via `saleOwnerId`, ghost holders admin-only);
+`personalBests(deals, repId, …)` → one rep's own bests. Records come from
+COMPLETED periods only; the current period rides along as `status: 'watch'`
+(≥85% of best) or `'new'` (beating it). Canceled excluded; sale dates before
+`dataStartDate` excluded. Surfaces: **Competitions page** bottom = the
+"📖 Record Book" card (company tiles gold, rep tiles teal, live watch/new
+chips); **Home card** = "Personal bests" tile row + a flame nudge when the
+current month is within 80% of (or beating) the rep's best; **Dashboard** =
+gold record-moment banners (in-progress records + records set in the last 7
+days, `prev` required so a first-ever period never banners; dismissals stick
+per record+period in `tt_rec_dismissed` localStorage).
+
 ## Performance page (`src/pages/Performance.jsx`, manager+)
 
 Phase 1 of the Team-section overhaul (per Keaton; Phase 2 = custom saved
