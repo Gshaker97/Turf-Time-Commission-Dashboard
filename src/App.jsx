@@ -31,7 +31,7 @@ function lazyWithReload(factory) {
 const Deals       = lazyWithReload(() => import('./pages/Deals'))
 const Dashboard   = lazyWithReload(() => import('./pages/Dashboard'))
 const Commissions = lazyWithReload(() => import('./pages/Commissions'))
-const Team        = lazyWithReload(() => import('./pages/Team'))
+const Goals       = lazyWithReload(() => import('./pages/Goals'))
 const Admin       = lazyWithReload(() => import('./pages/Admin'))
 const Home        = lazyWithReload(() => import('./pages/Home'))
 const Payroll     = lazyWithReload(() => import('./pages/Payroll'))
@@ -80,8 +80,10 @@ function AppRoutes() {
         {/* Requires Audit: Keaton or admin only — the page self-guards by identity
             (Keaton is a VP, not an admin), so no role-based Guard here. */}
         <Route path="audit"       element={<RequiresAudit />} />
-        <Route path="team"  element={
-          <Guard roles={['rep','manager','director','vp','admin']}><Team /></Guard>
+        {/* The Team page retired into Goals (workspace) + Performance (analysis). */}
+        <Route path="team"  element={<Navigate to="/goals" replace />} />
+        <Route path="goals" element={
+          <Guard roles={['rep','manager','director','vp','admin']}><Goals /></Guard>
         } />
         <Route path="performance" element={
           <Guard roles={['manager','director','vp','admin']}><Performance /></Guard>

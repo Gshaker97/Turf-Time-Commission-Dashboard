@@ -2,8 +2,8 @@ import { Suspense } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, BarChart2, DollarSign,
-  Users2, ShieldCheck, Eye, X,
-  Home, Wallet, Trophy, Upload, ScanSearch, Gauge,
+  ShieldCheck, Eye, X,
+  Home, Wallet, Trophy, Upload, ScanSearch, Gauge, Target,
 } from 'lucide-react'
 import NavBar from './NavBar'
 import Notices from './Notices'
@@ -16,7 +16,7 @@ const NAV = [
   { to: '/deals',       icon: BarChart2,       label: 'Deals',       short: 'Deals',   roles: ['rep','manager','director','vp','admin'] },
   { to: '/commissions', icon: DollarSign,      label: 'Commissions', short: 'Pay',     roles: ['rep','manager','director','vp','admin'] },
   { to: '/competitions',icon: Trophy,          label: 'Competitions',short: 'Comps',   roles: ['rep','manager','director','vp','admin'] },
-  { to: '/team',        icon: Users2,          label: 'Team',        short: 'Team',    roles: ['rep','manager','director','vp','admin'] },
+  { to: '/goals',       icon: Target,          label: 'Goals',       short: 'Goals',   roles: ['rep','manager','director','vp','admin'] },
   { to: '/performance', icon: Gauge,           label: 'Performance', short: 'Perf',    roles: ['manager','director','vp','admin'] },
   { to: '/payroll',     icon: Wallet,          label: 'Payroll',     short: 'Payroll', roles: ['vp','admin'] },
   { to: '/import',      icon: Upload,          label: 'Import',      short: 'Import',  roles: ['vp','admin'] },

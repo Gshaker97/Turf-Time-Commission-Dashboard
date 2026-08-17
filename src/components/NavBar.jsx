@@ -10,7 +10,7 @@ const TITLES = {
   '/deals':       'Deals Pipeline',
   '/dashboard':   'Dashboard',
   '/commissions': 'Commissions',
-  '/team':        'Team',
+  '/goals':       'Goals',
   '/performance': 'Performance',
   '/admin':       'Admin Panel',
   '/audit':       'Requires Audit',

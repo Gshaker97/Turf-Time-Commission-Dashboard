@@ -498,6 +498,28 @@ export async function deleteRepGoal(subjectId, scope, year, month) {
     .eq('subject_id', subjectId).eq('scope', scope).eq('year', year).eq('month', month)
 }
 
+// ── Personal goals (weekly + monthly per rep, migration 040) ──
+let _personalGoals = []   // demo store
+
+export async function fetchPersonalGoals() {
+  if (DEMO_MODE) return { data: _personalGoals.map(g => ({ ...g })), error: null }
+  return supabase.from('personal_goals').select('*')
+    .order('period_start', { ascending: false }).limit(2000)
+}
+
+export async function upsertPersonalGoal({ rep_id, period, period_start, est_target, deals_target, revenue_target }, profileId) {
+  const row = { rep_id, period, period_start, est_target, deals_target, revenue_target }
+  if (DEMO_MODE) {
+    _personalGoals = [
+      ..._personalGoals.filter(g => !(g.rep_id === rep_id && g.period === period && g.period_start === period_start)),
+      { ...row, id: 'pg-' + Date.now() },
+    ]
+    return { error: null }
+  }
+  return supabase.from('personal_goals')
+    .upsert({ ...row, updated_by: profileId }, { onConflict: 'rep_id,period,period_start' })
+}
+
 // ── Payroll adjustments (per-rep, per-pay-date +/- $, see migration 027) ──
 let _payrollAdjustments = []   // demo store
 

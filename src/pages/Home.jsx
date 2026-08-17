@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { startOfWeek, endOfWeek, addDays, format as dfFormat } from "date-fns";
 import { Trophy, TrendingUp, Award, Target, ClipboardList, Percent, DollarSign, Wallet, Layers, Flame, Clock, Share2, Check, X } from "lucide-react";
-import { fetchDeals, fetchCompetitions, fetchUsers, fetchWeeklyStats } from "../lib/db";
+import { fetchDeals, fetchCompetitions, fetchUsers, fetchWeeklyStats, fetchPersonalGoals } from "../lib/db";
+import { currentPeriods, resolveGoal, goalIsSet, repProduction, periodElapsed, metricProgress, estimateStreak } from "../utils/goals";
 import { getUserCommission, isCanceled, fmt } from "../utils/commission";
 import { personalBests } from "../utils/records";
 import { useSettings } from "../contexts/SettingsContext";
@@ -75,11 +76,13 @@ export default function Home() {
   const viewUser = useMemo(() => users.find(u => u.id === me) || profile, [users, me, profile]);
   const viewingOther = !!viewId && viewId !== profile?.id;
 
+  const [personalGoals, setPersonalGoals] = useState([]);
   useEffect(() => {
-    Promise.all([fetchDeals(), fetchCompetitions(), fetchUsers(), fetchWeeklyStats()])
-      .then(([{ data: d }, { data: c }, { data: u }, { data: w }]) => {
+    Promise.all([fetchDeals(), fetchCompetitions(), fetchUsers(), fetchWeeklyStats(), fetchPersonalGoals()])
+      .then(([{ data: d }, { data: c }, { data: u }, { data: w }, { data: pg }]) => {
         setAllDeals((d ?? []).filter(x => !isCanceled(x)));
         setComps(c || []); setUsers(u || []); setWeekly(w || []);
+        setPersonalGoals(pg || []);
         setLoading(false);
       });
   }, []);
@@ -433,6 +436,74 @@ export default function Home() {
         <StatTile icon={Wallet}     label="Commission" value={money(stats.commission)} sub="your total earnings · tap" color="#34d399" onClick={() => toggleDrill("commission")} />
         <StatTile icon={TrendingUp} label="Avg Deal"   value={money(stats.avgDeal)} sub="per self-gen deal · tap" color="#fff" onClick={() => toggleDrill("avgDeal")} />
       </div>
+
+      {/* My Goals — mirror of the Goals page (edit there; this stays current) */}
+      {(() => {
+        const today = dfFormat(new Date(), "yyyy-MM-dd");
+        const periods = currentPeriods(today);
+        const wGoal = resolveGoal(personalGoals, me, "week", periods.week.start);
+        const mGoal = resolveGoal(personalGoals, me, "month", periods.month.start);
+        const streak = estimateStreak(personalGoals, allDeals, weekly, me, today);
+        const bar = (label, value, prog, money) => {
+          if (!prog) return null;
+          const color = prog.status === "done" ? "#4ade80" : prog.status === "ahead" ? "#00b894" : "#fbbf24";
+          return (
+            <div key={label} className="py-1">
+              <div className="flex items-center gap-2 text-[11.5px]">
+                <span className="w-[84px] flex-shrink-0 text-white/45">{label}</span>
+                <span className="font-bold text-white">{money ? fmt(value) : value}</span>
+                <span className="text-white/25">/ {money ? fmt(prog.target) : prog.target}</span>
+                <span className="ml-auto text-[10px] font-semibold" style={{ color }}>
+                  {prog.status === "done" ? "✓ hit" : prog.status === "ahead" ? "on pace" : `behind${money ? ` ${fmt(prog.gap)}` : ` by ${Math.ceil(prog.gap)}`}`}
+                </span>
+              </div>
+              <div className="h-1 rounded-full overflow-hidden mt-0.5" style={{ background: "#1a1a1a" }}>
+                <div className="h-full rounded-full" style={{ width: `${prog.frac * 100}%`, background: color }} />
+              </div>
+            </div>
+          );
+        };
+        const blockFor = (title, p, goal) => {
+          const prod = repProduction(allDeals, weekly, me, p);
+          const el = periodElapsed(p, today);
+          const rows = [
+            bar("SG Estimates", prod.sgEst, metricProgress(prod.sgEst, goal?.est_target, el)),
+            bar("Deals", prod.deals, metricProgress(prod.deals, goal?.deals_target, el)),
+            bar("Revenue", prod.revenue, metricProgress(prod.revenue, goal?.revenue_target, el), true),
+          ].filter(Boolean);
+          return (
+            <div className="rounded-xl p-3 flex-1 min-w-0" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
+              <div className="flex items-baseline justify-between">
+                <p className="text-[9px] uppercase tracking-widest text-white/30 font-semibold">{title}</p>
+                <p className="text-[9px] text-white/25">{p.sub}</p>
+              </div>
+              {rows.length ? <div className="mt-1">{rows}</div> : (
+                <p className="text-[11px] text-white/30 mt-2">No goals set yet.</p>
+              )}
+              <p className="text-[10px] text-white/30 mt-1">Leads: {prod.leadsRan} ran · {prod.leadsClosed} closed</p>
+            </div>
+          );
+        };
+        return (
+          <>
+            <div className="flex items-center gap-2 mb-2">
+              <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold">My goals</p>
+              {streak > 1 && (
+                <span className="flex items-center gap-1 text-[10px] font-bold text-amber-300">
+                  <Flame size={10} /> {streak}-week estimate streak
+                </span>
+              )}
+              <Link to="/goals" className="ml-auto text-[10px] text-teal hover:underline">
+                {goalIsSet(wGoal) || goalIsSet(mGoal) ? "Manage on Goals →" : "Set goals →"}
+              </Link>
+            </div>
+            <div className="flex flex-col md:flex-row gap-2 md:gap-3 mb-3">
+              {blockFor("This Week", periods.week, wGoal)}
+              {blockFor("This Month", periods.month, mGoal)}
+            </div>
+          </>
+        );
+      })()}
 
       {/* Personal bests — all-time, owner-credited, completed periods only */}
       {bests && (bests.bestMonth.best || bests.biggestDeal) && (<>
