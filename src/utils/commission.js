@@ -169,8 +169,11 @@ export const calcDealCommissions = (deal) => {
     managerAmt:  r.manager,
     directorAmt: r.director,
     vpAmt:       r.vp,
-    // commission as a % of the deal's job price
-    commPct:     r.job > 0 ? r.totalCommission / r.job : 0,
+    // Rep commission as a % of BASELINE — the house convention ("rep priced
+    // in 30%" means repPool ÷ baseline). Was totalCommission ÷ job price,
+    // which silently folded overrides in and read ~3pts high in the DealModal
+    // preview vs every other Comm % on the site.
+    commPct:     r.baseline > 0 ? r.repCommission / r.baseline : 0,
   }
 }
 
