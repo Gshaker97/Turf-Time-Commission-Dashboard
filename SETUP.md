@@ -184,6 +184,33 @@ Redeploy Kong after saving.
 
 ---
 
+## Email (invites & password resets)
+
+The site's invite flow ("email the new user, they set their own password") and
+the login page's "Forgot password?" both send email THROUGH THE AUTH SERVICE
+(GoTrue), which needs an SMTP provider configured once:
+
+1. Create a free account at an SMTP provider — **Resend** (resend.com) is the
+   recommended one. Verify your sending domain (e.g. `turftimeaz.com`) by
+   adding the DNS records Resend shows you, then create an API key.
+2. In Railway, open the Supabase **Auth** (GoTrue) service → **Variables** and
+   add:
+   - `GOTRUE_SMTP_HOST` = `smtp.resend.com`
+   - `GOTRUE_SMTP_PORT` = `587`
+   - `GOTRUE_SMTP_USER` = `resend`
+   - `GOTRUE_SMTP_PASS` = *(the Resend API key)*
+   - `GOTRUE_SMTP_ADMIN_EMAIL` = `no-reply@yourdomain.com`
+   - `GOTRUE_SMTP_SENDER_NAME` = `Turf Time Dashboard`
+   - `GOTRUE_SITE_URL` = *(the site's public URL)*
+   - `GOTRUE_URI_ALLOW_LIST` = `<site url>/set-password`
+3. Redeploy the Auth service.
+
+Then on **Admin → Users**, the key button offers "email an invite" (the user
+gets a link to `/set-password` and chooses their own password), password
+resets can go by email, and the login page's "Forgot password?" works. Until
+SMTP is configured, those actions return a clear error and the manual
+temporary-password flow keeps working as the fallback.
+
 ## Adding new users later
 
 When a new rep joins:

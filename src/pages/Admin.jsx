@@ -190,10 +190,21 @@ export default function Admin() {
   const [busyUser, setBusyUser] = useState('')   // user id mid-action
   const hasUserAdmin = userAdminConfigured()
 
-  // Create the Supabase login for a roster member (no more Studio).
+  // Create the Supabase login for a roster member. Preferred path: EMAIL them
+  // an invite so they set their own password (needs SMTP on the auth service);
+  // fallback: admin sets a temporary password by hand.
   async function createLogin(u) {
-    if (!confirm(`Create a login for ${u.name} (${u.email})? They'll get a temporary password to change on first sign-in.`)) return
+    const viaEmail = confirm(
+      `Create ${u.name}'s login?\n\nOK — EMAIL AN INVITE to ${u.email} so they choose their own password (recommended).\nCancel — set a temporary password by hand instead.`)
     setBusyUser(u.id)
+    if (viaEmail) {
+      const r = await userAdmin('invite', { email: u.email })
+      setBusyUser('')
+      if (!r.ok) return toast.error('Invite failed: ' + (r.error || 'unknown error'))
+      loadAll()
+      toast.success(`Invite emailed to ${u.email} — they'll set their own password from the link.`)
+      return
+    }
     const r = await userAdmin('create_login', { email: u.email })
     setBusyUser('')
     if (!r.ok) return toast.error('Could not create login: ' + (r.error || 'unknown error'))
@@ -201,10 +212,19 @@ export default function Admin() {
     window.prompt(`Login created for ${u.name}. Copy their temporary password and share it securely:`, r.password || '')
   }
 
-  // Set a new temporary password for a user.
+  // Reset a user's password. Preferred: email them a reset link; fallback:
+  // set a new temporary password by hand.
   async function resetLogin(u) {
-    if (!confirm(`Reset ${u.name}'s password to a new temporary one?`)) return
+    const viaEmail = confirm(
+      `Reset ${u.name}'s password?\n\nOK — EMAIL a reset link to ${u.email} so they choose a new password (recommended).\nCancel — set a temporary password by hand instead.`)
     setBusyUser(u.id)
+    if (viaEmail) {
+      const r = await userAdmin('send_reset', { email: u.email })
+      setBusyUser('')
+      if (!r.ok) return toast.error('Could not send the reset email: ' + (r.error || 'unknown error'))
+      toast.success(`Password-reset email sent to ${u.email}.`)
+      return
+    }
     const r = await userAdmin('reset_password', { email: u.email })
     setBusyUser('')
     if (!r.ok) return toast.error('Could not reset password: ' + (r.error || 'unknown error'))

@@ -39,6 +39,7 @@ const Competitions = lazyWithReload(() => import('./pages/Competitions'))
 const ImportDeals = lazyWithReload(() => import('./pages/ImportDeals'))
 const RequiresAudit = lazyWithReload(() => import('./pages/RequiresAudit'))
 const Performance = lazyWithReload(() => import('./pages/Performance'))
+const SetPassword = lazyWithReload(() => import('./pages/SetPassword'))
 
 function Spinner() {
   return (
@@ -68,6 +69,9 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/dashboard" replace /> : <Login />} />
+      {/* Invite + password-reset email links land here (tokens in the URL
+          hash sign the user in; the page then sets their chosen password). */}
+      <Route path="/set-password" element={<SetPassword />} />
       <Route path="/" element={<Guard><Layout /></Guard>}>
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="deals"       element={<Deals />} />

@@ -389,7 +389,7 @@ export async function userAdmin(action, payload = {}) {
     const resp = await fetch('/api/user-admin', {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action, token: session.access_token, ...payload }),
+      body: JSON.stringify({ action, token: session.access_token, origin: window.location.origin, ...payload }),
     })
     return await resp.json()
   } catch (e) {
@@ -496,6 +496,23 @@ export async function deleteRepGoal(subjectId, scope, year, month) {
   }
   return supabase.from('rep_goals').delete()
     .eq('subject_id', subjectId).eq('scope', scope).eq('year', year).eq('month', month)
+}
+
+// ── Self-serve auth flows (invite / forgot password) ──────────
+// "Forgot password" on the login page — GoTrue emails a reset link that lands
+// on /set-password (needs SMTP configured on the auth service).
+export async function sendPasswordReset(email) {
+  if (DEMO_MODE) return { error: { message: 'Password reset is disabled in demo mode.' } }
+  return supabase.auth.resetPasswordForEmail(String(email).trim(), {
+    redirectTo: window.location.origin + '/set-password',
+  })
+}
+
+// Set the signed-in user's own password (the /set-password page, reached from
+// an invite or reset email link).
+export async function updateOwnPassword(password) {
+  if (DEMO_MODE) return { error: { message: 'Disabled in demo mode.' } }
+  return supabase.auth.updateUser({ password })
 }
 
 // ── Personal goals (weekly + monthly per rep, migration 040) ──
