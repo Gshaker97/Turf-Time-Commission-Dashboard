@@ -138,6 +138,64 @@ async function setActive(target, active) {
   return ok({ active: !!active })
 }
 
+// Password-reset email (GoTrue /recover) — the link lands on /set-password.
+async function recoverEmail(email, redirectTo) {
+  const qs = redirectTo ? `?redirect_to=${encodeURIComponent(redirectTo)}` : ''
+  const resp = await fetch(`${SUPABASE_URL}/auth/v1/recover${qs}`, {
+    method: 'POST', headers: jsonHeaders,
+    body: JSON.stringify({ email }),
+  })
+  if (!resp.ok) {
+    const t = (await resp.text()).slice(0, 300)
+    const hint = /smtp|mail|sending|dial|connect/i.test(t)
+      ? ' Email sending is not configured on the auth service yet (SMTP) — see SETUP.md, or set a password manually instead.'
+      : ''
+    return err(`Could not send the email: ${t}${hint}`)
+  }
+  return ok({ sent: true })
+}
+
+// Email an INVITE: GoTrue creates the auth user and emails them a link to set
+// their own password (lands on /set-password). Links the profile with the
+// same verify step as createLogin. Self-healing: if an auth user already
+// exists for this email (half-created login), adopt it and send a
+// password-reset email instead — same end result for the user.
+async function inviteUser(target, redirectTo) {
+  if (target.auth_id) return err(`${target.name} already has a login — send them a password-reset email instead.`)
+  const qs = redirectTo ? `?redirect_to=${encodeURIComponent(redirectTo)}` : ''
+  const resp = await fetch(`${SUPABASE_URL}/auth/v1/invite${qs}`, {
+    method: 'POST', headers: jsonHeaders,
+    body: JSON.stringify({ email: target.email }),
+  })
+  let authUser = null
+  if (resp.ok) {
+    authUser = await resp.json()
+  } else {
+    const t = (await resp.text()).slice(0, 300)
+    const existing = await findAuthUser(target.email)
+    if (!existing) {
+      const hint = /smtp|mail|sending|dial|connect/i.test(t)
+        ? ' Email sending is not configured on the auth service yet (SMTP) — see SETUP.md, or use "set a password manually".'
+        : ''
+      return err(`Invite failed: ${t}${hint}`)
+    }
+    authUser = existing   // adopt the half-created login, then email a reset link
+  }
+  await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${target.id}`, {
+    method: 'PATCH', headers: { ...jsonHeaders, Prefer: 'return=minimal' },
+    body: JSON.stringify({ auth_id: authUser.id }),
+  })
+  const check = await restGet(`/rest/v1/profiles?select=auth_id&id=eq.${target.id}`)
+  if (check[0]?.auth_id !== authUser.id) {
+    return err('The invite went out but the profile would not link to the login — run migration 032 (guard service bypass) and try again.')
+  }
+  if (!resp.ok) {
+    const rec = await recoverEmail(target.email, redirectTo)
+    if (!rec.ok) return rec
+  }
+  return ok({ invited: true, email: target.email })
+}
+
 async function handleUserAdmin(rawBody) {
   if (!SUPABASE_URL || !SERVICE_KEY) {
     return err('User admin is not configured — set the SUPABASE_SERVICE_KEY variable on the site\'s Railway service and redeploy.')
@@ -165,9 +223,19 @@ async function handleUserAdmin(rawBody) {
   const target = (await restGet(`/rest/v1/profiles?select=id,email,auth_id,name&email=eq.${encodeURIComponent(email)}`))[0]
   if (!target) return err('No roster profile with that email — add the user first')
 
+  // Where invite / reset emails should land — the site's own origin (sent by
+  // the frontend; GoTrue's redirect allow-list is the real gate).
+  const redirectTo = typeof body.origin === 'string' && /^https?:\/\/[^\s]+$/.test(body.origin)
+    ? body.origin.replace(/\/+$/, '') + '/set-password'
+    : null
+
   switch (body.action) {
     case 'create_login':   return createLogin(target, body.password)
     case 'reset_password': return resetPassword(target, body.password)
+    case 'invite':         return inviteUser(target, redirectTo)
+    case 'send_reset':     return target.auth_id
+      ? recoverEmail(target.email, redirectTo)
+      : err(`${target.name} has no login yet — send an invite instead.`)
     case 'change_email':   return changeEmail(target, body.newEmail)
     case 'set_active':     return setActive(target, body.active)
     default:               return err('Unknown action')

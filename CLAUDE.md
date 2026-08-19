@@ -339,6 +339,21 @@ alert, their deals still count in org totals + rep scope.
   password of their choice and it's set via
   `userAdmin('reset_password'|'create_login', { email, password })` (creates the
   login if none yet), so admins manage known passwords directly.
+- **Invite flow (preferred) vs manual passwords.** The Admin → Users key
+  button offers two paths: EMAIL AN INVITE (server `invite` action → GoTrue
+  `/auth/v1/invite` — creates+links the auth user, emails a link landing on
+  `/set-password` where the user picks their own password; self-heals
+  half-created logins by adopting + sending a recovery email) or the legacy
+  manual temporary password. Password resets likewise: `send_reset` (GoTrue
+  `/recover` email) or manual. The login page has "Forgot password?"
+  (`sendPasswordReset` in db.js → same `/set-password` landing).
+  `/set-password` (`src/pages/SetPassword.jsx`) reads the hash-token session
+  and calls `supabase.auth.updateUser`. ALL email paths require SMTP
+  configured on the GoTrue service (see SETUP.md "Email" section — Resend +
+  `GOTRUE_SMTP_*` vars + `GOTRUE_URI_ALLOW_LIST` including `/set-password`);
+  until then they return a clear error and manual passwords remain the
+  fallback. The frontend passes `window.location.origin` so redirect links
+  always target the calling site.
 - **Email = login, always.** Changing a user's email (Edit modal or the
   password flow) goes through `userAdmin('change_email', { email, newEmail })`
   — the server updates the GoTrue login FIRST, then mirrors `profiles.email`,
