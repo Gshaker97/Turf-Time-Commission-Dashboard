@@ -5,6 +5,7 @@ import { fetchDeals, fetchUsers, updateDeal, fetchPayrollAdjustments, addPayroll
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import { dealAmounts, fmt, activeDeals, deductionLabel } from '../utils/commission'
+import { onClickUnlessSelecting } from '../utils/selection'
 import DealModal from '../components/DealModal'
 import { toast } from '../lib/toast'
 
@@ -109,7 +110,17 @@ export default function Payroll() {
   const [modal, setModal]     = useState(false)
   const [showPayees, setShowPayees] = useState(true)
   const [tab, setTab] = useState('run')   // 'run' | 'deductions'
-  const [runStyle, setRunStyle] = useState('list')   // 'list' (compact) | 'cards' (full payouts)
+  // Deals render as one list; a row expands IN PLACE to its full payout card.
+  const [expanded, setExpanded] = useState(() => new Set())
+  const toggleExpanded = (id) => setExpanded(s => {
+    const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n
+  })
+  // Same idea on the payee summary: click a person to see the deals behind
+  // their lump sum.
+  const [openPayees, setOpenPayees] = useState(() => new Set())
+  const togglePayee = (id) => setOpenPayees(s => {
+    const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n
+  })
   const [repFilter, setRepFilter] = useState('')
   const [adjFor, setAdjFor] = useState('')            // payee id whose adjustment editor is open
   const [adjAmt, setAdjAmt] = useState('')
@@ -381,6 +392,13 @@ export default function Payroll() {
     return { total, paid, remaining: allPaid ? 0 : total - paid, pending, pendingCount, finalizedCount, adjTotal,
              count: shownDeals.length, paidCount, payees: shownPayees.length }
   })()
+
+  // Advancing a deal collapses it — you've dealt with it, so the run reads
+  // top-to-bottom as you work. Re-click the row to open it again.
+  function approveAndCollapse(id, status = APPROVED) {
+    setExpanded(s => { const n = new Set(s); n.delete(id); return n })
+    setStatus(id, status)
+  }
 
   async function setStatus(id, status) {
     const deal = deals.find(d => d.id === id)
@@ -789,10 +807,16 @@ export default function Payroll() {
                   {shownPayees.map(p => (
                     <div key={p.id} className="py-1 border-t border-white/5">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-[13px] text-white/80 truncate mr-1">
-                          {p.name}
-                          <span className="text-white/30 text-[11px]"> · {p.dealIds.size} deal{p.dealIds.size === 1 ? '' : 's'}</span>
-                        </span>
+                        <button onClick={onClickUnlessSelecting(() => togglePayee(p.id))}
+                          className="flex items-center gap-1 text-[13px] text-white/80 truncate mr-1 text-left min-w-0 hover:text-white transition-colors"
+                          title="Show the deals in this payout">
+                          <ChevronDown size={12}
+                            className={`text-white/25 flex-shrink-0 transition-transform ${openPayees.has(p.id) ? 'rotate-180' : ''}`} />
+                          <span className="truncate">
+                            {p.name}
+                            <span className="text-white/30 text-[11px]"> · {p.dealIds.size} deal{p.dealIds.size === 1 ? '' : 's'}</span>
+                          </span>
+                        </button>
                         <span className="flex items-center gap-1.5 flex-shrink-0">
                           <span className="text-[13px] font-semibold text-white whitespace-nowrap">{fmt(p.total)}</span>
                           {isAdmin && view !== 'overdue' && !runLock && (
@@ -808,6 +832,30 @@ export default function Payroll() {
                           )}
                         </span>
                       </div>
+                      {/* Expanded — every deal feeding this person's payout,
+                          with the role they earned it in and any deduction. */}
+                      {openPayees.has(p.id) && (
+                        p.lines.length === 0 ? (
+                          <p className="text-[11px] text-white/30 pl-4 mt-0.5">Adjustments only — no deals on this run.</p>
+                        ) : (
+                          <div className="pl-4 mt-1 mb-1 rounded-lg overflow-hidden" style={{ background: '#171717', border: '1px solid #262626' }}>
+                            {p.lines.map((l, i) => (
+                              <div key={i} className="px-2.5 py-1.5 border-b border-white/5 last:border-0">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-[11.5px] text-white/70 truncate">
+                                    {l.deal}
+                                    <span className="text-white/30"> · {l.selfGen ? 'Self-Gen' : l.role}</span>
+                                  </span>
+                                  <span className="text-[11.5px] font-semibold text-white whitespace-nowrap">{fmt(l.amount)}</span>
+                                </div>
+                                {l.ded > 0 && (
+                                  <p className="text-[10px] text-red-400/80 truncate">− {l.note || 'deduction'} · {fmt(l.ded)}</p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )
+                      )}
                       {p.adjustments.map(a => (
                         <div key={a.id} className="flex items-center justify-between gap-2 pl-3 mt-0.5">
                           <span className="text-[11px] text-white/40 truncate">↳ adjustment{a.note ? ` · ${a.note}` : ''}</span>
@@ -843,45 +891,52 @@ export default function Payroll() {
             </div>
           )}
 
-          {/* Deals in this run — compact list by default; cards show payouts inline */}
+          {/* Deals in this run — ONE list. A row expands in place to the full
+              payout card; the deal NAME still opens the editor. Approving a
+              deal collapses it again so the run works top-to-bottom. */}
           <div className="flex items-center justify-between mb-2">
             <p className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">Deals in this run</p>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
               <span className="text-[11px] text-white/30">{shownDeals.length} deal{shownDeals.length === 1 ? '' : 's'}</span>
-              <div className="flex rounded-lg overflow-hidden text-[10px] font-semibold" style={{ border: '1px solid #2a2a2a' }}>
-                {[['list', 'List'], ['cards', 'Cards']].map(([k, label]) => (
-                  <button key={k} onClick={() => setRunStyle(k)} className="px-2 py-1 transition-colors"
-                    style={runStyle === k ? { background: '#00b894', color: '#0b0b0b' } : { background: '#1e1e1e', color: 'rgba(255,255,255,0.5)' }}>
-                    {label}
-                  </button>
-                ))}
-              </div>
+              {shownDeals.length > 0 && (
+                <button
+                  onClick={() => setExpanded(expanded.size ? new Set() : new Set(shownDeals.map(d => d.id)))}
+                  className="text-[11px] font-semibold text-white/40 hover:text-teal transition-colors">
+                  {expanded.size ? 'Collapse all' : 'Expand all'}
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Compact list — one row per deal, everything actionable inline */}
-          {runStyle === 'list' && (
-            <div className="rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-              {shownDeals.map(d => {
-                const a = dealAmounts(d)
-                const color = statusColor(d.status)
-                const isPaid = d.status === PAID
-                const dealLocked = isRunLocked(d.pay_date)
-                return (
-                  <div key={d.id} className="flex items-center gap-2.5 px-3 md:px-4 py-2 border-b border-white/5 last:border-0 hover:bg-white/[0.02] transition-colors">
+          <div className="rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+            {shownDeals.map(d => {
+              const a = dealAmounts(d)
+              const color = statusColor(d.status)
+              const isPaid = d.status === PAID
+              const dealLocked = isRunLocked(d.pay_date)
+              const isOpen = expanded.has(d.id)
+              const payouts = isOpen ? dealPayouts(d, userById) : []
+              return (
+                <div key={d.id} className="border-b border-white/5 last:border-0">
+                  {/* Row — click anywhere (except the name/actions) to expand */}
+                  <div onClick={onClickUnlessSelecting(() => toggleExpanded(d.id))}
+                    className="flex items-center gap-2.5 px-3 md:px-4 py-2 hover:bg-white/[0.02] transition-colors cursor-pointer"
+                    style={isOpen ? { background: 'rgba(255,255,255,0.02)' } : undefined}>
+                    <ChevronDown size={13}
+                      className={`text-white/25 flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
                     <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} title={d.status} />
-                    <button onClick={() => openEdit(d)}
+                    <button onClick={e => { e.stopPropagation(); openEdit(d) }}
                       className="text-[13px] font-semibold text-white truncate text-left hover:text-teal transition-colors min-w-0 flex-1"
-                      title="Click to edit this deal">
+                      title="Click the name to edit this deal">
                       {d.deal_name}
                     </button>
                     {d.commission_verified === true && <BadgeCheck size={13} className="flex-shrink-0" style={{ color: '#fbbf24' }} title="Commission verified" />}
                     <span className="hidden sm:block text-[11px] flex-shrink-0" style={{ color }}>{d.status}</span>
                     <span className="text-[13px] font-bold text-teal flex-shrink-0 w-[88px] text-right">{fmt(a.totalCommission)}</span>
-                    <div className="flex items-center gap-1 flex-shrink-0">
+                    <div className="flex items-center gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
                       {dealLocked && <Lock size={13} className="text-white/30" title={`The ${fmtDay(d.pay_date)} pay run is locked`} />}
                       {canApprove && !dealLocked && !isPaid && d.status !== APPROVED && (
-                        <button onClick={() => setStatus(d.id, APPROVED)} title={`Move to ${APPROVED}`}
+                        <button onClick={() => approveAndCollapse(d.id)} title={`Move to ${APPROVED}`}
                           className="px-2 py-1 rounded-lg text-[10px] font-semibold text-white/60 hover:text-white transition-colors"
                           style={{ border: '1px solid #3a3a3a' }}>
                           Approve
@@ -890,118 +945,69 @@ export default function Payroll() {
                       {canPay && (isPaid ? (
                         <span className="flex items-center text-teal px-1" title="Paid"><CheckCircle2 size={14} /></span>
                       ) : (!dealLocked || d.status === APPROVED) && (
-                        <button onClick={() => setStatus(d.id, PAID)} title="Mark paid"
+                        <button onClick={() => approveAndCollapse(d.id, PAID)} title="Mark paid"
                           className="px-2 py-1 rounded-lg text-[10px] font-bold text-dark transition-colors" style={{ background: '#00b894' }}>
                           Paid
                         </button>
                       ))}
                     </div>
                   </div>
-                )
-              })}
-              {shownDeals.length === 0 && (
-                <div className="px-4 py-6 text-white/30 text-sm text-center">
-                  {effFilter ? 'No deals for this rep in this run.' : 'No deals in this run.'}
-                </div>
-              )}
-            </div>
-          )}
 
-          {runStyle === 'cards' && (
-          <div className="space-y-2">
-            {shownDeals.map(d => {
-              const a = dealAmounts(d)
-              const color = statusColor(d.status)
-              const isPaid = d.status === PAID
-              const dealLocked = isRunLocked(d.pay_date)
-              const payouts = dealPayouts(d, userById)
-              return (
-                <div key={d.id} className="rounded-xl p-3 md:p-4" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <button onClick={() => openEdit(d)}
-                        className="text-[14px] font-semibold text-white truncate text-left hover:text-teal transition-colors" title="Click to edit this deal">
-                        {d.deal_name}
-                      </button>
-                      <p className="text-[11px] text-white/40">{[d.office, d.payment_method].filter(Boolean).join(' · ') || '—'}</p>
-                    </div>
-                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0"
-                      style={{ color, border: `1px solid ${color}40` }}>{d.status}</span>
-                  </div>
+                  {/* Expanded — the full payout card, inline */}
+                  {isOpen && (
+                    <div className="px-3 md:px-4 pb-3 pt-1">
+                      <p className="text-[11px] text-white/40 mb-2">{[d.office, d.payment_method].filter(Boolean).join(' · ') || 'No office / payment set'}</p>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-4 gap-y-2 mt-3 text-[12px]">
-                    <div><p className="text-white/30 text-[10px] uppercase">Sold</p><p className="text-white/80">{fmtDay(d.sale_date) || '—'}</p></div>
-                    <div><p className="text-white/30 text-[10px] uppercase">Baseline</p><p className="text-white/80">{fmt(a.baseline)}</p></div>
-                    <div><p className="text-white/30 text-[10px] uppercase">Job price</p><p className="text-white/80">{fmt(a.job)}</p></div>
-                    <div><p className="text-white/30 text-[10px] uppercase">Rep pool</p><p className={a.job - a.baseline < 0 ? 'text-red-400' : 'text-white/80'}>{fmt(a.job - a.baseline)}</p></div>
-                    <div><p className="text-white/30 text-[10px] uppercase">Install</p><p className="text-white/80">{fmtDay(d.install_date) || 'TBD'}</p></div>
-                    <div><p className="text-white/30 text-[10px] uppercase">Pay date</p><p className="text-white/80">{fmtDay(d.pay_date) || 'TBD'}</p></div>
-                  </div>
-
-                  {/* Payouts on this deal — the rep/override breakdown, merged in */}
-                  <div className="mt-3 rounded-lg overflow-hidden" style={{ background: '#171717', border: '1px solid #262626' }}>
-                    {payouts.length === 0 ? (
-                      <div className="px-3 py-2 text-[12px] text-white/30">No payouts on this deal.</div>
-                    ) : payouts.map((p, i) => (
-                      <div key={i} className="flex items-center justify-between px-3 py-1.5 text-[12px] border-b border-white/5 last:border-0">
-                        {p.unassigned ? (
-                          <span className="text-amber-400 truncate mr-2 flex items-center gap-1.5">
-                            <AlertTriangle size={11} /> Unassigned <span className="text-amber-400/60">· {p.role} — set the {p.role.toLowerCase()} on the deal</span>
-                          </span>
-                        ) : (
-                          <span className="text-white/70 truncate mr-2">{p.name} <span className="text-white/30">· {p.role}</span></span>
-                        )}
-                        <span className={`font-semibold whitespace-nowrap ${p.unassigned ? 'text-amber-400' : 'text-white'}`}>{fmt(p.amount)}</span>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-4 gap-y-2 text-[12px]">
+                        <div><p className="text-white/30 text-[10px] uppercase">Sold</p><p className="text-white/80">{fmtDay(d.sale_date) || '—'}</p></div>
+                        <div><p className="text-white/30 text-[10px] uppercase">Baseline</p><p className="text-white/80">{fmt(a.baseline)}</p></div>
+                        <div><p className="text-white/30 text-[10px] uppercase">Job price</p><p className="text-white/80">{fmt(a.job)}</p></div>
+                        <div><p className="text-white/30 text-[10px] uppercase">Rep pool</p><p className={a.job - a.baseline < 0 ? 'text-red-400' : 'text-white/80'}>{fmt(a.job - a.baseline)}</p></div>
+                        <div><p className="text-white/30 text-[10px] uppercase">Install</p><p className="text-white/80">{fmtDay(d.install_date) || 'TBD'}</p></div>
+                        <div><p className="text-white/30 text-[10px] uppercase">Pay date</p><p className="text-white/80">{fmtDay(d.pay_date) || 'TBD'}</p></div>
                       </div>
-                    ))}
-                  </div>
 
-                  {a.deduction > 0 && (
-                    <p className="text-[11px] text-red-400/90 mt-2 flex items-center gap-1.5">
-                      <AlertTriangle size={12} /> {fmt(a.deduction)} deduction — {deductionLabel(d, a)}
-                    </p>
-                  )}
+                      {/* Who gets paid on this deal */}
+                      <div className="mt-3 rounded-lg overflow-hidden" style={{ background: '#171717', border: '1px solid #262626' }}>
+                        {payouts.length === 0 ? (
+                          <div className="px-3 py-2 text-[12px] text-white/30">No payouts on this deal.</div>
+                        ) : payouts.map((p, i) => (
+                          <div key={i} className="flex items-center justify-between px-3 py-1.5 text-[12px] border-b border-white/5 last:border-0">
+                            {p.unassigned ? (
+                              <span className="text-amber-400 truncate mr-2 flex items-center gap-1.5">
+                                <AlertTriangle size={11} /> Unassigned <span className="text-amber-400/60">· {p.role} — set the {p.role.toLowerCase()} on the deal</span>
+                              </span>
+                            ) : (
+                              <span className="text-white/70 truncate mr-2">{p.name} <span className="text-white/30">· {p.role}</span></span>
+                            )}
+                            <span className={`font-semibold whitespace-nowrap ${p.unassigned ? 'text-amber-400' : 'text-white'}`}>{fmt(p.amount)}</span>
+                          </div>
+                        ))}
+                      </div>
 
-                  <div className="flex items-center justify-between gap-3 mt-3 pt-3 border-t border-white/5">
-                    <div>
-                      <span className="text-[10px] uppercase text-white/30">Total commission</span>
-                      <span className="ml-2 text-[15px] font-bold text-teal">{fmt(a.totalCommission)}</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      {dealLocked && <Lock size={13} className="text-white/30" title={`The ${fmtDay(d.pay_date)} pay run is locked`} />}
-                      <button onClick={() => openEdit(d)}
-                        className="p-2 rounded-lg text-white/40 hover:text-teal hover:bg-teal/10 transition-colors" title="Edit deal">
-                        <Pencil size={14} />
-                      </button>
-                      {canApprove && !dealLocked && !isPaid && d.status !== APPROVED && (
-                        <button onClick={() => setStatus(d.id, APPROVED)}
-                          className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-white/70 hover:text-white transition-colors"
-                          style={{ border: '1px solid #3a3a3a' }}>
-                          Approve
+                      {a.deduction > 0 && (
+                        <p className="text-[11px] text-red-400/90 mt-2 flex items-center gap-1.5">
+                          <AlertTriangle size={12} /> {fmt(a.deduction)} deduction — {deductionLabel(d, a)}
+                        </p>
+                      )}
+
+                      <div className="flex items-center justify-end gap-1.5 mt-3">
+                        <button onClick={() => openEdit(d)}
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-white/50 hover:text-teal hover:bg-teal/10 transition-colors">
+                          <Pencil size={13} /> Edit deal
                         </button>
-                      )}
-                      {canPay && (
-                        isPaid ? (
-                          <span className="flex items-center gap-1 text-[12px] font-semibold text-teal px-2"><CheckCircle2 size={14} /> Paid</span>
-                        ) : (!dealLocked || d.status === APPROVED) && (
-                          <button onClick={() => setStatus(d.id, PAID)}
-                            className="px-3 py-1.5 rounded-lg text-[11px] font-bold text-dark transition-colors" style={{ background: '#00b894' }}>
-                            Mark paid
-                          </button>
-                        )
-                      )}
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               )
             })}
             {shownDeals.length === 0 && (
-              <div className="rounded-xl px-4 py-6 text-white/30 text-sm text-center" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+              <div className="px-4 py-6 text-white/30 text-sm text-center">
                 {effFilter ? 'No deals for this rep in this run.' : 'No deals in this run.'}
               </div>
             )}
           </div>
-          )}
         </>
       )}
       </>)}
