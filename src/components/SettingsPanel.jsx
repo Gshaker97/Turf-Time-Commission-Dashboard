@@ -654,23 +654,25 @@ function LeadFeedEditor() {
                 {f.hint && <p className="text-[9.5px] text-white/25 truncate">{f.hint}</p>}
               </div>
               <span className="text-white/20 text-[12px]">←</span>
-              {incoming.length > 0 ? (
-                <select value={map[f.key] || ''} onChange={e => setField(f.key, e.target.value)}
-                  style={inputStyle} className="flex-1 min-w-0 px-2 py-1.5 rounded-lg text-[12px] text-white focus:outline-none">
-                  <option value="">— not mapped —</option>
-                  {incoming.map(i => <option key={i} value={i}>{i}</option>)}
-                  {map[f.key] && !incoming.includes(map[f.key]) && <option value={map[f.key]}>{map[f.key]} (not in last payload)</option>}
-                </select>
-              ) : (
-                <input value={map[f.key] || ''} onChange={e => setField(f.key, e.target.value)}
-                  placeholder="their field name" style={inputStyle}
-                  className="flex-1 min-w-0 px-2 py-1.5 rounded-lg text-[12px] text-white placeholder-white/20 focus:outline-none" />
+              {/* Combobox: pick a field from the last payload, or type two
+                  space-separated ones to join them (first name + last name). */}
+              <input value={map[f.key] || ''} onChange={e => setField(f.key, e.target.value)}
+                list={incoming.length ? `leadfields-${f.key}` : undefined}
+                placeholder={incoming.length ? 'pick or type a field…' : 'their field name'}
+                style={inputStyle}
+                className="flex-1 min-w-0 px-2 py-1.5 rounded-lg text-[12px] text-white placeholder-white/20 focus:outline-none" />
+              {incoming.length > 0 && (
+                <datalist id={`leadfields-${f.key}`}>
+                  {incoming.map(i => <option key={i} value={i} />)}
+                </datalist>
               )}
             </div>
           ))}
         </div>
         <p className="text-[10.5px] text-white/30 mt-2">
-          Unmapped fields fall back to a same-named field in the payload. Nested values work with dots — <code className="text-white/45">data.customer.name</code>.
+          Click a box to pick from what the CRM sent, or type it. Nested values use dots (<code className="text-white/45">resource.firstName</code>),
+          and <span className="text-white/45">two fields separated by a space</span> get joined — e.g.{' '}
+          <code className="text-white/45">resource.firstName resource.lastName</code> for a full name. Unmapped fields fall back to a same-named field.
         </p>
       </div>
 

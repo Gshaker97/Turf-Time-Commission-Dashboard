@@ -410,10 +410,20 @@ async function ingestLeads(rawBody) {
   const { fieldMap, statusMap } = await loadLeadConfig()
   await recordLastPayload(items[0])
   // Our field ← whatever the admin mapped it to, else the same-named field.
+  // A mapping may name SEVERAL paths separated by spaces — their values are
+  // joined with a space, so a CRM that splits "first name" / "last name"
+  // (very common) still fills one Customer Name field.
   const pick = (item, field) => {
     const mapped = fieldMap[field]
-    const v = mapped ? atPath(item, mapped) : item[field]
-    return v === '' || v === undefined ? null : v
+    if (!mapped) {
+      const v = item[field]
+      return v === '' || v === undefined ? null : v
+    }
+    const parts = String(mapped).trim().split(/\s+/)
+      .map(p => atPath(item, p))
+      .filter(v => v !== null && v !== undefined && v !== '')
+    if (!parts.length) return null
+    return parts.length === 1 ? parts[0] : parts.map(String).join(' ')
   }
 
   // Resolve people by email in one lookup.
