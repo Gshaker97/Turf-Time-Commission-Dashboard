@@ -40,6 +40,7 @@ const ImportDeals = lazyWithReload(() => import('./pages/ImportDeals'))
 const RequiresAudit = lazyWithReload(() => import('./pages/RequiresAudit'))
 const Performance = lazyWithReload(() => import('./pages/Performance'))
 const SetPassword = lazyWithReload(() => import('./pages/SetPassword'))
+const Leads       = lazyWithReload(() => import('./pages/Leads'))
 
 function Spinner() {
   return (
@@ -77,6 +78,7 @@ function AppRoutes() {
         <Route path="deals"       element={<Deals />} />
         <Route path="dashboard"   element={<Dashboard />} />
         <Route path="commissions" element={<Commissions />} />
+        <Route path="leads"       element={<Leads />} />
         <Route path="competitions" element={<Competitions />} />
         <Route path="home"        element={<Home />} />
         <Route path="payroll"     element={<Guard roles={['vp','admin']}><Payroll /></Guard>} />

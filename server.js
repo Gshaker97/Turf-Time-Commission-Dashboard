@@ -315,8 +315,103 @@ async function exportDeals(since) {
   }
 }
 
+// ── Lead / appointment ingest (feeds the Leads tab) ─────────────────────────
+// POST /api/leads/ingest  ·  Authorization: Bearer <service key>
+//
+// ONE normalized contract for every possible pipe — a CRM webhook posting
+// directly, a Zapier/Make step, or a polling script. Whichever we end up
+// with, only the thin adapter that shapes the payload changes; everything
+// downstream (table, page, estimate counts) stays put.
+//
+// Body: a single appointment object, or { leads: [ … ] } for a batch.
+//   external_id*   the CRM's own appointment id — the dedup key
+//   customer_name, address, phone, email, office, notes
+//   appointment_at ISO timestamp of the appointment
+//   status         scheduled | completed | sold | no_show | canceled
+//                  (or send `disposition` and let the map below normalize it)
+//   setter_email / closer_email   matched to profiles by email
+//   setter_name  / closer_name    fallback labels when no match
+//
+// Upserts on (source, external_id) so a webhook firing twice is harmless.
+const LEAD_STATUSES = ['scheduled', 'completed', 'sold', 'no_show', 'canceled']
+// Common CRM dispositions → our lifecycle. Anything unrecognized stays
+// 'scheduled' and keeps its raw text in `disposition` for review.
+const DISPOSITION_MAP = {
+  scheduled: 'scheduled', set: 'scheduled', booked: 'scheduled', upcoming: 'scheduled', pending: 'scheduled',
+  completed: 'completed', complete: 'completed', ran: 'completed', run: 'completed', demoed: 'completed',
+  presented: 'completed', quoted: 'completed', 'not sold': 'completed', 'no sale': 'completed', lost: 'completed',
+  sold: 'sold', closed: 'sold', won: 'sold', 'closed won': 'sold',
+  'no show': 'no_show', no_show: 'no_show', noshow: 'no_show', missed: 'no_show',
+  canceled: 'canceled', cancelled: 'canceled', rescheduled: 'canceled',
+}
+const normalizeStatus = (status, disposition) => {
+  const s = String(status || '').trim().toLowerCase().replace(/[\s-]+/g, '_')
+  if (LEAD_STATUSES.includes(s)) return s
+  const d = String(disposition || status || '').trim().toLowerCase()
+  return DISPOSITION_MAP[d] || DISPOSITION_MAP[d.replace(/[\s-]+/g, '_')] || 'scheduled'
+}
+
+async function ingestLeads(rawBody) {
+  let body
+  try { body = JSON.parse(rawBody || '{}') } catch { return err('Bad JSON body.') }
+  const items = Array.isArray(body) ? body : Array.isArray(body.leads) ? body.leads : [body]
+  if (!items.length) return err('No leads in the payload.')
+  if (items.length > 500) return err('Too many leads in one call (max 500).')
+
+  // Resolve people by email in one lookup.
+  const emails = [...new Set(items.flatMap(i =>
+    [i.setter_email, i.closer_email].filter(Boolean).map(e => String(e).trim().toLowerCase())))]
+  const byEmail = {}
+  if (emails.length) {
+    const list = emails.map(e => `"${e.replace(/"/g, '')}"`).join(',')
+    const rows = await restGet(`/rest/v1/profiles?select=id,email&email=in.(${encodeURIComponent(list)})`)
+    for (const p of rows) byEmail[String(p.email).toLowerCase()] = p.id
+  }
+
+  const rows = []
+  const unmatched = []
+  for (const i of items) {
+    const setterEmail = i.setter_email ? String(i.setter_email).trim().toLowerCase() : null
+    const closerEmail = i.closer_email ? String(i.closer_email).trim().toLowerCase() : null
+    const setterId = setterEmail ? byEmail[setterEmail] || null : null
+    const closerId = closerEmail ? byEmail[closerEmail] || null : null
+    if (setterEmail && !setterId) unmatched.push(setterEmail)
+    if (closerEmail && !closerId) unmatched.push(closerEmail)
+    rows.push({
+      source: String(i.source || 'repcard'),
+      external_id: i.external_id != null ? String(i.external_id) : null,
+      customer_name: i.customer_name ?? null,
+      address: i.address ?? null,
+      phone: i.phone ?? null,
+      email: i.email ?? null,
+      appointment_at: i.appointment_at ?? null,
+      status: normalizeStatus(i.status, i.disposition),
+      disposition: i.disposition ?? i.status ?? null,
+      setter_id: setterId, closer_id: closerId,
+      setter_name: i.setter_name ?? setterEmail ?? null,
+      closer_name: i.closer_name ?? closerEmail ?? null,
+      office: i.office ?? null,
+      notes: i.notes ?? null,
+      raw: i,
+    })
+  }
+
+  const resp = await fetch(`${SUPABASE_URL}/rest/v1/leads?on_conflict=source,external_id`, {
+    method: 'POST',
+    headers: { ...jsonHeaders, Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify(rows),
+  })
+  if (!resp.ok) return err(`Write failed (${resp.status}): ${(await resp.text()).slice(0, 300)}`)
+  return ok({
+    received: rows.length,
+    // Surfaced so a rep whose CRM email doesn't match the roster is visible
+    // immediately instead of silently landing without an owner.
+    unmatched_emails: [...new Set(unmatched)],
+  })
+}
+
 const app = express()
-app.use(express.text({ type: '*/*', limit: '16kb' }))
+app.use(express.text({ type: '*/*', limit: '1mb' }))
 
 app.get('/api/export/deals', async (req, res) => {
   if (!SUPABASE_URL || !SERVICE_KEY) return res.status(503).json(err('Export is not configured — SUPABASE_SERVICE_KEY is missing on the site service.'))
@@ -337,6 +432,14 @@ app.get('/api/health', (req, res) => {
     build: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) || null,
     at: new Date().toISOString(),
   })
+})
+
+app.post('/api/leads/ingest', async (req, res) => {
+  if (!SUPABASE_URL || !SERVICE_KEY) return res.status(503).json(err('Lead ingest is not configured — SUPABASE_SERVICE_KEY is missing on the site service.'))
+  const auth = String(req.headers.authorization || '')
+  if (auth !== `Bearer ${SERVICE_KEY}`) return res.status(401).json(err('Unauthorized'))
+  try { res.json(await ingestLeads(req.body)) }
+  catch (e) { res.status(500).json(err(e.message || 'Ingest failed')) }
 })
 
 app.post('/api/user-admin', async (req, res) => {
