@@ -72,7 +72,8 @@ export default function Leads() {
         if (!hay.includes(q)) return false
       }
       return true
-    }).sort((a, b) => String(b.appointment_at ?? '').localeCompare(String(a.appointment_at ?? '')))
+    // Chronological — the list reads like the calendar it came from.
+    }).sort((a, b) => String(a.appointment_at ?? '').localeCompare(String(b.appointment_at ?? '')))
   }, [scoped, dateFrom, dateTo, statusFilter, repFilter, search])
 
   const kpis = useMemo(() => {
@@ -182,7 +183,9 @@ export default function Leads() {
             <CalendarCheck size={18} className="text-teal" /> Leads
           </h1>
           <p className="text-[12px] text-white/40 mt-0.5">
-            Appointments fed in from the field CRM. An appointment that RAN counts as an estimate.
+            Appointments fed in from the field CRM, in calendar order. An appointment that RAN counts as an estimate —
+            marking one <span className="text-white/55">Sold</span> records the outcome only; deal counts and revenue
+            always come from the Deals page.
           </p>
         </div>
         {isAdmin && (
@@ -287,15 +290,20 @@ export default function Leads() {
       <div className="grid grid-cols-2 md:flex gap-2 md:gap-3">
         <Kpi label="Appointments Set" value={kpis.set} color="#74b9ff" />
         <Kpi label="Ran (Estimates)"  value={kpis.ran} sub={kpis.showRate != null ? `${kpis.showRate.toFixed(0)}% show rate` : undefined} />
-        <Kpi label="Sold"             value={kpis.sold} color="#4ade80" />
-        <Kpi label="Close Rate"       value={kpis.closeRate == null ? '—' : `${kpis.closeRate.toFixed(0)}%`} sub="sold ÷ ran" color="#a78bfa" />
+        {/* "Sold at appt" is an APPOINTMENT OUTCOME, not a sale record — the
+            deals table is the only source of deal counts and revenue. */}
+        <Kpi label="Sold at Appt"     value={kpis.sold} sub="outcome, not a deal record" color="#4ade80" />
+        <Kpi label="Appt Close %"     value={kpis.closeRate == null ? '—' : `${kpis.closeRate.toFixed(0)}%`} sub="sold ÷ ran" color="#a78bfa" />
         <Kpi label="No Shows"         value={kpis.noShow} color="#fb923c" />
       </div>
 
       {byRep.length > 0 && (
         <div className="rounded-xl p-4 md:p-5" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
           <h3 className="text-[13px] font-semibold text-white mb-0.5">By Rep — {presetLabel(preset)}</h3>
-          <p className="text-[10px] text-white/30 mb-3">Set → ran → sold. "Ran" is the estimate count these will replace the manual entry with.</p>
+          <p className="text-[10px] text-white/30 mb-3">
+            Set → ran → sold, credited to whoever ran the appointment. <span className="text-white/45">Ran</span> is the estimate
+            count feeding close rates site-wide; <span className="text-white/45">Sold</span> is the appointment's outcome, not a deal record.
+          </p>
           <div className="overflow-x-auto">
             <table className="w-full text-[12px] min-w-[440px]">
               <thead>
