@@ -44,10 +44,12 @@ CREATE TABLE IF NOT EXISTS leads (
   updated_at     TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Dedup backstop: one row per CRM appointment id (blank/NULL ids exempt).
-CREATE UNIQUE INDEX IF NOT EXISTS leads_source_external_idx
-  ON leads (source, external_id)
-  WHERE external_id IS NOT NULL AND external_id <> '';
+-- Dedup key: one row per CRM appointment id. Must be a real UNIQUE CONSTRAINT,
+-- not a partial index — ON CONFLICT (used by the webhook ingest and the CSV
+-- importer) can't target a partial one. NULLs are distinct in Postgres, so
+-- appointments with no external_id still coexist; see migration 042.
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_source_external_key;
+ALTER TABLE leads ADD  CONSTRAINT leads_source_external_key UNIQUE (source, external_id);
 
 CREATE INDEX IF NOT EXISTS leads_appointment_idx ON leads (appointment_at DESC);
 CREATE INDEX IF NOT EXISTS leads_setter_idx      ON leads (setter_id);
