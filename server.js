@@ -434,10 +434,23 @@ app.get('/api/health', (req, res) => {
   })
 })
 
+// Auth for the CRM feed. Prefer LEADS_INGEST_SECRET — a dedicated token that
+// ONLY opens this endpoint — so the database master key never has to be
+// pasted into a third-party vendor's webhook config. The service key still
+// works (handy for curl tests) but the vendor should get the scoped secret.
+// Also accepts ?secret= for senders that can't set custom headers.
+function ingestAuthorized(req) {
+  const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim()
+    || String(req.headers['x-api-key'] || '').trim()
+    || String(req.query.secret || '').trim()
+  if (!supplied) return false
+  const scoped = (process.env.LEADS_INGEST_SECRET || '').trim()
+  return (scoped && supplied === scoped) || (SERVICE_KEY && supplied === SERVICE_KEY)
+}
+
 app.post('/api/leads/ingest', async (req, res) => {
   if (!SUPABASE_URL || !SERVICE_KEY) return res.status(503).json(err('Lead ingest is not configured — SUPABASE_SERVICE_KEY is missing on the site service.'))
-  const auth = String(req.headers.authorization || '')
-  if (auth !== `Bearer ${SERVICE_KEY}`) return res.status(401).json(err('Unauthorized'))
+  if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
   try { res.json(await ingestLeads(req.body)) }
   catch (e) { res.status(500).json(err(e.message || 'Ingest failed')) }
 })
