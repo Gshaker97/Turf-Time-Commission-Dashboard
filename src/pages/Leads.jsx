@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { format } from 'date-fns'
-import { CalendarCheck, Search, Link2 } from 'lucide-react'
+import { CalendarCheck, Search, Link2, Upload, X } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
-import { fetchLeads, fetchUsers, updateLead } from '../lib/db'
+import { fetchLeads, fetchUsers, updateLead, upsertLeads } from '../lib/db'
+import { csvToLeads } from '../utils/leadImport'
 import { getPresetRange, presetLabel } from '../utils/dateRanges'
 import DateRangeFilter from '../components/DateRangeFilter'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
@@ -108,6 +109,45 @@ export default function Leads() {
 
   // Any admin correction PINS the row so the CRM feed can't revert it (the
   // feed keeps refreshing timing/details; status + people stay ours).
+  // ── CSV backfill ──────────────────────────────────────────
+  // The webhook only fires on events from the moment it's configured, so
+  // already-scheduled appointments need one import. Keyed on the appointment
+  // id like the feed, so re-importing (or overlapping date ranges) updates
+  // rather than duplicates.
+  const [importOpen, setImportOpen] = useState(false)
+  const [csvText, setCsvText] = useState('')
+  const [importing, setImporting] = useState(false)
+  const profilesByEmail = useMemo(() => Object.fromEntries(
+    users.filter(u => u.email).map(u => [String(u.email).toLowerCase(), u.id])), [users])
+  const preview = useMemo(
+    () => (csvText.trim() ? csvToLeads(csvText, profilesByEmail) : null),
+    [csvText, profilesByEmail])
+  const unmatchedEmails = useMemo(() => {
+    if (!preview) return []
+    const bad = new Set()
+    for (const l of preview.leads) {
+      if (l._setterEmail && !l.setter_id) bad.add(l._setterEmail)
+      if (l._closerEmail && !l.closer_id) bad.add(l._closerEmail)
+    }
+    return [...bad]
+  }, [preview])
+
+  async function runImport() {
+    if (!preview?.leads.length) return
+    setImporting(true)
+    const rows = preview.leads.map(l => {
+      const r = { ...l }
+      delete r._setterEmail; delete r._closerEmail
+      return r
+    })
+    const res = await upsertLeads(rows)
+    setImporting(false)
+    if (res?.error) { toast.error('Import failed: ' + (res.error.message || 'unknown error')); return }
+    toast.success(`Imported ${rows.length} appointment${rows.length === 1 ? '' : 's'}.`)
+    setImportOpen(false); setCsvText('')
+    load()
+  }
+
   async function patchLead(l, patch) {
     const withPin = { ...patch, pinned: true }
     setLeads(ls => ls.map(x => x.id === l.id ? { ...x, ...withPin } : x))
@@ -136,14 +176,85 @@ export default function Leads() {
 
   return (
     <div className="space-y-4 pb-8">
-      <div>
-        <h1 className="text-lg md:text-xl font-bold text-white flex items-center gap-2">
-          <CalendarCheck size={18} className="text-teal" /> Leads
-        </h1>
-        <p className="text-[12px] text-white/40 mt-0.5">
-          Appointments fed in from the field CRM. An appointment that RAN counts as an estimate.
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-lg md:text-xl font-bold text-white flex items-center gap-2">
+            <CalendarCheck size={18} className="text-teal" /> Leads
+          </h1>
+          <p className="text-[12px] text-white/40 mt-0.5">
+            Appointments fed in from the field CRM. An appointment that RAN counts as an estimate.
+          </p>
+        </div>
+        {isAdmin && (
+          <button onClick={() => setImportOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold text-white/70 hover:text-white transition-colors flex-shrink-0"
+            style={{ background: '#1e1e1e', border: '1px solid #2e2e2e' }}
+            title="Backfill appointments from a CRM export">
+            <Upload size={14} /> Import CSV
+          </button>
+        )}
       </div>
+
+      {/* CSV backfill */}
+      {importOpen && (
+        <div className="fixed inset-0 z-50 flex items-end md:items-center md:justify-center md:p-4">
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setImportOpen(false)} />
+          <div className="relative w-full md:max-w-2xl rounded-t-2xl md:rounded-2xl overflow-y-auto shadow-2xl"
+            style={{ background: '#242424', border: '1px solid #333', maxHeight: '92dvh' }}>
+            <div className="flex items-center justify-between px-5 py-3 sticky top-0" style={{ background: '#242424', borderBottom: '1px solid #2e2e2e' }}>
+              <h2 className="text-[15px] font-semibold text-white">Import appointments</h2>
+              <button onClick={() => setImportOpen(false)} className="p-1.5 rounded-lg text-white/30 hover:text-white hover:bg-white/10"><X size={16} /></button>
+            </div>
+            <div className="p-5 space-y-3">
+              <p className="text-[12px] text-white/45">
+                Paste a CSV export from the CRM (or choose the file). Rows are matched on the appointment <b className="text-white/70">ID</b>,
+                so importing the same range twice updates rather than duplicates — safe to re-run.
+              </p>
+              <input type="file" accept=".csv,text/csv"
+                onChange={e => { const f = e.target.files?.[0]; if (f) f.text().then(setCsvText) }}
+                className="block w-full text-[12px] text-white/60 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:text-[12px] file:font-semibold file:bg-teal file:text-dark" />
+              <textarea value={csvText} onChange={e => setCsvText(e.target.value)} rows={6}
+                placeholder="…or paste the CSV contents here"
+                style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }}
+                className="w-full px-3 py-2 rounded-lg text-[12px] text-white placeholder-white/20 focus:outline-none font-mono resize-none" />
+
+              {preview && (
+                <div className="rounded-lg p-3 space-y-2 text-[12px]" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+                  {preview.missing.length > 0 && (
+                    <p className="text-amber-400">⚠ Missing expected column{preview.missing.length > 1 ? 's' : ''}: {preview.missing.join(', ')}</p>
+                  )}
+                  <p className="text-white/70">
+                    <b className="text-teal">{preview.leads.length}</b> appointment{preview.leads.length === 1 ? '' : 's'} ready
+                  </p>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-white/45">
+                    {['scheduled', 'completed', 'sold', 'no_show', 'canceled'].map(s => {
+                      const n = preview.leads.filter(l => l.status === s).length
+                      return n ? <span key={s}>{stat(s).label}: <b className="text-white/70">{n}</b></span> : null
+                    })}
+                  </div>
+                  {unmatchedEmails.length > 0 && (
+                    <div className="text-[11px] text-amber-400/90">
+                      <p>{unmatchedEmails.length} rep email{unmatchedEmails.length === 1 ? '' : 's'} not on the roster — those appointments still import, with the name as text:</p>
+                      <p className="text-amber-400/60 break-words mt-0.5">{unmatchedEmails.join(', ')}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-1">
+                <button onClick={runImport} disabled={!preview?.leads.length || importing}
+                  className="flex-1 py-2.5 rounded-xl text-[13px] font-bold text-dark bg-teal hover:bg-teal-dark disabled:opacity-40 transition-colors">
+                  {importing ? 'Importing…' : preview?.leads.length ? `Import ${preview.leads.length}` : 'Import'}
+                </button>
+                <button onClick={() => setImportOpen(false)}
+                  className="px-5 py-2.5 rounded-xl text-[13px] text-white/50 hover:text-white transition-colors" style={{ border: '1px solid #3a3a3a' }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {leads.length === 0 && (
         <div className="rounded-xl px-4 py-3 text-[12px]"

@@ -509,6 +509,20 @@ export async function fetchLeads() {
     .limit(3000)
 }
 
+// Bulk upsert of appointments (CSV import / backfill). Keyed the same way as
+// the webhook feed, so importing a row the feed already delivered updates it
+// rather than duplicating.
+export async function upsertLeads(rows) {
+  if (DEMO_MODE) {
+    for (const r of rows) {
+      _leads = [..._leads.filter(l => !(l.source === r.source && l.external_id === r.external_id)),
+        { ...r, id: 'lead-' + (r.external_id || Math.random().toString(36).slice(2)) }]
+    }
+    return { error: null }
+  }
+  return supabase.from('leads').upsert(rows, { onConflict: 'source,external_id' })
+}
+
 // Admin correction of a single lead (status/owner fixes).
 export async function updateLead(id, patch) {
   if (DEMO_MODE) { _leads = _leads.map(l => l.id === id ? { ...l, ...patch } : l); return { error: null } }
