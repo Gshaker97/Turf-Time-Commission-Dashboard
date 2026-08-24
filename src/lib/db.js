@@ -498,6 +498,23 @@ export async function deleteRepGoal(subjectId, scope, year, month) {
     .eq('subject_id', subjectId).eq('scope', scope).eq('year', year).eq('month', month)
 }
 
+// ── Leads / appointments (fed by the CRM, migration 041) ──────
+let _leads = []   // demo store
+
+export async function fetchLeads() {
+  if (DEMO_MODE) return { data: _leads.map(l => ({ ...l })), error: null }
+  return supabase.from('leads')
+    .select('*, setter:setter_id(id,name), closer:closer_id(id,name)')
+    .order('appointment_at', { ascending: false })
+    .limit(3000)
+}
+
+// Admin correction of a single lead (status/owner fixes).
+export async function updateLead(id, patch) {
+  if (DEMO_MODE) { _leads = _leads.map(l => l.id === id ? { ...l, ...patch } : l); return { error: null } }
+  return requireRow(await supabase.from('leads').update(patch).eq('id', id).select('id'))
+}
+
 // ── Self-serve auth flows (invite / forgot password) ──────────
 // "Forgot password" on the login page — GoTrue emails a reset link that lands
 // on /set-password (needs SMTP configured on the auth service).

@@ -239,6 +239,38 @@ setup + deploy steps.
   reads, writes by admins, the rep, or their direct manager). Do
   not re-run `001`/`002` against a populated database.
 
+## Leads / appointments (CRM feed, migration 041)
+
+Replaces hand-collected estimates. `leads` = one row per APPOINTMENT fed in
+from the field CRM (RepCard). Route `/leads`, all roles (reps see only
+appointments they set or run; admins edit).
+- **Ingest:** `POST /api/leads/ingest` on `server.js`, auth = the service key
+  as bearer. ONE normalized contract so any pipe works (direct webhook,
+  Zapier/Make, or a poller) — only a thin adapter changes. Body = one object
+  or `{ leads: [...] }`; upserts on `(source, external_id)` so a webhook
+  firing twice is harmless (partial UNIQUE index, same backstop as
+  `deals.project_id`). People resolve BY EMAIL against `profiles`
+  (`setter_email`/`closer_email`); unmatched emails come back in the response
+  AND the row still lands with `setter_name`/`closer_name` text — never drop
+  the appointment.
+- **Status** is a normalized lifecycle: `scheduled | completed | sold |
+  no_show | canceled`. `completed`/`sold` = the appointment RAN = an estimate.
+  The CRM's raw outcome is kept in `disposition`; `DISPOSITION_MAP` in
+  server.js normalizes the common ones, anything unrecognized lands
+  `scheduled` for manual fixing (per Keaton: some reps use dispositions, some
+  don't).
+- **A human's correction beats the feed.** Closers get reassigned and
+  dispositions are inconsistent, so admins fix status/setter/closer on the
+  page — which sets `leads.pinned`. The `leads_keep_manual_fields()` trigger
+  then preserves those five fields against SERVICE-KEY writes (`auth.uid()
+  IS NULL` = the feed) while still letting it refresh timing/details; a
+  signed-in admin can always edit, and the "edited" chip unpins to hand the
+  row back. This is the deliberate fix for the ScheduleSync "my setter keeps
+  reverting" class of bug.
+- **Estimates transition:** the page's per-rep funnel (set → ran → sold) is
+  the automatic replacement for `weekly_stats` manual entry. Per Keaton, RUN
+  BOTH IN PARALLEL and compare before cutting the close-rate metrics over.
+
 ## Records & big moments (`src/utils/records.js`)
 
 All-time bests computed straight from deals — no storage, no manual entry.
