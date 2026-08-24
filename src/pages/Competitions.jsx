@@ -12,6 +12,7 @@ import {
 import { headIdSet, teamKeyFor, buildChangesByProfile } from '../utils/team'
 import { fmt } from '../utils/commission'
 import { buildRecordBook } from '../utils/records'
+import { onClickUnlessSelecting } from '../utils/selection'
 import { useSettings } from '../contexts/SettingsContext'
 import CompetitionModal from '../components/CompetitionModal'
 
@@ -47,7 +48,7 @@ function StandRow({ e, comp, deals, users, canManage, mine, teamCtx }) {
   return (
     <div className="rounded-lg" style={mine ? { background: '#00b89415', border: '1px solid #00b89430' } : undefined}>
       <div className={`flex items-center gap-3 px-3 py-2 rounded-lg ${clickable ? 'cursor-pointer hover:bg-white/[0.04]' : ''}`}
-        onClick={clickable ? () => setOpen(o => !o) : undefined}
+        onClick={clickable ? onClickUnlessSelecting(() => setOpen(o => !o)) : undefined}
         title={clickable ? 'Click to verify the deals counted' : undefined}>
         <span className="w-6 text-center text-[12px] font-bold flex-shrink-0" style={{ color: rc || 'rgba(255,255,255,0.4)' }}>
           {e.rank <= 3 ? ['🥇', '🥈', '🥉'][e.rank - 1] : e.rank}

@@ -10,6 +10,7 @@ import { fetchDeals, fetchUsers, fetchGoal, saveGoal as saveGoalDb, deleteGoal a
 import { fmt, dealAmounts, activeDeals } from '../utils/commission'
 import { headIdSet, saleOwnerId, buildChangesByProfile, teamOfSale } from '../utils/team'
 import { buildRecordBook, periodEnd } from '../utils/records'
+import { onClickUnlessSelecting } from '../utils/selection'
 import { getPresetRange, getPreviousRange } from '../utils/dateRanges'
 import DateRangeFilter from '../components/DateRangeFilter'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
@@ -777,7 +778,7 @@ export default function Dashboard() {
               const reps     = team.reps.filter(r => isAdmin || !r.ghost)
               return (
                 <div key={team.id}>
-                  <button onClick={() => toggleTeam(team.id)} className="w-full text-left">
+                  <button onClick={onClickUnlessSelecting(() => toggleTeam(team.id))} className="w-full text-left">
                   <div className="flex items-center justify-between mb-1.5">
                     <div className="flex items-center gap-2 min-w-0">
                       <RankBadge n={i + 1} />

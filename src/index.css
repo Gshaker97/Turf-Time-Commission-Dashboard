@@ -15,6 +15,23 @@
 
   * { box-sizing: border-box; }
 
+  /* Numbers and names must always be selectable/copyable — browsers block
+     drag-selection inside <button>, and lots of the site's rows (team
+     breakdown, leaderboards, competition standings, expandable cards) are
+     buttons so the whole row is clickable. Opt text back in everywhere, then
+     exempt genuine icon-only controls where a stray selection is just noise. */
+  button, [role="button"], summary {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  /* Icon-only / chrome controls stay unselectable. */
+  button:not(:has(> *)):empty,
+  nav a, nav button,
+  .no-select, .no-select * {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
   /* Date input calendar icon color */
   input[type="date"]::-webkit-calendar-picker-indicator {
     filter: invert(0.4);

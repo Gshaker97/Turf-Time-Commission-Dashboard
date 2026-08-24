@@ -7,6 +7,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import { dealAmounts, getUserCommission, fmt, activeDeals, deductionLabel } from '../utils/commission'
 import { getPresetRange, presetLabel } from '../utils/dateRanges'
+import { onClickUnlessSelecting } from '../utils/selection'
 import DateRangeFilter from '../components/DateRangeFilter'
 
 // LOCAL dates, never UTC — .toISOString() rolls to tomorrow at 5pm Arizona.
@@ -102,7 +103,7 @@ function DealRow({ deal, id, statusColor }) {
 
   return (
     <div className="border-b border-white/5 last:border-0">
-      <button onClick={() => setOpen(o => !o)}
+      <button onClick={onClickUnlessSelecting(() => setOpen(o => !o))}
         className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-white/[0.02] transition-colors">
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-semibold text-white/90 truncate">{deal.deal_name}</p>
@@ -169,7 +170,7 @@ function PipelineWeekGroup({ week, id, users, statusColor }) {
 
   return (
     <div className="border-b border-white/5 last:border-0">
-      <button onClick={() => setOpen(o => !o)}
+      <button onClick={onClickUnlessSelecting(() => setOpen(o => !o))}
         className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/[0.02] transition-colors">
         <div className="flex items-center gap-2">
           {week.isOverdue && <span className="text-amber-400 text-[11px]">⚠</span>}

@@ -4,6 +4,7 @@ import { startOfWeek, endOfWeek, addDays, format as dfFormat } from "date-fns";
 import { Trophy, TrendingUp, Award, Target, ClipboardList, Percent, DollarSign, Wallet, Layers, Flame, Clock, Share2, Check, X } from "lucide-react";
 import { fetchDeals, fetchCompetitions, fetchUsers, fetchWeeklyStats, fetchPersonalGoals } from "../lib/db";
 import { currentPeriods, resolveGoal, goalIsSet, repProduction, periodElapsed, metricProgress, estimateStreak } from "../utils/goals";
+import { onClickUnlessSelecting } from "../utils/selection";
 import { getUserCommission, isCanceled, fmt } from "../utils/commission";
 import { personalBests } from "../utils/records";
 import { useSettings } from "../contexts/SettingsContext";
@@ -38,7 +39,7 @@ function rateColor(r) {
 function StatTile({ icon: Icon, label, value, sub, color = "#00b894", trend, onClick }) {
   const Tag = onClick ? "button" : "div";
   return (
-    <Tag onClick={onClick}
+    <Tag onClick={onClick ? onClickUnlessSelecting(onClick) : undefined}
       className={`rounded-xl p-3 md:p-4 min-w-0 text-left w-full ${onClick ? "cursor-pointer hover:border-white/25 transition-colors" : ""}`}
       style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
       <div className="flex items-center gap-1.5 mb-1.5">
