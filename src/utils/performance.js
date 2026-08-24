@@ -10,6 +10,7 @@ import {
 } from 'date-fns'
 import { dealAmounts, isCanceled } from './commission'
 import { saleOwnerId, teamOfSale } from './team'
+import { RAN_STATUSES } from './estimates'
 
 const WEEK = { weekStartsOn: 0 }   // Sun–Sat, same as all reporting
 const f = (d) => format(d, 'yyyy-MM-dd')
@@ -175,7 +176,11 @@ function finishBucket(b, hasEstimates) {
 // One pass over deals + stats → { [periodKey]: finishedBucket } for a scope.
 // Deals bucket by sale_date; stats by week_start. Revenue/deals/markup come
 // from non-canceled deals only (house rule); cancel rate uses all of them.
-export function bucketize(deals, weeklyStats, periods, scope, teamCtx) {
+//
+// opts.leads + opts.estimatesFrom switch the ESTIMATE source over to the CRM
+// feed on/after the cutover date (see utils/estimates.js) — appointments that
+// ran replace hand-entered weekly counts, while earlier periods keep theirs.
+export function bucketize(deals, weeklyStats, periods, scope, teamCtx, opts = {}) {
   const byKey = {}
   for (const p of periods) byKey[p.key] = newBucket()
   const lookup = (dateISO) => {
@@ -195,10 +200,28 @@ export function bucketize(deals, weeklyStats, periods, scope, teamCtx) {
   }
   const hasEst = scopeHasEstimates(scope)
   if (hasEst) {
+    const from = opts.estimatesFrom || null
+    // Manual weekly entries — only for weeks the feed doesn't own yet.
     for (const s of weeklyStats) {
       const k = lookup(s.week_start)
       if (!k || !statInScope(s, scope, teamCtx)) continue
+      if (from && String(s.week_start) >= String(from)) continue
       byKey[k].estimates += estOf(s)
+    }
+    // CRM feed — an appointment that RAN is an estimate, credited to whoever
+    // ran it. Self-gen only, matching the metric's definition everywhere.
+    if (from) {
+      for (const l of opts.leads || []) {
+        const day = l.appointment_at ? String(l.appointment_at).slice(0, 10) : null
+        if (!day || day < from) continue
+        if (!RAN_STATUSES.has(l.status)) continue
+        const ranBy = l.closer_id || l.setter_id
+        if (!ranBy || (l.setter_id && l.setter_id !== ranBy)) continue   // lead, not self-gen
+        const k = lookup(day)
+        if (!k) continue
+        if (!statInScope({ rep_id: ranBy, week_start: day }, scope, teamCtx)) continue
+        byKey[k].estimates += 1
+      }
     }
   }
   const out = {}

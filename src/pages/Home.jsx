@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { startOfWeek, endOfWeek, addDays, format as dfFormat } from "date-fns";
 import { Trophy, TrendingUp, Award, Target, ClipboardList, Percent, DollarSign, Wallet, Layers, Flame, Clock, Share2, Check, X } from "lucide-react";
-import { fetchDeals, fetchCompetitions, fetchUsers, fetchWeeklyStats, fetchPersonalGoals } from "../lib/db";
+import { fetchDeals, fetchCompetitions, fetchUsers, fetchWeeklyStats, fetchPersonalGoals, fetchLeads } from "../lib/db";
+import { estimatesFor } from "../utils/estimates";
 import { currentPeriods, resolveGoal, goalIsSet, repProduction, periodElapsed, metricProgress, estimateStreak } from "../utils/goals";
 import { onClickUnlessSelecting } from "../utils/selection";
 import { getUserCommission, isCanceled, fmt } from "../utils/commission";
@@ -66,7 +67,9 @@ export default function Home() {
 
   const mr = months[selected];
   const me = viewId || profile?.id;
-  const { dataStartDate } = useSettings();
+  const { dataStartDate, estimatesFrom } = useSettings();
+  const [leads, setLeads] = useState([]);
+  const estOpts = useMemo(() => ({ leads, estimatesFrom }), [leads, estimatesFrom]);
 
   // Personal bests (owner-credited, completed periods) + how close the
   // current month is to the rep's best — the "beat yourself" nudge.
@@ -79,11 +82,12 @@ export default function Home() {
 
   const [personalGoals, setPersonalGoals] = useState([]);
   useEffect(() => {
-    Promise.all([fetchDeals(), fetchCompetitions(), fetchUsers(), fetchWeeklyStats(), fetchPersonalGoals()])
-      .then(([{ data: d }, { data: c }, { data: u }, { data: w }, { data: pg }]) => {
+    Promise.all([fetchDeals(), fetchCompetitions(), fetchUsers(), fetchWeeklyStats(), fetchPersonalGoals(), fetchLeads()])
+      .then(([{ data: d }, { data: c }, { data: u }, { data: w }, { data: pg }, { data: ld }]) => {
         setAllDeals((d ?? []).filter(x => !isCanceled(x)));
         setComps(c || []); setUsers(u || []); setWeekly(w || []);
         setPersonalGoals(pg || []);
+        setLeads(ld || []);
         setLoading(false);
       });
   }, []);
@@ -94,11 +98,14 @@ export default function Home() {
   const setterRevForMonth = (key) => allDeals
     .filter(d => d.setter_id === me && d.sale_date?.startsWith(key))
     .reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0);
-  const wkSum = (key, field) => weekly
-    .filter(s => s.rep_id === me && (s.week_start || "").startsWith(key))
-    .reduce((s, x) => s + (Number(x[field]) || 0), 0);
-  const sgEstForMonth = (key) => wkSum(key, "self_gen_estimates");
-  const ldEstForMonth = (key) => wkSum(key, "lead_estimates");
+  // Estimates come from the leads feed on/after the cutover, manual before —
+  // one shared rule so Home, Goals and Performance never disagree.
+  const monthEstimates = (key) => estimatesFor({
+    leads, weeklyStats: weekly, repId: me,
+    start: `${key}-01`, end: `${key}-31`, from: estimatesFrom,
+  });
+  const sgEstForMonth = (key) => monthEstimates(key).sgEst;
+  const ldEstForMonth = (key) => monthEstimates(key).leadEst;
   const setterCountForMonth = (key) => allDeals.filter(d => d.setter_id === me && d.sale_date?.startsWith(key)).length;
 
   // My stats for the selected month — split self-gen (deals I set) vs leads
@@ -444,7 +451,7 @@ export default function Home() {
         const periods = currentPeriods(today);
         const wGoal = resolveGoal(personalGoals, me, "week", periods.week.start);
         const mGoal = resolveGoal(personalGoals, me, "month", periods.month.start);
-        const streak = estimateStreak(personalGoals, allDeals, weekly, me, today);
+        const streak = estimateStreak(personalGoals, allDeals, weekly, me, today, 26, estOpts);
         const bar = (label, value, prog, money) => {
           if (!prog) return null;
           const color = prog.status === "done" ? "#4ade80" : prog.status === "ahead" ? "#00b894" : "#fbbf24";
@@ -466,7 +473,7 @@ export default function Home() {
           );
         };
         const blockFor = (title, p, goal) => {
-          const prod = repProduction(allDeals, weekly, me, p);
+          const prod = repProduction(allDeals, weekly, me, p, estOpts);
           const el = periodElapsed(p, today);
           const rows = [
             bar("SG Est", prod.sgEst, metricProgress(prod.sgEst, goal?.est_target, el)),

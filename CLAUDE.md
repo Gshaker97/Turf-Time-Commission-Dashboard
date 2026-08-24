@@ -277,9 +277,17 @@ appointments they set or run; admins edit).
   signed-in admin can always edit, and the "edited" chip unpins to hand the
   row back. This is the deliberate fix for the ScheduleSync "my setter keeps
   reverting" class of bug.
-- **Estimates transition:** the page's per-rep funnel (set → ran → sold) is
-  the automatic replacement for `weekly_stats` manual entry. Per Keaton, RUN
-  BOTH IN PARALLEL and compare before cutting the close-rate metrics over.
+- **Estimates now COME FROM LEADS** (`src/utils/estimates.js`, the one shared
+  rule — never count estimates inline). `app_settings.estimates_from_leads_date`
+  (Admin → Settings, exposed as `estimatesFrom`) is the cutover: appointments
+  on/after it supply estimate counts; weeks BEFORE it keep their hand-entered
+  `weekly_stats` numbers, so June/July history survives. Blank = manual
+  everywhere. Credit goes to whoever RAN the appointment — set it AND ran it
+  = self-gen estimate, someone else set it = lead estimate. Consumers:
+  `bucketize` (Performance, via `opts.leads`/`opts.estimatesFrom`),
+  `repProduction`/`estimateStreak`/`suggestFromRevenue` (Goals + Home, via the
+  same opts), and Home's month tiles. The Performance page's manual estimate
+  inputs auto-disable for weeks the feed owns and say so.
 
 ## Records & big moments (`src/utils/records.js`)
 

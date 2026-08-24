@@ -10,7 +10,7 @@ import { useSettings } from '../contexts/SettingsContext'
 import {
   fetchDeals, fetchUsers, fetchTeamChanges, fetchWeeklyStats,
   fetchTargets, saveTarget, deleteTarget, fetchGoal, fetchRepGoals,
-  upsertWeeklyStat,
+  upsertWeeklyStat, fetchLeads,
 } from '../lib/db'
 import { weekStartOf } from '../utils/dateRanges'
 import { dealAmounts, isCanceled } from '../utils/commission'
@@ -222,13 +222,14 @@ const DEFAULT_PREFS = {
 
 export default function Performance() {
   const { profile, isAdmin } = useAuth()
-  const { settings, offices } = useSettings()
+  const { settings, offices, estimatesFrom } = useSettings()
 
   const [deals,       setDeals]       = useState([])
   const [users,       setUsers]       = useState([])
   const [teamChanges, setTeamChanges] = useState([])
   const [weeklyStats, setWeeklyStats] = useState([])
   const [targets,     setTargets]     = useState([])
+  const [leads,       setLeads]       = useState([])
   const [companyGoal, setCompanyGoal] = useState(null)   // monthly_goals fallback (current month)
   const [repGoals,    setRepGoals]    = useState([])     // rep_goals fallback (current month)
   const [loading,     setLoading]     = useState(true)
@@ -245,15 +246,16 @@ export default function Performance() {
   const now = new Date()
   const loadData = () =>
     Promise.all([
-      fetchDeals(), fetchUsers(), fetchTeamChanges(), fetchWeeklyStats(), fetchTargets(),
+      fetchDeals(), fetchUsers(), fetchTeamChanges(), fetchWeeklyStats(), fetchTargets(), fetchLeads(),
       fetchGoal(now.getFullYear(), now.getMonth() + 1),
       fetchRepGoals(now.getFullYear(), now.getMonth() + 1),
-    ]).then(([d, u, tc, ws, tg, g, rg]) => {
+    ]).then(([d, u, tc, ws, tg, l, g, rg]) => {
       setDeals(d.data ?? [])              // includes canceled — cancel rate needs them
       setUsers(u.data ?? [])
       setTeamChanges(tc.data ?? [])
       setWeeklyStats(ws.data ?? [])
       setTargets(tg.data ?? [])
+      setLeads(l.data ?? [])
       setCompanyGoal(g.data ?? null)
       setRepGoals(rg.data ?? [])
     })
@@ -265,6 +267,7 @@ export default function Performance() {
   const headsSet  = useMemo(() => headIdSet(users), [users])
   const changesByProfile = useMemo(() => buildChangesByProfile(teamChanges), [teamChanges])
   const teamCtx = useMemo(() => ({ usersById, heads: headsSet, changesByProfile }), [usersById, headsSet, changesByProfile])
+  const estOpts = useMemo(() => ({ leads, estimatesFrom }), [leads, estimatesFrom])
 
   const heads = useMemo(() => users.filter(u => headsSet.has(u.id)).sort((a, b) => a.name.localeCompare(b.name)), [users, headsSet])
   const activeReps = useMemo(() =>
@@ -303,7 +306,7 @@ export default function Performance() {
   const statsForBuckets = dayView ? [] : weeklyStats
 
   const buckets = useMemo(
-    () => bucketize(deals, statsForBuckets, periods, scope, teamCtx),
+    () => bucketize(deals, statsForBuckets, periods, scope, teamCtx, estOpts),
     [deals, statsForBuckets, periods, scope, teamCtx])
 
   // Scorecard period: the focused period itself (vs the one before it at the
@@ -316,7 +319,7 @@ export default function Performance() {
     // Pace comparison: while the current period is in progress, the previous
     // period is clamped to the same elapsed point (Aug 1–2 vs Jul 1–2).
     ps[0] = pacePrevPeriod(ps[0], ps[1])
-    return { ps, b: bucketize(deals, weeklyStats, ps, scope, teamCtx) }
+    return { ps, b: bucketize(deals, weeklyStats, ps, scope, teamCtx, estOpts) }
   }, [focus, grain, deals, weeklyStats, scope, teamCtx])
   const curPeriod = focus ?? headerBuckets.ps[1]
   const cur  = headerBuckets.b[headerBuckets.ps[1].key]
@@ -355,7 +358,7 @@ export default function Performance() {
     const todayISO = localTodayISO()
     if (last.to < todayISO) return null
     const clamped = pacePrevPeriod(periods[periods.length - 2], last, todayISO)
-    return bucketize(deals, statsForBuckets, [clamped], scope, teamCtx)[clamped.key]
+    return bucketize(deals, statsForBuckets, [clamped], scope, teamCtx, estOpts)[clamped.key]
   }, [periods, deals, statsForBuckets, scope, teamCtx])
   const hasEstimates = scopeHasEstimates(scope)
 
@@ -444,8 +447,8 @@ export default function Performance() {
     const months = periodsFor('month', 4).slice(0, 3)   // last 3 FULL months
     return [...keys].map(k => {
       const tScope = { type: 'team', id: k }
-      const b = bucketize(deals, weeklyStats, [curPeriod], tScope, teamCtx)[curPeriod.key]
-      const moB = bucketize(deals, weeklyStats, months, tScope, teamCtx)
+      const b = bucketize(deals, weeklyStats, [curPeriod], tScope, teamCtx, estOpts)[curPeriod.key]
+      const moB = bucketize(deals, weeklyStats, months, tScope, teamCtx, estOpts)
       const moAvgRevenue = months.reduce((s, m) => s + moB[m.key].revenue, 0) / months.length
       const moAvgDeals   = months.reduce((s, m) => s + moB[m.key].deals, 0) / months.length
       let goal = resolveTarget(targets, { scopeType: 'team', subject: k, metric: 'revenue', grain: headerGrain, periodStart: curPeriod.from })
@@ -489,7 +492,7 @@ export default function Performance() {
     if (prefs.activity?.breakdown !== 'team' || scope.type !== 'org' || dayView || !hasEstimates) return null
     const rows = periods.map(p => ({ label: p.label }))
     const series = teamCompare.map(t => {
-      const b = bucketize(deals, statsForBuckets, periods, { type: 'team', id: t.key }, teamCtx)
+      const b = bucketize(deals, statsForBuckets, periods, { type: 'team', id: t.key }, teamCtx, estOpts)
       periods.forEach((p, i) => { rows[i][t.key] = b[p.key].close_rate })
       return { key: t.key, name: t.shortName, color: t.color }
     })
@@ -635,8 +638,12 @@ export default function Performance() {
   // so coarser views stay read-only totals. Writes the SAME weekly_stats
   // store as the Team page's Weekly Stats tab, and this page's numbers
   // (scorecard, donuts, change table) update instantly on save.
-  const editEstWeek = isAdmin && hasEstimates && headerGrain === 'week'
-    ? weekStartOf(curPeriod.from) : null
+  // Manual estimate entry only applies to weeks the CRM feed doesn't own —
+  // once leads drive a week, typing a number here would be ignored anyway.
+  const curWeekStart = headerGrain === 'week' ? weekStartOf(curPeriod.from) : null
+  const weekOwnedByFeed = !!(curWeekStart && estimatesFrom && curWeekStart >= estimatesFrom)
+  const editEstWeek = isAdmin && hasEstimates && headerGrain === 'week' && !weekOwnedByFeed
+    ? curWeekStart : null
   const estValue = (repId, field) => {
     const s = weeklyStats.find(x => x.rep_id === repId && x.week_start === editEstWeek)
     return Number(s?.[field]) || 0
@@ -1232,7 +1239,9 @@ export default function Performance() {
             <p className="text-[10px] mt-0.5" style={{ color: editEstWeek ? '#00b894' : 'rgba(255,255,255,0.3)' }}>
               {editEstWeek
                 ? `Typing enabled — SG Est + Leads Ran boxes save to the week of ${curPeriod.label} as you tab out.`
-                : 'To type estimates, switch to the Weekly view or zoom into a week (Last Wk button, or click a week on a chart).'}
+                : weekOwnedByFeed
+                  ? 'Estimates for this week come from the Leads feed — every appointment that ran. Fix a wrong count on the Leads tab, not here.'
+                  : 'To type estimates, switch to the Weekly view or zoom into a week (Last Wk button, or click a week on a chart).'}
             </p>
           )}
         </div>
