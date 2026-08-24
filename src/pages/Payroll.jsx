@@ -115,6 +115,12 @@ export default function Payroll() {
   const toggleExpanded = (id) => setExpanded(s => {
     const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n
   })
+  // Same idea on the payee summary: click a person to see the deals behind
+  // their lump sum.
+  const [openPayees, setOpenPayees] = useState(() => new Set())
+  const togglePayee = (id) => setOpenPayees(s => {
+    const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n
+  })
   const [repFilter, setRepFilter] = useState('')
   const [adjFor, setAdjFor] = useState('')            // payee id whose adjustment editor is open
   const [adjAmt, setAdjAmt] = useState('')
@@ -801,10 +807,16 @@ export default function Payroll() {
                   {shownPayees.map(p => (
                     <div key={p.id} className="py-1 border-t border-white/5">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-[13px] text-white/80 truncate mr-1">
-                          {p.name}
-                          <span className="text-white/30 text-[11px]"> · {p.dealIds.size} deal{p.dealIds.size === 1 ? '' : 's'}</span>
-                        </span>
+                        <button onClick={onClickUnlessSelecting(() => togglePayee(p.id))}
+                          className="flex items-center gap-1 text-[13px] text-white/80 truncate mr-1 text-left min-w-0 hover:text-white transition-colors"
+                          title="Show the deals in this payout">
+                          <ChevronDown size={12}
+                            className={`text-white/25 flex-shrink-0 transition-transform ${openPayees.has(p.id) ? 'rotate-180' : ''}`} />
+                          <span className="truncate">
+                            {p.name}
+                            <span className="text-white/30 text-[11px]"> · {p.dealIds.size} deal{p.dealIds.size === 1 ? '' : 's'}</span>
+                          </span>
+                        </button>
                         <span className="flex items-center gap-1.5 flex-shrink-0">
                           <span className="text-[13px] font-semibold text-white whitespace-nowrap">{fmt(p.total)}</span>
                           {isAdmin && view !== 'overdue' && !runLock && (
@@ -820,6 +832,30 @@ export default function Payroll() {
                           )}
                         </span>
                       </div>
+                      {/* Expanded — every deal feeding this person's payout,
+                          with the role they earned it in and any deduction. */}
+                      {openPayees.has(p.id) && (
+                        p.lines.length === 0 ? (
+                          <p className="text-[11px] text-white/30 pl-4 mt-0.5">Adjustments only — no deals on this run.</p>
+                        ) : (
+                          <div className="pl-4 mt-1 mb-1 rounded-lg overflow-hidden" style={{ background: '#171717', border: '1px solid #262626' }}>
+                            {p.lines.map((l, i) => (
+                              <div key={i} className="px-2.5 py-1.5 border-b border-white/5 last:border-0">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-[11.5px] text-white/70 truncate">
+                                    {l.deal}
+                                    <span className="text-white/30"> · {l.selfGen ? 'Self-Gen' : l.role}</span>
+                                  </span>
+                                  <span className="text-[11.5px] font-semibold text-white whitespace-nowrap">{fmt(l.amount)}</span>
+                                </div>
+                                {l.ded > 0 && (
+                                  <p className="text-[10px] text-red-400/80 truncate">− {l.note || 'deduction'} · {fmt(l.ded)}</p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )
+                      )}
                       {p.adjustments.map(a => (
                         <div key={a.id} className="flex items-center justify-between gap-2 pl-3 mt-0.5">
                           <span className="text-[11px] text-white/40 truncate">↳ adjustment{a.note ? ` · ${a.note}` : ''}</span>
