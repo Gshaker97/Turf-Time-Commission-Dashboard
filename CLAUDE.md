@@ -244,8 +244,13 @@ setup + deploy steps.
 All-time bests computed straight from deals — no storage, no manual entry.
 `buildRecordBook(deals, { users, isAdmin, dataStartDate, todayISO })` →
 company records (biggest revenue month/week/day + most deals month/week/day)
-and rep records (biggest rep month/week, most deals rep month/week, biggest
-single deal — owner-credited via `saleOwnerId`, ghost holders admin-only);
+rep records (biggest rep month/week/day, most deals rep month/week/day,
+biggest single deal — owner-credited via `saleOwnerId`, ghost holders
+admin-only), and — when `teamCtx` ({usersById, heads, changesByProfile}) is
+passed — TEAM records (same six, date-effective via `teamOfSale`, Unassigned
+excluded). Rep/team records use `pickEntityRecord` (maps keyed
+`entityId|periodKey`) so they carry best/prev/current + watch/new status like
+company ones;
 `personalBests(deals, repId, …)` → one rep's own bests. Records come from
 COMPLETED periods only; the current period rides along as `status: 'watch'`
 (≥85% of best) or `'new'` (beating it). Canceled excluded; sale dates before
@@ -253,9 +258,10 @@ COMPLETED periods only; the current period rides along as `status: 'watch'`
 "📖 Record Book" card (company tiles gold, rep tiles teal, live watch/new
 chips); **Home card** = "Personal bests" tile row + a flame nudge when the
 current month is within 80% of (or beating) the rep's best; **Dashboard** =
-gold record-moment banners (in-progress records + records set in the last 7
-days, `prev` required so a first-ever period never banners; dismissals stick
-per record+period in `tt_rec_dismissed` localStorage).
+gold record-moment banners for COMPANY, TEAM, and REP records (in-progress
+records + records set in the last 7 days, `prev` required so a first-ever
+period never banners; company → team → rep priority, max 3 shown; dismissals
+stick per record+period in `tt_rec_dismissed` localStorage).
 
 ## Performance page (`src/pages/Performance.jsx`, manager+)
 
