@@ -65,6 +65,9 @@ export function SettingsProvider({ children }) {
     // our atomized data (office/pay date/payment), so background alerts and
     // staging leave them alone. They still count in historical totals.
     dataStartDate: settings.data_start_date || '2026-06-01',
+    // On/after this date, estimate counts come from the LEADS feed instead
+    // of the hand-entered weekly stats (null = still manual everywhere).
+    estimatesFrom: settings.estimates_from_leads_date || null,
     statuses, statusLabels, statusColor,
     paymentMethods: settings.payment_methods ?? [],
     offices: settings.offices ?? [],
@@ -80,6 +83,6 @@ export const useSettings = () => useContext(SettingsContext) ?? {
   settings: DEFAULTS, loaded: false, refresh: () => {}, save: async () => ({}),
   statuses: DEFAULTS.deal_statuses, statusLabels: DEFAULTS.deal_statuses.map(s => s.label),
   statusColor: () => '#94a3b8', paymentMethods: DEFAULTS.payment_methods, offices: DEFAULTS.offices,
-  siteName: 'Turf Time Dashboard', dataStartDate: '2026-06-01', noteNotify: NOTE_NOTIFY_DEFAULT,
+  siteName: 'Turf Time Dashboard', dataStartDate: '2026-06-01', estimatesFrom: null, noteNotify: NOTE_NOTIFY_DEFAULT,
   overrideExclusionItems: ['Electrical', 'Gas', 'Pergolas'],
 }

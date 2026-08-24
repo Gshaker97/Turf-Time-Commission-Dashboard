@@ -748,6 +748,8 @@ export default function SettingsPanel() {
       <ListEditor title="Sync: Skip Deal Names" settingKey="sync_skip_names"
         hint="Jobs whose customer name contains any of these are skipped as junk/test rows (case-insensitive substring)."
         placeholder="e.g. test" fallback={['test', 'cute']} />
+      <DateSetting title="Estimates From Leads — Start Date" settingKey="estimates_from_leads_date" fallback=""
+        hint="On and after this date, a rep's estimate count comes from the Leads feed — every appointment that RAN — instead of the hand-entered weekly numbers. Earlier weeks keep their manual entries, so history stays intact. Leave blank to keep using manual entry everywhere." />
       <DateSetting title="Data Start Date" settingKey="data_start_date" fallback="2026-06-01"
         hint="Deals closed before this date are treated as legacy: they still count in historical totals, but they're left out of the Needs-review staging list, the payroll overdue nag, and the Watchdog's background alerts. You'll still be prompted as they reach their pay-date run." />
     </div>

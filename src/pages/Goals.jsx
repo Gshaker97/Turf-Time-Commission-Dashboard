@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState, Fragment } from 'react'
 import { format } from 'date-fns'
 import { Target, Flame } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
-import { fetchDeals, fetchUsers, fetchWeeklyStats, fetchPersonalGoals, upsertPersonalGoal, saveRepGoal } from '../lib/db'
+import { fetchDeals, fetchUsers, fetchWeeklyStats, fetchPersonalGoals, fetchLeads, upsertPersonalGoal, saveRepGoal } from '../lib/db'
+import { useSettings } from '../contexts/SettingsContext'
 import { fmt } from '../utils/commission'
 import { headIdSet, teamKeyFor } from '../utils/team'
 import {
@@ -62,6 +63,8 @@ function MetricCell({ value, prog, editable, isEditing, onStartEdit, onDoneEdit,
 
 export default function Goals() {
   const { profile, isAdmin } = useAuth()
+  const { estimatesFrom } = useSettings()
+  const [leads, setLeads] = useState([])
   const [deals, setDeals] = useState([])
   const [users, setUsers] = useState([])
   const [weeklyStats, setWeeklyStats] = useState([])
@@ -70,9 +73,9 @@ export default function Goals() {
   const [editCell, setEditCell] = useState(null)   // "repId|period|field" being typed
 
   useEffect(() => {
-    Promise.all([fetchDeals(), fetchUsers(), fetchWeeklyStats(), fetchPersonalGoals()])
-      .then(([d, u, ws, g]) => {
-        setDeals(d.data ?? []); setUsers(u.data ?? []); setWeeklyStats(ws.data ?? []); setGoals(g.data ?? [])
+    Promise.all([fetchDeals(), fetchUsers(), fetchWeeklyStats(), fetchPersonalGoals(), fetchLeads()])
+      .then(([d, u, ws, g, l]) => {
+        setDeals(d.data ?? []); setUsers(u.data ?? []); setWeeklyStats(ws.data ?? []); setGoals(g.data ?? []); setLeads(l.data ?? [])
       })
       .finally(() => setLoading(false))
   }, [])
@@ -80,6 +83,7 @@ export default function Goals() {
   const today = todayISO()
   const periods = useMemo(() => currentPeriods(today), [today])
   const headsSet = useMemo(() => headIdSet(users), [users])
+  const estOpts = useMemo(() => ({ leads, estimatesFrom }), [leads, estimatesFrom])
 
   // Roster grouped by current team — active reps, managers, and team heads
   // (same seeding rule as the Performance breakdown); ghosts admin-only.
@@ -158,7 +162,7 @@ export default function Goals() {
     let rev = 0, revGoal = 0, dealsN = 0, dealsGoal = 0
     for (const rep of rows) {
       const g = resolveGoal(goals, rep.id, 'month', periods.month.start)
-      const p = repProduction(deals, weeklyStats, rep.id, periods.month)
+      const p = repProduction(deals, weeklyStats, rep.id, periods.month, estOpts)
       rev += p.revenue; dealsN += p.deals
       if (g?.revenue_target > 0) revGoal += Number(g.revenue_target)
       if (g?.deals_target > 0) dealsGoal += Number(g.deals_target)
@@ -170,16 +174,16 @@ export default function Goals() {
     const editable = canEditRep(rep)
     const wGoal = resolveGoal(goals, rep.id, 'week', periods.week.start)
     const mGoal = resolveGoal(goals, rep.id, 'month', periods.month.start)
-    const wProd = repProduction(deals, weeklyStats, rep.id, periods.week)
-    const mProd = repProduction(deals, weeklyStats, rep.id, periods.month)
+    const wProd = repProduction(deals, weeklyStats, rep.id, periods.week, estOpts)
+    const mProd = repProduction(deals, weeklyStats, rep.id, periods.month, estOpts)
     const wEl = periodElapsed(periods.week, today)
     const mEl = periodElapsed(periods.month, today)
-    const streak = estimateStreak(goals, deals, weeklyStats, rep.id, today)
+    const streak = estimateStreak(goals, deals, weeklyStats, rep.id, today, 26, estOpts)
     const noGoals = !goalIsSet(wGoal) && !goalIsSet(mGoal)
     // The goal-math helper shows while a monthly revenue goal exists but the
     // activity targets that should follow from it are still blank.
     const sug = editable && mGoal?.revenue_target > 0 && (mGoal.est_target == null || mGoal.deals_target == null)
-      ? suggestFromRevenue(deals, weeklyStats, rep.id, Number(mGoal.revenue_target), today) : null
+      ? suggestFromRevenue(deals, weeklyStats, rep.id, Number(mGoal.revenue_target), today, estOpts) : null
 
     const cells = (goal, prod, elapsed, periodKey) => (<>
       {[['est_target', prod.sgEst, false], ['deals_target', prod.deals, false], ['revenue_target', prod.revenue, true]].map(([field, value, money]) => {

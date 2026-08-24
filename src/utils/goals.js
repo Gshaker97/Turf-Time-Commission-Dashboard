@@ -15,6 +15,7 @@ import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, subMonths } f
 import { isCanceled } from './commission'
 import { saleOwnerId } from './team'
 import { weekStartOf } from './dateRanges'
+import { estimatesFor } from './estimates'
 
 const f = (d) => format(d, 'yyyy-MM-dd')
 
@@ -53,22 +54,21 @@ export const goalIsSet = hasTargets
 
 // A rep's production inside [start, end]: owner-credited deals/revenue,
 // self-gen estimates + leads ran from weekly_stats, lead closes/revenue.
-export function repProduction(deals, weeklyStats, repId, { start, end }) {
-  let revenue = 0, dealsN = 0, leadsClosed = 0, leadRevenue = 0, sgEst = 0, leadsRan = 0
+// opts.leads + opts.estimatesFrom hand estimate counting to the CRM feed on
+// and after the cutover date (see utils/estimates.js); earlier weeks keep
+// their hand-entered numbers so history stays intact.
+export function repProduction(deals, weeklyStats, repId, { start, end }, opts = {}) {
+  let revenue = 0, dealsN = 0, leadsClosed = 0, leadRevenue = 0
   for (const d of deals) {
     if (!d.sale_date || d.sale_date < start || d.sale_date > end || isCanceled(d)) continue
     const v = Number(d.baseline_revenue) || 0
     if (saleOwnerId(d) === repId) { revenue += v; dealsN += 1 }
     if (d.closer_id === repId && d.setter_id && d.setter_id !== d.closer_id) { leadsClosed += 1; leadRevenue += v }
   }
-  for (const s of weeklyStats) {
-    if (!s.week_start || s.rep_id !== repId) continue
-    if (s.week_start < start || s.week_start > end) continue
-    const sg = Number(s.self_gen_estimates) || 0, ld = Number(s.lead_estimates) || 0
-    if (sg || ld) { sgEst += sg; leadsRan += ld }
-    else sgEst += Number(s.estimates) || 0   // legacy unsplit weeks count as self-gen
-  }
-  return { revenue, deals: dealsN, leadsClosed, leadRevenue, sgEst, leadsRan }
+  const { sgEst, leadEst } = estimatesFor({
+    leads: opts.leads || [], weeklyStats, repId, start, end, from: opts.estimatesFrom || null,
+  })
+  return { revenue, deals: dealsN, leadsClosed, leadRevenue, sgEst, leadsRan: leadEst }
 }
 
 // Fraction of the period elapsed (0..1) — drives the pace marker.
@@ -93,12 +93,12 @@ export function metricProgress(value, target, elapsed) {
 
 // Goal math: suggest weekly + monthly activity from a monthly revenue target,
 // using the rep's own trailing 3 FULL months (fallbacks when history is thin).
-export function suggestFromRevenue(deals, weeklyStats, repId, monthlyRevenue, todayISO) {
+export function suggestFromRevenue(deals, weeklyStats, repId, monthlyRevenue, todayISO, opts = {}) {
   if (!(monthlyRevenue > 0)) return null
   const now = new Date(todayISO + 'T12:00:00')
   const start = f(startOfMonth(subMonths(now, 3)))
   const end = f(endOfMonth(subMonths(now, 1)))
-  const p = repProduction(deals, weeklyStats, repId, { start, end })
+  const p = repProduction(deals, weeklyStats, repId, { start, end }, opts)
   const avgDeal = p.deals > 0 ? p.revenue / p.deals : 6000
   const closeRate = p.sgEst > 0 && p.deals > 0 ? Math.min(p.deals / p.sgEst, 1) : 0.35
   const dealsMo = Math.max(1, Math.ceil(monthlyRevenue / avgDeal))
@@ -112,7 +112,7 @@ export function suggestFromRevenue(deals, weeklyStats, repId, monthlyRevenue, to
 
 // Consecutive completed weeks (ending last week) where the rep hit their
 // self-gen estimate goal. Weeks with no goal in force break the streak.
-export function estimateStreak(rows, deals, weeklyStats, repId, todayISO, maxWeeks = 26) {
+export function estimateStreak(rows, deals, weeklyStats, repId, todayISO, maxWeeks = 26, opts = {}) {
   let streak = 0
   let ws = weekStartOf(todayISO)
   for (let i = 0; i < maxWeeks; i++) {
@@ -121,7 +121,7 @@ export function estimateStreak(rows, deals, weeklyStats, repId, todayISO, maxWee
     const g = resolveGoal(rows, repId, 'week', ws)
     if (!g || !(g.est_target > 0)) break
     const end = f(endOfWeek(new Date(ws + 'T12:00:00'), { weekStartsOn: 0 }))
-    const p = repProduction(deals, weeklyStats, repId, { start: ws, end })
+    const p = repProduction(deals, weeklyStats, repId, { start: ws, end }, opts)
     if (p.sgEst >= g.est_target) streak += 1
     else break
   }
