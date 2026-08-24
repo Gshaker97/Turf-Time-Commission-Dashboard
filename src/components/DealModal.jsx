@@ -307,7 +307,13 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
   const repPoolForm = Math.max((parseFloat(form.job_price) || 0) - (parseFloat(form.baseline_revenue) || 0), 0)
   const setterDollars = repPoolForm * splitPct / 100
   const closerDollars = repPoolForm * (100 - splitPct) / 100
+  // While a $ box is focused, keep the RAW typed text — the displayed value is
+  // otherwise recomputed from the split on every keystroke, which mangles
+  // multi-digit entry ("1" → "1.00" → the next digit lands after the decimal).
+  // On blur it snaps back to the computed amount.
+  const [moneyEdit, setMoneyEdit] = useState(null)   // { which, text }
   function setSplitFromDollars(which, raw) {
+    setMoneyEdit({ which, text: raw })
     if (repPoolForm <= 0) return
     const v = Math.max(0, parseFloat(String(raw).replace(/[$,]/g, '')) || 0)
     let sp = which === 'setter' ? (v / repPoolForm) * 100 : (1 - v / repPoolForm) * 100
@@ -315,6 +321,8 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
     // cent — rounding to 2 dropped custom splits off by a few dollars.
     set('setter_split_pct', Math.min(100, Math.max(0, sp)).toFixed(4))
   }
+  const moneyValue = (which, computed) =>
+    moneyEdit?.which === which ? moneyEdit.text : (repPoolForm > 0 ? computed.toFixed(2) : '')
   // Resolve a typed bonus contribution to dollars (% is of baseline).
   const baseForBonus = parseFloat(form.baseline_revenue) || 0
   // Override exclusions — subcontracted items (Electrical/Gas/Pergolas…) whose
@@ -582,17 +590,23 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
               {/* Or type the dollar amount — the slider/% follow */}
               <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
                 <span className="text-[11px] text-white/40 sm:w-20 sm:text-right shrink-0">Setter $</span>
-                <input type="number" step="any" min="0" value={repPoolForm > 0 ? setterDollars.toFixed(2) : ''}
-                  onChange={e => setSplitFromDollars('setter', e.target.value)} placeholder="—" disabled={repPoolForm <= 0}
+                <input type="number" step="any" min="0" value={moneyValue('setter', setterDollars)}
+                  onChange={e => setSplitFromDollars('setter', e.target.value)}
+                  onFocus={e => e.target.select()} onBlur={() => setMoneyEdit(null)}
+                  placeholder="—" disabled={repPoolForm <= 0}
                   className="flex-1 px-2 py-2 rounded-lg text-[13px] text-white focus:outline-none disabled:opacity-40"
                   style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }} />
                 <span className="text-[11px] text-white/40 sm:w-20 sm:text-right shrink-0">Closer $</span>
-                <input type="number" step="any" min="0" value={repPoolForm > 0 ? closerDollars.toFixed(2) : ''}
-                  onChange={e => setSplitFromDollars('closer', e.target.value)} placeholder="—" disabled={repPoolForm <= 0}
+                <input type="number" step="any" min="0" value={moneyValue('closer', closerDollars)}
+                  onChange={e => setSplitFromDollars('closer', e.target.value)}
+                  onFocus={e => e.target.select()} onBlur={() => setMoneyEdit(null)}
+                  placeholder="—" disabled={repPoolForm <= 0}
                   className="flex-1 px-2 py-2 rounded-lg text-[13px] text-white focus:outline-none disabled:opacity-40"
                   style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }} />
               </div>
-              <p className="text-[10px] text-white/30">Type a $ amount to set the split (of the {fmt(repPoolForm)} rep pool) — the slider and % follow.</p>
+              <p className="text-[10px] text-white/30">
+                Type either $ amount — the other rep gets the rest of the {fmt(repPoolForm)} rep pool and the split % updates.
+              </p>
             </div>
           )}
 
