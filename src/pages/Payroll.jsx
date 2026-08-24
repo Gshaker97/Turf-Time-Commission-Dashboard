@@ -925,11 +925,15 @@ export default function Payroll() {
                     <ChevronDown size={13}
                       className={`text-white/25 flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
                     <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} title={d.status} />
-                    <button onClick={e => { e.stopPropagation(); openEdit(d) }}
-                      className="text-[13px] font-semibold text-white truncate text-left hover:text-teal transition-colors min-w-0 flex-1"
-                      title="Click the name to edit this deal">
-                      {d.deal_name}
-                    </button>
+                    {/* The wrapper takes the free space (clicking it expands the
+                        row); the button hugs the text so only the NAME edits. */}
+                    <div className="min-w-0 flex-1">
+                      <button onClick={e => { e.stopPropagation(); openEdit(d) }}
+                        className="block w-fit max-w-full text-[13px] font-semibold text-white truncate text-left hover:text-teal transition-colors"
+                        title="Click the name to edit this deal">
+                        {d.deal_name}
+                      </button>
+                    </div>
                     {d.commission_verified === true && <BadgeCheck size={13} className="flex-shrink-0" style={{ color: '#fbbf24' }} title="Commission verified" />}
                     <span className="hidden sm:block text-[11px] flex-shrink-0" style={{ color }}>{d.status}</span>
                     <span className="text-[13px] font-bold text-teal flex-shrink-0 w-[88px] text-right">{fmt(a.totalCommission)}</span>
