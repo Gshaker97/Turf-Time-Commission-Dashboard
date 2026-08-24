@@ -531,6 +531,191 @@ function NoteNotifyEditor() {
   )
 }
 
+// ── Lead feed: webhook endpoint + field mapping ──────────────────────────
+// The CRM posts whatever shape it likes; this maps its field names onto ours
+// so no code change is needed per provider. The last payload received is
+// stored by the server, so the picker lists REAL incoming field names.
+const LEAD_FIELDS = [
+  { key: 'external_id',    label: 'Appointment ID', hint: 'Their unique id — prevents duplicates' },
+  { key: 'customer_name',  label: 'Customer Name' },
+  { key: 'appointment_at', label: 'Appointment Date/Time' },
+  { key: 'status',         label: 'Status / Disposition' },
+  { key: 'setter_email',   label: 'Setter Email', hint: 'How we match the rep who booked it' },
+  { key: 'closer_email',   label: 'Closer Email', hint: 'The rep running it' },
+  { key: 'setter_name',    label: 'Setter Name', hint: 'Fallback when the email has no match' },
+  { key: 'closer_name',    label: 'Closer Name' },
+  { key: 'address',        label: 'Address' },
+  { key: 'phone',          label: 'Phone' },
+  { key: 'email',          label: 'Customer Email' },
+  { key: 'office',         label: 'Office' },
+  { key: 'notes',          label: 'Notes' },
+]
+const LEAD_LIFECYCLE = [
+  ['scheduled', 'Scheduled — on the calendar'],
+  ['completed', 'Ran — counts as an estimate'],
+  ['sold',      'Sold — ran and closed'],
+  ['no_show',   'No Show'],
+  ['canceled',  'Canceled'],
+]
+
+function LeadFeedEditor() {
+  const { settings, save } = useSettings()
+  const [map, setMap] = useState({})
+  const [statusMap, setStatusMap] = useState({})
+  const [dirty, setDirty] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState('')
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    setMap(settings.lead_field_map || {})
+    setStatusMap(settings.lead_status_map || {})
+    setDirty(false)
+  }, [settings.lead_field_map, settings.lead_status_map])
+
+  const last = settings.lead_last_payload || null
+  const incoming = last?.fields ? Object.keys(last.fields).sort() : []
+  const url = `${window.location.origin}/api/leads/ingest`
+
+  const setField = (k, v) => { setMap(m => ({ ...m, [k]: v })); setDirty(true); setSaved(false) }
+  const setStatus = (k, v) => { setStatusMap(m => ({ ...m, [k]: v })); setDirty(true); setSaved(false) }
+
+  async function onSave() {
+    setSaving(true); setError('')
+    const cleanMap = Object.fromEntries(Object.entries(map).filter(([, v]) => v))
+    const cleanStatus = Object.fromEntries(Object.entries(statusMap).filter(([, v]) => v))
+    const a = (await save('lead_field_map', cleanMap)) || {}
+    const b = (await save('lead_status_map', cleanStatus)) || {}
+    setSaving(false)
+    if (a.error || b.error) { setError((a.error || b.error).message); return }
+    setDirty(false); setSaved(true); setTimeout(() => setSaved(false), 2000)
+  }
+
+  // Disposition values seen in the last payload's status-ish field, so the
+  // status mapper can be filled in by clicking rather than typing.
+  const seenStatus = last?.sample && map.status ? String(
+    String(map.status).split('.').reduce((o, k) => (o == null ? undefined : o[k]), last.sample) ?? '') : ''
+  const knownDispositions = [...new Set([...Object.keys(statusMap), seenStatus].filter(Boolean))]
+
+  return (
+    <div className="rounded-xl p-4 md:p-5 space-y-4" style={card}>
+      <div>
+        <h3 className="text-[14px] font-semibold text-white">Lead Feed (CRM Webhook)</h3>
+        <p className="text-[11px] text-white/40 mt-0.5">
+          Point your CRM's webhook here and map its fields onto ours — no code change needed when the CRM's format differs.
+        </p>
+      </div>
+
+      {/* Endpoint */}
+      <div>
+        <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1.5">Webhook URL · POST</p>
+        <div className="flex items-center gap-2">
+          <code className="flex-1 min-w-0 truncate px-3 py-2 rounded-lg text-[12px] text-teal" style={inputStyle}>{url}</code>
+          <button onClick={() => { navigator.clipboard?.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 1600) }}
+            className="px-3 py-2 rounded-lg text-[12px] font-semibold text-white/60 hover:text-white whitespace-nowrap"
+            style={inputStyle}>{copied ? 'Copied' : 'Copy'}</button>
+        </div>
+        <p className="text-[10.5px] text-white/30 mt-1.5">
+          Send header <code className="text-white/50">Authorization: Bearer &lt;LEADS_INGEST_SECRET&gt;</code> — the secret lives in the site's Railway variables, never here.
+        </p>
+      </div>
+
+      {/* What the CRM last sent */}
+      <div>
+        <div className="flex items-baseline justify-between gap-2 mb-1.5">
+          <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest">Last received</p>
+          {last?.at && <p className="text-[10px] text-white/25">{new Date(last.at).toLocaleString()}</p>}
+        </div>
+        {incoming.length === 0 ? (
+          <p className="text-[12px] text-white/35 rounded-lg px-3 py-2.5" style={inputStyle}>
+            Nothing yet. Fire a test from your CRM — the fields it sends will appear here to map.
+          </p>
+        ) : (
+          <div className="rounded-lg px-3 py-2.5 max-h-40 overflow-y-auto space-y-0.5" style={inputStyle}>
+            {incoming.map(f => (
+              <p key={f} className="text-[11px] text-white/50 truncate">
+                <span className="text-teal">{f}</span>
+                <span className="text-white/25"> = {String(last.fields[f] ?? '')}</span>
+              </p>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Field mapping */}
+      <div>
+        <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-2">Field mapping</p>
+        <div className="space-y-1.5">
+          {LEAD_FIELDS.map(f => (
+            <div key={f.key} className="flex items-center gap-2">
+              <div className="w-[150px] flex-shrink-0">
+                <p className="text-[12px] text-white/70 truncate">{f.label}</p>
+                {f.hint && <p className="text-[9.5px] text-white/25 truncate">{f.hint}</p>}
+              </div>
+              <span className="text-white/20 text-[12px]">←</span>
+              {incoming.length > 0 ? (
+                <select value={map[f.key] || ''} onChange={e => setField(f.key, e.target.value)}
+                  style={inputStyle} className="flex-1 min-w-0 px-2 py-1.5 rounded-lg text-[12px] text-white focus:outline-none">
+                  <option value="">— not mapped —</option>
+                  {incoming.map(i => <option key={i} value={i}>{i}</option>)}
+                  {map[f.key] && !incoming.includes(map[f.key]) && <option value={map[f.key]}>{map[f.key]} (not in last payload)</option>}
+                </select>
+              ) : (
+                <input value={map[f.key] || ''} onChange={e => setField(f.key, e.target.value)}
+                  placeholder="their field name" style={inputStyle}
+                  className="flex-1 min-w-0 px-2 py-1.5 rounded-lg text-[12px] text-white placeholder-white/20 focus:outline-none" />
+              )}
+            </div>
+          ))}
+        </div>
+        <p className="text-[10.5px] text-white/30 mt-2">
+          Unmapped fields fall back to a same-named field in the payload. Nested values work with dots — <code className="text-white/45">data.customer.name</code>.
+        </p>
+      </div>
+
+      {/* Disposition mapping */}
+      <div>
+        <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1.5">Their dispositions → our lifecycle</p>
+        <p className="text-[10.5px] text-white/30 mb-2">
+          Only needed for wording we don't already recognize. <span className="text-white/45">Ran</span> and <span className="text-white/45">Sold</span> are what count as an estimate.
+        </p>
+        <div className="space-y-1.5">
+          {knownDispositions.map(d => (
+            <div key={d} className="flex items-center gap-2">
+              <code className="w-[150px] flex-shrink-0 truncate text-[12px] text-white/70">{d}</code>
+              <span className="text-white/20 text-[12px]">→</span>
+              <select value={statusMap[d] || ''} onChange={e => setStatus(d, e.target.value)}
+                style={inputStyle} className="flex-1 min-w-0 px-2 py-1.5 rounded-lg text-[12px] text-white focus:outline-none">
+                <option value="">— auto-detect —</option>
+                {LEAD_LIFECYCLE.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+          ))}
+          <AddDisposition onAdd={d => setStatus(d, 'completed')} existing={knownDispositions} />
+        </div>
+      </div>
+
+      <SaveBar dirty={dirty} saving={saving} saved={saved} error={error} onSave={onSave} />
+    </div>
+  )
+}
+
+function AddDisposition({ onAdd, existing }) {
+  const [v, setV] = useState('')
+  const add = () => { const t = v.trim(); if (t && !existing.includes(t)) { onAdd(t); setV('') } }
+  return (
+    <div className="flex items-center gap-2 pt-1">
+      <input value={v} onChange={e => setV(e.target.value)} placeholder="Add a disposition you use…"
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add() } }}
+        style={inputStyle} className="w-[150px] px-2 py-1.5 rounded-lg text-[12px] text-white placeholder-white/20 focus:outline-none" />
+      <button onClick={add} className="flex items-center gap-1 text-[11px] font-semibold text-teal hover:underline">
+        <Plus size={12} /> Add
+      </button>
+    </div>
+  )
+}
+
 export default function SettingsPanel() {
   return (
     <div className="space-y-4">
@@ -551,6 +736,7 @@ export default function SettingsPanel() {
       <OverrideRatesEditor />
       <PayDateRuleEditor />
       <NoteNotifyEditor />
+      <LeadFeedEditor />
       <ListEditor title="Override Exclusion Items" settingKey="override_exclusion_items"
         hint="Subcontracted products that earn no manager/director/VP override. On a deal, pick the item and enter its price — overrides then compute off baseline minus those amounts (baseline and job price don't change)."
         placeholder="e.g. Electrical" fallback={['Electrical', 'Gas', 'Pergolas']} />

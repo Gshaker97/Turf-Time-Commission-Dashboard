@@ -344,11 +344,60 @@ const DISPOSITION_MAP = {
   'no show': 'no_show', no_show: 'no_show', noshow: 'no_show', missed: 'no_show',
   canceled: 'canceled', cancelled: 'canceled', rescheduled: 'canceled',
 }
-const normalizeStatus = (status, disposition) => {
+// statusMap = the admin's own disposition → lifecycle overrides (Settings),
+// checked before the built-in list so a team's custom wording always wins.
+const normalizeStatus = (status, disposition, statusMap = {}) => {
+  const raw = String(disposition ?? status ?? '').trim()
+  const custom = statusMap[raw] || statusMap[raw.toLowerCase()]
+  if (LEAD_STATUSES.includes(custom)) return custom
   const s = String(status || '').trim().toLowerCase().replace(/[\s-]+/g, '_')
   if (LEAD_STATUSES.includes(s)) return s
-  const d = String(disposition || status || '').trim().toLowerCase()
+  const d = raw.toLowerCase()
   return DISPOSITION_MAP[d] || DISPOSITION_MAP[d.replace(/[\s-]+/g, '_')] || 'scheduled'
+}
+
+// Read a possibly-nested value by dot path ("data.customer.name") so a
+// mapping can reach into whatever shape the CRM sends.
+function atPath(obj, path) {
+  if (!path) return undefined
+  return String(path).split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj)
+}
+
+// Flatten a payload to dot-path → value, so the Settings mapper can list the
+// exact field names the CRM sent (capped so a huge payload can't blow up).
+function flattenPayload(obj, prefix = '', out = {}, depth = 0) {
+  if (depth > 4 || Object.keys(out).length > 200) return out
+  for (const [k, v] of Object.entries(obj || {})) {
+    const key = prefix ? `${prefix}.${k}` : k
+    if (v && typeof v === 'object' && !Array.isArray(v)) flattenPayload(v, key, out, depth + 1)
+    else out[key] = Array.isArray(v) ? `[${v.length} items]` : v
+  }
+  return out
+}
+
+// Admin-defined field + disposition mapping (Admin → Settings → Lead Feed).
+async function loadLeadConfig() {
+  try {
+    const rows = await restGet('/rest/v1/app_settings?select=key,value&key=in.(lead_field_map,lead_status_map)')
+    const cfg = {}
+    for (const r of rows) cfg[r.key] = r.value
+    return { fieldMap: cfg.lead_field_map || {}, statusMap: cfg.lead_status_map || {} }
+  } catch { return { fieldMap: {}, statusMap: {} } }
+}
+
+// Remember the most recent payload so the Settings mapper can show exactly
+// what the CRM sent, with real field names to pick from.
+async function recordLastPayload(sample) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/app_settings?on_conflict=key`, {
+      method: 'POST',
+      headers: { ...jsonHeaders, Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify([{
+        key: 'lead_last_payload',
+        value: { at: new Date().toISOString(), fields: flattenPayload(sample), sample },
+      }]),
+    })
+  } catch { /* diagnostics only — never fail an ingest over this */ }
 }
 
 async function ingestLeads(rawBody) {
@@ -358,9 +407,18 @@ async function ingestLeads(rawBody) {
   if (!items.length) return err('No leads in the payload.')
   if (items.length > 500) return err('Too many leads in one call (max 500).')
 
+  const { fieldMap, statusMap } = await loadLeadConfig()
+  await recordLastPayload(items[0])
+  // Our field ← whatever the admin mapped it to, else the same-named field.
+  const pick = (item, field) => {
+    const mapped = fieldMap[field]
+    const v = mapped ? atPath(item, mapped) : item[field]
+    return v === '' || v === undefined ? null : v
+  }
+
   // Resolve people by email in one lookup.
   const emails = [...new Set(items.flatMap(i =>
-    [i.setter_email, i.closer_email].filter(Boolean).map(e => String(e).trim().toLowerCase())))]
+    [pick(i, 'setter_email'), pick(i, 'closer_email')].filter(Boolean).map(e => String(e).trim().toLowerCase())))]
   const byEmail = {}
   if (emails.length) {
     const list = emails.map(e => `"${e.replace(/"/g, '')}"`).join(',')
@@ -371,27 +429,31 @@ async function ingestLeads(rawBody) {
   const rows = []
   const unmatched = []
   for (const i of items) {
-    const setterEmail = i.setter_email ? String(i.setter_email).trim().toLowerCase() : null
-    const closerEmail = i.closer_email ? String(i.closer_email).trim().toLowerCase() : null
+    const se = pick(i, 'setter_email'), ce = pick(i, 'closer_email')
+    const setterEmail = se ? String(se).trim().toLowerCase() : null
+    const closerEmail = ce ? String(ce).trim().toLowerCase() : null
     const setterId = setterEmail ? byEmail[setterEmail] || null : null
     const closerId = closerEmail ? byEmail[closerEmail] || null : null
     if (setterEmail && !setterId) unmatched.push(setterEmail)
     if (closerEmail && !closerId) unmatched.push(closerEmail)
+    const extId = pick(i, 'external_id')
+    const rawStatus = pick(i, 'status')
+    const disposition = pick(i, 'disposition') ?? rawStatus
     rows.push({
-      source: String(i.source || 'repcard'),
-      external_id: i.external_id != null ? String(i.external_id) : null,
-      customer_name: i.customer_name ?? null,
-      address: i.address ?? null,
-      phone: i.phone ?? null,
-      email: i.email ?? null,
-      appointment_at: i.appointment_at ?? null,
-      status: normalizeStatus(i.status, i.disposition),
-      disposition: i.disposition ?? i.status ?? null,
+      source: String(pick(i, 'source') || 'repcard'),
+      external_id: extId != null ? String(extId) : null,
+      customer_name: pick(i, 'customer_name'),
+      address: pick(i, 'address'),
+      phone: pick(i, 'phone'),
+      email: pick(i, 'email'),
+      appointment_at: pick(i, 'appointment_at'),
+      status: normalizeStatus(rawStatus, disposition, statusMap),
+      disposition: disposition ?? null,
       setter_id: setterId, closer_id: closerId,
-      setter_name: i.setter_name ?? setterEmail ?? null,
-      closer_name: i.closer_name ?? closerEmail ?? null,
-      office: i.office ?? null,
-      notes: i.notes ?? null,
+      setter_name: pick(i, 'setter_name') ?? setterEmail ?? null,
+      closer_name: pick(i, 'closer_name') ?? closerEmail ?? null,
+      office: pick(i, 'office'),
+      notes: pick(i, 'notes'),
       raw: i,
     })
   }
