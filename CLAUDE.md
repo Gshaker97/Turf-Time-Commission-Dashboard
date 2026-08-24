@@ -244,15 +244,25 @@ setup + deploy steps.
 Replaces hand-collected estimates. `leads` = one row per APPOINTMENT fed in
 from the field CRM (RepCard). Route `/leads`, all roles (reps see only
 appointments they set or run; admins edit).
-- **Ingest:** `POST /api/leads/ingest` on `server.js`, auth = the service key
-  as bearer. ONE normalized contract so any pipe works (direct webhook,
-  Zapier/Make, or a poller) — only a thin adapter changes. Body = one object
-  or `{ leads: [...] }`; upserts on `(source, external_id)` so a webhook
-  firing twice is harmless (partial UNIQUE index, same backstop as
-  `deals.project_id`). People resolve BY EMAIL against `profiles`
-  (`setter_email`/`closer_email`); unmatched emails come back in the response
-  AND the row still lands with `setter_name`/`closer_name` text — never drop
-  the appointment.
+- **Ingest:** `POST /api/leads/ingest` on `server.js`. Auth = `LEADS_INGEST_SECRET`
+  (a Railway var on the SITE service — a scoped token so the database master
+  key never goes into a vendor's config); the service key also works for curl
+  tests, and `X-API-Key` / `?secret=` are accepted for senders that can't set
+  headers. Body = one object or `{ leads: [...] }`; upserts on
+  `(source, external_id)` so a webhook firing twice is harmless (partial
+  UNIQUE index, same backstop as `deals.project_id`). People resolve BY EMAIL
+  against `profiles`; unmatched emails come back in the response AND the row
+  still lands with `setter_name`/`closer_name` text — never drop the
+  appointment.
+- **Field mapping is ADMIN-CONFIGURABLE, not hard-coded per CRM.** Admin →
+  Settings → "Lead Feed" holds `app_settings.lead_field_map` (our field ←
+  their field name, dot paths supported for nested payloads) and
+  `lead_status_map` (their disposition wording → our lifecycle). The server
+  applies both in `ingestLeads`; unmapped fields fall back to a same-named
+  key. Every ingest also stores `lead_last_payload` (flattened field list +
+  the sample), so the Settings mapper lists the REAL incoming field names as
+  dropdown options instead of making anyone guess. Adding a new CRM = mapping
+  clicks, not a code change.
 - **Status** is a normalized lifecycle: `scheduled | completed | sold |
   no_show | canceled`. `completed`/`sold` = the appointment RAN = an estimate.
   The CRM's raw outcome is kept in `disposition`; `DISPOSITION_MAP` in
