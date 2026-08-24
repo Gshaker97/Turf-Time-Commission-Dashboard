@@ -378,12 +378,12 @@ function RecordTile({ label, value, holder, when, teal, rec, metric }) {
 
 // The all-time Record Book — company bests (with live record-watch) + rep
 // bests. Sits at the bottom of the page; visible to everyone.
-function RecordBook({ deals, users, isAdmin, dataStartDate }) {
+function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
   const book = useMemo(
-    () => buildRecordBook(deals, { users, isAdmin, dataStartDate, todayISO: todayISO() }),
-    [deals, users, isAdmin, dataStartDate]
+    () => buildRecordBook(deals, { users, isAdmin, dataStartDate, todayISO: todayISO(), teamCtx }),
+    [deals, users, isAdmin, dataStartDate, teamCtx]
   )
-  const c = book.company, r = book.reps
+  const c = book.company, r = book.reps, t = book.teams
   const hasAny = Object.values(c).some(x => x.best || x.current) || Object.values(r).some(Boolean)
   if (!hasAny) return null
   return (
@@ -407,14 +407,29 @@ function RecordBook({ deals, users, isAdmin, dataStartDate }) {
         <div>
           <p className="text-[9px] font-bold uppercase tracking-widest text-white/30 mb-2">Rep records</p>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5">
-            <RecordTile teal label="Biggest Rep Month" value={r.revMonth?.value} holder={r.revMonth?.holderName} when={r.revMonth?.label} />
-            <RecordTile teal label="Biggest Rep Week"  value={r.revWeek?.value}  holder={r.revWeek?.holderName}  when={r.revWeek?.label} />
+            <RecordTile teal label="Biggest Rep Month" value={r.revMonth.best?.value} holder={r.revMonth.best?.holderName} when={r.revMonth.best?.label} rec={r.revMonth} />
+            <RecordTile teal label="Biggest Rep Week"  value={r.revWeek.best?.value}  holder={r.revWeek.best?.holderName}  when={r.revWeek.best?.label}  rec={r.revWeek} />
             <RecordTile teal label="Biggest Single Deal" value={r.biggestDeal?.value} holder={r.biggestDeal?.holderName} when={r.biggestDeal?.when} />
-            <RecordTile teal label="Most Deals — Rep Month" metric="deals" value={r.dealsMonth?.value} holder={r.dealsMonth?.holderName} when={r.dealsMonth?.label} />
-            <RecordTile teal label="Most Deals — Rep Week"  metric="deals" value={r.dealsWeek?.value}  holder={r.dealsWeek?.holderName}  when={r.dealsWeek?.label} />
+            <RecordTile teal label="Most Deals — Rep Month" metric="deals" value={r.dealsMonth.best?.value} holder={r.dealsMonth.best?.holderName} when={r.dealsMonth.best?.label} rec={r.dealsMonth} />
+            <RecordTile teal label="Most Deals — Rep Week"  metric="deals" value={r.dealsWeek.best?.value}  holder={r.dealsWeek.best?.holderName}  when={r.dealsWeek.best?.label}  rec={r.dealsWeek} />
+            <RecordTile teal label="Biggest Rep Day" value={r.revDay.best?.value} holder={r.revDay.best?.holderName} when={r.revDay.best?.label} rec={r.revDay} />
           </div>
         </div>
       </div>
+
+      {t && Object.values(t).some(x => x.best) && (
+        <div className="mt-4">
+          <p className="text-[9px] font-bold uppercase tracking-widest text-white/30 mb-2">Team records</p>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5">
+            <RecordTile label="Biggest Team Month" value={t.revMonth.best?.value} holder={t.revMonth.best?.holderName} when={t.revMonth.best?.label} rec={t.revMonth} />
+            <RecordTile label="Biggest Team Week"  value={t.revWeek.best?.value}  holder={t.revWeek.best?.holderName}  when={t.revWeek.best?.label}  rec={t.revWeek} />
+            <RecordTile label="Biggest Team Day"   value={t.revDay.best?.value}   holder={t.revDay.best?.holderName}   when={t.revDay.best?.label}   rec={t.revDay} />
+            <RecordTile label="Most Deals — Team Month" metric="deals" value={t.dealsMonth.best?.value} holder={t.dealsMonth.best?.holderName} when={t.dealsMonth.best?.label} rec={t.dealsMonth} />
+            <RecordTile label="Most Deals — Team Week"  metric="deals" value={t.dealsWeek.best?.value}  holder={t.dealsWeek.best?.holderName}  when={t.dealsWeek.best?.label}  rec={t.dealsWeek} />
+            <RecordTile label="Most Deals — Team Day"   metric="deals" value={t.dealsDay.best?.value}   holder={t.dealsDay.best?.holderName}   when={t.dealsDay.best?.label}   rec={t.dealsDay} />
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -654,7 +669,7 @@ export default function Competitions() {
       )}
 
       {/* All-time Record Book — company + rep bests, visible to everyone. */}
-      {!loading && <RecordBook deals={deals} users={users} isAdmin={isAdmin} dataStartDate={dataStartDate} />}
+      {!loading && <RecordBook deals={deals} users={users} isAdmin={isAdmin} dataStartDate={dataStartDate} teamCtx={teamCtx} />}
 
       {/* Off-screen render used only to snapshot a competition to a PNG. */}
       {exportComp && (

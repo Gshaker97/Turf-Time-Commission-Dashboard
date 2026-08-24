@@ -9,7 +9,7 @@
 // ============================================================
 import { format } from 'date-fns'
 import { isCanceled } from './commission'
-import { saleOwnerId } from './team'
+import { saleOwnerId, teamOfSale } from './team'
 import { weekStartOf } from './dateRanges'
 
 const monthLabel = (mk) => format(new Date(mk + '-15T12:00:00'), 'MMMM yyyy')
@@ -50,17 +50,45 @@ function pickRecord(map, metric, curKey, labelFn) {
 
 const bump = (map, k, v) => { const t = (map[k] ||= { revenue: 0, deals: 0 }); t.revenue += v; t.deals += 1 }
 
+// Same as pickRecord, but for maps keyed `${entityId}|${periodKey}` (reps,
+// teams): best + runner-up over COMPLETED periods, plus the current period's
+// LEADER — so a banner can fire the moment somebody passes the all-time mark.
+function pickEntityRecord(map, metric, curKey, labelFn, nameOf) {
+  let best = null, prev = null, current = null
+  for (const k of Object.keys(map)) {
+    const i = k.indexOf('|')
+    const id = k.slice(0, i), pk = k.slice(i + 1)
+    const v = map[k][metric]
+    if (!(v > 0)) continue
+    const row = { id, key: pk, value: v, label: labelFn(pk), holderName: nameOf(id) }
+    if (pk === curKey) { if (!current || v > current.value) current = row; continue }
+    if (!best || v > best.value) { prev = best; best = row }
+    else if (!prev || v > prev.value) prev = row
+  }
+  let status = null
+  if (current) {
+    if (!best) status = 'new'
+    else if (current.value > best.value) status = 'new'
+    else if (current.value >= best.value * 0.85) status = 'watch'
+  }
+  return { best, prev, current, status }
+}
+
 // Full record book: company records (with watch/new status) + rep records.
 // Ghost reps' deals still count for company; their NAMES only hold rep
 // records for admins (hidden elsewhere, like every leaderboard).
-export function buildRecordBook(deals = [], { users = [], isAdmin = false, dataStartDate = '', todayISO }) {
+// teamCtx ({ usersById, heads, changesByProfile }) enables TEAM records —
+// date-effective attribution, same rule as every other team breakdown.
+export function buildRecordBook(deals = [], { users = [], isAdmin = false, dataStartDate = '', todayISO, teamCtx = null }) {
   const curMonth = todayISO.slice(0, 7)
   const curWeek  = weekStartOf(todayISO)
   const ghosts = new Set(users.filter(u => u.ghost).map(u => u.id))
   const nameOf = (id) => users.find(u => u.id === id)?.name ?? '—'
+  const teamNameOf = (id) => (id === 'unassigned' ? 'Unassigned' : `${nameOf(id)}'s Team`)
 
   const cm = {}, cw = {}, cd = {}
-  const rm = {}, rw = {}
+  const rm = {}, rw = {}, rd = {}
+  const tm = {}, tw = {}, td = {}
   let biggestDeal = null
   for (const d of deals) {
     if (!d.sale_date || isCanceled(d)) continue
@@ -72,21 +100,18 @@ export function buildRecordBook(deals = [], { users = [], isAdmin = false, dataS
     if (o && (isAdmin || !ghosts.has(o))) {
       bump(rm, `${o}|${mk}`, v)
       bump(rw, `${o}|${wk}`, v)
+      bump(rd, `${o}|${dk}`, v)
       if (v > 0 && (!biggestDeal || v > biggestDeal.value))
         biggestDeal = { value: v, holderId: o, when: dayLabel(dk) }
     }
-  }
-
-  // Rep records over completed periods only (current period still cooking).
-  const repBest = (map, metric, curSuffix, labelFn) => {
-    let best = null
-    for (const k of Object.keys(map)) {
-      const [id, pk] = k.split('|')
-      if (pk === curSuffix) continue
-      const v = map[k][metric]
-      if (v > 0 && (!best || v > best.value)) best = { value: v, holderId: id, label: labelFn(pk) }
+    if (teamCtx && o) {
+      const tk = teamOfSale(o, d.sale_date, teamCtx.usersById, teamCtx.heads, teamCtx.changesByProfile)
+      if (tk && tk !== 'unassigned') {
+        bump(tm, `${tk}|${mk}`, v)
+        bump(tw, `${tk}|${wk}`, v)
+        bump(td, `${tk}|${dk}`, v)
+      }
     }
-    return best
   }
 
   const company = {
@@ -98,14 +123,24 @@ export function buildRecordBook(deals = [], { users = [], isAdmin = false, dataS
     dealsDay:   pickRecord(cd, 'deals',   todayISO, dayLabel),
   }
   const reps = {
-    revMonth:   repBest(rm, 'revenue', curMonth, monthLabel),
-    revWeek:    repBest(rw, 'revenue', curWeek,  weekLabel),
-    dealsMonth: repBest(rm, 'deals',   curMonth, monthLabel),
-    dealsWeek:  repBest(rw, 'deals',   curWeek,  weekLabel),
+    revMonth:   pickEntityRecord(rm, 'revenue', curMonth, monthLabel, nameOf),
+    revWeek:    pickEntityRecord(rw, 'revenue', curWeek,  weekLabel,  nameOf),
+    revDay:     pickEntityRecord(rd, 'revenue', todayISO, dayLabel,   nameOf),
+    dealsMonth: pickEntityRecord(rm, 'deals',   curMonth, monthLabel, nameOf),
+    dealsWeek:  pickEntityRecord(rw, 'deals',   curWeek,  weekLabel,  nameOf),
+    dealsDay:   pickEntityRecord(rd, 'deals',   todayISO, dayLabel,   nameOf),
     biggestDeal,
   }
-  for (const r of Object.values(reps)) if (r && r.holderId) r.holderName = nameOf(r.holderId)
-  return { company, reps }
+  if (biggestDeal) biggestDeal.holderName = nameOf(biggestDeal.holderId)
+  const teams = teamCtx ? {
+    revMonth:   pickEntityRecord(tm, 'revenue', curMonth, monthLabel, teamNameOf),
+    revWeek:    pickEntityRecord(tw, 'revenue', curWeek,  weekLabel,  teamNameOf),
+    revDay:     pickEntityRecord(td, 'revenue', todayISO, dayLabel,   teamNameOf),
+    dealsMonth: pickEntityRecord(tm, 'deals',   curMonth, monthLabel, teamNameOf),
+    dealsWeek:  pickEntityRecord(tw, 'deals',   curWeek,  weekLabel,  teamNameOf),
+    dealsDay:   pickEntityRecord(td, 'deals',   todayISO, dayLabel,   teamNameOf),
+  } : null
+  return { company, reps, teams }
 }
 
 // One rep's personal bests (owner-credited), for the Home card.

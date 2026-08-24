@@ -207,7 +207,10 @@ export default function Dashboard() {
   const recordMoments = useMemo(() => {
     if (!deals.length) return []
     const today = format(new Date(), 'yyyy-MM-dd')
-    const { company } = buildRecordBook(deals, { users, isAdmin, dataStartDate, todayISO: today })
+    const { company, reps, teams } = buildRecordBook(deals, {
+      users, isAdmin, dataStartDate, todayISO: today,
+      teamCtx: { usersById, heads: headsSet, changesByProfile },
+    })
     const NAMES = {
       revMonth: ['month', 'biggest month'], revWeek: ['week', 'biggest week'], revDay: ['day', 'biggest day'],
       dealsMonth: ['month', 'most deals in a month'], dealsWeek: ['week', 'most deals in a week'], dealsDay: ['day', 'most deals in a day'],
@@ -215,25 +218,39 @@ export default function Dashboard() {
     const cutoff = new Date(today + 'T12:00:00'); cutoff.setDate(cutoff.getDate() - 7)
     const cutISO = format(cutoff, 'yyyy-MM-dd')
     const val = (key, v) => key.startsWith('deals') ? `${v} deals` : fmt(v)
-    const out = []
-    for (const [key, rec] of Object.entries(company)) {
-      const [grain, label] = NAMES[key]
-      // In-progress: the current period has already passed the all-time best.
-      if (rec.status === 'new' && rec.best) {
-        out.push({
-          id: `rec-${key}-${rec.current.key}`,
-          text: <>🔥 <b>NEW COMPANY RECORD in progress</b> — {label}: <b>{val(key, rec.current.value)}</b> and counting (previous best: {val(key, rec.best.value)}, {rec.best.label})</>,
-        })
-      // Recently completed: the reigning record was set within the last week.
-      } else if (rec.best && rec.prev && periodEnd(grain, rec.best.key) >= cutISO) {
-        out.push({
-          id: `rec-${key}-${rec.best.key}`,
-          text: <>🔥 <b>NEW COMPANY RECORD</b> — {label}: <b>{val(key, rec.best.value)}</b> ({rec.best.label}; previous: {val(key, rec.prev.value)})</>,
-        })
+
+    // Company / rep / team all banner the same two ways: a record being
+    // passed RIGHT NOW, or one set within the last 7 days. `prev` is required
+    // on completed ones so a first-ever period never banners.
+    const scan = (book, scope) => {
+      const out = []
+      if (!book) return out
+      for (const [key, rec] of Object.entries(book)) {
+        if (!NAMES[key] || !rec || typeof rec !== 'object' || !('status' in rec)) continue
+        const [grain, label] = NAMES[key]
+        const who = (r) => r?.holderName ? <b>{r.holderName}</b> : null
+        if (rec.status === 'new' && rec.best) {
+          out.push({
+            id: `rec-${scope}-${key}-${rec.current.key}`,
+            text: scope === 'company'
+              ? <>🔥 <b>NEW COMPANY RECORD in progress</b> — {label}: <b>{val(key, rec.current.value)}</b> and counting (previous best: {val(key, rec.best.value)}, {rec.best.label})</>
+              : <>🔥 {who(rec.current)} is breaking the {scope} record — {label}: <b>{val(key, rec.current.value)}</b> and counting (previous: {val(key, rec.best.value)}{rec.best.holderName ? `, ${rec.best.holderName}` : ''})</>,
+          })
+        } else if (rec.best && rec.prev && periodEnd(grain, rec.best.key) >= cutISO) {
+          out.push({
+            id: `rec-${scope}-${key}-${rec.best.key}`,
+            text: scope === 'company'
+              ? <>🔥 <b>NEW COMPANY RECORD</b> — {label}: <b>{val(key, rec.best.value)}</b> ({rec.best.label}; previous: {val(key, rec.prev.value)})</>
+              : <>🔥 <b>NEW {scope.toUpperCase()} RECORD</b> — {who(rec.best)}, {label}: <b>{val(key, rec.best.value)}</b> ({rec.best.label}; previous: {val(key, rec.prev.value)})</>,
+          })
+        }
       }
+      return out
     }
-    return out.filter(m => !dismissedRecs.has(m.id)).slice(0, 2)
-  }, [deals, users, isAdmin, dataStartDate, dismissedRecs])
+    // Company first, then team, then rep — biggest news at the top.
+    const out = [...scan(company, 'company'), ...scan(teams, 'team'), ...scan(reps, 'rep')]
+    return out.filter(m => !dismissedRecs.has(m.id)).slice(0, 3)
+  }, [deals, users, isAdmin, dataStartDate, dismissedRecs, usersById, headsSet, changesByProfile])
 
   const monthlyGoal = useMemo(() => {
     const curKey = `${String(goalYear).padStart(4,'0')}-${String(goalMonth).padStart(2,'0')}`
