@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, Fragment } from 'react'
 import { format } from 'date-fns'
-import { CalendarCheck, Search, Link2, Upload, X } from 'lucide-react'
+import { CalendarCheck, Search, Link2, Upload, X, ChevronDown } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchLeads, fetchUsers, updateLead, upsertLeads, fetchLeadHistory } from '../lib/db'
 import { csvToLeads } from '../utils/leadImport'
@@ -9,6 +9,8 @@ import { headIdSet, teamKeyFor } from '../utils/team'
 import DateRangeFilter from '../components/DateRangeFilter'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { toast } from '../lib/toast'
+import { useSettings } from '../contexts/SettingsContext'
+import { leadFeedHealth } from '../utils/feedHealth'
 
 // The lifecycle the site reasons about (migration 041). RUN = the appointment
 // actually happened, which is what counts as an estimate.
@@ -36,6 +38,7 @@ function Kpi({ label, value, sub, color = '#00b894' }) {
 
 export default function Leads() {
   const { profile, isAdmin } = useAuth()
+  const { settings } = useSettings()
   const role = profile?.role ?? 'rep'
   const [leads, setLeads] = useState([])
   const [users, setUsers] = useState([])
@@ -46,7 +49,20 @@ export default function Leads() {
   const [preset, setPreset]     = useState('mtd')
   const [search, setSearch]     = useState('')
   const [repFilter, setRepFilter]       = useState('')
+  // The rep board is collapsible so the appointment list can be the focus.
+  const [showBoard, setShowBoard] = useState(() => {
+    try { return localStorage.getItem('tt_leads_board') !== 'off' } catch { return true }
+  })
+  const toggleBoard = () => setShowBoard(v => {
+    const next = !v
+    try { localStorage.setItem('tt_leads_board', next ? 'on' : 'off') } catch { /* ignore */ }
+    return next
+  })
   const [statusFilter, setStatusFilter] = useState('')
+
+  const feed = useMemo(
+    () => leadFeedHealth(leads, settings?.lead_last_payload?.at),
+    [leads, settings?.lead_last_payload?.at])
 
   const load = () => Promise.all([fetchLeads(), fetchUsers()])
     .then(([l, u]) => { setLeads(l.data ?? []); setUsers(u.data ?? []) })
@@ -181,11 +197,11 @@ export default function Leads() {
   // Field labels + value rendering for the log — ids become names, statuses
   // become their friendly label.
   const FIELD_LABEL = {
-    status: 'Status', setter_id: 'Setter', closer_id: 'Closer',
-    setter_name: 'Setter name', closer_name: 'Closer name',
-    appointment_at: 'Date/time', customer_name: 'Customer', address: 'Address',
-    phone: 'Phone', email: 'Email', office: 'Office', notes: 'Notes',
-    disposition: 'Disposition', pinned: 'Protected from feed', deal_id: 'Linked deal',
+    status: 'the status', setter_id: 'the setter', closer_id: 'the closer',
+    setter_name: 'the setter', closer_name: 'the closer',
+    appointment_at: 'the date', customer_name: 'the customer', address: 'the address',
+    phone: 'the phone', email: 'the email', office: 'the office', notes: 'the notes',
+    disposition: 'the disposition', pinned: 'feed protection', deal_id: 'the linked deal',
   }
   const histValue = (field, v) => {
     if (v === null || v === undefined || v === '') return '—'
@@ -284,27 +300,30 @@ export default function Leads() {
                   No changes recorded yet. History starts once migration 043 is in place.
                 </p>
               ) : hist.map(h => {
-                const who = h.editor?.name || nameOfUser(h.changed_by) || 'CRM feed'
+                // One plain sentence per change: who did it, what it became.
+                const who = h.editor?.name || nameOfUser(h.changed_by) || 'RepCard'
                 const entries = Object.entries(h.changes || {}).filter(([k]) => k !== '_event')
                 const created = h.changes?._event === 'created'
                 return (
-                  <div key={h.id} className="rounded-lg px-3 py-2.5" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
-                    <div className="flex items-baseline justify-between gap-2 mb-1">
-                      <span className="text-[12px] font-semibold text-white/85">{who}</span>
-                      <span className="text-[10px] text-white/30 whitespace-nowrap">{format(new Date(h.changed_at), 'MMM d, h:mma')}</span>
+                  <div key={h.id} className="flex items-baseline justify-between gap-3 py-1.5 border-b border-white/5 last:border-0">
+                    <div className="min-w-0">
+                      {created ? (
+                        <p className="text-[12px] text-white/70">
+                          Added by <span className="font-semibold text-white/90">{who}</span>
+                        </p>
+                      ) : entries.length === 0 ? (
+                        <p className="text-[12px] text-white/35">Refreshed by {who}</p>
+                      ) : entries.map(([field, v]) => (
+                        <p key={field} className="text-[12px] text-white/70">
+                          <span className="font-semibold text-white/90">{who}</span>
+                          {' '}updated {FIELD_LABEL[field] || field} to{' '}
+                          <span className="font-semibold text-white/90">{histValue(field, v?.to)}</span>
+                        </p>
+                      ))}
                     </div>
-                    {created ? (
-                      <p className="text-[11.5px] text-white/45">Appointment added</p>
-                    ) : entries.length === 0 ? (
-                      <p className="text-[11.5px] text-white/35">No visible field changes</p>
-                    ) : entries.map(([field, v]) => (
-                      <p key={field} className="text-[11.5px] text-white/60">
-                        <span className="text-white/40">{FIELD_LABEL[field] || field}:</span>{' '}
-                        <span className="text-white/35 line-through">{histValue(field, v?.from)}</span>
-                        {' → '}
-                        <span className="text-white/85">{histValue(field, v?.to)}</span>
-                      </p>
-                    ))}
+                    <span className="text-[10px] text-white/25 whitespace-nowrap flex-shrink-0">
+                      {format(new Date(h.changed_at), 'MMM d, h:mma')}
+                    </span>
                   </div>
                 )
               })}
@@ -374,12 +393,20 @@ export default function Leads() {
         </div>
       )}
 
-      {leads.length === 0 && (
-        <div className="rounded-xl px-4 py-3 text-[12px]"
-          style={{ background: 'rgba(116,185,255,0.07)', border: '1px solid rgba(116,185,255,0.3)', color: '#bcdcff' }}>
-          No appointments yet — this fills in automatically once the CRM feed is connected.
-        </div>
-      )}
+      {/* Feed health — a push feed has no "last ran", so this answers
+          "are appointments actually arriving?" at a glance. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl px-3.5 py-2"
+        style={{ background: '#1e1e1e', border: `1px solid ${feed.level === 'ok' ? '#2a2a2a' : feed.color + '55'}` }}>
+        <span className="flex items-center gap-2 min-w-0">
+          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: feed.color }} />
+          <span className="text-[11.5px] text-white/60">CRM feed · {feed.text}</span>
+        </span>
+        {feed.lastAt && (
+          <span className="text-[11px] text-white/30 ml-auto whitespace-nowrap">
+            {feed.last7} in the last 7 days
+          </span>
+        )}
+      </div>
 
       <div className="flex flex-wrap items-center gap-2">
         <DateRangeFilter from={dateFrom} to={dateTo} preset={preset}
@@ -414,11 +441,16 @@ export default function Leads() {
 
       {byTeam.length > 0 && (
         <div className="rounded-xl p-4 md:p-5" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-          <h3 className="text-[13px] font-semibold text-white mb-0.5">By Team &amp; Rep — {presetLabel(preset)}</h3>
-          <p className="text-[10px] text-white/30 mb-3">
+          <button onClick={toggleBoard}
+            className="flex items-center gap-1.5 text-[13px] font-semibold text-white hover:text-teal transition-colors">
+            <ChevronDown size={13} className={`text-white/30 transition-transform ${showBoard ? '' : '-rotate-90'}`} />
+            By Team &amp; Rep — {presetLabel(preset)}
+          </button>
+          <p className="text-[10px] text-white/30 mb-3 mt-0.5">
             Set → ran → sold, credited to whoever ran the appointment. <span className="text-white/45">Ran</span> is the estimate
             count feeding close rates site-wide; <span className="text-white/45">Sold</span> is the appointment's outcome, not a deal record.
           </p>
+          {showBoard && (
           <div className="overflow-x-auto">
             <table className="w-full text-[12px] min-w-[440px]">
               <thead>
@@ -459,6 +491,7 @@ export default function Leads() {
               </tbody>
             </table>
           </div>
+          )}
         </div>
       )}
 
