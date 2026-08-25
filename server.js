@@ -449,7 +449,7 @@ async function ingestLeads(rawBody) {
     const extId = pick(i, 'external_id')
     const rawStatus = pick(i, 'status')
     const disposition = pick(i, 'disposition') ?? rawStatus
-    rows.push({
+    const row = {
       source: String(pick(i, 'source') || 'repcard'),
       external_id: extId != null ? String(extId) : null,
       customer_name: pick(i, 'customer_name'),
@@ -457,23 +457,37 @@ async function ingestLeads(rawBody) {
       phone: pick(i, 'phone'),
       email: pick(i, 'email'),
       appointment_at: pick(i, 'appointment_at'),
-      status: normalizeStatus(rawStatus, disposition, statusMap),
-      disposition: disposition ?? null,
       setter_id: setterId, closer_id: closerId,
       setter_name: pick(i, 'setter_name') ?? setterEmail ?? null,
       closer_name: pick(i, 'closer_name') ?? closerEmail ?? null,
       office: pick(i, 'office'),
       notes: pick(i, 'notes'),
       raw: i,
-    })
+    }
+    // Only touch the status when the CRM actually SENT an outcome. Most event
+    // types (appointment updated, closer reassigned) carry an empty
+    // disposition — writing a default 'scheduled' from those would wipe a
+    // real "Sold"/"Ran" the outcome event had already recorded.
+    if (disposition != null && String(disposition).trim() !== '') {
+      row.status = normalizeStatus(rawStatus, disposition, statusMap)
+      row.disposition = disposition
+    }
+    rows.push(row)
   }
 
-  const resp = await fetch(`${SUPABASE_URL}/rest/v1/leads?on_conflict=source,external_id`, {
-    method: 'POST',
-    headers: { ...jsonHeaders, Prefer: 'resolution=merge-duplicates,return=minimal' },
-    body: JSON.stringify(rows),
-  })
-  if (!resp.ok) return err(`Write failed (${resp.status}): ${(await resp.text()).slice(0, 300)}`)
+  // PostgREST requires every object in a bulk upsert to have identical keys,
+  // so send the with-status and without-status rows as separate batches.
+  const withStatus = rows.filter(r => 'status' in r)
+  const noStatus   = rows.filter(r => !('status' in r))
+  for (const batch of [withStatus, noStatus]) {
+    if (!batch.length) continue
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/leads?on_conflict=source,external_id`, {
+      method: 'POST',
+      headers: { ...jsonHeaders, Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify(batch),
+    })
+    if (!resp.ok) return err(`Write failed (${resp.status}): ${(await resp.text()).slice(0, 300)}`)
+  }
   return ok({
     received: rows.length,
     // Surfaced so a rep whose CRM email doesn't match the roster is visible
