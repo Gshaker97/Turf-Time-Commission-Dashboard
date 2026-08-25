@@ -101,7 +101,7 @@ export default function Dashboard() {
   const [activePreset, setActivePreset] = useState('mtd')
   const [teamFilter,   setTeamFilter]   = useState('')
   const [teamChanges,  setTeamChanges]  = useState([])
-  const [repSort,      setRepSort]      = useState({ key: 'revenue', dir: 'desc' })  // leaderboard ranking
+  const [repSort,      setRepSort]      = useState({ key: 'totalRevenue', dir: 'desc' })  // leaderboard ranking
   const [copied,       setCopied]       = useState(false)
   const [openTeams,    setOpenTeams]    = useState(() => new Set())
   const toggleTeam = (id) => setOpenTeams(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -421,7 +421,15 @@ export default function Dashboard() {
         if (closerOwn === sid) c.selfGens += 1
       }
     }
-    return Object.values(map).map(r => ({ ...r, pct: (r.revenue / companyTotalRev) * 100 }))
+    // Total revenue = every deal they set OR closed. `leadRevenue` only counts
+    // deals closed for a DIFFERENT setter, so a self-gen is counted once, not
+    // twice. (pct stays tied to set revenue — totals across reps would exceed
+    // company revenue otherwise, since a closed deal also counts for its setter.)
+    return Object.values(map).map(r => ({
+      ...r,
+      totalRevenue: r.revenue + r.leadRevenue,
+      pct: (r.revenue / companyTotalRev) * 100,
+    }))
   }, [filtered, users, companyTotalRev])
 
   // Rank by the chosen column (defaults to set-revenue). All sortable columns
@@ -436,18 +444,18 @@ export default function Dashboard() {
     // are hidden from non-admins, but their deals still feed every total above.
     return [...repData]
       .filter(r => (r.deals || r.leads || r.revenue || r.leadRevenue || r.commission) && (isAdmin || !ghostIds.has(r.id)))
-      .sort((a, b) => (dir === 'asc' ? (a[key] - b[key]) : (b[key] - a[key])) || (b.revenue - a.revenue))
+      .sort((a, b) => (dir === 'asc' ? (a[key] - b[key]) : (b[key] - a[key])) || (b.totalRevenue - a.totalRevenue))
   }, [repData, repSort, ghostIds, isAdmin])
 
   // Copy the current leaderboard to the clipboard as a real table (HTML) with a
   // tab-separated fallback — pastes cleanly into Canva, Sheets, Docs, etc.
   async function copyLeaderboard() {
-    const cols = ['#', 'Rep', 'Deals', 'Closed', 'Revenue', 'Closed Rev', 'Self Gen', 'Leads', 'Lead Rev', 'Comm']
+    const cols = ['#', 'Rep', 'Total Rev', 'Personal Rev', 'Comm', 'Closed', 'Self Gen', 'Set']
     // The export is a shareable artifact, so ghost reps are always dropped —
     // even for an admin, who sees them on-screen. (Re-rank after filtering.)
     const rows = rankedReps
       .filter(r => !ghostIds.has(r.id))
-      .map((r, i) => [i + 1, r.name, r.deals, r.closed, fmt(r.revenue), fmt(r.closedRevenue), r.selfGens, r.leads, fmt(r.leadRevenue), fmt(r.commission)])
+      .map((r, i) => [i + 1, r.name, fmt(r.totalRevenue), fmt(r.revenue), fmt(r.commission), r.closed, r.selfGens, r.deals])
     const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     const tsv = [cols, ...rows].map(r => r.join('\t')).join('\n')
     const html =
@@ -748,27 +756,23 @@ export default function Dashboard() {
           {/* Scrolls both ways: vertically through the rankings, and
               horizontally on a phone to reach Closed Rev / Self Gen. */}
           <div className="max-h-[460px] overflow-y-auto overflow-x-auto">
-          <table className="w-full min-w-[540px]">
+          <table className="w-full min-w-[520px]">
             <thead className="sticky top-0 z-10" style={{ background: '#242424' }}>
               <tr className="text-[9px] md:text-[10px] font-bold text-white/30 uppercase tracking-wider">
                 <th className="text-left pb-2 w-6">#</th>
                 <th className="text-left pb-2">Rep</th>
-                <SortTh label="Deals" align="center" className="hidden sm:table-cell" title="Deals they set (generated)"
-                  active={repSort.key === 'deals'} dir={repSort.dir} onClick={() => toggleRepSort('deals')} />
-                <SortTh label="Closed" align="center" title="Total deals they closed — self-gens plus other reps' leads"
-                  active={repSort.key === 'closed'} dir={repSort.dir} onClick={() => toggleRepSort('closed')} />
-                <SortTh label="Revenue" align="right" title="Baseline revenue of deals they set"
+                <SortTh label="Total Rev" align="right" title="Revenue on every deal they set OR closed (a self-gen counts once)"
+                  active={repSort.key === 'totalRevenue'} dir={repSort.dir} onClick={() => toggleRepSort('totalRevenue')} />
+                <SortTh label="Personal Rev" align="right" title="Revenue on the deals they set themselves"
                   active={repSort.key === 'revenue'} dir={repSort.dir} onClick={() => toggleRepSort('revenue')} />
-                <SortTh label="Closed Rev" align="right" title="Baseline revenue of every deal they closed"
-                  active={repSort.key === 'closedRevenue'} dir={repSort.dir} onClick={() => toggleRepSort('closedRevenue')} />
-                <SortTh label="Self Gen" align="center" title="Deals they both set and closed themselves"
-                  active={repSort.key === 'selfGens'} dir={repSort.dir} onClick={() => toggleRepSort('selfGens')} />
-                <SortTh label="Leads" align="center" className="hidden md:table-cell" title="Deals they closed for another setter"
-                  active={repSort.key === 'leads'} dir={repSort.dir} onClick={() => toggleRepSort('leads')} />
-                <SortTh label="Lead Rev" align="right" className="hidden md:table-cell" title="Revenue from deals closed for other setters"
-                  active={repSort.key === 'leadRevenue'} dir={repSort.dir} onClick={() => toggleRepSort('leadRevenue')} />
                 <SortTh label="Comm" align="right"
                   active={repSort.key === 'commission'} dir={repSort.dir} onClick={() => toggleRepSort('commission')} />
+                <SortTh label="Closed" align="center" title="Deals they closed — their own plus other reps' leads"
+                  active={repSort.key === 'closed'} dir={repSort.dir} onClick={() => toggleRepSort('closed')} />
+                <SortTh label="Self Gen" align="center" title="Deals they both set and closed themselves"
+                  active={repSort.key === 'selfGens'} dir={repSort.dir} onClick={() => toggleRepSort('selfGens')} />
+                <SortTh label="Set" align="center" title="Deals they set (generated), however they were closed"
+                  active={repSort.key === 'deals'} dir={repSort.dir} onClick={() => toggleRepSort('deals')} />
               </tr>
             </thead>
             <tbody>
@@ -777,36 +781,28 @@ export default function Dashboard() {
                   <tr key={rep.id} className="border-t border-white/[0.04]">
                     <td className="py-2"><RankBadge n={i + 1} /></td>
                     <td className="py-2 text-[12px] font-medium text-white/80 truncate max-w-[100px]">{rep.name}</td>
-                    <td className="py-2 text-[12px] text-white/60 text-center hidden sm:table-cell">{rep.deals}</td>
-                    <td className="py-2 text-[12px] text-center">
-                      {rep.closed > 0 ? <span className="text-white/80 font-semibold">{rep.closed}</span> : <span className="text-white/20">—</span>}
+                    <td className="py-2 text-right whitespace-nowrap">
+                      <p className="text-[12px] font-bold text-teal">{fmt(rep.totalRevenue)}</p>
                     </td>
                     <td className="py-2 text-right whitespace-nowrap">
-                      <p className="text-[12px] font-bold text-teal">{fmt(rep.revenue)}</p>
+                      <p className="text-[12px] font-semibold text-white/70">{fmt(rep.revenue)}</p>
                       <p className="text-[10px] text-white/30 hidden sm:block">{rep.pct.toFixed(1)}%</p>
                     </td>
-                    <td className="py-2 text-right whitespace-nowrap">
-                      {rep.closedRevenue > 0
-                        ? <span className="text-[12px] font-semibold text-white/70">{fmt(rep.closedRevenue)}</span>
-                        : <span className="text-[12px] text-white/20">—</span>}
+                    <td className="py-2 text-[12px] font-semibold text-emerald-400 text-right whitespace-nowrap">{fmt(rep.commission)}</td>
+                    <td className="py-2 text-[12px] text-center">
+                      {rep.closed > 0 ? <span className="text-white/80 font-semibold">{rep.closed}</span> : <span className="text-white/20">—</span>}
                     </td>
                     <td className="py-2 text-[12px] text-center">
                       {rep.selfGens > 0 ? <span className="text-white/60">{rep.selfGens}</span> : <span className="text-white/20">—</span>}
                     </td>
-                    <td className="py-2 text-[12px] text-center hidden md:table-cell">
-                      {rep.leads > 0 ? <span className="text-white/60">{rep.leads}</span> : <span className="text-white/20">—</span>}
+                    <td className="py-2 text-[12px] text-center">
+                      {rep.deals > 0 ? <span className="text-white/60">{rep.deals}</span> : <span className="text-white/20">—</span>}
                     </td>
-                    <td className="py-2 text-right whitespace-nowrap hidden md:table-cell">
-                      {rep.leadRevenue > 0
-                        ? <span className="text-[12px] text-white/70">{fmt(rep.leadRevenue)}</span>
-                        : <span className="text-[12px] text-white/20">—</span>}
-                    </td>
-                    <td className="py-2 text-[12px] font-semibold text-emerald-400 text-right whitespace-nowrap">{fmt(rep.commission)}</td>
                   </tr>
                 )
               })}
               {rankedReps.length === 0 && (
-                <tr><td colSpan={10} className="py-8 text-center text-white/30 text-[13px]">No data for this period</td></tr>
+                <tr><td colSpan={8} className="py-8 text-center text-white/30 text-[13px]">No data for this period</td></tr>
               )}
             </tbody>
           </table>
