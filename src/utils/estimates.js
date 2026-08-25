@@ -19,7 +19,19 @@ import { weekStartOf } from './dateRanges'
 
 // Appointment statuses that mean it actually happened.
 export const RAN_STATUSES = new Set(['completed', 'sold'])
-const dayOf = (ts) => (ts ? String(ts).slice(0, 10) : null)
+
+// The LOCAL calendar day an appointment falls on. Timestamps are stored UTC,
+// so a 6:30pm Arizona appointment is 01:30 the NEXT day in UTC — slicing the
+// raw string put evening appointments on tomorrow, dropping them out of
+// "today" filters and shifting their estimates into the next week.
+export const apptDay = (ts) => {
+  if (!ts) return null
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return String(ts).slice(0, 10)
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+const dayOf = apptDay
 
 // Estimates from the LEADS feed for one rep (or the whole company when repId
 // is null) inside [start, end], counting only appointments on/after `from`.

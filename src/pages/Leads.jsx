@@ -9,6 +9,7 @@ import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { toast } from '../lib/toast'
 import { useSettings } from '../contexts/SettingsContext'
 import { leadFeedHealth } from '../utils/feedHealth'
+import { apptDay } from '../utils/estimates'
 
 // The lifecycle the site reasons about (migration 041). RUN = the appointment
 // actually happened, which is what counts as an estimate.
@@ -96,7 +97,8 @@ export default function Leads() {
     () => (role === 'rep' && !isAdmin) ? leads.filter(mine) : leads,
     [leads, role, isAdmin, profile?.id])
 
-  const dayOf = (l) => (l.appointment_at ? String(l.appointment_at).slice(0, 10) : '')
+  // Local calendar day — a 6:30pm appointment is tomorrow in UTC.
+  const dayOf = (l) => apptDay(l.appointment_at) || ''
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
     return scoped.filter(l => {

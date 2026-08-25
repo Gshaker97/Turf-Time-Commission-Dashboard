@@ -10,7 +10,7 @@ import {
 } from 'date-fns'
 import { dealAmounts, isCanceled } from './commission'
 import { saleOwnerId, teamOfSale } from './team'
-import { RAN_STATUSES } from './estimates'
+import { RAN_STATUSES, apptDay } from './estimates'
 
 const WEEK = { weekStartsOn: 0 }   // Sun–Sat, same as all reporting
 const f = (d) => format(d, 'yyyy-MM-dd')
@@ -212,7 +212,7 @@ export function bucketize(deals, weeklyStats, periods, scope, teamCtx, opts = {}
     // ran it. Self-gen only, matching the metric's definition everywhere.
     if (from) {
       for (const l of opts.leads || []) {
-        const day = l.appointment_at ? String(l.appointment_at).slice(0, 10) : null
+        const day = apptDay(l.appointment_at)
         if (!day || day < from) continue
         if (!RAN_STATUSES.has(l.status)) continue
         const ranBy = l.closer_id || l.setter_id
