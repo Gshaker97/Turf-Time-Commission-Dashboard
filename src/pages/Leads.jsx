@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, Fragment } from 'react'
 import { format } from 'date-fns'
 import { CalendarCheck, Search, Link2, Upload, X } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
-import { fetchLeads, fetchUsers, updateLead, upsertLeads } from '../lib/db'
+import { fetchLeads, fetchUsers, updateLead, upsertLeads, fetchLeadHistory } from '../lib/db'
 import { csvToLeads } from '../utils/leadImport'
 import { getPresetRange, presetLabel } from '../utils/dateRanges'
 import { headIdSet, teamKeyFor } from '../utils/team'
@@ -167,6 +167,35 @@ export default function Leads() {
     load()
   }
 
+  // ── Edit history (migration 043) ──────────────────────────
+  // Clicking a customer name shows who changed what — the CRM feed, the CSV
+  // importer, and admin corrections all land in the same log.
+  const [histLead, setHistLead] = useState(null)
+  const [hist, setHist] = useState(null)   // null = loading
+  async function openHistory(l) {
+    setHistLead(l); setHist(null)
+    const { data } = await fetchLeadHistory(l.id)
+    setHist(data ?? [])
+  }
+  const nameOfUser = (id) => users.find(u => u.id === id)?.name ?? null
+  // Field labels + value rendering for the log — ids become names, statuses
+  // become their friendly label.
+  const FIELD_LABEL = {
+    status: 'Status', setter_id: 'Setter', closer_id: 'Closer',
+    setter_name: 'Setter name', closer_name: 'Closer name',
+    appointment_at: 'Date/time', customer_name: 'Customer', address: 'Address',
+    phone: 'Phone', email: 'Email', office: 'Office', notes: 'Notes',
+    disposition: 'Disposition', pinned: 'Protected from feed', deal_id: 'Linked deal',
+  }
+  const histValue = (field, v) => {
+    if (v === null || v === undefined || v === '') return '—'
+    if (field === 'status') return stat(v).label
+    if (field === 'setter_id' || field === 'closer_id') return nameOfUser(v) || 'someone'
+    if (field === 'appointment_at') return dt(v)
+    if (field === 'pinned') return v ? 'yes' : 'no'
+    return String(v)
+  }
+
   // Any admin correction PINS the row so the CRM feed can't revert it (the
   // feed keeps refreshing timing/details; status + people stay ours).
   async function patchLead(l, patch) {
@@ -217,6 +246,72 @@ export default function Leads() {
           </button>
         )}
       </div>
+
+      {/* Edit history for one appointment */}
+      {histLead && (
+        <div className="fixed inset-0 z-50 flex items-end md:items-center md:justify-center md:p-4">
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setHistLead(null)} />
+          <div className="relative w-full md:max-w-lg rounded-t-2xl md:rounded-2xl overflow-y-auto shadow-2xl"
+            style={{ background: '#242424', border: '1px solid #333', maxHeight: '85dvh' }}>
+            <div className="flex items-start justify-between gap-3 px-5 py-3 sticky top-0" style={{ background: '#242424', borderBottom: '1px solid #2e2e2e' }}>
+              <div className="min-w-0">
+                <h2 className="text-[14px] font-semibold text-white truncate">{histLead.customer_name || 'Unnamed'}</h2>
+                <p className="text-[11px] text-white/35">{dt(histLead.appointment_at)}</p>
+              </div>
+              <button onClick={() => setHistLead(null)} className="p-1.5 rounded-lg text-white/30 hover:text-white hover:bg-white/10 flex-shrink-0"><X size={16} /></button>
+            </div>
+            <div className="p-5 space-y-3">
+              {histLead.pinned && (
+                <div className="rounded-lg px-3 py-2.5 flex items-start justify-between gap-3 text-[11.5px]"
+                  style={{ background: 'rgba(251,191,36,0.07)', border: '1px solid rgba(251,191,36,0.3)' }}>
+                  <span className="text-amber-200/85">
+                    Corrected here, so the CRM feed can no longer change its status, setter or closer.
+                    It still refreshes timing and customer details.
+                  </span>
+                  {isAdmin && (
+                    <button onClick={() => { unpin(histLead); setHistLead({ ...histLead, pinned: false }) }}
+                      className="text-[11px] font-semibold text-amber-300 hover:underline whitespace-nowrap flex-shrink-0">
+                      Hand back to feed
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {hist === null ? (
+                <p className="text-[12px] text-white/35 py-4 text-center">Loading history…</p>
+              ) : hist.length === 0 ? (
+                <p className="text-[12px] text-white/35 py-4 text-center">
+                  No changes recorded yet. History starts once migration 043 is in place.
+                </p>
+              ) : hist.map(h => {
+                const who = h.editor?.name || nameOfUser(h.changed_by) || 'CRM feed'
+                const entries = Object.entries(h.changes || {}).filter(([k]) => k !== '_event')
+                const created = h.changes?._event === 'created'
+                return (
+                  <div key={h.id} className="rounded-lg px-3 py-2.5" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+                    <div className="flex items-baseline justify-between gap-2 mb-1">
+                      <span className="text-[12px] font-semibold text-white/85">{who}</span>
+                      <span className="text-[10px] text-white/30 whitespace-nowrap">{format(new Date(h.changed_at), 'MMM d, h:mma')}</span>
+                    </div>
+                    {created ? (
+                      <p className="text-[11.5px] text-white/45">Appointment added</p>
+                    ) : entries.length === 0 ? (
+                      <p className="text-[11.5px] text-white/35">No visible field changes</p>
+                    ) : entries.map(([field, v]) => (
+                      <p key={field} className="text-[11.5px] text-white/60">
+                        <span className="text-white/40">{FIELD_LABEL[field] || field}:</span>{' '}
+                        <span className="text-white/35 line-through">{histValue(field, v?.from)}</span>
+                        {' → '}
+                        <span className="text-white/85">{histValue(field, v?.to)}</span>
+                      </p>
+                    ))}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* CSV backfill */}
       {importOpen && (
@@ -375,14 +470,20 @@ export default function Leads() {
           return (
             <div key={l.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 border-b border-white/5 last:border-0">
               <div className="min-w-0 flex-1">
-                <p className="text-[13px] font-semibold text-white truncate">
+                <button onClick={() => openHistory(l)} title="Show this appointment's edit history"
+                  className="block max-w-full text-[13px] font-semibold text-white truncate text-left hover:text-teal transition-colors">
                   {l.customer_name || 'Unnamed'}
                   {l.deal_id && <Link2 size={11} className="inline ml-1.5 text-teal/70" title="Linked to a deal" />}
-                </p>
+                </button>
                 <p className="text-[10.5px] text-white/35 truncate">
                   {l.address || 'No address'}
                   {l.office ? ` · ${l.office}` : ''}
                 </p>
+                {l.pinned && (
+                  <p className="text-[9.5px] text-amber-400/70 truncate mt-0.5">
+                    Edited here — the CRM feed won't change its status or people
+                  </p>
+                )}
               </div>
               {isAdmin ? (
                 <div className="flex flex-col gap-1 min-w-[168px]">
@@ -417,12 +518,6 @@ export default function Leads() {
               ) : (
                 <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap"
                   style={{ color: s.color, border: `1px solid ${s.color}40` }}>{s.label}</span>
-              )}
-              {isAdmin && l.pinned && (
-                <button onClick={() => unpin(l)} title="Edited here — the CRM feed can't change the status or people. Click to hand it back."
-                  className="text-[9px] font-bold uppercase tracking-wide text-amber-400/80 hover:text-amber-300">
-                  edited
-                </button>
               )}
             </div>
           )
