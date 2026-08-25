@@ -4,9 +4,7 @@ import { CalendarCheck, Search, Link2, Upload, X, ChevronDown } from 'lucide-rea
 import { useAuth } from '../contexts/AuthContext'
 import { fetchLeads, fetchUsers, updateLead, upsertLeads, fetchLeadHistory } from '../lib/db'
 import { csvToLeads } from '../utils/leadImport'
-import { getPresetRange, presetLabel } from '../utils/dateRanges'
 import { headIdSet, teamKeyFor } from '../utils/team'
-import DateRangeFilter from '../components/DateRangeFilter'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { toast } from '../lib/toast'
 import { useSettings } from '../contexts/SettingsContext'
@@ -23,6 +21,29 @@ const STATUSES = [
   { key: 'canceled',  label: 'Canceled',  color: '#6b7280' },
 ]
 const stat = (k) => STATUSES.find(s => s.key === k) ?? { label: k || '—', color: '#6b7280' }
+
+// Appointments look FORWARD, so the usual sales presets (which all stop at
+// today) hide the rest of the week. These span whole periods instead.
+const iso = (d) => format(d, 'yyyy-MM-dd')
+function apptRange(key, now = new Date()) {
+  const d = new Date(now)
+  const sunday = (x) => { const y = new Date(x); y.setDate(y.getDate() - y.getDay()); return y }
+  const addD = (x, n) => { const y = new Date(x); y.setDate(y.getDate() + n); return y }
+  switch (key) {
+    case 'today':     return { from: iso(d), to: iso(d) }
+    case 'week':      { const s0 = sunday(d); return { from: iso(s0), to: iso(addD(s0, 6)) } }
+    case 'next_week': { const s0 = addD(sunday(d), 7); return { from: iso(s0), to: iso(addD(s0, 6)) } }
+    case 'last_week': { const s0 = addD(sunday(d), -7); return { from: iso(s0), to: iso(addD(s0, 6)) } }
+    case 'month':     return { from: iso(new Date(d.getFullYear(), d.getMonth(), 1)),
+                               to:   iso(new Date(d.getFullYear(), d.getMonth() + 1, 0)) }
+    case 'all':       return { from: '', to: '' }
+    default:          return { from: iso(d), to: iso(d) }
+  }
+}
+const APPT_RANGES = [
+  ['today', 'Today'], ['week', 'This Week'], ['next_week', 'Next Week'],
+  ['last_week', 'Last Week'], ['month', 'This Month'], ['all', 'All'],
+]
 const RAN = new Set(['completed', 'sold'])   // an estimate was run
 const dt = (iso) => iso ? format(new Date(iso), 'EEE, MMM d · h:mma') : '—'
 
@@ -43,10 +64,10 @@ export default function Leads() {
   const [leads, setLeads] = useState([])
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
-  const initial = getPresetRange('mtd')
+  const initial = apptRange('week')
   const [dateFrom, setDateFrom] = useState(initial.from)
   const [dateTo, setDateTo]     = useState(initial.to)
-  const [preset, setPreset]     = useState('mtd')
+  const [preset, setPreset]     = useState('week')
   const [search, setSearch]     = useState('')
   const [repFilter, setRepFilter]       = useState('')
   // The rep board is collapsible so the appointment list can be the focus.
@@ -409,9 +430,22 @@ export default function Leads() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <DateRangeFilter from={dateFrom} to={dateTo} preset={preset}
-          onChange={({ from, to, preset }) => { setDateFrom(from); setDateTo(to); setPreset(preset) }}
-          count={filtered.length} countLabel="appointments" />
+        <div className="flex gap-1 p-1 rounded-xl" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+          {APPT_RANGES.map(([k, label]) => (
+            <button key={k} onClick={() => { const r = apptRange(k); setDateFrom(r.from); setDateTo(r.to); setPreset(k) }}
+              className={`px-2.5 py-1.5 rounded-lg text-[12px] font-semibold transition-colors ${preset === k ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <span className="flex items-center gap-1.5">
+          <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPreset('custom') }}
+            style={selStyle} className={selCls} />
+          <span className="text-white/25 text-[11px]">to</span>
+          <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setPreset('custom') }}
+            style={selStyle} className={selCls} />
+        </span>
+        <span className="text-[11px] text-white/30">{filtered.length} appointments</span>
         <div className="relative">
           <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/25" />
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Customer, address, rep…"
@@ -444,7 +478,7 @@ export default function Leads() {
           <button onClick={toggleBoard}
             className="flex items-center gap-1.5 text-[13px] font-semibold text-white hover:text-teal transition-colors">
             <ChevronDown size={13} className={`text-white/30 transition-transform ${showBoard ? '' : '-rotate-90'}`} />
-            By Team &amp; Rep — {presetLabel(preset)}
+            By Team &amp; Rep
           </button>
           <p className="text-[10px] text-white/30 mb-3 mt-0.5">
             Set → ran → sold, credited to whoever ran the appointment. <span className="text-white/45">Ran</span> is the estimate
