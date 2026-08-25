@@ -2,11 +2,12 @@ import { useState, useEffect } from 'react'
 import { Plus, Pencil, Trash2, RefreshCw, Activity, KeyRound, UserPlus, Search, ShieldCheck } from 'lucide-react'
 import {
   fetchUsers, insertUser, updateUser, deleteUser,
-  userAdmin, userAdminConfigured, fetchTeamChanges,
+  userAdmin, userAdminConfigured, fetchTeamChanges, fetchLeads,
 } from '../lib/db'
 import { toast } from '../lib/toast'
 import UserModal from '../components/UserModal'
 import { headIdSet } from '../utils/team'
+import { leadFeedHealth } from '../utils/feedHealth'
 import SettingsPanel from '../components/SettingsPanel'
 import { useSettings } from '../contexts/SettingsContext'
 import { DEMO_MODE } from '../lib/supabase'
@@ -53,6 +54,11 @@ function SystemHealth() {
 
   const hb = settings?.sync_heartbeat
   const wd = settings?.watchdog_heartbeat
+  // Lead feed: push-based, so its health is 'when did we last hear from
+  // it', not a cron heartbeat.
+  const [leadRows, setLeadRows] = useState([])
+  useEffect(() => { fetchLeads().then(({ data }) => setLeadRows(data || [])) }, [])
+  const feed = leadFeedHealth(leadRows, settings?.lead_last_payload?.at)
 
   let sync
   const syncVer = hb?.version ? ` · v${hb.version}` : ''
@@ -80,6 +86,8 @@ function SystemHealth() {
         <span className="text-[10px] uppercase tracking-wider text-white/30 font-semibold">System health</span>
       </div>
       <HealthRow label="Scheduler sync" {...sync} />
+      <HealthRow label="Lead feed" ok={feed.level === 'ok'} color={feed.color}
+        text={`${feed.text}${feed.lastAt ? ` · ${feed.last7} in 7 days` : ''}`} />
       {syncIssues.length > 0 && (
         <div className="ml-[126px] -mt-0.5 pb-1 space-y-0.5">
           {syncIssues.map((t, i) => (
