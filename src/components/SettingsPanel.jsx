@@ -567,6 +567,7 @@ function LeadFeedEditor() {
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
+  const [copiedPayload, setCopiedPayload] = useState(false)
 
   useEffect(() => {
     setMap(settings.lead_field_map || {})
@@ -625,7 +626,21 @@ function LeadFeedEditor() {
       <div>
         <div className="flex items-baseline justify-between gap-2 mb-1.5">
           <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest">Last received</p>
-          {last?.at && <p className="text-[10px] text-white/25">{new Date(last.at).toLocaleString()}</p>}
+          <div className="flex items-baseline gap-2">
+            {last?.at && <p className="text-[10px] text-white/25">{new Date(last.at).toLocaleString()}</p>}
+            {/* Copy the WHOLE payload — the list below truncates and can't be
+                drag-selected on a phone, which is exactly when you need to
+                send it to someone to diagnose a mis-mapped field. */}
+            {last && (
+              <button
+                onClick={() => {
+                  navigator.clipboard?.writeText(JSON.stringify(last.sample ?? last.fields ?? last, null, 2))
+                  setCopiedPayload(true); setTimeout(() => setCopiedPayload(false), 1600)
+                }}
+                className="px-2 py-0.5 rounded-md text-[10px] font-semibold text-white/50 hover:text-white"
+                style={inputStyle}>{copiedPayload ? 'Copied' : 'Copy payload'}</button>
+            )}
+          </div>
         </div>
         {incoming.length === 0 ? (
           <p className="text-[12px] text-white/35 rounded-lg px-3 py-2.5" style={inputStyle}>
@@ -634,7 +649,7 @@ function LeadFeedEditor() {
         ) : (
           <div className="rounded-lg px-3 py-2.5 max-h-40 overflow-y-auto space-y-0.5" style={inputStyle}>
             {incoming.map(f => (
-              <p key={f} className="text-[11px] text-white/50 truncate">
+              <p key={f} className="text-[11px] text-white/50 break-words">
                 <span className="text-teal">{f}</span>
                 <span className="text-white/25"> = {String(last.fields[f] ?? '')}</span>
               </p>

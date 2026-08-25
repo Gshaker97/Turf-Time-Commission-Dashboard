@@ -470,19 +470,18 @@ async function ingestLeads(rawBody) {
     put('appointment_at', pick(i, 'appointment_at'))
     put('office', pick(i, 'office'))
     put('notes', pick(i, 'notes'))
-    // People: an id is written whenever the event NAMED that person — even if
-    // the email doesn't match the roster (null id + name text is the correct
-    // "unknown rep" state). Silence about a person leaves them untouched.
+    // People: THE FEED CAN SET SOMEONE, NEVER UNSET SOMEONE.
+    // An id is written only on a positive roster match. If the event names a
+    // person we can't match, we keep the name as text but leave the existing
+    // id alone; if it says nothing about them, nothing is touched. A CRM event
+    // that simply omits (or fails to resolve) a rep must never blank one that
+    // was already correct — clearing a person stays a deliberate admin action.
     const setterNamed = pick(i, 'setter_name')
     const closerNamed = pick(i, 'closer_name')
-    if (setterEmail || setterNamed) {
-      row.setter_id = setterId
-      row.setter_name = setterNamed ?? setterEmail ?? null
-    }
-    if (closerEmail || closerNamed) {
-      row.closer_id = closerId
-      row.closer_name = closerNamed ?? closerEmail ?? null
-    }
+    if (setterId) row.setter_id = setterId
+    if (setterNamed || setterEmail) row.setter_name = setterNamed ?? setterEmail
+    if (closerId) row.closer_id = closerId
+    if (closerNamed || closerEmail) row.closer_name = closerNamed ?? closerEmail
     // Same rule for the outcome: most events carry an empty disposition, and
     // writing the 'scheduled' default from those would wipe a real Sold/Ran.
     if (disposition != null && String(disposition).trim() !== '') {

@@ -288,10 +288,10 @@ export default function Leads() {
 
       {/* Edit history for one appointment */}
       {histLead && (
-        <div className="fixed inset-0 z-50 flex items-end md:items-center md:justify-center md:p-4">
+        <div className="fixed inset-0 z-[60] flex items-end md:items-center md:justify-center md:p-4">
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setHistLead(null)} />
           <div className="relative w-full md:max-w-lg rounded-t-2xl md:rounded-2xl overflow-y-auto shadow-2xl"
-            style={{ background: '#242424', border: '1px solid #333', maxHeight: '85dvh' }}>
+            style={{ background: '#242424', border: '1px solid #333', maxHeight: '80dvh', paddingBottom: 'calc(env(safe-area-inset-bottom) + 72px)' }}>
             <div className="flex items-start justify-between gap-3 px-5 py-3 sticky top-0" style={{ background: '#242424', borderBottom: '1px solid #2e2e2e' }}>
               <div className="min-w-0">
                 <h2 className="text-[14px] font-semibold text-white truncate">{histLead.customer_name || 'Unnamed'}</h2>
@@ -357,10 +357,10 @@ export default function Leads() {
 
       {/* CSV backfill */}
       {importOpen && (
-        <div className="fixed inset-0 z-50 flex items-end md:items-center md:justify-center md:p-4">
+        <div className="fixed inset-0 z-[60] flex items-end md:items-center md:justify-center md:p-4">
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setImportOpen(false)} />
           <div className="relative w-full md:max-w-2xl rounded-t-2xl md:rounded-2xl overflow-y-auto shadow-2xl"
-            style={{ background: '#242424', border: '1px solid #333', maxHeight: '92dvh' }}>
+            style={{ background: '#242424', border: '1px solid #333', maxHeight: '88dvh', paddingBottom: 'calc(env(safe-area-inset-bottom) + 72px)' }}>
             <div className="flex items-center justify-between px-5 py-3 sticky top-0" style={{ background: '#242424', borderBottom: '1px solid #2e2e2e' }}>
               <h2 className="text-[15px] font-semibold text-white">Import appointments</h2>
               <button onClick={() => setImportOpen(false)} className="p-1.5 rounded-lg text-white/30 hover:text-white hover:bg-white/10"><X size={16} /></button>
