@@ -177,15 +177,28 @@ export default function Leads() {
   const [importing, setImporting] = useState(false)
   const profilesByEmail = useMemo(() => Object.fromEntries(
     users.filter(u => u.email).map(u => [String(u.email).toLowerCase(), u.id])), [users])
+  // Name fallback: the CRM holds a rep's personal email, not their company
+  // one, so names are what actually match. A duplicated name matches nobody.
+  const profilesByName = useMemo(() => {
+    const m = {}, dupes = new Set()
+    for (const u of users) {
+      const n = String(u.name || '').trim().toLowerCase().replace(/\s+/g, ' ')
+      if (!n) continue
+      if (m[n] && m[n] !== u.id) dupes.add(n)
+      m[n] = u.id
+    }
+    for (const n of dupes) delete m[n]
+    return m
+  }, [users])
   const preview = useMemo(
-    () => (csvText.trim() ? csvToLeads(csvText, profilesByEmail) : null),
-    [csvText, profilesByEmail])
+    () => (csvText.trim() ? csvToLeads(csvText, profilesByEmail, 'repcard', profilesByName) : null),
+    [csvText, profilesByEmail, profilesByName])
   const unmatchedEmails = useMemo(() => {
     if (!preview) return []
     const bad = new Set()
     for (const l of preview.leads) {
-      if (l._setterEmail && !l.setter_id) bad.add(l._setterEmail)
-      if (l._closerEmail && !l.closer_id) bad.add(l._closerEmail)
+      if (l._setterWho && !l.setter_id) bad.add(l._setterWho)
+      if (l._closerWho && !l.closer_id) bad.add(l._closerWho)
     }
     return [...bad]
   }, [preview])
@@ -195,7 +208,7 @@ export default function Leads() {
     setImporting(true)
     const rows = preview.leads.map(l => {
       const r = { ...l }
-      delete r._setterEmail; delete r._closerEmail
+      delete r._setterWho; delete r._closerWho
       return r
     })
     const res = await upsertLeads(rows)
@@ -394,7 +407,7 @@ export default function Leads() {
                   </div>
                   {unmatchedEmails.length > 0 && (
                     <div className="text-[11px] text-amber-400/90">
-                      <p>{unmatchedEmails.length} rep email{unmatchedEmails.length === 1 ? '' : 's'} not on the roster — those appointments still import, with the name as text:</p>
+                      <p>{unmatchedEmails.length} rep{unmatchedEmails.length === 1 ? '' : 's'} not matched to the roster — those appointments still import, with the name as text:</p>
                       <p className="text-amber-400/60 break-words mt-0.5">{unmatchedEmails.join(', ')}</p>
                     </div>
                   )}
