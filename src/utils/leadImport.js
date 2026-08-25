@@ -84,8 +84,18 @@ const join = (a, b) => [a, b].map(x => String(x || '').trim()).filter(Boolean).j
 const clean = (v) => { const s = String(v ?? '').trim(); return s && s !== '+1' ? s : null }
 
 // rows → { leads, headers, unmatchedHeaders }. `profilesByEmail` maps a
-// lowercased email to a profile id so setter/closer attach on import.
-export function csvToLeads(text, profilesByEmail = {}, source = 'repcard') {
+// lowercased email to a profile id so setter/closer attach on import;
+// `profilesByName` is the fallback for the common case where the CRM holds a
+// rep's personal address rather than their company one (same rule as the
+// webhook ingest in server.js — keep the two in step).
+const normName = (n) => String(n || '').trim().toLowerCase().replace(/\s+/g, ' ')
+
+export function csvToLeads(text, profilesByEmail = {}, source = 'repcard', profilesByName = {}) {
+  const person = (email, name) => {
+    if (email && profilesByEmail[email]) return profilesByEmail[email]
+    const n = normName(name)
+    return (n && profilesByName[n]) || null
+  }
   const table = parseCsv(text)
   if (table.length < 2) return { leads: [], headers: [], missing: ['No data rows found'] }
   const headers = table[0].map(h => String(h).trim())
@@ -103,6 +113,8 @@ export function csvToLeads(text, profilesByEmail = {}, source = 'repcard') {
     if (!extId) continue
     const se = (get(r, 'setter_email') || '').toLowerCase() || null
     const ce = (get(r, 'closer_email') || '').toLowerCase() || null
+    const sn = join(get(r, 'setter_first'), get(r, 'setter_last'))
+    const cn = join(get(r, 'closer_first'), get(r, 'closer_last'))
     leads.push({
       source,
       external_id: String(extId),
@@ -113,13 +125,13 @@ export function csvToLeads(text, profilesByEmail = {}, source = 'repcard') {
       appointment_at: toIso(get(r, 'at_utc'), get(r, 'at_local')),
       status: statusFrom(get(r, 'category'), get(r, 'outcome')),
       disposition: get(r, 'outcome') || get(r, 'category'),
-      setter_id: se ? profilesByEmail[se] ?? null : null,
-      closer_id: ce ? profilesByEmail[ce] ?? null : null,
-      setter_name: join(get(r, 'setter_first'), get(r, 'setter_last')) || se,
-      closer_name: join(get(r, 'closer_first'), get(r, 'closer_last')) || ce,
+      setter_id: person(se, sn),
+      closer_id: person(ce, cn),
+      setter_name: sn || se,
+      closer_name: cn || ce,
       notes: get(r, 'notes'),
       raw: Object.fromEntries(headers.map((h, i) => [h, r[i] ?? ''])),
-      _setterEmail: se, _closerEmail: ce,   // for the unmatched report (stripped before save)
+      _setterWho: sn || se, _closerWho: cn || ce,  // for the unmatched report (stripped before save)
     })
   }
   return { leads, headers, missing }

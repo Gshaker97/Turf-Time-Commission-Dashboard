@@ -342,8 +342,28 @@ const DISPOSITION_MAP = {
   presented: 'completed', quoted: 'completed', 'not sold': 'completed', 'no sale': 'completed', lost: 'completed',
   sold: 'sold', closed: 'sold', won: 'sold', 'closed won': 'sold',
   'no show': 'no_show', no_show: 'no_show', noshow: 'no_show', missed: 'no_show',
+  'no showed': 'no_show', 'no-showed': 'no_show',
   canceled: 'canceled', cancelled: 'canceled', rescheduled: 'canceled',
+  'canceled appointment': 'canceled', 'cancelled appointment': 'canceled',
+  // RepCard's "Held" dispositions — the appointment RAN, sale or no sale.
+  'signed up': 'sold',
+  'not interested': 'completed', 'bad credit / not cash': 'completed',
+  'follow up scheduled': 'completed', 'lost to competition': 'completed',
+  'no urgency': 'completed', 'getting multiple bids': 'completed',
+  // "Confirmation" dispositions say nothing about the outcome yet.
+  confirmed: 'scheduled', 'not confirmed': 'scheduled',
 }
+
+// Some CRMs (RepCard) send the outcome as "<Disposition> (<Category>)" —
+// "Signed Up (Held)", "No Showed (Not Held)", "Confirmed (Confirmation)".
+// The category alone answers the only question we care about — did the
+// appointment RUN? — so it backs up the disposition wording. That way a team
+// inventing a new disposition still lands in the right lifecycle instead of
+// silently falling through to 'scheduled'. "Not Held" defaults to canceled
+// rather than no_show: two of its three options are cancel-ish, and pinning
+// an unrecognised outcome on the customer as a no-show is the worse guess.
+const CATEGORY_MAP = { held: 'completed', 'not held': 'canceled', confirmation: 'scheduled' }
+
 // statusMap = the admin's own disposition → lifecycle overrides (Settings),
 // checked before the built-in list so a team's custom wording always wins.
 const normalizeStatus = (status, disposition, statusMap = {}) => {
@@ -352,8 +372,13 @@ const normalizeStatus = (status, disposition, statusMap = {}) => {
   if (LEAD_STATUSES.includes(custom)) return custom
   const s = String(status || '').trim().toLowerCase().replace(/[\s-]+/g, '_')
   if (LEAD_STATUSES.includes(s)) return s
-  const d = raw.toLowerCase()
-  return DISPOSITION_MAP[d] || DISPOSITION_MAP[d.replace(/[\s-]+/g, '_')] || 'scheduled'
+  const paren = raw.match(/^(.*?)\s*\(([^)]*)\)\s*$/)
+  const d = (paren ? paren[1] : raw).toLowerCase().trim()
+  const category = paren ? paren[2].toLowerCase().trim() : ''
+  return DISPOSITION_MAP[d]
+    || DISPOSITION_MAP[d.replace(/[\s-]+/g, '_')]
+    || CATEGORY_MAP[category]
+    || 'scheduled'
 }
 
 // Read a possibly-nested value by dot path ("data.customer.name") so a
@@ -426,14 +451,31 @@ async function ingestLeads(rawBody) {
     return parts.length === 1 ? parts[0] : parts.map(String).join(' ')
   }
 
-  // Resolve people by email in one lookup.
-  const emails = [...new Set(items.flatMap(i =>
-    [pick(i, 'setter_email'), pick(i, 'closer_email')].filter(Boolean).map(e => String(e).trim().toLowerCase())))]
-  const byEmail = {}
-  if (emails.length) {
-    const list = emails.map(e => `"${e.replace(/"/g, '')}"`).join(',')
-    const rows = await restGet(`/rest/v1/profiles?select=id,email&email=in.(${encodeURIComponent(list)})`)
-    for (const p of rows) byEmail[String(p.email).toLowerCase()] = p.id
+  // Resolve people by email, FALLING BACK TO NAME.
+  // A CRM identifies a rep by their login there, which is usually a personal
+  // address (garrison.shaker@gmail.com) — not the company email on our
+  // roster. So email alone matched nobody and every feed event arrived
+  // ownerless. Names ("Garrison Shaker") do match, and the roster is small
+  // enough to fetch whole. A name shared by two people resolves to NEITHER —
+  // no owner beats the wrong owner.
+  const normName = (n) => String(n || '').trim().toLowerCase().replace(/\s+/g, ' ')
+  const byEmail = {}, byName = {}
+  {
+    const dupes = new Set()
+    const profs = await restGet('/rest/v1/profiles?select=id,name,email')
+    for (const p of profs) {
+      if (p.email) byEmail[String(p.email).toLowerCase()] = p.id
+      const n = normName(p.name)
+      if (!n) continue
+      if (byName[n] && byName[n] !== p.id) dupes.add(n)
+      byName[n] = p.id
+    }
+    for (const n of dupes) delete byName[n]
+  }
+  const resolvePerson = (email, name) => {
+    if (email && byEmail[email]) return byEmail[email]
+    const n = normName(name)
+    return (n && byName[n]) || null
   }
 
   const rows = []
@@ -442,10 +484,12 @@ async function ingestLeads(rawBody) {
     const se = pick(i, 'setter_email'), ce = pick(i, 'closer_email')
     const setterEmail = se ? String(se).trim().toLowerCase() : null
     const closerEmail = ce ? String(ce).trim().toLowerCase() : null
-    const setterId = setterEmail ? byEmail[setterEmail] || null : null
-    const closerId = closerEmail ? byEmail[closerEmail] || null : null
-    if (setterEmail && !setterId) unmatched.push(setterEmail)
-    if (closerEmail && !closerId) unmatched.push(closerEmail)
+    const setterNamed = pick(i, 'setter_name')
+    const closerNamed = pick(i, 'closer_name')
+    const setterId = resolvePerson(setterEmail, setterNamed)
+    const closerId = resolvePerson(closerEmail, closerNamed)
+    if ((setterEmail || setterNamed) && !setterId) unmatched.push(setterNamed || setterEmail)
+    if ((closerEmail || closerNamed) && !closerId) unmatched.push(closerNamed || closerEmail)
     const extId = pick(i, 'external_id')
     const rawStatus = pick(i, 'status')
     const disposition = pick(i, 'disposition') ?? rawStatus
@@ -476,8 +520,6 @@ async function ingestLeads(rawBody) {
     // id alone; if it says nothing about them, nothing is touched. A CRM event
     // that simply omits (or fails to resolve) a rep must never blank one that
     // was already correct — clearing a person stays a deliberate admin action.
-    const setterNamed = pick(i, 'setter_name')
-    const closerNamed = pick(i, 'closer_name')
     if (setterId) row.setter_id = setterId
     if (setterNamed || setterEmail) row.setter_name = setterNamed ?? setterEmail
     if (closerId) row.closer_id = closerId
@@ -511,9 +553,9 @@ async function ingestLeads(rawBody) {
   }
   return ok({
     received: rows.length,
-    // Surfaced so a rep whose CRM email doesn't match the roster is visible
+    // Surfaced so a rep the CRM names but the roster can't place is visible
     // immediately instead of silently landing without an owner.
-    unmatched_emails: [...new Set(unmatched)],
+    unmatched_people: [...new Set(unmatched)],
   })
 }
 
