@@ -250,10 +250,29 @@ appointments they set or run; admins edit).
   tests, and `X-API-Key` / `?secret=` are accepted for senders that can't set
   headers. Body = one object or `{ leads: [...] }`; upserts on
   `(source, external_id)` so a webhook firing twice is harmless (partial
-  UNIQUE index, same backstop as `deals.project_id`). People resolve BY EMAIL
-  against `profiles`; unmatched emails come back in the response AND the row
-  still lands with `setter_name`/`closer_name` text — never drop the
-  appointment.
+  UNIQUE index, same backstop as `deals.project_id`).
+- **A WEBHOOK EVENT IS A PARTIAL UPDATE, NOT A FULL RECORD — only write what
+  you were actually given.** RepCard's event types carry different blocks, so
+  writing every column unconditionally made any absent block land as NULL and
+  silently erase good data. Three real bugs came from this one mistake
+  (statusless events wiping a recorded Sold; whole events blanking
+  setter/closer; an unresolvable name nulling a correct id). The standing
+  rules in `ingestLeads`: a column is sent only when the payload supplied it;
+  the status/disposition is written only when non-empty; and **the feed can
+  SET a person but never UNSET one** (an id is written only on a positive
+  roster match — an unmatched name still lands as `setter_name`/`closer_name`
+  text, and clearing a person stays a deliberate admin action). Rows are
+  batched by key signature because PostgREST requires identical keys across a
+  bulk upsert.
+- **People resolve by EMAIL, falling back to NAME.** A CRM stores the rep's
+  own login, which is usually a PERSONAL address
+  (`garrison.shaker@gmail.com`) — not the company email on our roster — so
+  email alone matched nobody and every feed event arrived ownerless. Names
+  ("Garrison Shaker") do match. A name shared by two profiles resolves to
+  NEITHER: no owner beats the wrong owner. `csvToLeads` takes the same
+  `profilesByName` fallback — keep the two paths in step. Unmatched people
+  come back as `unmatched_people` in the response AND the row still lands
+  with the name as text — never drop the appointment.
 - **Field mapping is ADMIN-CONFIGURABLE, not hard-coded per CRM.** Admin →
   Settings → "Lead Feed" holds `app_settings.lead_field_map` (our field ←
   their field name, dot paths supported for nested payloads) and
@@ -265,10 +284,20 @@ appointments they set or run; admins edit).
   clicks, not a code change.
 - **Status** is a normalized lifecycle: `scheduled | completed | sold |
   no_show | canceled`. `completed`/`sold` = the appointment RAN = an estimate.
-  The CRM's raw outcome is kept in `disposition`; `DISPOSITION_MAP` in
-  server.js normalizes the common ones, anything unrecognized lands
-  `scheduled` for manual fixing (per Keaton: some reps use dispositions, some
-  don't).
+  The CRM's raw outcome is kept in `disposition`; `normalizeStatus` in
+  server.js resolves it in four steps: the admin's `lead_status_map` wins
+  first, then an already-normalized status, then `DISPOSITION_MAP` on the
+  wording, then `CATEGORY_MAP`. **RepCard sends the outcome as
+  `"<Disposition> (<Category>)"`** — `No Showed (Not Held)`, `Signed Up
+  (Held)`, `Confirmed (Confirmation)` — so the trailing parenthetical is
+  parsed off and the CATEGORY backs up the wording: `Held` → `completed`
+  (it ran), `Not Held` → `canceled`, `Confirmation` → `scheduled`. That way a
+  team inventing a new disposition still lands in the right lifecycle instead
+  of falling through to `scheduled`. `Not Held` defaults to `canceled` rather
+  than `no_show` deliberately — two of its three options are cancel-ish, and
+  pinning an unrecognized outcome on the customer as a no-show is the worse
+  guess. Anything with no category and no known wording lands `scheduled` for
+  manual fixing (per Keaton: some reps use dispositions, some don't).
 - **A human's correction beats the feed.** Closers get reassigned and
   dispositions are inconsistent, so admins fix status/setter/closer on the
   page — which sets `leads.pinned`. The `leads_keep_manual_fields()` trigger
