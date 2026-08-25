@@ -449,25 +449,42 @@ async function ingestLeads(rawBody) {
     const extId = pick(i, 'external_id')
     const rawStatus = pick(i, 'status')
     const disposition = pick(i, 'disposition') ?? rawStatus
+
+    // A WEBHOOK EVENT IS A PARTIAL UPDATE, NOT A FULL RECORD.
+    // RepCard's event types carry different blocks — an appointment-update
+    // may omit the closer, an outcome may omit the contact. Writing every
+    // column unconditionally meant any absent block landed as NULL and
+    // silently erased good data (real bug: setters/closers vanishing).
+    // So: only send a column when this payload actually provided it;
+    // anything omitted keeps its stored value.
     const row = {
       source: String(pick(i, 'source') || 'repcard'),
       external_id: extId != null ? String(extId) : null,
-      customer_name: pick(i, 'customer_name'),
-      address: pick(i, 'address'),
-      phone: pick(i, 'phone'),
-      email: pick(i, 'email'),
-      appointment_at: pick(i, 'appointment_at'),
-      setter_id: setterId, closer_id: closerId,
-      setter_name: pick(i, 'setter_name') ?? setterEmail ?? null,
-      closer_name: pick(i, 'closer_name') ?? closerEmail ?? null,
-      office: pick(i, 'office'),
-      notes: pick(i, 'notes'),
       raw: i,
     }
-    // Only touch the status when the CRM actually SENT an outcome. Most event
-    // types (appointment updated, closer reassigned) carry an empty
-    // disposition — writing a default 'scheduled' from those would wipe a
-    // real "Sold"/"Ran" the outcome event had already recorded.
+    const put = (col, v) => { if (v !== null && v !== undefined && v !== '') row[col] = v }
+    put('customer_name', pick(i, 'customer_name'))
+    put('address', pick(i, 'address'))
+    put('phone', pick(i, 'phone'))
+    put('email', pick(i, 'email'))
+    put('appointment_at', pick(i, 'appointment_at'))
+    put('office', pick(i, 'office'))
+    put('notes', pick(i, 'notes'))
+    // People: an id is written whenever the event NAMED that person — even if
+    // the email doesn't match the roster (null id + name text is the correct
+    // "unknown rep" state). Silence about a person leaves them untouched.
+    const setterNamed = pick(i, 'setter_name')
+    const closerNamed = pick(i, 'closer_name')
+    if (setterEmail || setterNamed) {
+      row.setter_id = setterId
+      row.setter_name = setterNamed ?? setterEmail ?? null
+    }
+    if (closerEmail || closerNamed) {
+      row.closer_id = closerId
+      row.closer_name = closerNamed ?? closerEmail ?? null
+    }
+    // Same rule for the outcome: most events carry an empty disposition, and
+    // writing the 'scheduled' default from those would wipe a real Sold/Ran.
     if (disposition != null && String(disposition).trim() !== '') {
       row.status = normalizeStatus(rawStatus, disposition, statusMap)
       row.disposition = disposition
@@ -476,10 +493,15 @@ async function ingestLeads(rawBody) {
   }
 
   // PostgREST requires every object in a bulk upsert to have identical keys,
-  // so send the with-status and without-status rows as separate batches.
-  const withStatus = rows.filter(r => 'status' in r)
-  const noStatus   = rows.filter(r => !('status' in r))
-  for (const batch of [withStatus, noStatus]) {
+  // and rows now carry only the columns their event actually supplied — so
+  // group by key signature and send one batch per shape.
+  const batches = new Map()
+  for (const r of rows) {
+    const sig = Object.keys(r).sort().join(',')
+    if (!batches.has(sig)) batches.set(sig, [])
+    batches.get(sig).push(r)
+  }
+  for (const batch of batches.values()) {
     if (!batch.length) continue
     const resp = await fetch(`${SUPABASE_URL}/rest/v1/leads?on_conflict=source,external_id`, {
       method: 'POST',
