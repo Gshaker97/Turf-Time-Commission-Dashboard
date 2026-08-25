@@ -509,6 +509,15 @@ export async function fetchLeads() {
     .limit(3000)
 }
 
+// Edit history for one appointment (migration 043) — who changed what, from
+// any path (CRM feed, importer, admin).
+export async function fetchLeadHistory(leadId) {
+  if (DEMO_MODE) return { data: [], error: null }
+  return supabase.from('lead_history')
+    .select('id,changed_at,changes,changed_by,editor:changed_by(name)')
+    .eq('lead_id', leadId).order('changed_at', { ascending: false }).limit(50)
+}
+
 // Bulk upsert of appointments (CSV import / backfill). Keyed the same way as
 // the webhook feed, so importing a row the feed already delivered updates it
 // rather than duplicating.

@@ -274,8 +274,10 @@ appointments they set or run; admins edit).
   page — which sets `leads.pinned`. The `leads_keep_manual_fields()` trigger
   then preserves those five fields against SERVICE-KEY writes (`auth.uid()
   IS NULL` = the feed) while still letting it refresh timing/details; a
-  signed-in admin can always edit, and the "edited" chip unpins to hand the
-  row back. This is the deliberate fix for the ScheduleSync "my setter keeps
+  signed-in admin can always edit; the row shows a quiet amber line under the
+  customer name instead of a chip, and clicking the NAME opens the edit
+  history (migration 043 `lead_history` + trigger, mirroring `deal_history`)
+  where "Hand back to feed" unpins. This is the deliberate fix for the ScheduleSync "my setter keeps
   reverting" class of bug.
 - **Estimates now COME FROM LEADS** (`src/utils/estimates.js`, the one shared
   rule — never count estimates inline). `app_settings.estimates_from_leads_date`
