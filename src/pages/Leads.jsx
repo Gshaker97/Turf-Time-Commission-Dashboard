@@ -1,16 +1,18 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, Fragment } from 'react'
 import { format } from 'date-fns'
 import { CalendarCheck, Search, Link2, Upload, X } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchLeads, fetchUsers, updateLead, upsertLeads } from '../lib/db'
 import { csvToLeads } from '../utils/leadImport'
 import { getPresetRange, presetLabel } from '../utils/dateRanges'
+import { headIdSet, teamKeyFor } from '../utils/team'
 import DateRangeFilter from '../components/DateRangeFilter'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { toast } from '../lib/toast'
 
 // The lifecycle the site reasons about (migration 041). RUN = the appointment
 // actually happened, which is what counts as an estimate.
+const PALETTE = ['#00b894', '#74b9ff', '#a78bfa', '#fbbf24', '#fb923c', '#f87171', '#34d399', '#60a5fa']
 const STATUSES = [
   { key: 'scheduled', label: 'Scheduled', color: '#74b9ff' },
   { key: 'completed', label: 'Ran',       color: '#00b894' },
@@ -90,8 +92,10 @@ export default function Leads() {
   }, [filtered])
 
   // Per-rep funnel for the period — the automatic replacement for the
-  // hand-entered Weekly Stats estimates.
-  const byRep = useMemo(() => {
+  // hand-entered Weekly Stats estimates — grouped under each rep's CURRENT
+  // team with team totals, same shape as Performance's Rep Breakdown.
+  const byTeam = useMemo(() => {
+    const heads = headIdSet(users)
     const m = {}
     const row = (id, name) => (m[id] ??= { id, name, set: 0, ran: 0, sold: 0 })
     for (const l of filtered) {
@@ -103,13 +107,27 @@ export default function Leads() {
       if (RAN.has(l.status)) r.ran += 1
       if (l.status === 'sold') r.sold += 1
     }
-    return Object.values(m)
-      .filter(r => isAdmin || !users.find(u => u.id === r.id)?.ghost)
-      .sort((a, b) => b.ran - a.ran || b.set - a.set)
+    const reps = Object.values(m).filter(r => isAdmin || !users.find(u => u.id === r.id)?.ghost)
+
+    const groups = {}
+    for (const r of reps) {
+      const u = users.find(x => x.id === r.id)
+      const tk = u ? teamKeyFor(u, heads) : 'unassigned'
+      ;(groups[tk] ??= []).push(r)
+    }
+    return Object.entries(groups).map(([tk, rows], i) => {
+      const lead = users.find(u => u.id === tk)
+      rows.sort((a, b) => b.ran - a.ran || b.set - a.set)
+      const sum = (k) => rows.reduce((s, r) => s + r[k], 0)
+      return {
+        key: tk,
+        name: tk === 'unassigned' ? 'No Team' : lead ? `${lead.name}'s Team` : 'Former Team',
+        color: PALETTE[i % PALETTE.length],
+        rows, set: sum('set'), ran: sum('ran'), sold: sum('sold'),
+      }
+    }).sort((a, b) => (a.key === 'unassigned') - (b.key === 'unassigned') || b.ran - a.ran || b.set - a.set)
   }, [filtered, users, isAdmin])
 
-  // Any admin correction PINS the row so the CRM feed can't revert it (the
-  // feed keeps refreshing timing/details; status + people stay ours).
   // ── CSV backfill ──────────────────────────────────────────
   // The webhook only fires on events from the moment it's configured, so
   // already-scheduled appointments need one import. Keyed on the appointment
@@ -149,6 +167,8 @@ export default function Leads() {
     load()
   }
 
+  // Any admin correction PINS the row so the CRM feed can't revert it (the
+  // feed keeps refreshing timing/details; status + people stay ours).
   async function patchLead(l, patch) {
     const withPin = { ...patch, pinned: true }
     setLeads(ls => ls.map(x => x.id === l.id ? { ...x, ...withPin } : x))
@@ -297,9 +317,9 @@ export default function Leads() {
         <Kpi label="No Shows"         value={kpis.noShow} color="#fb923c" />
       </div>
 
-      {byRep.length > 0 && (
+      {byTeam.length > 0 && (
         <div className="rounded-xl p-4 md:p-5" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-          <h3 className="text-[13px] font-semibold text-white mb-0.5">By Rep — {presetLabel(preset)}</h3>
+          <h3 className="text-[13px] font-semibold text-white mb-0.5">By Team &amp; Rep — {presetLabel(preset)}</h3>
           <p className="text-[10px] text-white/30 mb-3">
             Set → ran → sold, credited to whoever ran the appointment. <span className="text-white/45">Ran</span> is the estimate
             count feeding close rates site-wide; <span className="text-white/45">Sold</span> is the appointment's outcome, not a deal record.
@@ -316,14 +336,30 @@ export default function Leads() {
                 </tr>
               </thead>
               <tbody>
-                {byRep.map(r => (
-                  <tr key={r.id} className="border-t" style={{ borderColor: '#2a2a2a' }}>
-                    <td className="py-2 pr-3 font-semibold text-white whitespace-nowrap">{r.name}</td>
-                    <td className="py-2 pr-3 text-right text-white/70">{r.set}</td>
-                    <td className="py-2 pr-3 text-right text-teal font-semibold">{r.ran}</td>
-                    <td className="py-2 pr-3 text-right text-white">{r.sold}</td>
-                    <td className="py-2 text-right text-white/60">{r.ran > 0 ? `${Math.round((r.sold / r.ran) * 100)}%` : '—'}</td>
-                  </tr>
+                {byTeam.map(t => (
+                  <Fragment key={t.key}>
+                    <tr className="border-t" style={{ borderColor: '#2a2a2a', background: '#232323' }}>
+                      <td className="py-2 pr-3">
+                        <span className="flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: t.color }} />
+                          <span className="text-[12px] font-bold text-white whitespace-nowrap">{t.name}</span>
+                        </span>
+                      </td>
+                      <td className="py-2 pr-3 text-right font-bold text-white/70">{t.set}</td>
+                      <td className="py-2 pr-3 text-right font-bold text-teal">{t.ran}</td>
+                      <td className="py-2 pr-3 text-right font-bold text-white">{t.sold}</td>
+                      <td className="py-2 text-right font-bold text-white/70">{t.ran > 0 ? `${Math.round((t.sold / t.ran) * 100)}%` : '—'}</td>
+                    </tr>
+                    {t.rows.map(r => (
+                      <tr key={r.id} className="border-t" style={{ borderColor: '#262626' }}>
+                        <td className="py-2 pr-3 pl-4 text-white/85 whitespace-nowrap">{r.name}</td>
+                        <td className="py-2 pr-3 text-right text-white/70">{r.set}</td>
+                        <td className="py-2 pr-3 text-right text-teal">{r.ran}</td>
+                        <td className="py-2 pr-3 text-right text-white">{r.sold}</td>
+                        <td className="py-2 text-right text-white/60">{r.ran > 0 ? `${Math.round((r.sold / r.ran) * 100)}%` : '—'}</td>
+                      </tr>
+                    ))}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
