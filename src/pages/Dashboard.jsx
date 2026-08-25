@@ -381,7 +381,8 @@ export default function Dashboard() {
         const u   = users.find(u => u.id === id)
         const mgr = u ? users.find(m => m.id === u.manager_id) : null
         map[id]   = { id, name: u?.name ?? '—', team: mgr?.name ?? '—',
-          deals: 0, revenue: 0, leads: 0, leadRevenue: 0, commission: 0 }
+          deals: 0, revenue: 0, leads: 0, leadRevenue: 0, commission: 0,
+          closed: 0, closedRevenue: 0, selfGens: 0 }
       }
       return map[id]
     }
@@ -407,6 +408,18 @@ export default function Dashboard() {
         c.leadRevenue += bl
         c.commission  += a.closer
       }
+      // Closed + closed revenue credit whoever RAN the appointment, self-gen
+      // or not. A deal with a setter but no closer_id was closed by the setter
+      // themselves — the same rule dealAmounts() uses to pay them the full rep
+      // pool — so fall back to the setter rather than crediting nobody.
+      // By construction: closed === selfGens + leads.
+      const closerOwn = deal.closer_id || deal.setter_id || null
+      if (closerOwn) {
+        const c = ensure(closerOwn)
+        c.closed        += 1
+        c.closedRevenue += bl
+        if (closerOwn === sid) c.selfGens += 1
+      }
     }
     return Object.values(map).map(r => ({ ...r, pct: (r.revenue / companyTotalRev) * 100 }))
   }, [filtered, users, companyTotalRev])
@@ -429,12 +442,12 @@ export default function Dashboard() {
   // Copy the current leaderboard to the clipboard as a real table (HTML) with a
   // tab-separated fallback — pastes cleanly into Canva, Sheets, Docs, etc.
   async function copyLeaderboard() {
-    const cols = ['#', 'Rep', 'Deals', 'Revenue', 'Leads', 'Lead Rev', 'Comm']
+    const cols = ['#', 'Rep', 'Deals', 'Closed', 'Revenue', 'Closed Rev', 'Self Gen', 'Leads', 'Lead Rev', 'Comm']
     // The export is a shareable artifact, so ghost reps are always dropped —
     // even for an admin, who sees them on-screen. (Re-rank after filtering.)
     const rows = rankedReps
       .filter(r => !ghostIds.has(r.id))
-      .map((r, i) => [i + 1, r.name, r.deals, fmt(r.revenue), r.leads, fmt(r.leadRevenue), fmt(r.commission)])
+      .map((r, i) => [i + 1, r.name, r.deals, r.closed, fmt(r.revenue), fmt(r.closedRevenue), r.selfGens, r.leads, fmt(r.leadRevenue), fmt(r.commission)])
     const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     const tsv = [cols, ...rows].map(r => r.join('\t')).join('\n')
     const html =
@@ -732,16 +745,24 @@ export default function Dashboard() {
               </button>
             )}
           </div>
-          <div className="max-h-[460px] overflow-y-auto">
-          <table className="w-full">
+          {/* Scrolls both ways: vertically through the rankings, and
+              horizontally on a phone to reach Closed Rev / Self Gen. */}
+          <div className="max-h-[460px] overflow-y-auto overflow-x-auto">
+          <table className="w-full min-w-[540px]">
             <thead className="sticky top-0 z-10" style={{ background: '#242424' }}>
               <tr className="text-[9px] md:text-[10px] font-bold text-white/30 uppercase tracking-wider">
                 <th className="text-left pb-2 w-6">#</th>
                 <th className="text-left pb-2">Rep</th>
                 <SortTh label="Deals" align="center" className="hidden sm:table-cell" title="Deals they set (generated)"
                   active={repSort.key === 'deals'} dir={repSort.dir} onClick={() => toggleRepSort('deals')} />
+                <SortTh label="Closed" align="center" title="Total deals they closed — self-gens plus other reps' leads"
+                  active={repSort.key === 'closed'} dir={repSort.dir} onClick={() => toggleRepSort('closed')} />
                 <SortTh label="Revenue" align="right" title="Baseline revenue of deals they set"
                   active={repSort.key === 'revenue'} dir={repSort.dir} onClick={() => toggleRepSort('revenue')} />
+                <SortTh label="Closed Rev" align="right" title="Baseline revenue of every deal they closed"
+                  active={repSort.key === 'closedRevenue'} dir={repSort.dir} onClick={() => toggleRepSort('closedRevenue')} />
+                <SortTh label="Self Gen" align="center" title="Deals they both set and closed themselves"
+                  active={repSort.key === 'selfGens'} dir={repSort.dir} onClick={() => toggleRepSort('selfGens')} />
                 <SortTh label="Leads" align="center" className="hidden md:table-cell" title="Deals they closed for another setter"
                   active={repSort.key === 'leads'} dir={repSort.dir} onClick={() => toggleRepSort('leads')} />
                 <SortTh label="Lead Rev" align="right" className="hidden md:table-cell" title="Revenue from deals closed for other setters"
@@ -757,9 +778,20 @@ export default function Dashboard() {
                     <td className="py-2"><RankBadge n={i + 1} /></td>
                     <td className="py-2 text-[12px] font-medium text-white/80 truncate max-w-[100px]">{rep.name}</td>
                     <td className="py-2 text-[12px] text-white/60 text-center hidden sm:table-cell">{rep.deals}</td>
+                    <td className="py-2 text-[12px] text-center">
+                      {rep.closed > 0 ? <span className="text-white/80 font-semibold">{rep.closed}</span> : <span className="text-white/20">—</span>}
+                    </td>
                     <td className="py-2 text-right whitespace-nowrap">
                       <p className="text-[12px] font-bold text-teal">{fmt(rep.revenue)}</p>
                       <p className="text-[10px] text-white/30 hidden sm:block">{rep.pct.toFixed(1)}%</p>
+                    </td>
+                    <td className="py-2 text-right whitespace-nowrap">
+                      {rep.closedRevenue > 0
+                        ? <span className="text-[12px] font-semibold text-white/70">{fmt(rep.closedRevenue)}</span>
+                        : <span className="text-[12px] text-white/20">—</span>}
+                    </td>
+                    <td className="py-2 text-[12px] text-center">
+                      {rep.selfGens > 0 ? <span className="text-white/60">{rep.selfGens}</span> : <span className="text-white/20">—</span>}
                     </td>
                     <td className="py-2 text-[12px] text-center hidden md:table-cell">
                       {rep.leads > 0 ? <span className="text-white/60">{rep.leads}</span> : <span className="text-white/20">—</span>}
@@ -774,7 +806,7 @@ export default function Dashboard() {
                 )
               })}
               {rankedReps.length === 0 && (
-                <tr><td colSpan={7} className="py-8 text-center text-white/30 text-[13px]">No data for this period</td></tr>
+                <tr><td colSpan={10} className="py-8 text-center text-white/30 text-[13px]">No data for this period</td></tr>
               )}
             </tbody>
           </table>
