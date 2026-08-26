@@ -47,6 +47,25 @@ const APPT_RANGES = [
 ]
 const RAN = new Set(['completed', 'sold'])   // an estimate was run
 const dt = (iso) => iso ? format(new Date(iso), 'EEE, MMM d · h:mma') : '—'
+// Inside a day group the date is already in the header, so rows show the time
+// only — it reads like the calendar the appointments came from.
+const tm = (iso) => iso ? format(new Date(iso), 'h:mmaaa') : '—'
+
+// A 'yyyy-MM-dd' key → how the day header should read. Built from explicit
+// parts because `new Date('2026-08-24')` parses as UTC midnight, which lands
+// on the 23rd in Arizona and would label every header with the wrong weekday.
+function dayMeta(key, now = new Date()) {
+  if (!key) return { label: 'No date set', rel: null, isToday: false }
+  const [y, m, d] = key.split('-').map(Number)
+  const date = new Date(y, m - 1, d)
+  const midnight = new Date(now); midnight.setHours(0, 0, 0, 0)
+  const diff = Math.round((date - midnight) / 86400000)
+  return {
+    label: format(date, 'EEEE · MMM d'),
+    rel: diff === 0 ? 'Today' : diff === 1 ? 'Tomorrow' : diff === -1 ? 'Yesterday' : null,
+    isToday: diff === 0,
+  }
+}
 
 function Kpi({ label, value, sub, color = '#00b894' }) {
   return (
@@ -128,6 +147,25 @@ export default function Leads() {
       showRate: set - filtered.filter(l => l.status === 'canceled').length > 0
         ? (ran / (set - filtered.filter(l => l.status === 'canceled').length)) * 100 : null,
     }
+  }, [filtered])
+
+  // One card per calendar day. `filtered` is already chronological, so a
+  // single pass is enough — a long undifferentiated list is hard to read, and
+  // days are the unit people actually think in when scanning a schedule.
+  const byDay = useMemo(() => {
+    const days = []
+    let cur = null
+    for (const l of filtered) {
+      const d = dayOf(l)
+      if (!cur || cur.day !== d) { cur = { day: d, rows: [] }; days.push(cur) }
+      cur.rows.push(l)
+    }
+    return days.map(g => ({
+      ...g,
+      ...dayMeta(g.day),
+      ran: g.rows.filter(l => RAN.has(l.status)).length,
+      sold: g.rows.filter(l => l.status === 'sold').length,
+    }))
   }, [filtered])
 
   // Per-rep funnel for the period — the automatic replacement for the
@@ -544,13 +582,38 @@ export default function Leads() {
         </div>
       )}
 
-      <div className="rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-        {filtered.length === 0 ? (
+      {filtered.length === 0 && (
+        <div className="rounded-xl" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
           <p className="px-4 py-8 text-center text-[13px] text-white/30">No appointments in this range.</p>
-        ) : filtered.map(l => {
+        </div>
+      )}
+
+      {byDay.map(g => (
+      <div key={g.day || 'nodate'} className="rounded-xl overflow-hidden"
+        style={{ background: '#1e1e1e', border: `1px solid ${g.isToday ? '#00b89455' : '#2a2a2a'}` }}>
+        {/* Day header — the separator that turns one long list into a schedule. */}
+        <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 px-4 py-2"
+          style={{ background: g.isToday ? '#00b8940f' : '#232323', borderBottom: '1px solid #2a2a2a' }}>
+          <span className="text-[12.5px] font-bold" style={{ color: g.isToday ? '#00b894' : '#fff' }}>{g.label}</span>
+          {g.rel && (
+            <span className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded"
+              style={g.isToday
+                ? { color: '#00b894', border: '1px solid #00b89455' }
+                : { color: 'rgba(255,255,255,0.4)', border: '1px solid #3a3a3a' }}>{g.rel}</span>
+          )}
+          <span className="text-[10.5px] text-white/30 ml-auto whitespace-nowrap">
+            {g.rows.length} appt{g.rows.length === 1 ? '' : 's'}
+            {g.ran > 0 && <> · <span className="text-teal/70">{g.ran} ran</span></>}
+            {g.sold > 0 && <> · <span className="text-white/50">{g.sold} sold</span></>}
+          </span>
+        </div>
+        {g.rows.map(l => {
           const s = stat(l.status)
           return (
             <div key={l.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 border-b border-white/5 last:border-0">
+              <div className="text-[11px] font-semibold text-white/45 tabular-nums w-[58px] flex-shrink-0">
+                {tm(l.appointment_at)}
+              </div>
               <div className="min-w-0 flex-1">
                 <button onClick={() => openHistory(l)} title="Show this appointment's edit history"
                   className="block max-w-full text-[13px] font-semibold text-white truncate text-left hover:text-teal transition-colors">
@@ -590,7 +653,6 @@ export default function Leads() {
                   )}
                 </div>
               )}
-              <div className="text-[11px] text-white/50 whitespace-nowrap min-w-[150px]">{dt(l.appointment_at)}</div>
               {isAdmin ? (
                 <select value={l.status} onChange={e => setStatus(l, e.target.value)}
                   style={{ background: '#242424', border: `1px solid ${s.color}55`, color: s.color }}
@@ -605,6 +667,7 @@ export default function Leads() {
           )
         })}
       </div>
+      ))}
     </div>
   )
 }
