@@ -232,10 +232,29 @@ function schSyncLocked_() {
         out.details.push(out.sheetIssue);
       } else {
       // A re-signed job leaves its OLD row on the tab next to the new one, and
-      // both stay APPROVED. If both rows drive the deal, they fight: the old
-      // row keeps flagging "Change Order" with the old numbers every time you
-      // move the deal forward. So per customer, only the NEWEST row (latest
-      // Approved Date; later sheet row wins ties) is allowed to touch the deal.
+      // both stay APPROVED. If both rows drive the deal, they fight: each one
+      // writes its own figures, which makes the OTHER row look changed, so the
+      // deal re-flags every single run and the ❗ can never be dismissed.
+      // Only the NEWEST row (latest Approved Date; later sheet row wins ties)
+      // is allowed to touch a deal.
+      //
+      // Keying that by CUSTOMER NAME was not enough. Two rows whose names
+      // differ even slightly — a typo, a suffix, extra punctuation — land under
+      // different keys and BOTH survive the dedup, yet both still resolve to
+      // the same deal through their shared Project ID. That is exactly the
+      // ping-pong seen live on Andrew Gonzales / Cesar Ventura / Michael:
+      // six alert writes a minute, alternating between two sets of numbers.
+      // So dedup on the TARGET the row resolves to, not on the label it wears.
+      const targetOf = [];
+      for (let r = 1; r < rows.length; r++) {
+        const cust = String(rows[r][ix.customer] || '').trim().toLowerCase();
+        const pid = String(rows[r][ix.project] || '').trim()
+          || String(ix.proposal >= 0 ? rows[r][ix.proposal] : '').trim();
+        // Resolved BEFORE the write loop so a project_id stamped mid-run can't
+        // shift a later row's key out from under the dedup.
+        const hit = (pid && byProject[pid]) || dealByName[cust];
+        targetOf[r] = hit ? 'deal:' + hit.id : 'cust:' + cust;
+      }
       const newestRow = {};
       for (let r = 1; r < rows.length; r++) {
         const cust = String(rows[r][ix.customer] || '').trim().toLowerCase();
@@ -251,9 +270,14 @@ function schSyncLocked_() {
         const rep0 = schCleanRep_(rows[r][ix.rep]).toLowerCase();
         if (SCH_EXCLUDE_REPS.some(function (x) { return rep0.indexOf(x) !== -1; })) continue;
         const when = schDate_(rows[r][ix.approved]) || '';
-        const prev = newestRow[cust];
-        if (!prev || when >= prev.when) newestRow[cust] = { r: r, when: when };
+        const prev = newestRow[targetOf[r]];
+        if (!prev || when >= prev.when) newestRow[targetOf[r]] = { r: r, when: when };
       }
+      // Belt and braces: one deal, at most one write per run. Even if some
+      // future matching path lets two rows through, they can never take turns
+      // overwriting each other's figures — the loop above is what SHOULD
+      // prevent it, this is what GUARANTEES the alert can't ping-pong.
+      const touched = {};
 
       for (let r = 1; r < rows.length; r++) {
         const row = rows[r];
@@ -268,7 +292,7 @@ function schSyncLocked_() {
         if (SCH_ONLY_STATUS && ix.status >= 0 && status !== SCH_ONLY_STATUS) { out.skipped++; continue; }
 
         // Stale duplicate (older re-sign row) — the newest row owns this deal.
-        const newest = newestRow[customer.toLowerCase()];
+        const newest = newestRow[targetOf[r]];
         if (newest && newest.r !== r) { out.skipped++; continue; }
 
         const projectId = String(row[ix.project] || '').trim() || String(ix.proposal >= 0 ? row[ix.proposal] : '').trim();
@@ -286,6 +310,17 @@ function schSyncLocked_() {
         const existing    = byProject[projectId] || dealByName[customer.toLowerCase()];
 
         if (existing) {
+          // Already handled this deal in this run — a second row must not get
+          // to overwrite the first one's figures (see `touched` above).
+          if (touched[existing.id]) {
+            out.skipped++;
+            out.details.push('Duplicate Jobs row ' + (r + 1) + ' ("' + customer + '") also points at deal "'
+              + (existing.deal_name || existing.id) + '" — ignored. Two rows driving one deal is what causes '
+              + 'a change alert that keeps coming back; remove or rename the stale row.');
+            continue;
+          }
+          touched[existing.id] = true;
+
           // The sheet's numbers changed since we last synced this deal
           // (synced_baseline/synced_job_price) — a re-signed agreement / new
           // version of the sale. The sync NO LONGER rewrites the deal for this
