@@ -190,20 +190,25 @@ export default function Dashboard() {
     return r.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0) || 1
   }, [deals, dateFrom, dateTo])
 
-  // ── Record moments: banner when a company record breaks ──
+  // ── Record moments: every record currently falling, in one card ──
   // Fires while a record is being beaten in progress, and for up to 7 days
-  // after a completed period sets a new all-time best. Dismissals stick per
-  // record per period (localStorage).
-  const [dismissedRecs, setDismissedRecs] = useState(() => {
-    try { return new Set(JSON.parse(localStorage.getItem('tt_rec_dismissed') || '[]')) } catch { return new Set() }
+  // after a completed period sets a new all-time best.
+  //
+  // These used to be full-width banners capped at three, each with its own ✕.
+  // Six record types across company/team/rep means up to EIGHTEEN can be live
+  // at once, so the cap silently threw most of them away — and because company
+  // records sort first, team and rep records essentially never surfaced. The
+  // cap is gone: the card shows all of them, grouped by scope so company still
+  // reads first, and the whole section collapses instead of being dismissed
+  // record-by-record (same pattern as the Leads rep board).
+  const [recsOpen, setRecsOpen] = useState(() => {
+    try { return localStorage.getItem('tt_records_open') !== 'off' } catch { return true }
   })
-  const dismissRec = (id) => {
-    setDismissedRecs(prev => {
-      const next = new Set(prev); next.add(id)
-      try { localStorage.setItem('tt_rec_dismissed', JSON.stringify([...next].slice(-40))) } catch { /* ignore */ }
-      return next
-    })
-  }
+  const toggleRecs = () => setRecsOpen(v => {
+    const next = !v
+    try { localStorage.setItem('tt_records_open', next ? 'on' : 'off') } catch { /* ignore */ }
+    return next
+  })
   const recordMoments = useMemo(() => {
     if (!deals.length) return []
     const today = format(new Date(), 'yyyy-MM-dd')
@@ -212,45 +217,50 @@ export default function Dashboard() {
       teamCtx: { usersById, heads: headsSet, changesByProfile },
     })
     const NAMES = {
-      revMonth: ['month', 'biggest month'], revWeek: ['week', 'biggest week'], revDay: ['day', 'biggest day'],
-      dealsMonth: ['month', 'most deals in a month'], dealsWeek: ['week', 'most deals in a week'], dealsDay: ['day', 'most deals in a day'],
+      revMonth: ['month', 'Biggest month'], revWeek: ['week', 'Biggest week'], revDay: ['day', 'Biggest day'],
+      dealsMonth: ['month', 'Most deals in a month'], dealsWeek: ['week', 'Most deals in a week'], dealsDay: ['day', 'Most deals in a day'],
     }
     const cutoff = new Date(today + 'T12:00:00'); cutoff.setDate(cutoff.getDate() - 7)
     const cutISO = format(cutoff, 'yyyy-MM-dd')
     const val = (key, v) => key.startsWith('deals') ? `${v} deals` : fmt(v)
+    // "was $88,140 · Jordan Bagwell, May 2026" — the mark that's being beaten,
+    // and who held it. A record without that context is just a number.
+    const wasLine = (key, rec) =>
+      `was ${val(key, rec.value)}${[rec.holderName, rec.label].filter(Boolean).join(', ') ? ` · ${[rec.holderName, rec.label].filter(Boolean).join(', ')}` : ''}`
 
-    // Company / rep / team all banner the same two ways: a record being
-    // passed RIGHT NOW, or one set within the last 7 days. `prev` is required
-    // on completed ones so a first-ever period never banners.
     const scan = (book, scope) => {
       const out = []
       if (!book) return out
       for (const [key, rec] of Object.entries(book)) {
         if (!NAMES[key] || !rec || typeof rec !== 'object' || !('status' in rec)) continue
         const [grain, label] = NAMES[key]
-        const who = (r) => r?.holderName ? <b>{r.holderName}</b> : null
         if (rec.status === 'new' && rec.best) {
           out.push({
-            id: `rec-${scope}-${key}-${rec.current.key}`,
-            text: scope === 'company'
-              ? <>🔥 <b>NEW COMPANY RECORD in progress</b> — {label}: <b>{val(key, rec.current.value)}</b> and counting (previous best: {val(key, rec.best.value)}, {rec.best.label})</>
-              : <>🔥 {who(rec.current)} is breaking the {scope} record — {label}: <b>{val(key, rec.current.value)}</b> and counting (previous: {val(key, rec.best.value)}{rec.best.holderName ? `, ${rec.best.holderName}` : ''})</>,
+            id: `rec-${scope}-${key}-${rec.current.key}`, scope,
+            who: rec.current.holderName || null, kind: label, live: true,
+            value: val(key, rec.current.value), was: wasLine(key, rec.best),
           })
         } else if (rec.best && rec.prev && periodEnd(grain, rec.best.key) >= cutISO) {
           out.push({
-            id: `rec-${scope}-${key}-${rec.best.key}`,
-            text: scope === 'company'
-              ? <>🔥 <b>NEW COMPANY RECORD</b> — {label}: <b>{val(key, rec.best.value)}</b> ({rec.best.label}; previous: {val(key, rec.prev.value)})</>
-              : <>🔥 <b>NEW {scope.toUpperCase()} RECORD</b> — {who(rec.best)}, {label}: <b>{val(key, rec.best.value)}</b> ({rec.best.label}; previous: {val(key, rec.prev.value)})</>,
+            id: `rec-${scope}-${key}-${rec.best.key}`, scope,
+            who: rec.best.holderName || null, kind: label, live: false,
+            value: val(key, rec.best.value), was: wasLine(key, rec.prev),
           })
         }
       }
       return out
     }
     // Company first, then team, then rep — biggest news at the top.
-    const out = [...scan(company, 'company'), ...scan(teams, 'team'), ...scan(reps, 'rep')]
-    return out.filter(m => !dismissedRecs.has(m.id)).slice(0, 3)
-  }, [deals, users, isAdmin, dataStartDate, dismissedRecs, usersById, headsSet, changesByProfile])
+    return [...scan(company, 'company'), ...scan(teams, 'team'), ...scan(reps, 'rep')]
+  }, [deals, users, isAdmin, dataStartDate, usersById, headsSet, changesByProfile])
+
+  // Grouped for display, keeping the company → team → rep order.
+  const recordGroups = useMemo(() => {
+    const meta = { company: ['Company', '#fbbf24'], team: ['Team', '#a78bfa'], rep: ['Rep', '#00b894'] }
+    return ['company', 'team', 'rep']
+      .map(s => ({ scope: s, label: meta[s][0], color: meta[s][1], rows: recordMoments.filter(m => m.scope === s) }))
+      .filter(g => g.rows.length)
+  }, [recordMoments])
 
   const monthlyGoal = useMemo(() => {
     const curKey = `${String(goalYear).padStart(4,'0')}-${String(goalMonth).padStart(2,'0')}`
@@ -558,15 +568,52 @@ export default function Dashboard() {
         </select>
       </div>
 
-      {/* ── Record moments — a company record is falling (or just fell) ── */}
-      {recordMoments.map(m => (
-        <div key={m.id} className="flex items-center gap-3 rounded-xl px-4 py-3"
-          style={{ background: 'linear-gradient(90deg, rgba(251,191,36,0.12), rgba(251,191,36,0.03))', border: '1px solid rgba(251,191,36,0.45)' }}>
-          <p className="text-[13px] text-white/85 min-w-0">{m.text}</p>
-          <button onClick={() => dismissRec(m.id)} title="Dismiss"
-            className="ml-auto p-1 rounded text-white/40 hover:text-white flex-shrink-0"><X size={14} /></button>
+      {/* ── Records falling right now — every one of them, collapsible ── */}
+      {recordMoments.length > 0 && (
+        <div className="rounded-xl overflow-hidden"
+          style={{ background: '#1e1e1e', border: '1px solid rgba(251,191,36,0.45)' }}>
+          {/* The header is the toggle, and carries the count — so a collapsed
+              card still tells you something is happening. */}
+          <button onClick={toggleRecs} aria-expanded={recsOpen}
+            className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:opacity-90 transition-opacity"
+            style={{ background: 'linear-gradient(90deg, rgba(251,191,36,0.12), rgba(251,191,36,0.03))',
+                     borderBottom: recsOpen ? '1px solid #2a2a2a' : 'none' }}>
+            <ChevronDown size={13} className={`flex-shrink-0 transition-transform ${recsOpen ? '' : '-rotate-90'}`}
+              style={{ color: 'rgba(251,191,36,0.7)' }} />
+            <span className="text-[13px] font-bold" style={{ color: '#fbbf24' }}>
+              🔥 {recordMoments.length} record{recordMoments.length === 1 ? '' : 's'} falling right now
+            </span>
+            <span className="ml-auto text-[11px] text-white/30 whitespace-nowrap hidden sm:block">
+              {recordGroups.map(g => `${g.rows.length} ${g.scope}`).join(' · ')}
+            </span>
+          </button>
+
+          {recsOpen && recordGroups.map(g => (
+            <div key={g.scope}>
+              <div className="flex items-center gap-1.5 px-4 pt-2.5 pb-1 text-[9.5px] font-bold uppercase tracking-widest"
+                style={{ color: g.color }}>
+                <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: g.color }} />
+                {g.label}
+              </div>
+              {g.rows.map(m => (
+                <div key={m.id} className="px-4 pt-1.5 pb-2" style={{ borderTop: '1px solid #262626' }}>
+                  <div className="flex items-baseline justify-between gap-4">
+                    <p className="text-[12.5px] text-white/85 min-w-0">
+                      {m.who && <b className="font-bold">{m.who}</b>}
+                      <span className="text-white/55">{m.who ? ` — ${m.kind.toLowerCase()}` : m.kind}</span>
+                      {!m.live && <span className="text-white/30"> · just set</span>}
+                    </p>
+                    <span className="text-[13px] font-bold tabular-nums whitespace-nowrap" style={{ color: g.color }}>
+                      {m.value}
+                    </span>
+                  </div>
+                  <p className="text-[10.5px] text-white/30 tabular-nums">{m.was}</p>
+                </div>
+              ))}
+            </div>
+          ))}
         </div>
-      ))}
+      )}
 
       {/* ── KPI cards — 2-col on mobile, row on md+ ── */}
       <div className="grid grid-cols-2 gap-2 md:flex md:gap-3">
