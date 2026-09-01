@@ -38,10 +38,21 @@ const DEAL_SELECT = `
 
 // ── Deals ─────────────────────────────────────────────────────
 
-// Pre-migration safety: if a live write fails because the database doesn't
-// have a column yet (e.g. `payment_method` before 006_settings.sql is run),
-// drop that column from the payload and retry. Lets new fields ship before
-// the matching migration is applied, without breaking deal saves.
+// A write that PostgREST rejects for an UNKNOWN COLUMN must never be reported
+// as saved.
+//
+// This used to drop the offending column and retry until the write succeeded,
+// as pre-migration safety so new fields could ship ahead of their migration.
+// That traded a loud error for SILENT DATA LOSS: the stripped field never
+// reached the database, the call returned `{ error: null }`, the optimistic UI
+// kept showing the new value, and the edit was simply gone on the next reload.
+// It also fires for columns that genuinely EXIST — PostgREST caches the schema,
+// so until its cache is reloaded after a migration every write to a new column
+// looks "unknown". That is the "my saved details don't stick" bug: some fields
+// on a save land, others vanish without a word.
+//
+// Now the column is named in a real error, so the caller reverts and says so.
+// Losing an edit quietly is far worse than refusing it out loud.
 async function writeWithSchemaFallback(run, payload) {
   let res = await run(payload)
   // Expired-session recovery: an access token that lapsed while the tab sat
@@ -52,13 +63,14 @@ async function writeWithSchemaFallback(run, payload) {
     try { await supabase.auth.refreshSession() } catch { /* fall through to the original error */ }
     res = await run(payload)
   }
-  let guard = 0
-  while (res?.error && guard++ < 24) {
-    const col = /Could not find the '([^']+)' column/.exec(res.error.message || '')?.[1]
-    if (!col || !(col in payload)) break
-    const { [col]: _omit, ...rest } = payload
-    payload = rest
-    res = await run(payload)
+  const col = res?.error && /Could not find the '([^']+)' column/.exec(res.error.message || '')?.[1]
+  if (col && col in payload) {
+    return { ...res, error: {
+      ...res.error,
+      message: `The database doesn't recognize the "${col}" column, so this change was NOT saved. `
+        + `If its migration has been run, the API's schema cache is stale — run `
+        + `NOTIFY pgrst, 'reload schema'; in Studio's SQL editor.`,
+    } }
   }
   return res
 }
