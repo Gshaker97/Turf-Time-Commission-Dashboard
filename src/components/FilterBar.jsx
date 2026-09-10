@@ -1,5 +1,6 @@
 import { Search, ChevronDown, X } from 'lucide-react'
 import DateRangeFilter from './DateRangeFilter'
+import RepMultiSelect from './RepMultiSelect'
 import { DATE_FIELDS } from './DealTable'
 import { useSettings } from '../contexts/SettingsContext'
 
@@ -20,7 +21,7 @@ const inputCls = 'h-9 rounded-lg text-[13px] text-white placeholder-white/20 foc
 // simply renders whatever it's handed.
 export default function FilterBar({
   users = [],
-  repFilter, setRepFilter,
+  repFilters = [], setRepFilters,
   search, setSearch,
   statusFilter, setStatusFilter,
   officeFilter, setOfficeFilter,
@@ -37,14 +38,15 @@ export default function FilterBar({
   const dateFieldLabel = DATE_FIELDS.find(f => f.value === dateField)?.label ?? 'Date'
 
   const clearAll = () => {
-    setRepFilter(''); setStatusFilter(''); setOfficeFilter(''); setPaymentFilter('')
+    setRepFilters([]); setStatusFilter(''); setOfficeFilter(''); setPaymentFilter('')
     setDateRange('', '', 'all')
   }
 
   // Chips cover the filters that don't announce themselves — the date pills
   // and scope dropdown already show their own state, so they're left out.
   const chips = []
-  if (repFilter)     chips.push({ key: 'rep',     label: `Rep: ${repName(repFilter)}`,  clear: () => setRepFilter('') })
+  // One chip per selected rep, each removable on its own.
+  for (const id of repFilters) chips.push({ key: `rep-${id}`, label: `Rep: ${repName(id)}`, clear: () => setRepFilters(repFilters.filter(r => r !== id)) })
   if (statusFilter)  chips.push({ key: 'status',  label: `Status: ${statusFilter}`,      clear: () => setStatusFilter('') })
   if (officeFilter)  chips.push({ key: 'office',  label: `Office: ${officeFilter}`,      clear: () => setOfficeFilter('') })
   if (paymentFilter) chips.push({ key: 'payment', label: `Payment: ${paymentFilter}`,    clear: () => setPaymentFilter('') })
@@ -96,10 +98,7 @@ export default function FilterBar({
             </button>
           )}
         </div>
-        <Select value={repFilter} onChange={setRepFilter} minW="130px">
-          <option value="">All Reps</option>
-          {reps.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-        </Select>
+        <RepMultiSelect users={reps} value={repFilters} onChange={setRepFilters} minW="150px" />
         <Select value={statusFilter} onChange={setStatusFilter} minW="130px">
           <option value="">All Statuses</option>
           {statusLabels.map(s => <option key={s} value={s}>{s}</option>)}
@@ -136,8 +135,10 @@ export default function FilterBar({
 function Select({ value, onChange, minW, title, children }) {
   return (
     <div className="relative">
+      {/* appearance-none hides the browser's own arrow — otherwise it draws
+          underneath our chevron and shows as a faint second one. */}
       <select value={value} onChange={e => onChange(e.target.value)} title={title}
-        style={{ ...inputStyle, minWidth: minW }} className={`${inputCls} pr-8`}>
+        style={{ ...inputStyle, minWidth: minW }} className={`${inputCls} pr-8 appearance-none`}>
         {children}
       </select>
       <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 pointer-events-none" />
