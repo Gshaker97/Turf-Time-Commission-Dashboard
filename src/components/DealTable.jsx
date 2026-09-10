@@ -334,7 +334,7 @@ function ChangeAlertTag({ deal, canEdit, onUpdate }) {
   const ca = deal.change_alert
   if (!ca) return null
   const money = (v) => (v == null || v === '' ? '—' : fmt(parseFloat(v) || 0))
-  const WIDTH = 256, EST_H = 210
+  const WIDTH = 256, EST_H = 262
   // The popover renders in a portal with fixed positioning — inside the row it
   // gets clipped by the table's scroll container (the Dismiss button became
   // unreachable on bottom rows). Flip above the icon when there's no room below.
@@ -367,17 +367,47 @@ function ChangeAlertTag({ deal, canEdit, onUpdate }) {
               <p>Sale price {money(ca.prev_job_price)} → <b className="text-white">{money(ca.job_price)}</b></p>
             </div>
             <p className="text-[10px] text-white/40 mt-1.5 leading-snug">
-              Nothing on the deal was changed — if this re-sign is real, update the numbers yourself, then dismiss.
+              Nothing on the deal was changed yet. Apply the sheet's figures, or dismiss if the deal is already right.
             </p>
             {canEdit && (
-              <button onClick={() => {
-                  if (!confirm('Dismiss this change alert?\n\nMake sure the deal\'s numbers are right first — if the re-sign is real, apply the new figures before dismissing. This clears the ❗ for good (it only returns if the sheet changes again).')) return
-                  onUpdate?.(deal.id, { change_alert: null }); setOpen(false)
-                }}
-                className="mt-2 w-full py-1.5 rounded-lg text-[11px] font-bold text-dark transition-opacity hover:opacity-90"
-                style={{ background: '#f59e0b' }}>
-                Dismiss — reviewed
-              </button>
+              <div className="mt-2 space-y-1.5">
+                {/* APPLY — adopt the sheet's new figures onto the deal. Stored
+                    *_amount values are cleared so the engine recomputes every
+                    commission from the new baseline/price (same rule as the
+                    DealModal's MONEY_KEYS), and the gold check comes off: it
+                    was a sign-off on the OLD numbers. The payroll guard (034/
+                    039) refuses to re-price a deal on a LOCKED run — that
+                    surfaces as a toast + revert via persistInline, which is
+                    the right answer: a frozen payout can't be silently changed. */}
+                <button onClick={() => {
+                    const finalized = deal.status === 'Paid' || deal.status === 'Pay Finalized'
+                    const msg = `Apply the sheet's new figures to this deal?\n\n`
+                      + `Baseline ${money(ca.prev_baseline)} → ${money(ca.baseline)}\n`
+                      + `Sale price ${money(ca.prev_job_price)} → ${money(ca.job_price)}\n\n`
+                      + `Every commission and override on the deal recomputes from the new numbers, and the gold check is removed so it can be re-verified.`
+                      + (finalized ? `\n\n⚠ This deal is ${deal.status}. If its pay run is locked, the change will be refused — unlock the run on the Payroll page first.` : '')
+                    if (!confirm(msg)) return
+                    onUpdate?.(deal.id, {
+                      baseline_revenue: ca.baseline, job_price: ca.job_price,
+                      setter_amount: null, closer_amount: null, manager_amount: null, director_amount: null, vp_amount: null,
+                      commission_verified: false,
+                      change_alert: null,
+                    })
+                    setOpen(false)
+                  }}
+                  className="w-full py-1.5 rounded-lg text-[11px] font-bold text-dark transition-opacity hover:opacity-90"
+                  style={{ background: '#f59e0b' }}>
+                  Apply new numbers to the deal
+                </button>
+                <button onClick={() => {
+                    if (!confirm('Dismiss this change alert without changing the deal?\n\nUse this when the deal is already right (or you updated it by hand). This clears the ❗ for good — it only returns if the sheet changes again.')) return
+                    onUpdate?.(deal.id, { change_alert: null }); setOpen(false)
+                  }}
+                  className="w-full py-1.5 rounded-lg text-[11px] font-semibold transition-colors hover:bg-white/5"
+                  style={{ color: '#f59e0b', border: '1px solid rgba(245,158,11,0.45)' }}>
+                  Dismiss — deal is already right
+                </button>
+              </div>
             )}
           </div>
         </>,
