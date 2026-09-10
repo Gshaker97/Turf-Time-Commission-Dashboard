@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Plus, Download } from 'lucide-react'
+import { Plus, Download, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import { fetchDeals, fetchUsers, fetchPayments, insertDeal, updateDeal, deleteDeal } from '../lib/db'
@@ -22,6 +22,50 @@ function downloadCsv(name, rows) {
   const a = document.createElement('a')
   a.href = url; a.download = name; a.click()
   URL.revokeObjectURL(url)
+}
+
+// Page-size choices for the deals list. 50 is the default: a month of deals
+// fits on one page, and "All time" no longer renders every deal ever sold
+// into one enormous table.
+const PAGE_SIZES = [25, 50, 100, 200]
+const PAGE_SIZE_KEY = 'tt_deals_page_size'
+
+function Pager({ page, pageCount, pageSize, setPage, setPageSize, from, to, total }) {
+  if (total === 0) return null
+  const btn = 'h-7 min-w-7 px-2 rounded-lg text-[12px] font-semibold transition-colors disabled:opacity-30 disabled:cursor-default text-white/60 hover:text-white hover:bg-white/5'
+  // Window of page numbers around the current one, first/last always shown.
+  const nums = []
+  for (let p = 1; p <= pageCount; p++) {
+    if (p === 1 || p === pageCount || Math.abs(p - page) <= 1) nums.push(p)
+    else if (nums[nums.length - 1] !== '…') nums.push('…')
+  }
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1">
+      <p className="text-[11.5px] text-white/40 tabular-nums">
+        Showing <span className="text-white/70">{from.toLocaleString()}–{to.toLocaleString()}</span> of <span className="text-white/70">{total.toLocaleString()}</span>
+      </p>
+      <div className="flex items-center gap-3 flex-wrap">
+        {pageCount > 1 && (
+          <div className="flex items-center gap-0.5 p-0.5 rounded-xl" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+            <button onClick={() => setPage(page - 1)} disabled={page <= 1} className={btn} aria-label="Previous page"><ChevronLeft size={14} /></button>
+            {nums.map((n, i) => n === '…'
+              ? <span key={`e${i}`} className="px-1 text-[11px] text-white/25">…</span>
+              : <button key={n} onClick={() => setPage(n)} aria-current={n === page ? 'page' : undefined}
+                  className={`${btn} tabular-nums ${n === page ? 'bg-teal text-dark hover:bg-teal hover:text-dark' : ''}`}>{n}</button>)}
+            <button onClick={() => setPage(page + 1)} disabled={page >= pageCount} className={btn} aria-label="Next page"><ChevronRight size={14} /></button>
+          </div>
+        )}
+        <label className="flex items-center gap-1.5 text-[11px] text-white/40">
+          Per page
+          <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))}
+            className="h-7 px-1.5 rounded-lg text-[12px] text-white/80 focus:outline-none"
+            style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+            {PAGE_SIZES.map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+      </div>
+    </div>
+  )
 }
 
 function sortValue(d, key) {
@@ -59,6 +103,15 @@ export default function Deals() {
   const setDateRange = (from, to, preset) => { setDateFrom(from); setDateTo(to); setDatePreset(preset) }
   const [sortKey,      setSortKey]      = useState('sale_date')
   const [sortDir,      setSortDir]      = useState('desc')
+
+  // Pagination — the table renders one page; KPIs and Export still cover the
+  // whole filtered set. Page size is remembered per browser.
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSizeState] = useState(() => {
+    try { const n = Number(localStorage.getItem(PAGE_SIZE_KEY)); return PAGE_SIZES.includes(n) ? n : 50 } catch { return 50 }
+  })
+  const setPageSize = (n) => { setPageSizeState(n); try { localStorage.setItem(PAGE_SIZE_KEY, String(n)) } catch { /* ignore */ } }
+  const tableTopRef = useRef(null)
 
   // Deep link from a bell notification: /deals?note=<dealId> opens that deal's
   // note thread (and clears filters that could hide the deal).
@@ -152,6 +205,36 @@ export default function Deals() {
   const [reviewTab, setReviewTab] = useState('all')   // 'review' | 'all'
   const onReview = canStage && reviewTab === 'review'
   const shownDeals = onReview ? needsReview : filtered
+
+  // Any change to what's being listed starts back at page 1.
+  useEffect(() => { setPage(1) },
+    [reviewTab, repFilter, search, statusFilter, officeFilter, paymentFilter, dateField, dateFrom, dateTo, sortKey, sortDir, pageSize])
+  // A bell deep-link must land on the page that actually holds the deal.
+  useEffect(() => {
+    if (!noteDealId) return
+    const i = shownDeals.findIndex(d => d.id === noteDealId)
+    if (i >= 0) setPage(Math.floor(i / pageSize) + 1)
+  }, [noteDealId, shownDeals, pageSize])
+
+  const pageCount = Math.max(1, Math.ceil(shownDeals.length / pageSize))
+  // Clamp rather than reset: deleting the last row on the final page should
+  // show the new final page, not throw you back to the start.
+  const curPage = Math.min(page, pageCount)
+  const pageDeals = useMemo(
+    () => shownDeals.slice((curPage - 1) * pageSize, curPage * pageSize),
+    [shownDeals, curPage, pageSize])
+  const goToPage = (p) => {
+    setPage(Math.min(Math.max(1, p), pageCount))
+    // The pager sits below the table; after a click you want the top of the
+    // NEW page, not the bottom of it. Instant — no motion to respect.
+    tableTopRef.current?.scrollIntoView({ block: 'start' })
+  }
+  const pagerProps = {
+    page: curPage, pageCount, pageSize, setPage: goToPage, setPageSize,
+    from: shownDeals.length ? (curPage - 1) * pageSize + 1 : 0,
+    to: Math.min(curPage * pageSize, shownDeals.length),
+    total: shownDeals.length,
+  }
 
   const kpis = useMemo(() => {
     let baseline = 0, totalComm = 0, totalJobPrice = 0, totalMarkupPct = 0
@@ -302,17 +385,20 @@ export default function Deals() {
         </div>
       )}
 
-      <div className="flex items-center justify-end">
+      <div ref={tableTopRef} className="flex items-center justify-between gap-3 flex-wrap scroll-mt-4">
+        <p className="text-[11.5px] text-white/40 tabular-nums">
+          {shownDeals.length > 0 && <>Showing <span className="text-white/70">{pagerProps.from.toLocaleString()}–{pagerProps.to.toLocaleString()}</span> of <span className="text-white/70">{shownDeals.length.toLocaleString()}</span></>}
+        </p>
         <button onClick={exportDeals} disabled={!shownDeals.length}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold text-white/70 hover:text-white transition-colors disabled:opacity-40"
           style={{ background: '#1e1e1e', border: '1px solid #2e2e2e' }}
-          title="Export the deals in view to a CSV">
+          title={`Export all ${shownDeals.length.toLocaleString()} deals in view to a CSV — every page, not just this one`}>
           <Download size={14} /> Export CSV
         </button>
       </div>
 
       <DealTable
-        deals={shownDeals}
+        deals={pageDeals}
         openNotesId={noteDealId}
         payments={payments}
         profile={profile}
@@ -332,6 +418,8 @@ export default function Deals() {
         onUpdate={persistInline}
         loading={loading}
       />
+
+      {!loading && <Pager {...pagerProps} />}
 
       {/* FAB — creating deals is admin-only */}
       {isAdmin && (
