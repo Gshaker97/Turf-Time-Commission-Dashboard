@@ -654,7 +654,16 @@ Settings checklist editor still exist but drive nothing.)
 Dashboard's filter row: date-range preset pills ALWAYS visible (one click, no
 hidden sliders toggle), the which-date picker (`DATE_FIELDS`) and the scope
 dropdown beside them, then search + rep/status/office/payment selects, then
-active-filter chips. The table is PAGINATED (`Pager` in `Deals.jsx`, 50/page
+active-filter chips. **The rep filter is MULTI-select and searchable**
+(`repFilters` = array of profile ids, empty = everyone; a deal matches when
+ANY selected rep set or closed it). `src/components/RepMultiSelect.jsx`
+exports `RepMultiSelect` (trigger + popover, used by FilterBar) and
+`RepPickList` (the search + checkbox body, used inside the Deals table's
+column-header menu) so both surfaces share state. One chip per selected rep.
+**Custom-chevron selects need `appearance-none`** — a native `<select>` draws
+its own arrow under the overlaid `ChevronDown` and shows as a faint double
+arrow (fixed in FilterBar's `Select` and DealTable's `DateFilterPanel`; apply
+it to any new select that overlays an icon). The table is PAGINATED (`Pager` in `Deals.jsx`, 50/page
 default, 25–200 remembered in `tt_deals_page_size`); KPIs and Export CSV
 cover the WHOLE filtered set, never just the visible page. Page resets to 1
 on any filter/sort/scope/tab change, clamps when the list shrinks, and the

@@ -98,7 +98,7 @@ export default function Deals() {
   const [modal,    setModal]    = useState(false)
   const [editDeal, setEditDeal] = useState(null)
 
-  const [repFilter,     setRepFilter]     = useState('')
+  const [repFilters,    setRepFilters]    = useState([])   // profile ids; empty = everyone
   const [search,        setSearch]        = useState('')
   const [statusFilter,  setStatusFilter]  = useState('')
   const [officeFilter,  setOfficeFilter]  = useState('')
@@ -130,7 +130,7 @@ export default function Deals() {
     if (d) {
       setDateRange('', '', 'all')
       setSearch(d.deal_name || '')
-      setStatusFilter(''); setOfficeFilter(''); setPaymentFilter(''); setRepFilter('')
+      setStatusFilter(''); setOfficeFilter(''); setPaymentFilter(''); setRepFilters([])
       setScope('')   // a scoped view could hide the deal the bell pointed at
       if (canStage) setReviewTab('all')
     }
@@ -203,7 +203,8 @@ export default function Deals() {
     } else if (activeScope) {
       rows = rows.filter(d => saleTeam(d) === activeScope)                              // a chosen team (admin)
     }
-    if (repFilter)     rows = rows.filter(d => d.setter_id === repFilter || d.closer_id === repFilter)
+    // Any deal that ANY selected rep set or closed — "person A and person B".
+    if (repFilters.length) rows = rows.filter(d => repFilters.includes(d.setter_id) || repFilters.includes(d.closer_id))
     if (search) {
       const q = search.toLowerCase()
       rows = rows.filter(d => d.deal_name?.toLowerCase().includes(q) || d.office?.toLowerCase().includes(q) || d.project_id?.toLowerCase().includes(q))
@@ -223,7 +224,7 @@ export default function Deals() {
       return ac < bc ? 1 : ac > bc ? -1 : 0
     })
     return rows
-  }, [deals, profile, role, activeScope, usersById, headsSet, changesByProfile, repFilter, search, statusFilter, officeFilter, paymentFilter, dateField, dateFrom, dateTo, sortKey, sortDir])
+  }, [deals, profile, role, activeScope, usersById, headsSet, changesByProfile, repFilters, search, statusFilter, officeFilter, paymentFilter, dateField, dateFrom, dateTo, sortKey, sortDir])
 
   // Staging workflow: VP/admin (who graduate deals) get a "Needs review" view —
   // every deal that needs SOMETHING: unverified commission, an undismissed
@@ -242,7 +243,7 @@ export default function Deals() {
 
   // Any change to what's being listed starts back at page 1.
   useEffect(() => { setPage(1) },
-    [reviewTab, activeScope, repFilter, search, statusFilter, officeFilter, paymentFilter, dateField, dateFrom, dateTo, sortKey, sortDir, pageSize])
+    [reviewTab, activeScope, repFilters, search, statusFilter, officeFilter, paymentFilter, dateField, dateFrom, dateTo, sortKey, sortDir, pageSize])
   // A bell deep-link must land on the page that actually holds the deal.
   useEffect(() => {
     if (!noteDealId) return
@@ -362,7 +363,7 @@ export default function Deals() {
     <div className="space-y-3 pb-32 md:pb-20">
       {!onReview && <FilterBar
         users={pickUsers}
-        repFilter={repFilter}         setRepFilter={setRepFilter}
+        repFilters={repFilters}       setRepFilters={setRepFilters}
         search={search}               setSearch={setSearch}
         statusFilter={statusFilter}   setStatusFilter={setStatusFilter}
         officeFilter={officeFilter}   setOfficeFilter={setOfficeFilter}
@@ -441,7 +442,7 @@ export default function Deals() {
         sortKey={sortKey}
         sortDir={sortDir}
         onSort={handleSort}
-        repFilter={repFilter}         setRepFilter={setRepFilter}
+        repFilters={repFilters}       setRepFilters={setRepFilters}
         statusFilter={statusFilter}   setStatusFilter={setStatusFilter}
         officeFilter={officeFilter}   setOfficeFilter={setOfficeFilter}
         paymentFilter={paymentFilter} setPaymentFilter={setPaymentFilter}

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, Fragment } from 'react'
 import { createPortal } from 'react-dom'
+import { RepPickList } from './RepMultiSelect'
 import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, X, MessageSquare, BadgeCheck, AlertCircle } from 'lucide-react'
 import { calcDealCommissions, fmt, fmtPct, isCanceled, officeOverrideRate, deductionBreakdown } from '../utils/commission'
 import { payDateFromInstall } from '../utils/dateRanges'
@@ -208,7 +209,7 @@ function DateFilterPanel({ dateField, setDateField, dateFrom, dateTo, datePreset
       <div className="relative">
         <select value={dateField} onChange={e => setDateField(e.target.value)}
           style={{ background: '#1e1e1e', border: '1px solid #333' }}
-          className="h-8 w-full rounded-lg text-[12px] text-white px-2 pr-7 focus:outline-none focus:border-teal/50">
+          className="h-8 w-full rounded-lg text-[12px] text-white px-2 pr-7 focus:outline-none focus:border-teal/50 appearance-none">
           {DATE_FIELDS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
         </select>
         <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-white/30 pointer-events-none" />
@@ -788,7 +789,7 @@ function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onUpdate, status
 export default function DealTable({
   deals, profile, users = [],
   sortKey, sortDir, onSort,
-  repFilter, setRepFilter,
+  repFilters = [], setRepFilters,
   statusFilter, setStatusFilter,
   officeFilter, setOfficeFilter,
   paymentFilter, setPaymentFilter,
@@ -820,7 +821,7 @@ export default function DealTable({
     status:  !!statusFilter,
     office:  !!officeFilter,
     payment: !!paymentFilter,
-    rep:     !!repFilter,
+    rep:     repFilters.length > 0,
     date:    !!(dateFrom || dateTo),
   }[col.filter] || false)
 
@@ -830,7 +831,7 @@ export default function DealTable({
       case 'status':  return () => <OptionFilter value={statusFilter}  options={statusLabels}  onChange={setStatusFilter}  allLabel="All statuses" />
       case 'office':  return () => <OptionFilter value={officeFilter}  options={offices}        onChange={setOfficeFilter}  allLabel="All offices" />
       case 'payment': return () => <OptionFilter value={paymentFilter} options={paymentMethods} onChange={setPaymentFilter} allLabel="All payments" />
-      case 'rep':     return () => <OptionFilter value={repFilter}     options={reps.map(r => ({ value: r.id, label: r.name }))} onChange={setRepFilter} allLabel="All reps" />
+      case 'rep':     return () => <RepPickList users={reps} value={repFilters} onChange={setRepFilters} />
       case 'date':    return () => <DateFilterPanel dateField={dateField} setDateField={setDateField}
                                      dateFrom={dateFrom} dateTo={dateTo} datePreset={datePreset} setDateRange={setDateRange} />
       default:        return null
