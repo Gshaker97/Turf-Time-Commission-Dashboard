@@ -139,10 +139,23 @@ export function dealAmounts(deal) {
   manager  -= fromManager
   director -= fromDirector
   vp       -= fromVp
+  // Who receives it — bonus_recipient: 'setter' (default), 'closer', or 'split'
+  // (migration 044; bonus_split_pct = the setter's share, null = 50/50). Both
+  // 'closer' and 'split' need a DISTINCT closer; on a solo deal the whole
+  // bonus falls back to the setter, mirroring the deduction split rules above.
   const bonus = fromManager + fromDirector + fromVp + fromCompany
+  let bonusSetter = 0, bonusCloser = 0
   if (bonus > 0) {
-    if ((deal.bonus_recipient || 'setter') === 'closer' && deal.closer_id && deal.closer_id !== deal.setter_id) closer += bonus
-    else setter += bonus
+    const hasCloser = !!deal.closer_id && deal.closer_id !== deal.setter_id
+    const recip = deal.bonus_recipient || 'setter'
+    if (recip === 'split' && hasCloser) {
+      const bsp = deal.bonus_split_pct == null ? 0.5 : Math.min(1, Math.max(0, num(deal.bonus_split_pct)))
+      bonusSetter = bonus * bsp
+      bonusCloser = bonus - bonusSetter
+    } else if (recip === 'closer' && hasCloser) bonusCloser = bonus
+    else bonusSetter = bonus
+    setter += bonusSetter
+    closer += bonusCloser
   }
 
   const repCommission = setter + closer
@@ -154,7 +167,8 @@ export function dealAmounts(deal) {
     setter, closer, manager, director, vp,
     repCommission, overrides, totalCommission,
     exclusionsTotal, overrideBase,
-    bonus, bonusFrom: { company: fromCompany, manager: fromManager, director: fromDirector, vp: fromVp },
+    bonus, bonusSetter, bonusCloser,
+    bonusFrom: { company: fromCompany, manager: fromManager, director: fromDirector, vp: fromVp },
     computed,
   }
 }
