@@ -73,8 +73,13 @@ setup + deploy steps.
      Override Exclusions section note. `dealAmounts` returns `exclusionsTotal`
      + `overrideBase`.
    - When a stored `*_amount` field is present, it WINS over the computed value.
-   - **Rep bonus** (migrations 025→026): several roles can chip in toward a
-     bonus for the rep (`bonus_recipient` = setter|closer). Each contribution is
+   - **Rep bonus** (migrations 025→026→044): several roles can chip in toward
+     a bonus for the rep (`bonus_recipient` = setter|closer|**split**; with
+     `split`, `bonus_split_pct` = the SETTER's share as a fraction, null =
+     50/50 — mirrors `deduction_paid_by='split'`+`deduction_split_pct` exactly,
+     same slider in the modal). `closer`/`split` need a DISTINCT closer; a solo
+     deal pays the whole bonus to the setter. `dealAmounts` returns
+     `bonusSetter`/`bonusCloser` alongside `bonus`). Each contribution is
      a resolved $ stored per source — `bonus_manager`/`bonus_director`/`bonus_vp`
      (pulled from THAT role's override, capped at what they have) + `bonus_company`
      (extra, from nobody). The editor lets you type a % of baseline or a $ and
@@ -236,7 +241,9 @@ setup + deploy steps.
   adds `personal_goals` (weekly + monthly commitments per rep — period
   'week'|'month' + `period_start` Sunday/1st, `est_target` (SELF-GEN
   estimates) / `deals_target` / `revenue_target`; RLS mirrors 024: anyone
-  reads, writes by admins, the rep, or their direct manager). Do
+  reads, writes by admins, the rep, or their direct manager); `044` adds
+  `deals.bonus_split_pct` (setter's share of a `bonus_recipient='split'` rep
+  bonus, fraction; see the engine rules above). Do
   not re-run `001`/`002` against a populated database.
 
 ## Leads / appointments (CRM feed, migration 041)

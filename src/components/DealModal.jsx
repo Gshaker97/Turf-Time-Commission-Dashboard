@@ -79,7 +79,7 @@ const BLANK = {
   deduction_amount: '', deduction_note: '',
   financed_amount: '', dealer_fee_pct: '',
   deduction_paid_by: 'closer', deduction_split_pct: '50',
-  bonus_mode: 'amount', bonus_recipient: 'setter',
+  bonus_mode: 'amount', bonus_recipient: 'setter', bonus_split_pct: '50',
   bonus_company: '', bonus_manager: '', bonus_director: '', bonus_vp: '',
 }
 // Override % defaults come from the admin-configured rate schedule
@@ -106,11 +106,12 @@ const H_LABELS = {
   director_amount: 'Director $', vp_amount: 'VP $',
   deduction_amount: 'Deduction', deduction_note: 'Deduction note',
   deduction_paid_by: 'Deduction paid by', deduction_split_pct: 'Deduction split',
+  bonus_recipient: 'Bonus to', bonus_split_pct: 'Bonus split',
   financed_amount: 'Financed', dealer_fee_pct: 'Dealer fee %',
   commission_verified: 'Gold check', notes: 'Notes',
 }
 const H_MONEY  = new Set(['baseline_revenue','job_price','setter_amount','closer_amount','manager_amount','director_amount','vp_amount','deduction_amount','financed_amount'])
-const H_PCT    = new Set(['setter_split_pct','manager_override_pct','director_override_pct','vp_override_pct','dealer_fee_pct','deduction_split_pct'])
+const H_PCT    = new Set(['setter_split_pct','manager_override_pct','director_override_pct','vp_override_pct','dealer_fee_pct','deduction_split_pct','bonus_split_pct'])
 const H_PEOPLE = new Set(['setter_id','closer_id','manager_id','director_id','vp_id'])
 
 function DealHistory({ dealId, users }) {
@@ -221,6 +222,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
           return {
             bonus_mode:      usePct ? 'pct' : 'amount',
             bonus_recipient: deal.bonus_recipient ?? 'setter',
+            bonus_split_pct: deal.bonus_split_pct != null ? (deal.bonus_split_pct * 100).toString() : '50',
             bonus_company:   show(deal.bonus_company),
             bonus_manager:   show(deal.bonus_manager),
             bonus_director:  show(deal.bonus_director),
@@ -371,9 +373,11 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
   const setterName = users.find(u => u.id === form.setter_id)?.name || 'Setter'
   const closerName = users.find(u => u.id === form.closer_id)?.name || 'Closer'
   const dedSplit = Math.min(100, Math.max(0, pctOr50(form.deduction_split_pct)))  // setter's %
-  // Mirror the engine: the bonus goes to the closer only when a DISTINCT closer
-  // is set — on a solo deal it falls back to the setter, so show that name.
-  const recipName = (form.bonus_recipient === 'closer' && form.closer_id && form.closer_id !== form.setter_id) ? closerName : setterName
+  // Mirror the engine: 'closer' and 'split' both need a DISTINCT closer — on a
+  // solo deal the whole bonus falls back to the setter, so show that name.
+  const bonusIsSplit = form.bonus_recipient === 'split' && isSplitDeal
+  const bonusSplit = Math.min(100, Math.max(0, pctOr50(form.bonus_split_pct)))  // setter's %
+  const recipName = (form.bonus_recipient === 'closer' && isSplitDeal) ? closerName : setterName
   // Per-role override $ (gross) for showing the live "5% → 4%" net as bonuses pull from it.
   const overrideGross = {
     manager:  form.manager_id  ? overrideBaseForm * ((parseFloat(form.manager_override_pct)  || 0) / 100) : 0,
@@ -438,6 +442,9 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
       bonus_director:  bonus$.director > 0 ? bonus$.director : null,
       bonus_vp:        bonus$.vp       > 0 ? bonus$.vp       : null,
       bonus_recipient: bonusDollars > 0 ? form.bonus_recipient : null,
+      // Setter's share, stored as a fraction — only meaningful for a split.
+      bonus_split_pct: bonusDollars > 0 && form.bonus_recipient === 'split'
+        ? Math.min(1, Math.max(0, pctOr50(form.bonus_split_pct) / 100)) : null,
     })
     setSaving(false)
   }
@@ -463,7 +470,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
     const MONEY_KEYS = ['baseline_revenue', 'job_price', 'setter_id', 'closer_id', 'setter_split_pct',
       'manager_id', 'director_id', 'vp_id', 'manager_override_pct', 'director_override_pct', 'vp_override_pct',
       'deduction_amount', 'financed_amount', 'dealer_fee_pct', 'deduction_paid_by', 'deduction_split_pct',
-      'override_exclusions', 'bonus_company', 'bonus_manager', 'bonus_director', 'bonus_vp', 'bonus_recipient']
+      'override_exclusions', 'bonus_company', 'bonus_manager', 'bonus_director', 'bonus_vp', 'bonus_recipient', 'bonus_split_pct']
     if (MONEY_KEYS.some(k => k in changed)) {
       Object.assign(changed, { setter_amount: null, closer_amount: null, manager_amount: null, director_amount: null, vp_amount: null })
     }
@@ -821,9 +828,14 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                   </Sel>
                 </Field>
                 <Field label="Bonus to">
-                  <Sel value={form.bonus_recipient} onChange={e => set('bonus_recipient', e.target.value)}>
+                  {/* A saved 'split' on a deal that has since gone solo displays as
+                      the setter — that's who the engine pays it to anyway. */}
+                  <Sel value={form.bonus_recipient === 'split' && !isSplitDeal ? 'setter' : form.bonus_recipient}
+                    onChange={e => set('bonus_recipient', e.target.value)}>
                     <option value="setter">{setterName}</option>
                     <option value="closer">{closerName}</option>
+                    {/* Splitting needs two people — on a solo deal there's no one to split with. */}
+                    {isSplitDeal && <option value="split">Split between both</option>}
                   </Sel>
                 </Field>
               </div>
@@ -851,10 +863,28 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                 )
               })}
             </div>
+            {/* Split slider — same control as the deduction split, so the two
+                splits read and behave identically. Setter on the left. */}
+            {bonusIsSplit && (
+              <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
+                <span className="text-[11px] text-white/50 sm:w-28 sm:text-right shrink-0 truncate">{setterName} {bonusSplit}%</span>
+                <input type="range" min="0" max="100" step="1" value={bonusSplit}
+                  onChange={e => set('bonus_split_pct', e.target.value)} className="flex-1 accent-teal" />
+                <span className="text-[11px] text-white/50 sm:w-28 shrink-0 truncate">{closerName} {100 - bonusSplit}%</span>
+              </div>
+            )}
             {bonusDollars > 0 && (
               <div className="mt-2.5 pt-2.5 border-t border-white/5 space-y-1">
                 <p className="text-[12px]">
-                  <span className="text-white/50">Total bonus to {recipName}:</span> <span className="font-bold text-teal">+{fmt(bonusDollars)}</span>
+                  {bonusIsSplit ? (
+                    <>
+                      <span className="text-white/50">Total bonus:</span> <span className="font-bold text-teal">+{fmt(bonusDollars)}</span>
+                      <span className="text-white/50"> · {setterName} </span><span className="font-semibold text-white/80">+{fmt(preview.bonusSetter)}</span>
+                      <span className="text-white/50"> · {closerName} </span><span className="font-semibold text-white/80">+{fmt(preview.bonusCloser)}</span>
+                    </>
+                  ) : (
+                    <><span className="text-white/50">Total bonus to {recipName}:</span> <span className="font-bold text-teal">+{fmt(bonusDollars)}</span></>
+                  )}
                 </p>
                 <p className="text-[12px]">
                   <span className="text-white/50">Total mgmt override:</span>{' '}
