@@ -535,13 +535,26 @@ Dashboard's goal is the company-wide revenue goal (separate `monthly_goals`
 table, admin-only).
 
 **Visibility (view scoping, NOT edit) by sales title:**
-- **Rep:** their own deals only (`role === 'rep'` filter in `Deals.jsx`); NEVER
-  any override amounts. Reps DO have Goals-page access (to set their own
-  goals and see the roster), consistent with the company-wide Dashboard.
-- **Manager/Director/VP:** their deals + their team's deals, and their OWN
-  override on the Commissions page. The Commissions page is siloed by identity
-  (`myParts(deal, id)` only emits roles the viewer personally holds), so nobody
-  sees anyone else's commission/override there.
+- **Deals page SCOPE dropdown (per Keaton, mirrors the Dashboard's team
+  filter):** `scope` state in `Deals.jsx`, options built by role in
+  `scopeOptions` — **admins** pick any team (a head id, filtered via the same
+  date-effective `teamOfSale` the Dashboard uses, so "X's Team" matches on
+  both pages); **managers/directors/VPs** get All / **My team** (`teamOfSale
+  === profile.id`); **reps** get **My deals** (setter or closer = them) / All.
+  Reps DEFAULT to My deals — what the page always showed them — and opt into
+  All; everyone else defaults to All. This is a UI filter: reps can now see
+  every deal's rep commission, which the company-wide Dashboard leaderboard
+  already exposed. The DealTable commission cell renders ONLY
+  `repCommission`/setter/closer — never override $ — so widening the rep view
+  leaks no management money. The bell deep-link resets scope to All so the
+  target deal can't be hidden.
+- **Rep:** NEVER any override amounts, anywhere. Reps DO have Goals-page
+  access (to set their own goals and see the roster), consistent with the
+  company-wide Dashboard.
+- **Manager/Director/VP:** their OWN override on the Commissions page. The
+  Commissions page is siloed by identity (`myParts(deal, id)` only emits roles
+  the viewer personally holds), so nobody sees anyone else's
+  commission/override there.
 - **Admin:** sees and adjusts everything.
 - **Dashboard + Competitions are company-wide for everyone** (full leaderboards
   / standings), by design — ghost names still hidden from non-admins.
@@ -636,6 +649,16 @@ sync's PAID PASS auto-moves `Pay Finalized` → `Paid` once the deal's `pay_date
 arrives. (The old per-deal checklist UI and its checklist-driven status
 automation were removed — the `deals.checklist` column and the Admin →
 Settings checklist editor still exist but drive nothing.)
+
+**Deals page filter bar (`FilterBar.jsx`) + pagination.** Laid out like the
+Dashboard's filter row: date-range preset pills ALWAYS visible (one click, no
+hidden sliders toggle), the which-date picker (`DATE_FIELDS`) and the scope
+dropdown beside them, then search + rep/status/office/payment selects, then
+active-filter chips. The table is PAGINATED (`Pager` in `Deals.jsx`, 50/page
+default, 25–200 remembered in `tt_deals_page_size`); KPIs and Export CSV
+cover the WHOLE filtered set, never just the visible page. Page resets to 1
+on any filter/sort/scope/tab change, clamps when the list shrinks, and the
+bell deep-link jumps to the page holding the deal.
 
 **Staging ("Needs review").** The Deals page gives VP/admin two tabs: **Needs
 review** (deals not yet vetted) and **All deals**. A deal graduates out of

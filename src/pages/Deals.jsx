@@ -3,7 +3,8 @@ import { useSearchParams } from 'react-router-dom'
 import { Plus, Download, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
-import { fetchDeals, fetchUsers, fetchPayments, insertDeal, updateDeal, deleteDeal } from '../lib/db'
+import { fetchDeals, fetchUsers, fetchPayments, fetchTeamChanges, insertDeal, updateDeal, deleteDeal } from '../lib/db'
+import { headIdSet, saleOwnerId, buildChangesByProfile, teamOfSale } from '../utils/team'
 import FilterBar from '../components/FilterBar'
 import KpiCard from '../components/KpiCard'
 import DealTable, { dealNeedsReview } from '../components/DealTable'
@@ -87,6 +88,12 @@ export default function Deals() {
   const [deals,    setDeals]    = useState([])
   const [payments, setPayments] = useState([])
   const [users,    setUsers]    = useState([])
+  const [teamChanges, setTeamChanges] = useState([])
+  // Whose deals: '' = everything the viewer may see; 'mine' = a rep's own
+  // deals or a manager's team; a head's id = that team (admins only).
+  // null = "not chosen yet" so the role-based default below can apply once
+  // the profile has loaded.
+  const [scope, setScope] = useState(null)
   const [loading,  setLoading]  = useState(true)
   const [modal,    setModal]    = useState(false)
   const [editDeal, setEditDeal] = useState(null)
@@ -124,6 +131,7 @@ export default function Deals() {
       setDateRange('', '', 'all')
       setSearch(d.deal_name || '')
       setStatusFilter(''); setOfficeFilter(''); setPaymentFilter(''); setRepFilter('')
+      setScope('')   // a scoped view could hide the deal the bell pointed at
       if (canStage) setReviewTab('all')
     }
   }, [noteDealId, loading])
@@ -134,10 +142,10 @@ export default function Deals() {
   // updates in place instead of blanking out to a "Loading…" placeholder.
   async function load(quiet = false) {
     if (!quiet) setLoading(true)
-    const [{ data: d }, { data: p }, { data: u }] = await Promise.all([
-      fetchDeals(), fetchPayments(), fetchUsers(),
+    const [{ data: d }, { data: p }, { data: u }, { data: tc }] = await Promise.all([
+      fetchDeals(), fetchPayments(), fetchUsers(), fetchTeamChanges(),
     ])
-    setDeals(d ?? []); setPayments(p ?? []); setUsers(u ?? [])
+    setDeals(d ?? []); setPayments(p ?? []); setUsers(u ?? []); setTeamChanges(tc ?? [])
     if (!quiet) setLoading(false)
   }
 
@@ -166,9 +174,35 @@ export default function Deals() {
   // Rep-filter dropdowns hide ghost users from non-admins (their deals still show/count).
   const pickUsers = isAdmin ? users : users.filter(u => !u.ghost)
 
+  // Team attribution — the SAME date-effective rule as the Dashboard's team
+  // filter, so "Jordan's Team" lists the same deals on both pages.
+  const usersById = useMemo(() => Object.fromEntries(users.map(u => [u.id, u])), [users])
+  const headsSet  = useMemo(() => headIdSet(users), [users])
+  const changesByProfile = useMemo(() => buildChangesByProfile(teamChanges), [teamChanges])
+  const saleTeam = (d) => teamOfSale(saleOwnerId(d), d.sale_date, usersById, headsSet, changesByProfile)
+
+  // Scope choices by role (per Keaton): admins pick any team; managers/
+  // directors/VPs get All or My team; reps get My deals or All. Reps DEFAULT
+  // to My deals — what the page always showed them — and opt into All.
+  const scopeOptions = useMemo(() => {
+    if (isAdmin) return [
+      { value: '', label: 'All Teams' },
+      ...users.filter(u => headsSet.has(u.id)).map(h => ({ value: h.id, label: `${h.name}'s Team` })),
+    ]
+    if (role === 'rep') return [{ value: 'mine', label: 'My deals' }, { value: '', label: 'All deals' }]
+    return [{ value: '', label: 'All deals' }, { value: 'mine', label: 'My team' }]
+  }, [isAdmin, role, users, headsSet])
+  const activeScope = scope ?? (role === 'rep' ? 'mine' : '')
+
   const filtered = useMemo(() => {
     let rows = [...deals]
-    if (role === 'rep') rows = rows.filter(d => d.setter_id === profile.id || d.closer_id === profile.id)
+    if (activeScope === 'mine') {
+      rows = role === 'rep'
+        ? rows.filter(d => d.setter_id === profile.id || d.closer_id === profile.id)   // deals I'm on
+        : rows.filter(d => saleTeam(d) === profile.id)                                  // my team's deals
+    } else if (activeScope) {
+      rows = rows.filter(d => saleTeam(d) === activeScope)                              // a chosen team (admin)
+    }
     if (repFilter)     rows = rows.filter(d => d.setter_id === repFilter || d.closer_id === repFilter)
     if (search) {
       const q = search.toLowerCase()
@@ -189,7 +223,7 @@ export default function Deals() {
       return ac < bc ? 1 : ac > bc ? -1 : 0
     })
     return rows
-  }, [deals, profile, role, repFilter, search, statusFilter, officeFilter, paymentFilter, dateField, dateFrom, dateTo, sortKey, sortDir])
+  }, [deals, profile, role, activeScope, usersById, headsSet, changesByProfile, repFilter, search, statusFilter, officeFilter, paymentFilter, dateField, dateFrom, dateTo, sortKey, sortDir])
 
   // Staging workflow: VP/admin (who graduate deals) get a "Needs review" view —
   // every deal that needs SOMETHING: unverified commission, an undismissed
@@ -208,7 +242,7 @@ export default function Deals() {
 
   // Any change to what's being listed starts back at page 1.
   useEffect(() => { setPage(1) },
-    [reviewTab, repFilter, search, statusFilter, officeFilter, paymentFilter, dateField, dateFrom, dateTo, sortKey, sortDir, pageSize])
+    [reviewTab, activeScope, repFilter, search, statusFilter, officeFilter, paymentFilter, dateField, dateFrom, dateTo, sortKey, sortDir, pageSize])
   // A bell deep-link must land on the page that actually holds the deal.
   useEffect(() => {
     if (!noteDealId) return
@@ -336,6 +370,7 @@ export default function Deals() {
         dateField={dateField}         setDateField={setDateField}
         dateFrom={dateFrom}           dateTo={dateTo}
         datePreset={datePreset}       setDateRange={setDateRange}
+        scope={activeScope}           setScope={setScope}  scopeOptions={scopeOptions}
         recordCount={filtered.length}
       />}
 
