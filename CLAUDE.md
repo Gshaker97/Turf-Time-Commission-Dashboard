@@ -752,6 +752,18 @@ Watchdog then reports). Detect-and-notify only; it never edits data. Frontend si
 error/unhandledrejection handlers report crashes to `client_errors`
 (migration 020) via `logClientError` in db.js.
 
+## Timestamps vs calendar days — a recurring bug class
+
+**Never `.slice(0, 10)` a timestamptz to get its calendar day.** Arizona is
+UTC−7, so anything after 5pm local is stored as the NEXT day in UTC, and the
+slice puts it on tomorrow. This bit three times in one session: appointments
+after 5pm vanished from "today" (`apptDay` in `utils/estimates.js`),
+competition rounds ending today read as over, and a rep moved after 5pm had
+same-day sales attributed to their OLD team (`localDay` in `utils/team.js`,
+used by `managerAsOf`). Derive the local day from `new Date(ts)` with
+`getFullYear/getMonth/getDate`; only plain `date` columns (`sale_date`,
+`pay_date`, `period_start`) are safe to compare as strings.
+
 ## Known low-severity items (not yet addressed)
 
 - `getMonths` / `monthRange` slice dates in UTC, which can be off-by-one at

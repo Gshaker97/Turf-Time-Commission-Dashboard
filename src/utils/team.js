@@ -45,6 +45,14 @@ export const saleOwnerId = (d) => d.setter_id || d.closer_id || null
 // team. Used by every team aggregate (Dashboard breakdown/filter, Team page
 // comparison) so moving a rep never rewrites history.
 
+// 'yyyy-MM-dd' in the viewer's LOCAL timezone for a stored timestamp.
+const localDay = (ts) => {
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return String(ts).slice(0, 10)
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
 // team_changes rows grouped per profile, oldest first.
 export function buildChangesByProfile(teamChanges = []) {
   const by = {}
@@ -65,7 +73,11 @@ export function managerAsOf(changesByProfile, user, dateISO) {
   // to Garrison, whose reports-to was first stamped July 2).
   let mgr = list[0].old_manager_id ?? list[0].new_manager_id ?? null
   for (const c of list) {
-    if (String(dateISO) >= String(c.changed_at).slice(0, 10)) mgr = c.new_manager_id ?? null
+    // LOCAL calendar day of the move, not the UTC slice: changed_at is a
+    // timestamptz, so a move made at 6pm Arizona is stored as 01:00 the NEXT
+    // day in UTC. Slicing the raw string put that move on tomorrow, and a
+    // deal sold the same afternoon resolved to the OLD team.
+    if (String(dateISO) >= localDay(c.changed_at)) mgr = c.new_manager_id ?? null
     else break
   }
   return mgr
