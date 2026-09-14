@@ -98,6 +98,14 @@ setup + deploy steps.
      or no people at all) so they always sum exactly to the company totals.
      Closed leads are NOT extra sales for the closer — their pay shows in
      commission columns only.
+   - **Dashboard Rep Leaderboard under a TEAM FILTER lists that team's
+     MEMBERS, not everyone who touched the team's deals** (per Keaton). It
+     credits each rep from every deal in the date range (`dateFiltered`),
+     then keeps only reps whose date-effective team as of the range end is
+     the filtered team (`teamOfSale(rep.id, asOf, …)`). A closer from another
+     team keeps their close credit on THEIR team's leaderboard. Filtering the
+     deals first put Stephen (Conner's team) under Jared's team because he
+     closed a deal Jared set.
 
 3. **All data access goes through `src/lib/db.js`.** Never import `supabase`
    directly into a page or component. The gateway is demo-aware: when
