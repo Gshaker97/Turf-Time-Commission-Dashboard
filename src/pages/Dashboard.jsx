@@ -157,12 +157,18 @@ export default function Dashboard() {
     return rows.filter(d => saleTeam(d) === teamFilter)
   }
 
-  const filtered = useMemo(() => {
-    let r = applyScopeFilters(deals)
+  // Every deal in the date range with the team filter NOT applied. The Rep
+  // Leaderboard credits each rep from ALL of their deals and then keeps only
+  // the filtered team's MEMBERS — see repData for why that isn't the same as
+  // filtering the deals first.
+  const dateFiltered = useMemo(() => {
+    let r = deals
     if (dateFrom) r = r.filter(d => d.sale_date >= dateFrom)
     if (dateTo)   r = r.filter(d => d.sale_date <= dateTo)
     return r
-  }, [deals, teamFilter, users, dateFrom, dateTo])
+  }, [deals, dateFrom, dateTo])
+
+  const filtered = useMemo(() => applyScopeFilters(dateFiltered), [dateFiltered, teamFilter, users])
 
   const prevFiltered = useMemo(() => {
     if (!prevPeriod) return []
@@ -396,7 +402,13 @@ export default function Dashboard() {
       }
       return map[id]
     }
-    for (const deal of filtered) {
+    // Walk the DATE-filtered deals, not the team-filtered ones. A deal belongs
+    // to its setter's team, but its closer can be on another team — filtering
+    // deals by team first listed that closer under a team they're not on
+    // (real case: Stephen, on Conner's team, showing under Jared's team
+    // because he closed a deal Jared set). Credit everyone from every deal,
+    // then keep only the filtered team's members (below).
+    for (const deal of dateFiltered) {
       // Deals + revenue credit the sale owner — the SETTER, falling back to
       // the closer when no setter was recorded (so no deal vanishes from the
       // leaderboard while still counting in the totals).
@@ -435,12 +447,19 @@ export default function Dashboard() {
     // deals closed for a DIFFERENT setter, so a self-gen is counted once, not
     // twice. (pct stays tied to set revenue — totals across reps would exceed
     // company revenue otherwise, since a closed deal also counts for its setter.)
-    return Object.values(map).map(r => ({
+    // Under a team filter, a rep appears only if they're ON that team — their
+    // team as of the end of the range, via the same date-effective rule that
+    // places deals, so a head is their own team and a moved rep follows the
+    // move. A closer from another team keeps their close credit, but on THEIR
+    // team's leaderboard, not this one.
+    const asOf = dateTo || format(new Date(), 'yyyy-MM-dd')
+    const onTeam = (id) => !teamFilter || teamOfSale(id, asOf, usersById, headsSet, changesByProfile) === teamFilter
+    return Object.values(map).filter(r => onTeam(r.id)).map(r => ({
       ...r,
       totalRevenue: r.revenue + r.leadRevenue,
       pct: (r.revenue / companyTotalRev) * 100,
     }))
-  }, [filtered, users, companyTotalRev])
+  }, [dateFiltered, users, companyTotalRev, teamFilter, dateTo, usersById, headsSet, changesByProfile])
 
   // Rank by the chosen column (defaults to set-revenue). All sortable columns
   // are numeric. Revenue breaks ties.
