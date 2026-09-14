@@ -695,6 +695,12 @@ Remaining, per-payee totals) counts only `Pay Finalized` + `Paid` deals
 (`isFinalized` in `src/pages/Payroll.jsx`); other deals on the run show in a
 separate "not yet finalized" line. The run also flags deals missing an `office`
 (their override % likely defaulted to 5% instead of the office rate).
+**Run deals are listed in INSTALL-DATE order** (`runDeals`), matching the
+Google Calendar so a run can be checked against it top-to-bottom (per
+Keaton); same-day ties fall back to sale date then name, no-install-date
+deals sink to the bottom. The sheet carries no install TIME, so within a day
+the calendar's order can't be reproduced. The per-payee statement copy
+(`copyPayee`) keeps its ROLE grouping — that's a pay stub, not a job list.
 
 **Spreadsheet sync (`scripts/ScheduleSync.gs`, entry `schSync`).** One Apps
 Script trigger (every minute) drives everything: the **Jobs** tab (ArcSite

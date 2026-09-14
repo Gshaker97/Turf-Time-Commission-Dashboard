@@ -190,8 +190,13 @@ export default function Payroll() {
   const runDeals = useMemo(() => {
     // Sales-Issue deals are pulled from the run (they're flagged, not payable).
     const list = view === 'overdue' ? overdueDeals : deals.filter(d => d.pay_date === view && d.status !== ISSUE)
-    // Pay oldest-sold first: sort by sale date ascending (blanks last).
-    return [...list].sort((a, b) => (a.sale_date || '9999').localeCompare(b.sale_date || '9999'))
+    // INSTALL order — the same order the Google Calendar shows the week — so a
+    // run can be walked top-to-bottom against the calendar for checks and
+    // balances (per Keaton). Same-day ties (the sheet carries no install TIME,
+    // only the date) fall back to sale date, then name; deals with no install
+    // date yet sink to the bottom.
+    const key = (d) => `${d.install_date || '9999-99-99'}|${d.sale_date || '9999-99-99'}|${(d.deal_name || '').toLowerCase()}`
+    return [...list].sort((a, b) => key(a).localeCompare(key(b)))
   }, [deals, view, overdueDeals])
 
   // Deals on this run with no office set — their director/VP override rate
