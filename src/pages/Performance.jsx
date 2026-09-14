@@ -909,6 +909,27 @@ export default function Performance() {
           <ScoreTile label="Cancel Rate" metric="cancel_rate" value={cur.cancel_rate} prev={prev?.cancel_rate} goal={goalFor('cancel_rate')} lowerIsBetter />
           <ScoreTile label="Markup %"    metric="markup_pct"  value={cur.markup_pct}  prev={prev?.markup_pct}  goal={goalFor('markup_pct')} />
         </div>
+        {/* Per-office deals + revenue for the SAME period as the tiles above,
+            as one glanceable strip (per Keaton — a header answer, not the
+            fuller card below). Org scope only: under a team/rep scope these
+            company-wide office figures would exceed the scoped Deals tile
+            right above them and read as a contradiction. The Contributions
+            card keeps the detailed per-office view (pace deltas, share bars). */}
+        {scope.type === 'org' && officeStats.length > 0 && (
+          <div className="mt-2 rounded-xl px-3 md:px-4 py-2 flex flex-wrap items-center gap-x-5 gap-y-1.5" style={CARD}>
+            <span className="text-[9px] md:text-[10px] font-semibold text-white/30 uppercase tracking-widest">By office</span>
+            {officeStats.map(o => (
+              <span key={o.key || 'none'} className="flex items-center gap-1.5 text-[12px] tabular-nums whitespace-nowrap">
+                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: o.color }} />
+                <span className="text-white/70 font-medium">{o.name}</span>
+                <span className="text-white/85 font-bold">{o.deals}</span>
+                <span className="text-white/35">deal{o.deals === 1 ? '' : 's'}</span>
+                <span className="text-white/20">·</span>
+                <span className="text-teal font-bold">{fmtMetric('revenue', o.revenue)}</span>
+              </span>
+            ))}
+          </div>
+        )}
         <p className="text-[10px] text-white/25 mt-1.5">
           ▲▼ compare to the <span className="text-white/40">same point</span> in the previous {headerGrain} while it's in progress — full period once complete.
         </p>
