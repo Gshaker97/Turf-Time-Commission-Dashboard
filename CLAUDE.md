@@ -386,7 +386,10 @@ one at the SAME grain, chart goal lines re-resolve at the displayed sub-grain
 (never scaled to days), and week-zooms hide estimates (weekly inputs can't
 split into days). A "Change Over Time" table shows every displayed period vs
 the one before (relative % for $/counts, percentage-point deltas for rates;
-green/red with cancel-rate inverted). Page order: scorecard first, then the
+green/red with cancel-rate inverted). Page order: scorecard first (six tiles + a **By-office strip** directly
+under them — per-office deals + revenue for the same period, rendered from
+`officeStats`, shown ONLY at org scope so it can't contradict a
+team/rep-scoped Deals tile), then the
 Contributions row, then Teams-vs-Goal (admin: click a Goal cell to edit
 inline — writes a targets row at the displayed grain effective from the
 current period), charts, Change table, Rep Breakdown. Admin buttons up top:
