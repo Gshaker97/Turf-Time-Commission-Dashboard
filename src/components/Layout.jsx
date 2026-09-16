@@ -52,7 +52,11 @@ export default function Layout() {
   // Admin-flag users see admin-gated nav items in addition to their title's.
   const effectiveRoles = isAdmin ? [role, 'admin'] : [role]
   const items = NAV.filter(n => n.roles.some(r => effectiveRoles.includes(r)))
-  if (isAdmin || canSeeTeam) items.push(MY_TEAM_NAV)
+  // Bonus sits right after Dashboard (before Deals), not at the end.
+  if (isAdmin || canSeeTeam) {
+    const dash = items.findIndex(n => n.to === '/dashboard')
+    items.splice(dash >= 0 ? dash + 1 : items.length, 0, MY_TEAM_NAV)
+  }
   if (isAdmin || isKeaton(profile)) items.push(AUDIT_NAV)
 
   return (
