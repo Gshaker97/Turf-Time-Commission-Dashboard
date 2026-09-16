@@ -11,6 +11,7 @@ const TITLES = {
   '/dashboard':   'Dashboard',
   '/commissions': 'Commissions',
   '/leads':       'Leads',
+  '/myteam':      'Bonus',
   '/goals':       'Goals',
   '/performance': 'Performance',
   '/admin':       'Admin Panel',
