@@ -41,6 +41,7 @@ const RequiresAudit = lazyWithReload(() => import('./pages/RequiresAudit'))
 const Performance = lazyWithReload(() => import('./pages/Performance'))
 const SetPassword = lazyWithReload(() => import('./pages/SetPassword'))
 const Leads       = lazyWithReload(() => import('./pages/Leads'))
+const MyTeam      = lazyWithReload(() => import('./pages/MyTeam'))
 
 function Spinner() {
   return (
@@ -79,6 +80,9 @@ function AppRoutes() {
         <Route path="dashboard"   element={<Dashboard />} />
         <Route path="commissions" element={<Commissions />} />
         <Route path="leads"       element={<Leads />} />
+        {/* My Team: the page self-guards to the team lead or an admin (a lead is
+            a plain rep, so this can't be a role-based Guard). */}
+        <Route path="myteam"      element={<MyTeam />} />
         <Route path="competitions" element={<Competitions />} />
         <Route path="home"        element={<Home />} />
         <Route path="payroll"     element={<Guard roles={['vp','admin']}><Payroll /></Guard>} />
