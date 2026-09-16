@@ -1,14 +1,15 @@
-import { Suspense } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, BarChart2, DollarSign,
   ShieldCheck, Eye, X,
-  Home, Wallet, Trophy, Upload, ScanSearch, Gauge, Target, CalendarCheck,
+  Home, Wallet, Trophy, Upload, ScanSearch, Gauge, Target, CalendarCheck, Users,
 } from 'lucide-react'
 import NavBar from './NavBar'
 import Notices from './Notices'
 import ErrorBoundary from './ErrorBoundary'
 import { useAuth } from '../contexts/AuthContext'
+import { fetchMyTeams } from '../lib/db'
 
 const NAV = [
   { to: '/home',        icon: Home,            label: 'Home',        short: 'Home',    roles: ['rep','manager','director','vp','admin'] },
@@ -27,15 +28,31 @@ const NAV = [
 // Keaton (by identity) or any admin sees the Requires-Audit tab. Keaton is a VP,
 // not an admin, so this can't be expressed as a plain role on NAV above.
 const AUDIT_NAV = { to: '/audit', icon: ScanSearch, label: 'Requires Audit', short: 'Audit' }
+// "My Team" — the private team-bonus view. Shown only to a sales-team LEAD or an
+// admin, which is data-driven (a lead is a plain rep), so it can't live in the
+// role-based NAV list above.
+const MY_TEAM_NAV = { to: '/myteam', icon: Users, label: 'My Team', short: 'Team' }
 const isKeaton = (p) => p?.email?.toLowerCase() === 'keaton@turftime.com' || p?.name === 'Keaton Shaker'
 
 export default function Layout() {
   const { profile, isPreviewMode, clearPreview, isAdmin } = useAuth()
   const { pathname } = useLocation()
   const role  = profile?.role ?? 'rep'
+
+  // Can this user see a sales team's bonus view? RLS returns only teams the
+  // caller may see — the ones they lead, or whose lead reports up to them
+  // (admins see all) — so a rep with no such team gets an empty list.
+  const [canSeeTeam, setCanSeeTeam] = useState(false)
+  useEffect(() => {
+    let alive = true
+    fetchMyTeams(profile).then(({ data }) => { if (alive) setCanSeeTeam((data || []).length > 0) })
+    return () => { alive = false }
+  }, [profile?.id])
+
   // Admin-flag users see admin-gated nav items in addition to their title's.
   const effectiveRoles = isAdmin ? [role, 'admin'] : [role]
   const items = NAV.filter(n => n.roles.some(r => effectiveRoles.includes(r)))
+  if (isAdmin || canSeeTeam) items.push(MY_TEAM_NAV)
   if (isAdmin || isKeaton(profile)) items.push(AUDIT_NAV)
 
   return (

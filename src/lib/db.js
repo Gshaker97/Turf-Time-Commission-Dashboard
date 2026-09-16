@@ -733,3 +733,124 @@ export async function saveSetting(key, value, profileId) {
   return supabase.from('app_settings')
     .upsert({ key, value, updated_by: profileId }, { onConflict: 'key' })
 }
+
+// ── Sales teams + monthly team-revenue bonus (migration 045) ──
+// The private "My Team" bonus view, for a team LEAD or an admin. Access is
+// enforced server-side: sales_teams RLS returns only teams you lead (admins see
+// all), and the team_month_summary() RPC re-checks the caller before returning
+// any numbers (→ 403 otherwise). Never trust the frontend to hide this.
+
+// Demo fixtures. Joseph Burgos isn't in the demo roster, so he's synthesized
+// here; Ricky (u-ricky) and Bryan (u-bryan) already exist in demoData. The demo
+// team mirrors the seed in migration 045; joined_at is set far in the past so
+// the demo widget shows populated numbers offline.
+const DEMO_TEAM_ID = 'team-ricky'
+const DEMO_SALES_TEAMS = [
+  { id: DEMO_TEAM_ID, name: "Ricky's Team", team_lead_user_id: 'u-ricky', active: true },
+]
+const DEMO_TEAM_MEMBERS = [
+  { user_id: 'u-ricky',  name: 'Ricky Marrugo', role: 'lead',   joined_at: '2000-01-01', left_at: null },
+  { user_id: 'u-bryan',  name: 'Bryan Burgos',  role: 'closer', joined_at: '2000-01-01', left_at: null },
+  { user_id: 'u-joseph', name: 'Joseph Burgos', role: 'closer', joined_at: '2000-01-01', left_at: null },
+]
+const DEMO_BONUS_TIERS = [
+  { min_revenue: 200000, bonus_amount: 2000 },
+  { min_revenue: 300000, bonus_amount: 4000 },
+  { min_revenue: 400000, bonus_amount: 6000 },
+  { min_revenue: 500000, bonus_amount: 8000 },
+  { min_revenue: 600000, bonus_amount: 10000 },
+  { min_revenue: 700000, bonus_amount: 12000 },
+]
+
+const isAdminProfile = (p) => p?.role === 'admin' || p?.is_admin === true
+
+// Who may see a team (demo mirror of the server rule): the lead, an admin, or
+// the lead's management chain (the lead's manager/director/vp).
+function demoCanView(team, profile) {
+  if (isAdminProfile(profile)) return true
+  if (team.team_lead_user_id === profile?.id) return true
+  const lead = DEMO_USERS.find(u => u.id === team.team_lead_user_id)
+  return !!lead && [lead.manager_id, lead.director_id, lead.vp_id].includes(profile?.id)
+}
+
+// Teams the signed-in user may see — their own (as lead), all (admin), or a
+// team whose lead reports up to them. Drives the "My Team" nav item + page
+// access; everyone else gets an empty list.
+export async function fetchMyTeams(profile) {
+  if (DEMO_MODE) {
+    const mine = DEMO_SALES_TEAMS.filter(t => demoCanView(t, profile))
+    return { data: mine.map(t => ({ ...t })), error: null }
+  }
+  return readWithAuthRetry(() =>
+    supabase.from('sales_teams')
+      .select('id,name,team_lead_user_id,active')
+      .eq('active', true)
+      .order('name'))
+}
+
+// Server-authorized monthly bonus summary for one team + month. Live mode calls
+// the SECURITY DEFINER RPC (re-verifies the caller = lead or admin, else 403);
+// demo mode recomputes the identical rules in memory from _deals.
+export async function fetchTeamMonthSummary(teamId, year, month, profile) {
+  if (DEMO_MODE) return { data: demoTeamMonthSummary(teamId, year, month, profile), error: null }
+  const { data, error } = await supabase.rpc('team_month_summary', {
+    p_team_id: teamId, p_year: year, p_month: month,
+  })
+  return { data: data ?? null, error }
+}
+
+// Demo replica of team_month_summary — same field (baseline_revenue), same date
+// basis (sale_date), canceled excluded, and the same one-owner attribution
+// (setter first, else closer) so the member rows reconcile to the team total.
+function demoTeamMonthSummary(teamId, year, month, profile) {
+  const team = DEMO_SALES_TEAMS.find(t => t.id === teamId)
+  if (!team) return null
+  if (!demoCanView(team, profile)) return null // mirror the 403
+
+  const members = DEMO_TEAM_MEMBERS
+  const pad = (n) => String(n).padStart(2, '0')
+  const start = `${year}-${pad(month)}-01`
+  const endD  = new Date(year, month, 1)            // first day of the next month
+  const end   = `${endD.getFullYear()}-${pad(endD.getMonth() + 1)}-01`
+  const canceled = (s) => { const x = String(s || '').trim().toLowerCase(); return x === 'canceled' || x === 'cancelled' }
+  const activeOn = (uid, date) =>
+    !!uid && members.some(m => m.user_id === uid && date >= m.joined_at && (m.left_at == null || date < m.left_at))
+
+  const per = {}
+  let revenue = 0
+  for (const d of _deals) {
+    const sd = d.sale_date
+    if (!sd || sd < start || sd >= end || canceled(d.status)) continue
+    const sm = activeOn(d.setter_id, sd)
+    const cm = activeOn(d.closer_id, sd)
+    if (!sm && !cm) continue
+    const rev   = parseFloat(d.baseline_revenue) || 0
+    const owner = sm ? d.setter_id : d.closer_id
+    revenue += rev
+    per[owner] = per[owner] || { deals: 0, revenue: 0 }
+    per[owner].deals   += 1
+    per[owner].revenue += rev
+  }
+
+  const memberRows = members
+    .map(m => ({ user_id: m.user_id, name: m.name, role: m.role,
+                 deals: per[m.user_id]?.deals || 0, revenue: per[m.user_id]?.revenue || 0 }))
+    .sort((a, b) => b.revenue - a.revenue || a.name.localeCompare(b.name))
+
+  const tiers   = DEMO_BONUS_TIERS
+  const cleared = tiers.filter(t => t.min_revenue <= revenue)
+  const bonus   = cleared.length ? cleared[cleared.length - 1].bonus_amount : 0
+  const next    = tiers.find(t => t.min_revenue > revenue) || null
+  const topMin  = tiers.length ? tiers[tiers.length - 1].min_revenue : 0
+
+  return {
+    team_id: team.id, team_name: team.name, year, month,
+    revenue, bonus,
+    next_target: next ? next.min_revenue : null,
+    next_bonus:  next ? next.bonus_amount : null,
+    gap:         next ? Math.max(next.min_revenue - revenue, 0) : null,
+    max_tier:    !next && revenue >= topMin,
+    tiers:       tiers.map(t => ({ ...t })),
+    members:     memberRows,
+  }
+}
