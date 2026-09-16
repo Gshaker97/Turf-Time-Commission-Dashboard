@@ -393,12 +393,12 @@ BEGIN
   WHERE NOT EXISTS (SELECT 1 FROM team_members WHERE team_id = v_team AND user_id = v_ricky AND left_at IS NULL);
 
   INSERT INTO team_members (team_id, user_id, role, joined_at)
-  SELECT v_team, v_bryan, 'closer', v_start
+  SELECT v_team, v_bryan, 'setter', v_start
   WHERE v_bryan IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM team_members WHERE team_id = v_team AND user_id = v_bryan AND left_at IS NULL);
 
   INSERT INTO team_members (team_id, user_id, role, joined_at)
-  SELECT v_team, v_joseph, 'closer', v_start
+  SELECT v_team, v_joseph, 'setter', v_start
   WHERE v_joseph IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM team_members WHERE team_id = v_team AND user_id = v_joseph AND left_at IS NULL);
 END $$;
