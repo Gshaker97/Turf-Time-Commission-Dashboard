@@ -345,10 +345,12 @@ WHERE NOT EXISTS (
 );
 
 -- ── Seed: "Ricky's Team" — Ricky (lead) + Bryan + Joseph ─────
--- Resolves people by email. Joseph Burgos is NOT in the original roster seed
--- (003), so a placeholder profile is created for him if missing — fix his
--- details and create his login in Admin → Users afterward. Members join at the
--- start of the current month (adjust joined_at if the pod started earlier).
+-- Resolves people by NAME (the live roster uses personal Gmail logins, not
+-- company emails, so name is the stable key across both live and a fresh 003
+-- seed). Joseph Burgos is NOT in the roster, so a placeholder profile is created
+-- for him — fix his email and create his login in Admin → Users afterward.
+-- Members join at the start of the current month (adjust joined_at if the pod
+-- started earlier).
 DO $$
 DECLARE
   v_ricky  UUID;
@@ -357,22 +359,24 @@ DECLARE
   v_team   UUID;
   v_start  DATE := date_trunc('month', CURRENT_DATE)::date;
 BEGIN
-  SELECT id INTO v_ricky  FROM profiles WHERE lower(email) = 'ricky@turftime.com'  LIMIT 1;
-  SELECT id INTO v_bryan  FROM profiles WHERE lower(email) = 'bryan@turftime.com'  LIMIT 1;
-  SELECT id INTO v_joseph FROM profiles WHERE lower(email) = 'joseph@turftime.com' LIMIT 1;
+  -- Exact full name (case-insensitive); prefer an active row. 'Ricky Marrugo'
+  -- is matched in full so it never picks up a different Ricky.
+  SELECT id INTO v_ricky  FROM profiles WHERE lower(name) = 'ricky marrugo' ORDER BY active DESC LIMIT 1;
+  SELECT id INTO v_bryan  FROM profiles WHERE lower(name) = 'bryan burgos'  ORDER BY active DESC LIMIT 1;
+  SELECT id INTO v_joseph FROM profiles WHERE lower(name) = 'joseph burgos' ORDER BY active DESC LIMIT 1;
 
   IF v_ricky IS NULL THEN
-    RAISE NOTICE '045 team seed skipped: ricky@turftime.com not found.';
+    RAISE NOTICE '045 team seed skipped: Ricky Marrugo not found.';
     RETURN;
   END IF;
 
   IF v_joseph IS NULL THEN
     INSERT INTO profiles (name, email, role, company_name, manager_id, director_id, vp_id, active)
-    SELECT 'Joseph Burgos', 'joseph@turftime.com', 'rep', 'Turf Time',
+    SELECT 'Joseph Burgos', 'joseph.burgos.placeholder@turftimeaz.com', 'rep', 'Turf Time',
            r.manager_id, r.director_id, r.vp_id, TRUE
     FROM profiles r WHERE r.id = v_ricky
     RETURNING id INTO v_joseph;
-    RAISE NOTICE 'Created placeholder profile for Joseph Burgos (joseph@turftime.com).';
+    RAISE NOTICE 'Created placeholder profile for Joseph Burgos — set his real email + login in Admin → Users.';
   END IF;
 
   SELECT id INTO v_team FROM sales_teams WHERE name = 'Ricky''s Team' LIMIT 1;
