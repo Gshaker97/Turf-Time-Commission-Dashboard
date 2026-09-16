@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Navigate } from 'react-router-dom'
-import { Users, Trophy, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react'
+import { Users, Trophy, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchMyTeams, fetchTeamMonthSummary } from '../lib/db'
 
@@ -85,7 +85,6 @@ export default function MyTeam() {
   const [summary,     setSummary]     = useState(null)
   const [loading,     setLoading]     = useState(true)
   const [error,       setError]       = useState(null)
-  const [expanded,    setExpanded]    = useState(false)  // for the oversight (non-lead) view
 
   // Which teams can this user see? (Lead → their team; admin → all.)
   useEffect(() => {
@@ -113,13 +112,6 @@ export default function MyTeam() {
     })
     return () => { alive = false }
   }, [teamId, monthIdx, months, profile])
-
-  // The team LEAD gets the full, always-open view. Everyone else who's allowed
-  // to see it (admins + the lead's management chain: Conner, Garrison, Keaton)
-  // gets a collapsed-by-default panel so it stays a quiet peek, not clutter.
-  const selectedTeam = (teams || []).find(t => t.id === teamId)
-  const isLead = !!selectedTeam && selectedTeam.team_lead_user_id === profile?.id
-  useEffect(() => { setExpanded(isLead) }, [isLead, teamId])
 
   // ── Access control (client side) ──────────────────────────
   // The nav item is already hidden for non-leads, and every data call is
@@ -217,25 +209,6 @@ export default function MyTeam() {
         </div>
       ) : !s ? null : (
         <>
-          {/* Oversight (non-lead) viewers — admins + the lead's chain — get a
-              collapsed-by-default peek with the key numbers on the toggle. */}
-          {!isLead && (
-            <button
-              onClick={() => setExpanded(e => !e)}
-              className="w-full flex items-center justify-between gap-3 rounded-xl px-4 md:px-5 py-3 text-left transition-colors hover:bg-white/[0.02]"
-              style={{ background: '#242424', border: '1px solid #2e2e2e' }}
-            >
-              <span className="flex items-center gap-2 text-[13px] font-semibold text-white/80">
-                <ChevronDown size={15} className={`text-white/40 transition-transform ${expanded ? '' : '-rotate-90'}`} />
-                Team bonus details
-              </span>
-              <span className="text-[12px] text-white/50 tabular-nums">
-                {usd0(revenue)} · <span className="text-teal font-semibold">{usd0(bonus)}</span> bonus
-              </span>
-            </button>
-          )}
-
-          {(isLead || expanded) && (<>
           {/* Bonus + progress card */}
           <div className="rounded-xl p-4 md:p-6" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
             <div className="flex flex-wrap items-end justify-between gap-4 mb-5">
@@ -267,11 +240,6 @@ export default function MyTeam() {
                 </p>
               ) : (
                 <p className="text-[13px] text-white/50">No bonus tiers configured.</p>
-              )}
-              {bonus === 0 && !maxTier && s.next_target != null && (
-                <p className="text-[11px] text-white/30 mt-1">
-                  Bonus starts at {usd0(tiers[0]?.min_revenue)} in team revenue.
-                </p>
               )}
             </div>
           </div>
@@ -317,7 +285,6 @@ export default function MyTeam() {
               Each deal counts once at full revenue, credited to its setter (or the closer when no team member set it).
             </p>
           </div>
-          </>)}
         </>
       )}
     </div>
