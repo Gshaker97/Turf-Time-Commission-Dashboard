@@ -1,23 +1,18 @@
 import { useState, useEffect } from 'react'
-import { Plus, Pencil, Trash2, RefreshCw, Activity, KeyRound, UserPlus, Search, ShieldCheck, UserCheck } from 'lucide-react'
+import { RefreshCw, Activity } from 'lucide-react'
 import {
   fetchUsers, insertUser, updateUser, deleteUser,
   userAdmin, userAdminConfigured, fetchTeamChanges, fetchLeads,
 } from '../lib/db'
 import { toast } from '../lib/toast'
 import UserModal from '../components/UserModal'
-import { headIdSet } from '../utils/team'
+import PeopleChart from '../components/PeopleChart'
 import { leadFeedHealth } from '../utils/feedHealth'
 import SettingsPanel from '../components/SettingsPanel'
 import { useSettings } from '../contexts/SettingsContext'
 import { DEMO_MODE } from '../lib/supabase'
 
-const TABS = ['Users', 'Settings']
-
-const ROLE_COLOR = {
-  vp: 'text-purple-400', director: 'text-indigo-400',
-  manager: 'text-amber-400', rep: 'text-white/50', admin: 'text-teal',
-}
+const TABS = ['People', 'Settings']
 
 // ── System health — heartbeats written by the Apps Scripts into app_settings.
 // Catches the two silent failure modes that have actually happened: the sync
@@ -123,7 +118,7 @@ function SystemHealth() {
 }
 
 export default function Admin() {
-  const [tab,      setTab]      = useState('Users')
+  const [tab,      setTab]      = useState('People')
   const [users,    setUsers]    = useState([])
   const [loading,  setLoading]  = useState(true)
   const [userModal, setUserModal] = useState(false)
@@ -258,132 +253,21 @@ export default function Admin() {
     }`
 
   const card  = { background: '#242424', border: '1px solid #2e2e2e' }
-  const [search, setSearch] = useState('')
   const [showLog, setShowLog] = useState(false)
-  // Deactivated people sit dimmed in their old team's section, which made
-  // them easy to miss in a long roster. This isolates them so reactivating
-  // someone is a two-click job, not a hunt.
-  const [onlyInactive, setOnlyInactive] = useState(false)
-  const inactiveCount = users.filter(u => u.active === false).length
-
-  // ── Roster grouping: leadership → each team (under its lead) → unassigned.
-  // A "team lead" is anyone people report to (manager_id) — manager, director,
-  // or VP alike — plus every manager (even with no reps yet).
-  const byName = (a, b) => (a.name || '').localeCompare(b.name || '')
-  const q = search.trim().toLowerCase()
-  const match = (u) =>
-    (!onlyInactive || u.active === false) &&
-    (!q || (u.name || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q))
-  const reportsTo = {}
-  users.forEach(u => { if (u.manager_id) (reportsTo[u.manager_id] ||= []).push(u) })
-  // Shared head rule (utils/team.js): direct reports make a team; a manager
-  // who reports to another lead with no directs of their own is a MEMBER (so
-  // an absorbed team's lead files under the absorbing team, not their own).
-  const heads = headIdSet(users)
-  const teams = users.filter(u => heads.has(u.id)).sort(byName).map(h => ({
-    head: h,
-    members: (reportsTo[h.id] || []).filter(u => !heads.has(u.id)).sort(byName),
-  }))
-  const grouped = new Set(teams.flatMap(t => [t.head.id, ...t.members.map(m => m.id)]))
-  const restUsers  = users.filter(u => !grouped.has(u.id))
-  const ROLE_RANK = { admin: 0, vp: 1, director: 2, manager: 3, rep: 4 }
-  const leadership = restUsers.filter(u => u.role !== 'rep').sort((a, b) => (ROLE_RANK[a.role] ?? 9) - (ROLE_RANK[b.role] ?? 9) || byName(a, b))
-  const unassigned = restUsers.filter(u => u.role === 'rep').sort(byName)
-
-  // Latest team change per person → the 'since <date>' stamp on their row.
-  const sinceByProfile = {}
-  for (const c of teamChanges) if (!sinceByProfile[c.profile_id]) sinceByProfile[c.profile_id] = c.changed_at
   const fmtSince = (iso) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
-  // One row per person — badges are display-only; edits go through the modal.
-  function UserRow({ u, subtitle }) {
-    const boss = users.find(x => x.id === u.manager_id)
-    const initials = (u.name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
-    return (
-      <div className="px-3 md:px-4 py-2.5 flex items-center gap-3 hover:bg-white/[0.02] transition-colors"
-        style={{ opacity: u.active === false ? 0.5 : 1 }}>
-        <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0"
-          style={{ background: '#1a1a1a', border: '1px solid #333', color: '#00b894' }}>
-          {initials}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[13px] font-semibold text-white truncate">{u.name}</span>
-            <span className={`text-[9px] font-bold uppercase tracking-wide ${ROLE_COLOR[u.role] || 'text-white/40'}`}>{u.role}</span>
-            {u.is_admin && u.role !== 'admin' && (
-              <span className="inline-flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full" style={{ color: '#00b894', border: '1px solid #00b89455' }}>
-                <ShieldCheck size={9} /> admin
-              </span>
-            )}
-            {u.ghost && <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full" style={{ color: '#a78bfa', border: '1px solid #a78bfa55' }}>ghost</span>}
-            {u.active === false && <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full" style={{ color: '#f87171', border: '1px solid #f8717155' }}>deactivated</span>}
-          </div>
-          <p className="text-[11px] text-white/35 truncate mt-0.5">
-            {u.email}
-            {subtitle !== false && boss && <span className="text-white/25"> · reports to {boss.name}</span>}
-            {subtitle !== false && boss && sinceByProfile[u.id] && <span className="text-white/20"> · since {fmtSince(sinceByProfile[u.id])}</span>}
-          </p>
-        </div>
-        <div className="flex items-center gap-1 md:gap-1.5 flex-shrink-0">
-          {u.auth_id ? (
-            hasUserAdmin && (
-              <button onClick={() => resetLogin(u)} disabled={busyUser === u.id} title="Reset their password"
-                className="p-1.5 rounded-lg text-white/25 hover:text-amber-400 hover:bg-amber-500/10 transition-colors disabled:opacity-40">
-                <KeyRound size={14} />
-              </button>
-            )
-          ) : hasUserAdmin ? (
-            <button onClick={() => createLogin(u)} disabled={busyUser === u.id} title="No login yet — create one"
-              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold text-teal transition-colors disabled:opacity-40"
-              style={{ border: '1px solid #00b89440' }}>
-              <UserPlus size={11} /> {busyUser === u.id ? '…' : 'login'}
-            </button>
-          ) : (
-            <span className="text-[10px] text-white/20 hidden md:inline" title="No auth login — use the create-login button or Studio">no login</span>
-          )}
-          {u.active === false ? (
-            // A grey "off" toggle on a half-faded row read as a disabled
-            // control, not an action — so nobody could find how to bring a
-            // rep back. Say it in words. (Reactivating also lifts the login
-            // ban via set_active, same handler as before.)
-            <button onClick={() => toggleActive(u)} title="Restore site access — their deals and stats never left"
-              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold text-teal transition-colors hover:bg-teal/10"
-              style={{ border: '1px solid #00b89466' }}>
-              <UserCheck size={11} /> Reactivate
-            </button>
-          ) : (
-            <button onClick={() => toggleActive(u)} title="Active — click to deactivate"
-              className="w-9 h-5 rounded-full flex items-center px-0.5 transition-colors flex-shrink-0"
-              style={{ background: '#00b894', justifyContent: 'flex-end' }}>
-              <span className="w-4 h-4 rounded-full bg-white block" />
-            </button>
-          )}
-          <button onClick={() => { setEditUser(u); setUserModal(true) }} title="Edit"
-            className="p-1.5 rounded-lg text-white/25 hover:text-teal hover:bg-teal/10 transition-colors">
-            <Pencil size={14} />
-          </button>
-          <button onClick={() => handleDeleteUser(u.id)} title="Delete"
-            className="p-1.5 rounded-lg text-white/25 hover:text-red-400 hover:bg-red-500/10 transition-colors">
-            <Trash2 size={14} />
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  function Section({ title, sub, children, count }) {
-    return (
-      <div className="rounded-xl overflow-hidden" style={card}>
-        <div className="px-3 md:px-4 py-2.5 flex items-center justify-between gap-3" style={{ background: '#1e1e1e', borderBottom: '1px solid #2a2a2a' }}>
-          <div className="flex items-baseline gap-2 min-w-0">
-            <h3 className="text-[12px] font-bold text-white truncate">{title}</h3>
-            {sub && <span className="text-[10px] text-white/30 truncate">{sub}</span>}
-          </div>
-          <span className="text-[10px] text-white/30 flex-shrink-0">{count} {count === 1 ? 'person' : 'people'}</span>
-        </div>
-        <div className="divide-y divide-white/5">{children}</div>
-      </div>
-    )
+  // Drag-to-move from the People chart. Only non-heads are draggable (the
+  // chart enforces it), so no reports cascade is needed here — that stays in
+  // saveUser for the Edit form. Same patchUser → updateUser path as every
+  // other roster write, so the team_changes trigger stamps the move.
+  async function moveUser(u, destId) {
+    const destLabel = destId ? `${users.find(x => x.id === destId)?.name || 'their new lead'}'s team` : 'Unassigned'
+    const fromLabel = u.manager_id ? `${users.find(x => x.id === u.manager_id)?.name || 'their old lead'}'s team` : 'Unassigned'
+    if (!confirm(`Move ${u.name} to ${destLabel}?\n\nLogged today in the team change log. ${u.name}'s past deals stay with ${fromLabel} — only sales from today forward count for ${destLabel}.`)) return
+    await patchUser(u.id, { manager_id: destId })
+    // Refresh just the log so the "since" date on their card updates.
+    const { data: tc } = await fetchTeamChanges()
+    setTeamChanges(tc ?? [])
   }
 
   return (
@@ -399,56 +283,20 @@ export default function Admin() {
         </button>
       </div>
 
-      {/* ── USERS ── */}
-      {tab === 'Users' && (
+      {/* ── PEOPLE — the roster as an org chart ── */}
+      {tab === 'People' && (
         <div className="space-y-3">
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="relative flex-1 min-w-[200px] max-w-sm">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/25" />
-              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name or email…"
-                className="w-full pl-9 pr-3 py-2 rounded-xl text-[13px] text-white placeholder-white/25 focus:outline-none focus:border-teal/40 transition-colors"
-                style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }} />
-            </div>
-            <p className="text-[12px] text-white/40">{users.length} users</p>
-            {inactiveCount > 0 && (
-              <button onClick={() => setOnlyInactive(v => !v)} aria-pressed={onlyInactive}
-                title={onlyInactive ? 'Show everyone' : 'Show only deactivated people'}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors ${
-                  onlyInactive ? 'text-red-300' : 'text-white/40 hover:text-white'}`}
-                style={{ border: `1px solid ${onlyInactive ? '#f8717166' : '#2a2a2a'}`, background: onlyInactive ? '#f871711a' : '#1e1e1e' }}>
-                Deactivated · {inactiveCount}
-              </button>
-            )}
-            <button onClick={() => { setEditUser(null); setUserModal(true) }}
-              className="ml-auto flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-bold text-dark bg-teal transition-colors">
-              <Plus size={13} /> Add User
-            </button>
-          </div>
-
-          {leadership.filter(match).length > 0 && (
-            <Section title="Leadership & Admin" count={leadership.filter(match).length}>
-              {leadership.filter(match).map(u => <UserRow key={u.id} u={u} />)}
-            </Section>
-          )}
-
-          {teams.map(({ head, members }) => {
-            const shown = [head, ...members].filter(match)
-            if (!shown.length) return null
-            return (
-              <Section key={head.id}
-                title={`${head.name}'s Team`}
-                sub={head.role !== 'manager' ? `led by their ${head.role}` : null}
-                count={shown.length}>
-                {shown.map(u => <UserRow key={u.id} u={u} subtitle={u.id !== head.id ? false : undefined} />)}
-              </Section>
-            )
-          })}
-
-          {unassigned.filter(match).length > 0 && (
-            <Section title="Unassigned reps" sub="no team lead set — assign one in Edit → Reports To" count={unassigned.filter(match).length}>
-              {unassigned.filter(match).map(u => <UserRow key={u.id} u={u} />)}
-            </Section>
-          )}
+          <PeopleChart
+            users={users} teamChanges={teamChanges}
+            hasUserAdmin={hasUserAdmin} busyUser={busyUser}
+            onAdd={() => { setEditUser(null); setUserModal(true) }}
+            onEdit={u => { setEditUser(u); setUserModal(true) }}
+            onDelete={handleDeleteUser}
+            onToggleActive={toggleActive}
+            onResetLogin={resetLogin}
+            onCreateLogin={createLogin}
+            onMove={moveUser}
+          />
 
           {/* Date-stamped log of reports-to moves (trigger-written, migration 029) */}
           {teamChanges.length > 0 && (

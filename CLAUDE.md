@@ -464,11 +464,28 @@ alert, their deals still count in org totals + rep scope.
   — the server updates the GoTrue login FIRST, then mirrors `profiles.email`,
   so the roster email and the sign-in email can never diverge. Never write
   `profiles.email` directly for a user who has an `auth_id`.
-- **Users tab layout:** a team-grouped roster (Leadership & Admin → one
-  section per team lead → Unassigned reps) with search; row badges are
-  display-only and edits go through the Edit modal (`UserModal`). The Edit
-  modal shows a **Team History** panel (that user's dated reports-to moves
-  from `team_changes`, newest first, plus current lead + since-date).
+- **People tab (`src/components/PeopleChart.jsx`, replaced the Users list —
+  per Keaton, approved from a mockup):** the roster as an ORG CHART.
+  Leadership row (every admin/VP/director, ranked) across the top; then one
+  COLUMN per team head (`headIdSet`, sorted by name; managers always get a
+  column even when empty; a director/VP head's column is labeled "led by
+  their <role>"), reps stacked beneath; **Unassigned is a real column**
+  (dashed, amber) and a valid drag source. **Drag a rep onto another column
+  to move them** — the chart only allows non-heads to drag (moving a head
+  triggers the reports cascade, which stays in the Edit form via
+  `saveUser`); the page's `moveUser` confirms ("logged today… past deals stay
+  with <old team>") then writes through `patchUser` → `updateUser` so the
+  `team_changes` trigger stamps the move, and refetches the log so the card's
+  "since" updates. **Deactivated people appear ONLY in a collapsed drawer**
+  at the bottom (never faded in place), each with the Reactivate button;
+  toolbar has a "Deactivated · N" pill that opens it. Phones: columns stack,
+  each collapsible (`tt_people_collapsed`; first open by default), row
+  actions fold into a ⋯ menu that also offers a **"Move to…"** select since
+  touch has no HTML5 drag. Row badges (role/admin/ghost/no login) are
+  display-only; edits go through the Edit modal (`UserModal`), which shows a
+  **Team History** panel (that user's dated reports-to moves from
+  `team_changes`, newest first, plus current lead + since-date). The Team
+  change log stays a collapsible below the chart.
 - **Setter/Closer in the DealModal are type-to-search pickers**
   (`PersonPicker` in DealModal.jsx — the roster outgrew dropdowns); the
   small selects (manager/director/VP/status/office/payment) stay native.
