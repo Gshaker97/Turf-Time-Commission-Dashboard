@@ -504,7 +504,10 @@ alert, their deals still count in org totals + rep scope.
   toolbar has a "Deactivated · N" pill that opens it. Phones: columns stack,
   each collapsible (`tt_people_collapsed`; first open by default), row
   actions fold into a ⋯ menu that also offers a **"Move to…"** select since
-  touch has no HTML5 drag. Row badges (role/admin/ghost/no login) are
+  touch has no HTML5 drag. **A team HEAD's own actions live behind a ⋯ beside
+  the count badge on every screen size — never a hover overlay**: the overlay
+  floated over the team-name banner and its pencil was mistaken for the
+  team-rename pencil (real report). Row badges (role/admin/ghost/no login) are
   display-only; edits go through the Edit modal (`UserModal`), which shows a
   **Team History** panel (that user's dated reports-to moves from
   `team_changes`, newest first, plus current lead + since-date). The Team
