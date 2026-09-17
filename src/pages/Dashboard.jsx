@@ -8,7 +8,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import { fetchDeals, fetchUsers, fetchGoal, saveGoal as saveGoalDb, deleteGoal as deleteGoalDb, fetchTeamChanges } from '../lib/db'
 import { fmt, dealAmounts, activeDeals } from '../utils/commission'
-import { headIdSet, saleOwnerId, buildChangesByProfile, teamOfSale } from '../utils/team'
+import { headIdSet, saleOwnerId, buildChangesByProfile, teamOfSale, teamLabel } from '../utils/team'
 import { buildRecordBook, periodEnd } from '../utils/records'
 import { onClickUnlessSelecting } from '../utils/selection'
 import { getPresetRange, getPreviousRange } from '../utils/dateRanges'
@@ -368,7 +368,7 @@ export default function Dashboard() {
       return { id: key, name, ghost, repCount, deals: mDeals.length, revenue, prevRev,
         reps: Object.values(byOwner).sort((a, b) => b.revenue - a.revenue), pct: (revenue / companyTotalRev) * 100 }
     }
-    const rows = mgrs.map(mgr => teamRow(mgr.id, mgr.name, mgr.ghost === true,
+    const rows = mgrs.map(mgr => teamRow(mgr.id, teamLabel(mgr), mgr.ghost === true,
       users.filter(u => u.manager_id === mgr.id && u.id !== mgr.id && u.active !== false).length
     ))
     // HISTORICAL teams: sale keys that aren't a current head (a lead whose
@@ -380,7 +380,7 @@ export default function Dashboard() {
       for (const key of Object.keys(byTeam)) {
         if (key === 'unassigned' || known.has(key)) continue
         const u = users.find(x => x.id === key)
-        rows.push(teamRow(key, u?.name ?? 'Former team', u?.ghost === true, 0))
+        rows.push(teamRow(key, u ? teamLabel(u) : 'Former team', u?.ghost === true, 0))
       }
     }
     rows.sort((a, b) => b.revenue - a.revenue)
@@ -564,7 +564,7 @@ export default function Dashboard() {
 
   const managers         = users.filter(u => headIdSet(users).has(u.id))   // team heads for the filter dropdown
   const maxWeekRevLocal  = maxWeekRev
-  const selectedTeamName = teamFilter ? managers.find(m => m.id === teamFilter)?.name : null
+  const selectedTeamName = teamFilter ? (m => m ? teamLabel(m) : null)(managers.find(m => m.id === teamFilter)) : null
 
   return (
     <div className="space-y-4 pb-6">
@@ -583,7 +583,7 @@ export default function Dashboard() {
           style={{ background: '#242424', border: '1px solid #333' }}
           className="h-8 px-2 rounded-lg text-[11px] md:text-[12px] text-white focus:outline-none self-start">
           <option value="">All Teams</option>
-          {managers.map(m => <option key={m.id} value={m.id}>{m.name}'s Team</option>)}
+          {managers.map(m => <option key={m.id} value={m.id}>{teamLabel(m)}</option>)}
         </select>
       </div>
 
@@ -895,7 +895,7 @@ export default function Dashboard() {
                       <RankBadge n={i + 1} />
                       <ChevronDown size={13} className={`text-white/30 flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
                       <div className="min-w-0">
-                        <span className="text-[12px] md:text-[13px] font-semibold text-white">{(isAdmin || !team.ghost) ? `${team.name}'s Team` : 'Team'}</span>
+                        <span className="text-[12px] md:text-[13px] font-semibold text-white">{(isAdmin || !team.ghost) ? team.name : 'Team'}</span>
                         <span className="text-[10px] text-white/30 ml-2 hidden sm:inline">{team.repCount} reps · {team.deals} deals</span>
                       </div>
                     </div>

@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { fetchDeals, fetchUsers, fetchWeeklyStats, fetchPersonalGoals, fetchLeads, upsertPersonalGoal, saveRepGoal } from '../lib/db'
 import { useSettings } from '../contexts/SettingsContext'
 import { fmt } from '../utils/commission'
-import { headIdSet, teamKeyFor } from '../utils/team'
+import { headIdSet, teamKeyFor, teamLabel } from '../utils/team'
 import {
   currentPeriods, resolveGoal, goalIsSet, repProduction, periodElapsed,
   metricProgress, suggestFromRevenue, estimateStreak,
@@ -99,7 +99,7 @@ export default function Goals() {
       rows.sort((a, b) => a.name.localeCompare(b.name))
       return {
         key: tk,
-        name: tk === 'unassigned' ? 'No Team' : lead ? `${lead.name}'s Team` : 'Former Team',
+        name: tk === 'unassigned' ? 'No Team' : lead ? teamLabel(lead) : 'Former Team',
         color: PALETTE[i % PALETTE.length],
         rows,
       }

@@ -38,6 +38,24 @@ export function teamKeyFor(u, heads) {
 // still counting in the company totals — the Dashboard-vs-Team mismatch.
 export const saleOwnerId = (d) => d.setter_id || d.closer_id || null
 
+// How a team is NAMED, everywhere. Teams are keyed by their HEAD, so the
+// official name lives on the head's profile (profiles.team_name, migration
+// 046) and is available wherever `users` is loaded — no extra fetch. Empty →
+// the default "<Head>'s Team". `teamShortLabel` is for legends and donut
+// slices: the official name, else the head's first name.
+// (Deliberately NOT sales_teams.name — those are BONUS PODS (045), a separate
+// model whose lead can be a rep who heads nothing on the org chart.)
+export const teamLabel = (head) => {
+  if (!head) return 'Team'
+  const official = String(head.team_name || '').trim()
+  return official || `${head.name || 'Team'}'s Team`
+}
+export const teamShortLabel = (head) => {
+  if (!head) return 'Team'
+  const official = String(head.team_name || '').trim()
+  return official || (head.name || 'Team').split(' ')[0]
+}
+
 // ── Date-effective team membership ───────────────────────────────────────────
 // Every reports-to move is date-stamped in team_changes (migration 029). A
 // SALE belongs to the team its owner was on AS OF THE SALE DATE: deals before

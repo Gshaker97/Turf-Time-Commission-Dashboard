@@ -7,6 +7,7 @@ import {
 import { toast } from '../lib/toast'
 import UserModal from '../components/UserModal'
 import PeopleChart from '../components/PeopleChart'
+import { teamLabel } from '../utils/team'
 import { leadFeedHealth } from '../utils/feedHealth'
 import SettingsPanel from '../components/SettingsPanel'
 import { useSettings } from '../contexts/SettingsContext'
@@ -261,14 +262,18 @@ export default function Admin() {
   // saveUser for the Edit form. Same patchUser → updateUser path as every
   // other roster write, so the team_changes trigger stamps the move.
   async function moveUser(u, destId) {
-    const destLabel = destId ? `${users.find(x => x.id === destId)?.name || 'their new lead'}'s team` : 'Unassigned'
-    const fromLabel = u.manager_id ? `${users.find(x => x.id === u.manager_id)?.name || 'their old lead'}'s team` : 'Unassigned'
+    const destLabel = destId ? teamLabel(users.find(x => x.id === destId)) : 'Unassigned'
+    const fromLabel = u.manager_id ? teamLabel(users.find(x => x.id === u.manager_id)) : 'Unassigned'
     if (!confirm(`Move ${u.name} to ${destLabel}?\n\nLogged today in the team change log. ${u.name}'s past deals stay with ${fromLabel} — only sales from today forward count for ${destLabel}.`)) return
     await patchUser(u.id, { manager_id: destId })
     // Refresh just the log so the "since" date on their card updates.
     const { data: tc } = await fetchTeamChanges()
     setTeamChanges(tc ?? [])
   }
+
+  // Official team name — lives on the head's profile (migration 046) so every
+  // page that loads users labels the team the same way via teamLabel().
+  function renameTeam(head, name) { patchUser(head.id, { team_name: name }) }
 
   return (
     <div className="space-y-4 pb-8">
@@ -296,6 +301,7 @@ export default function Admin() {
             onResetLogin={resetLogin}
             onCreateLogin={createLogin}
             onMove={moveUser}
+            onRenameTeam={renameTeam}
           />
 
           {/* Date-stamped log of reports-to moves (trigger-written, migration 029) */}
