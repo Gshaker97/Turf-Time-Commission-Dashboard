@@ -138,7 +138,7 @@ export default function PeopleChart({
     const isDragging = dragging === u.id
     const menuOpen = menuFor === u.id
     return (
-      <div className={`group border-t border-white/5 first:border-t-0 ${isDragging ? 'opacity-35' : ''}`}>
+      <div className={`group relative border-t border-white/5 first:border-t-0 ${isDragging ? 'opacity-35' : ''}`}>
         <div className={`flex items-center gap-2 px-2 py-2 ${draggable(u) ? 'cursor-grab active:cursor-grabbing' : ''}`} {...dragProps(u)}>
           {draggable(u)
             ? <GripVertical size={12} className="text-white/15 flex-shrink-0 hidden md:block" />
@@ -149,7 +149,9 @@ export default function PeopleChart({
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5 flex-wrap">
-              <span className={`text-[12.5px] truncate ${isHead ? 'font-bold text-white' : 'font-semibold text-white/85'}`}>{u.name}</span>
+              {/* Names WRAP rather than truncate — a roster where you can't read
+                  who's who is useless. Only the email/since subline clips. */}
+              <span className={`text-[12.5px] leading-tight break-words ${isHead ? 'font-bold text-white' : 'font-semibold text-white/85'}`}>{u.name}</span>
               {(!inTeam || u.role !== 'rep') && <span className={`text-[8.5px] font-bold uppercase tracking-wide ${ROLE_COLOR[u.role] || 'text-white/40'}`}>{u.role}</span>}
               {u.is_admin && u.role !== 'admin' && (
                 <span className="inline-flex items-center gap-0.5 text-[8.5px] font-bold uppercase tracking-wide px-1 rounded" style={{ color: '#00b894', border: '1px solid #00b89455' }}>
@@ -163,8 +165,12 @@ export default function PeopleChart({
               {isHead ? u.email : (since ? `since ${fmtSince(since)}` : u.email)}
             </p>
           </div>
-          {/* Desktop: icons on hover. Phone: a ⋯ that opens a row below. */}
-          <div className="hidden md:flex items-center gap-0.5 flex-shrink-0 opacity-30 group-hover:opacity-100 transition-opacity">
+          {/* Desktop: icons appear on hover as an OVERLAY at the right edge, so
+              they reserve no width at rest — three always-present icons were
+              what crammed the names. A soft fade masks whatever sits under
+              them. Phone: a ⋯ that opens a row below. */}
+          <div className="hidden md:group-hover:flex absolute right-1 top-1/2 -translate-y-1/2 items-center gap-0.5 rounded-lg pl-1 pr-0.5"
+            style={{ background: '#1e1e1e', boxShadow: '-16px 0 14px -6px #1e1e1e' }}>
             <Actions u={u} />
           </div>
           <button onClick={() => setMenuFor(menuOpen ? null : u.id)} aria-expanded={menuOpen}
@@ -222,7 +228,31 @@ export default function PeopleChart({
             <ChevronDown size={13} className={`transition-transform ${closed ? '-rotate-90' : ''}`} />
           </button>
           {head ? (
-            <div className="min-w-0 flex-1"><Person u={head} inTeam={false} /></div>
+            // The column is titled by the lead's FULL NAME (per Keaton — an
+            // initials bubble squeezed between a chevron and a count badge
+            // read as an abbreviation). Role + admin/login badges sit under it.
+            <div className="group relative min-w-0 flex-1 py-0.5">
+              <p className="text-[13.5px] font-bold text-white leading-tight break-words pr-1">{head.name}</p>
+              <p className="text-[10px] text-white/35 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                <span className={`font-bold uppercase tracking-wide ${ROLE_COLOR[head.role] || 'text-white/40'}`}>{head.role}</span>
+                {meta && <span>· {meta}</span>}
+                {head.is_admin && head.role !== 'admin' && (
+                  <span className="inline-flex items-center gap-0.5 text-[8.5px] font-bold uppercase tracking-wide px-1 rounded" style={{ color: '#00b894', border: '1px solid #00b89455' }}>
+                    <ShieldCheck size={8} /> admin
+                  </span>
+                )}
+                {!head.auth_id && <span className="text-[8.5px] font-bold uppercase tracking-wide px-1 rounded" style={{ color: '#f59e0b', border: '1px solid #f59e0b55' }}>no login</span>}
+              </p>
+              <div className="hidden md:group-hover:flex absolute right-0 top-1/2 -translate-y-1/2 items-center gap-0.5 rounded-lg pl-1"
+                style={{ background: '#1e1e1e', boxShadow: '-16px 0 14px -6px #1e1e1e' }}>
+                <Actions u={head} />
+              </div>
+              <button onClick={() => setMenuFor(menuFor === head.id ? null : head.id)} aria-expanded={menuFor === head.id}
+                className="md:hidden absolute right-0 top-0 p-1 rounded-lg text-white/40 hover:text-white">
+                <MoreHorizontal size={15} />
+              </button>
+              {menuFor === head.id && <div className="md:hidden flex items-center gap-1.5 pt-1.5"><Actions u={head} /></div>}
+            </div>
           ) : (
             <div className="min-w-0 flex-1 flex items-center gap-2 py-1">
               <div className="w-[34px] h-[34px] rounded-full flex items-center justify-center text-[12px] font-bold flex-shrink-0"
@@ -232,7 +262,6 @@ export default function PeopleChart({
           )}
           <span className="text-[11px] font-bold text-white/60 px-2 py-0.5 rounded-full flex-shrink-0" style={{ background: '#242424', border: '1px solid #2a2a2a' }}>{people.length}</span>
         </div>
-        {head && !closed && meta && <p className="px-3 pb-1.5 -mt-1 text-[10px] text-white/30">{meta}</p>}
         {!closed && (
           <div>
             {isOver && (
@@ -279,7 +308,7 @@ export default function PeopleChart({
       {leadersShown.length > 0 && (
         <>
           <p className={label}>Leadership</p>
-          <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', maxWidth: 760 }}>
+          <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', maxWidth: 820 }}>
             {leadersShown.map(u => (
               <div key={u.id} className="rounded-xl px-1" style={card}><Person u={u} inTeam={false} /></div>
             ))}
@@ -289,7 +318,7 @@ export default function PeopleChart({
 
       {/* Teams — Unassigned is a column like any other */}
       <p className={label}>Teams</p>
-      <div className="grid gap-2 md:gap-2.5 items-start" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 215px), 1fr))' }}>
+      <div className="grid gap-2 md:gap-2.5 items-start" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 250px), 1fr))' }}>
         {teams.map(({ head, members }) => (
           <Column key={head.id} colKey={head.id} head={head} people={members}
             meta={head.role === 'manager' ? null : `led by their ${head.role}`} />
@@ -317,7 +346,7 @@ export default function PeopleChart({
                 style={{ background: '#1a1a1a', border: '1px solid #333', color: 'rgba(255,255,255,0.35)' }}>{initialsOf(u.name)}</div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-[12.5px] font-semibold text-white/60 truncate">{u.name}</span>
+                  <span className="text-[12.5px] font-semibold text-white/60 leading-tight break-words">{u.name}</span>
                   <span className={`text-[8.5px] font-bold uppercase tracking-wide ${ROLE_COLOR[u.role] || 'text-white/40'}`}>{u.role}</span>
                   <span className="text-[8.5px] font-bold uppercase tracking-wide px-1 rounded" style={{ color: '#f87171', border: '1px solid #f8717155' }}>deactivated</span>
                 </div>
