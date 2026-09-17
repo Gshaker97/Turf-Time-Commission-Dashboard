@@ -4,7 +4,7 @@ import { CalendarCheck, Search, Link2, Upload, X, ChevronDown } from 'lucide-rea
 import { useAuth } from '../contexts/AuthContext'
 import { fetchLeads, fetchUsers, updateLead, upsertLeads, fetchLeadHistory } from '../lib/db'
 import { csvToLeads } from '../utils/leadImport'
-import { headIdSet, teamKeyFor } from '../utils/team'
+import { headIdSet, teamKeyFor, teamLabel } from '../utils/team'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { toast } from '../lib/toast'
 import { useSettings } from '../contexts/SettingsContext'
@@ -198,7 +198,7 @@ export default function Leads() {
       const sum = (k) => rows.reduce((s, r) => s + r[k], 0)
       return {
         key: tk,
-        name: tk === 'unassigned' ? 'No Team' : lead ? `${lead.name}'s Team` : 'Former Team',
+        name: tk === 'unassigned' ? 'No Team' : lead ? teamLabel(lead) : 'Former Team',
         color: PALETTE[i % PALETTE.length],
         rows, set: sum('set'), ran: sum('ran'), sold: sum('sold'),
       }

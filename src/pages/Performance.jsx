@@ -14,7 +14,7 @@ import {
 } from '../lib/db'
 import { weekStartOf } from '../utils/dateRanges'
 import { dealAmounts, isCanceled } from '../utils/commission'
-import { headIdSet, buildChangesByProfile, saleOwnerId, teamOfSale, teamKeyFor } from '../utils/team'
+import { headIdSet, buildChangesByProfile, saleOwnerId, teamOfSale, teamKeyFor, teamLabel, teamShortLabel } from '../utils/team'
 import {
   GRAINS, METRICS, PERCENT_METRICS, SUB_GRAIN, periodsFor, periodsInRange,
   zoomLabel, pacePrevPeriod, bucketize, resolveTarget, fmtMetric,
@@ -285,7 +285,7 @@ export default function Performance() {
   const scopeName = scope.type === 'org' ? 'Entire Company'
     : scope.type === 'office' ? (offices.find(o => o.toLowerCase() === scope.name) ?? scope.name)
     : scope.id === 'unassigned' ? 'Unassigned'
-    : (usersById[scope.id]?.name ? (scope.type === 'team' ? `${usersById[scope.id].name}'s Team` : usersById[scope.id].name) : '—')
+    : (usersById[scope.id]?.name ? (scope.type === 'team' ? teamLabel(usersById[scope.id]) : usersById[scope.id].name) : '—')
 
   const grainDef = GRAINS.find(g => g.key === grain) ?? GRAINS[1]
 
@@ -408,7 +408,7 @@ export default function Performance() {
       if (mode === 'office') return k === '_none' ? 'No office' : (offices.find(o => o.toLowerCase() === k) ?? k)
       if (k === 'unassigned') return 'Unassigned'
       const u = usersById[k]
-      return u ? `${u.name.split(' ')[0]}'s Team${headsSet.has(k) ? '' : ' (former)'}` : 'Former team'
+      return u ? `${teamLabel(u)}${headsSet.has(k) ? '' : ' (former)'}` : 'Former team'
     }
     const series = Object.keys(byEnt).map((k, i) => ({ key: k, name: entName(k), color: PALETTE[i % PALETTE.length] }))
     return { rows: periods.map(p => rowByPeriod[p.key]), series }
@@ -454,8 +454,9 @@ export default function Performance() {
       let goal = resolveTarget(targets, { scopeType: 'team', subject: k, metric: 'revenue', grain: headerGrain, periodStart: curPeriod.from })
       if (goal == null && headerGrain === 'month') goal = repGoals.find(g => g.scope === 'team' && g.subject_id === k)?.target ?? null
       const u = usersById[k]
-      const name = k === 'unassigned' ? 'Unassigned' : u ? `${u.name}${headsSet.has(k) ? '' : ' (former)'}` : 'Former team'
-      return { key: k, name, shortName: name.split(' ')[0], ...b, moAvgRevenue, moAvgDeals, goal, goalPct: goal > 0 ? (b.revenue / goal) * 100 : null }
+      const name = k === 'unassigned' ? 'Unassigned' : u ? `${teamLabel(u)}${headsSet.has(k) ? '' : ' (former)'}` : 'Former team'
+      const shortName = k === 'unassigned' ? 'Unassigned' : u ? teamShortLabel(u) : 'Former'
+      return { key: k, name, shortName, ...b, moAvgRevenue, moAvgDeals, goal, goalPct: goal > 0 ? (b.revenue / goal) * 100 : null }
     })
       // Current head teams always stay (zeros included) so the row never
       // vanishes on a quiet period; historical keys only appear with activity.
@@ -596,7 +597,7 @@ export default function Performance() {
       const lead = usersById[tk]
       return {
         key: tk,
-        name: tk === 'unassigned' ? 'No Team' : lead ? `${lead.name}'s Team` : 'Former Team',
+        name: tk === 'unassigned' ? 'No Team' : lead ? teamLabel(lead) : 'Former Team',
         color: teamCompare.find(t => t.key === tk)?.color ?? '#6b7280',
         rows,
         revenue: rows.reduce((s, r) => s + r.revenue, 0),
@@ -692,7 +693,7 @@ export default function Performance() {
     if (t.scope === 'org') return 'Company'
     if (t.scope === 'office') return offices.find(o => o.toLowerCase() === t.subject) ?? t.subject
     const u = usersById[t.subject]
-    return u ? (t.scope === 'team' ? `${u.name}'s Team` : u.name) : t.subject === 'unassigned' ? 'Unassigned' : '—'
+    return u ? (t.scope === 'team' ? teamLabel(u) : u.name) : t.subject === 'unassigned' ? 'Unassigned' : '—'
   }
 
   if (loading) return <div className="p-8 text-white/40 text-sm">Loading…</div>
@@ -729,7 +730,7 @@ export default function Performance() {
             className="h-9 px-2 rounded-lg text-[12px] text-white focus:outline-none max-w-[240px]">
             <option value="org">Entire Company</option>
             <optgroup label="Teams">
-              {heads.map(h => <option key={h.id} value={`team:${h.id}`}>{h.name}'s Team</option>)}
+              {heads.map(h => <option key={h.id} value={`team:${h.id}`}>{teamLabel(h)}</option>)}
             </optgroup>
             <optgroup label="Offices">
               {offices.map(o => <option key={o} value={`office:${o.toLowerCase()}`}>{o}</option>)}
@@ -797,7 +798,7 @@ export default function Performance() {
                   style={{ background: '#2a2a2a', border: '1px solid #333' }}
                   className="h-9 px-2 rounded-lg text-[12px] text-white focus:outline-none max-w-[180px]">
                   <option value="">Select…</option>
-                  {tForm.scope === 'team' && heads.map(h => <option key={h.id} value={h.id}>{h.name}'s Team</option>)}
+                  {tForm.scope === 'team' && heads.map(h => <option key={h.id} value={h.id}>{teamLabel(h)}</option>)}
                   {tForm.scope === 'office' && offices.map(o => <option key={o} value={o.toLowerCase()}>{o}</option>)}
                   {tForm.scope === 'rep' && activeReps.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
                 </select>

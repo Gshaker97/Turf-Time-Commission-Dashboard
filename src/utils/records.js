@@ -9,7 +9,7 @@
 // ============================================================
 import { format } from 'date-fns'
 import { isCanceled } from './commission'
-import { saleOwnerId, teamOfSale } from './team'
+import { saleOwnerId, teamOfSale, teamLabel } from './team'
 import { weekStartOf } from './dateRanges'
 
 const monthLabel = (mk) => format(new Date(mk + '-15T12:00:00'), 'MMMM yyyy')
@@ -84,7 +84,7 @@ export function buildRecordBook(deals = [], { users = [], isAdmin = false, dataS
   const curWeek  = weekStartOf(todayISO)
   const ghosts = new Set(users.filter(u => u.ghost).map(u => u.id))
   const nameOf = (id) => users.find(u => u.id === id)?.name ?? '—'
-  const teamNameOf = (id) => (id === 'unassigned' ? 'Unassigned' : `${nameOf(id)}'s Team`)
+  const teamNameOf = (id) => (id === 'unassigned' ? 'Unassigned' : teamLabel(users.find(u => u.id === id)))
 
   const cm = {}, cw = {}, cd = {}
   const rm = {}, rw = {}, rd = {}

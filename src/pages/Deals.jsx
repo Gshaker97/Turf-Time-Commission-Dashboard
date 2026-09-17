@@ -4,7 +4,7 @@ import { Plus, Download, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import { fetchDeals, fetchUsers, fetchPayments, fetchTeamChanges, insertDeal, updateDeal, deleteDeal } from '../lib/db'
-import { headIdSet, saleOwnerId, buildChangesByProfile, teamOfSale } from '../utils/team'
+import { headIdSet, saleOwnerId, buildChangesByProfile, teamOfSale, teamLabel } from '../utils/team'
 import FilterBar from '../components/FilterBar'
 import KpiCard from '../components/KpiCard'
 import DealTable, { dealNeedsReview } from '../components/DealTable'
@@ -187,7 +187,7 @@ export default function Deals() {
   const scopeOptions = useMemo(() => {
     if (isAdmin) return [
       { value: '', label: 'All Teams' },
-      ...users.filter(u => headsSet.has(u.id)).map(h => ({ value: h.id, label: `${h.name}'s Team` })),
+      ...users.filter(u => headsSet.has(u.id)).map(h => ({ value: h.id, label: teamLabel(h) })),
     ]
     if (role === 'rep') return [{ value: 'mine', label: 'My deals' }, { value: '', label: 'All deals' }]
     return [{ value: '', label: 'All deals' }, { value: 'mine', label: 'My team' }]

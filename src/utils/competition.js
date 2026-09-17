@@ -13,7 +13,7 @@
 //                  closer share it by credit_split_pct = the closer's share).
 // ============================================================
 import { fmt, isCanceled } from './commission'
-import { teamOfSale } from './team'
+import { teamOfSale, teamLabel } from './team'
 
 export const COMP_TYPES = [
   { key: 'individual', label: 'Individual' },
@@ -251,7 +251,7 @@ export function competitionStandings(comp, deals = [], users = [], opts = {}) {
   if (comp.type === 'company') {
     entrants = users.filter(u => ['rep', 'manager', 'director', 'vp'].includes(u.role)).map(u => ({ id: u.id, name: u.name }))
   } else if (comp.type === 'team') {
-    entrants = (comp.participant_ids || []).map(id => ({ id, name: `${nameOf(id)}'s Team` }))
+    entrants = (comp.participant_ids || []).map(id => ({ id, name: teamLabel(users.find(u => u.id === id)) }))
   } else if (comp.type === 'squads') {
     entrants = (comp.sides || []).map(s => ({ id: s.id, name: s.name || 'Unnamed side' }))
   } else {

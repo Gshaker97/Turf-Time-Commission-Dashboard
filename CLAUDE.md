@@ -251,7 +251,11 @@ setup + deploy steps.
   estimates) / `deals_target` / `revenue_target`; RLS mirrors 024: anyone
   reads, writes by admins, the rep, or their direct manager); `044` adds
   `deals.bonus_split_pct` (setter's share of a `bonus_recipient='split'` rep
-  bonus, fraction; see the engine rules above). Do
+  bonus, fraction; see the engine rules above); `045` adds the BONUS-POD
+  tables `sales_teams` / `team_members` / `bonus_tiers` + the
+  `team_month_summary()` RPC (see "Bonus pods" below — a model SEPARATE from
+  the org chart); `046` adds `profiles.team_name` (a team's official name;
+  see "What teams exist"). Do
   not re-run `001`/`002` against a populated database.
 
 ## Leads / appointments (CRM feed, migration 041)
@@ -334,6 +338,25 @@ appointments they set or run; admins edit).
   `repProduction`/`estimateStreak`/`suggestFromRevenue` (Goals + Home, via the
   same opts), and Home's month tiles. The Performance page's manual estimate
   inputs auto-disable for weeks the feed owns and say so.
+
+## Bonus pods (`sales_teams`, migration 045 — route `/myteam`, nav "Bonus")
+
+A monthly team-revenue BONUS program, deliberately SEPARATE from the org
+chart (`utils/team.js` / `team_changes`): a "pod" has a `team_lead_user_id`
+who earns a bonus off the pod's monthly baseline revenue, and its lead can be
+a REP who heads nothing on the People chart (the seed is "Ricky's Team":
+Ricky lead + Bryan + Joseph). `sales_teams` (name, lead, active),
+`team_members` (date-effective `joined_at`/`left_at`), `bonus_tiers` (revenue
+→ bonus schedule; `team_id NULL` = default; seeded $200k→$2k … $700k→$12k).
+Revenue follows rule #1 (baseline, sale_date, canceled excluded, each deal
+once — setter if a member, else closer). **Access is enforced SERVER-SIDE**:
+RLS shows a pod only to its lead, admins, or the lead's manager/director/VP,
+and the SECURITY DEFINER `team_month_summary(team_id, year, month)` RPC
+re-checks the caller and raises 42501 before returning numbers.
+`src/pages/MyTeam.jsx` renders it (`fetchMyTeams`/`fetchTeamMonthSummary` in
+db.js); the Joseph Burgos row is a seeded PLACEHOLDER profile pending a real
+email + login. `sales_teams.name` is the POD's name, not an org-chart team's
+— see `teamLabel` for those.
 
 ## Records & big moments (`src/utils/records.js`)
 
@@ -501,6 +524,17 @@ alert, their deals still count in org totals + rep scope.
   merged into Team Jones), not by rewiring reports. Used by the Admin roster,
   Team page (comparison + card grouping + visibleReps), Dashboard
   breakdown/filter, and Weekly Stats — never re-derive headship inline.
+  **Team NAMES go through `teamLabel(head)` / `teamShortLabel(head)` in
+  `utils/team.js` — never build `"<name>'s Team"` inline.** The official name
+  is `profiles.team_name` on the HEAD (migration 046; teams are keyed by head
+  everywhere, so it rides along wherever `users` is loaded); empty = default
+  "<Head>'s Team". Edited inline on Admin → People by clicking the column
+  banner (`onRenameTeam` → `patchUser(head.id, { team_name })`). Consumers:
+  Dashboard team filter + breakdown rows, Deals scope options, Performance
+  (scope name, Teams-vs-Goal, chart series, target picker, rep-breakdown
+  groups), Goals + Leads team groups, Competitions (team-type entrants,
+  squad pickers), the Record Book's team records, and the People chart's
+  columns / Move-to menu / drawer.
 - **Deal manager auto-fill:** picking a setter/closer in the DealModal (and
   the sync's schedule pass) backfills a MISSING `manager_id` from that
   person's current reports-to — ONLY when that person's lead has the

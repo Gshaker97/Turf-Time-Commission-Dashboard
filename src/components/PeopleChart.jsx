@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Search, Plus, KeyRound, UserPlus, Pencil, Trash2, UserCheck, ShieldCheck,
   ChevronDown, GripVertical, MoreHorizontal,
 } from 'lucide-react'
-import { headIdSet } from '../utils/team'
+import { headIdSet, teamLabel } from '../utils/team'
 
 // ============================================================
 // The roster as an org chart (Admin → People). Per Keaton, replacing the
@@ -35,8 +35,23 @@ const initialsOf = (name) => (name || '?').split(' ').map(w => w[0]).slice(0, 2)
 
 export default function PeopleChart({
   users = [], teamChanges = [], hasUserAdmin = false, busyUser = '',
-  onAdd, onEdit, onDelete, onToggleActive, onResetLogin, onCreateLogin, onMove,
+  onAdd, onEdit, onDelete, onToggleActive, onResetLogin, onCreateLogin, onMove, onRenameTeam,
 }) {
+  // Inline rename of a team's official name (the column banner). Enter/blur
+  // commit, Escape cancels, empty reverts to the default "<Head>'s Team".
+  // The ref guards the Enter→blur double-fire so one edit is one write.
+  const [renaming, setRenaming] = useState(null)   // head id being renamed
+  const [draft, setDraft] = useState('')
+  const committing = useRef(false)
+  const startRename = (head) => { setRenaming(head.id); setDraft(head.team_name || '') }
+  const commitRename = (head) => {
+    if (renaming !== head.id || committing.current) return
+    committing.current = true
+    setRenaming(null)
+    const next = draft.trim()
+    if ((head.team_name || '') !== next) onRenameTeam?.(head, next || null)
+    setTimeout(() => { committing.current = false }, 0)
+  }
   const [search, setSearch] = useState('')
   const q = search.trim().toLowerCase()
   const match = (u) => !q || (u.name || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q)
@@ -129,7 +144,7 @@ export default function PeopleChart({
     onDrop: (e) => { e.preventDefault(); dropOn(colKey) },
   })
   // Targets for the phone "Move to…" menu: every team head + Unassigned.
-  const moveTargets = teams.map(t => ({ value: t.head.id, label: t.head.role === 'manager' ? `${t.head.name}'s team` : `${t.head.name}'s directs` }))
+  const moveTargets = teams.map(t => ({ value: t.head.id, label: teamLabel(t.head) }))
 
   // ── One person card ──
   function Person({ u, inTeam = true }) {
@@ -232,10 +247,26 @@ export default function PeopleChart({
             // initials bubble squeezed between a chevron and a count badge
             // read as an abbreviation). Role + admin/login badges sit under it.
             <div className="group relative min-w-0 flex-1 py-0.5">
-              <p className="text-[13.5px] font-bold text-white leading-tight break-words pr-1">{head.name}</p>
+              {/* The banner is the team's OFFICIAL NAME (profiles.team_name),
+                  editable right here — click it. Falls back to "<Head>'s Team". */}
+              {renaming === head.id ? (
+                <input autoFocus value={draft} onChange={e => setDraft(e.target.value)}
+                  placeholder={`${head.name}'s Team`}
+                  onKeyDown={e => { if (e.key === 'Enter') commitRename(head); if (e.key === 'Escape') setRenaming(null) }}
+                  onBlur={() => commitRename(head)}
+                  className="w-full h-7 px-2 rounded-lg text-[13px] font-bold text-white placeholder-white/25 focus:outline-none"
+                  style={{ background: '#242424', border: '1px solid rgba(0,184,148,0.5)' }} />
+              ) : (
+                <button type="button" onClick={() => startRename(head)}
+                  title={head.team_name ? 'Rename this team' : 'Give this team an official name'}
+                  className="text-left flex items-start gap-1.5 max-w-full pr-6">
+                  <span className={`text-[13.5px] font-bold leading-tight break-words ${head.team_name ? 'text-white' : 'text-white/80'}`}>{teamLabel(head)}</span>
+                  <Pencil size={10} className="mt-1 text-white/20 group-hover:text-teal flex-shrink-0 transition-colors" />
+                </button>
+              )}
               <p className="text-[10px] text-white/35 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                <span>Led by <span className="text-white/60">{head.name}</span></span>
                 <span className={`font-bold uppercase tracking-wide ${ROLE_COLOR[head.role] || 'text-white/40'}`}>{head.role}</span>
-                {meta && <span>· {meta}</span>}
                 {head.is_admin && head.role !== 'admin' && (
                   <span className="inline-flex items-center gap-0.5 text-[8.5px] font-bold uppercase tracking-wide px-1 rounded" style={{ color: '#00b894', border: '1px solid #00b89455' }}>
                     <ShieldCheck size={8} /> admin
@@ -320,8 +351,7 @@ export default function PeopleChart({
       <p className={label}>Teams</p>
       <div className="grid gap-2 md:gap-2.5 items-start" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 250px), 1fr))' }}>
         {teams.map(({ head, members }) => (
-          <Column key={head.id} colKey={head.id} head={head} people={members}
-            meta={head.role === 'manager' ? null : `led by their ${head.role}`} />
+          <Column key={head.id} colKey={head.id} head={head} people={members} />
         ))}
         <Column colKey="unassigned" title="Unassigned" meta="no team lead — drag them to a team" people={unassigned} tone="amber" />
       </div>
@@ -351,7 +381,7 @@ export default function PeopleChart({
                   <span className="text-[8.5px] font-bold uppercase tracking-wide px-1 rounded" style={{ color: '#f87171', border: '1px solid #f8717155' }}>deactivated</span>
                 </div>
                 <p className="text-[10px] text-white/30 truncate mt-0.5">
-                  {u.manager_id && nameOf(u.manager_id) ? `was on ${nameOf(u.manager_id)}'s team` : 'no team'} · {u.email}
+                  {u.manager_id && nameOf(u.manager_id) ? `was on ${teamLabel(users.find(x => x.id === u.manager_id))}` : 'no team'} · {u.email}
                 </p>
               </div>
               <button onClick={() => onToggleActive?.(u)} title="Restore site access — their deals and stats never left"

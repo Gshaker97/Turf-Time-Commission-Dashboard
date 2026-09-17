@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { X, Plus, Trash2 } from 'lucide-react'
 import { COMP_TYPES, COMP_METRICS, COMP_GOAL_MODES, COMP_CREDIT_MODES } from '../utils/competition'
-import { headIdSet } from '../utils/team'
+import { headIdSet, teamLabel } from '../utils/team'
 import { weeksInRange } from '../utils/dateRanges'
 
 const inputCls = 'w-full px-3 py-2 rounded-lg text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-teal/40 transition-colors'
@@ -250,7 +250,7 @@ export default function CompetitionModal({ competition, users = [], isAdmin = fa
                             <button key={h.id} type="button" onClick={() => patchSide(s.id, { team_ids: toggleIn(s.team_ids, h.id) })}
                               className={`px-2 py-1 rounded-full text-[11px] font-semibold transition-colors ${on ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}
                               style={on ? undefined : { border: '1px solid #3a3a3a' }}>
-                              {h.name.split(' ')[0]}'s Team
+                              {teamLabel(h)}
                             </button>
                           )
                         })}
@@ -325,7 +325,7 @@ export default function CompetitionModal({ competition, users = [], isAdmin = fa
                         style={on ? { background: '#00b894' } : { border: '1.5px solid rgba(255,255,255,0.3)' }}>
                         {on && <span className="text-dark text-[10px] font-bold">✓</span>}
                       </span>
-                      <span className="text-[13px] text-white/85">{u.name}{form.type === 'team' ? "'s Team" : ''}</span>
+                      <span className="text-[13px] text-white/85">{form.type === 'team' ? teamLabel(u) : u.name}</span>
                       <span className="text-[10px] text-white/30 ml-auto uppercase">{u.role}</span>
                     </button>
                   )
@@ -340,7 +340,7 @@ export default function CompetitionModal({ competition, users = [], isAdmin = fa
                   <div className="mt-2 space-y-1.5">
                     {form.participant_ids.map(id => (
                       <div key={id} className="flex items-center gap-2">
-                        <span className="text-[12px] text-white/60 flex-1 truncate">{nameOf(id)}{form.type === 'team' ? "'s Team" : ''}</span>
+                        <span className="text-[12px] text-white/60 flex-1 truncate">{form.type === 'team' ? teamLabel(users.find(x => x.id === id)) : nameOf(id)}</span>
                         <input type="number" step="any" value={form.manual_scores?.[id] ?? ''}
                           onChange={e => setManual(id, e.target.value)} placeholder="auto"
                           style={inputStyle} className="w-28 px-2 py-1.5 rounded-lg text-[12px] text-white text-right focus:outline-none" />
