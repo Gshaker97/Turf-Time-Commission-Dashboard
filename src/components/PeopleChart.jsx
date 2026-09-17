@@ -247,8 +247,11 @@ export default function PeopleChart({
             // initials bubble squeezed between a chevron and a count badge
             // read as an abbreviation). Role + admin/login badges sit under it.
             <div className="group relative min-w-0 flex-1 py-0.5">
-              {/* The banner is the team's OFFICIAL NAME (profiles.team_name),
-                  editable right here — click it. Falls back to "<Head>'s Team". */}
+              {/* The header is ONLY the team's name (profiles.team_name, editable
+                  right here — click it; falls back to "<Head>'s Team"). The
+                  manager is a normal card pinned to the top of the list below,
+                  with the same hover actions as every rep — per Keaton, so
+                  editing them isn't a hunt for a tiny control. */}
               {renaming === head.id ? (
                 <input autoFocus value={draft} onChange={e => setDraft(e.target.value)}
                   placeholder={`${head.name}'s Team`}
@@ -264,21 +267,6 @@ export default function PeopleChart({
                   <Pencil size={12} className="mt-0.5 text-white/25 group-hover:text-teal flex-shrink-0 transition-colors" />
                 </button>
               )}
-              <p className="text-[10px] text-white/35 mt-0.5 flex items-center gap-1.5 flex-wrap">
-                <span>Led by <span className="text-white/60">{head.name}</span></span>
-                <span className={`font-bold uppercase tracking-wide ${ROLE_COLOR[head.role] || 'text-white/40'}`}>{head.role}</span>
-                {head.is_admin && head.role !== 'admin' && (
-                  <span className="inline-flex items-center gap-0.5 text-[8.5px] font-bold uppercase tracking-wide px-1 rounded" style={{ color: '#00b894', border: '1px solid #00b89455' }}>
-                    <ShieldCheck size={8} /> admin
-                  </span>
-                )}
-                {!head.auth_id && <span className="text-[8.5px] font-bold uppercase tracking-wide px-1 rounded" style={{ color: '#f59e0b', border: '1px solid #f59e0b55' }}>no login</span>}
-              </p>
-              {/* The lead's OWN actions (edit / login / delete) open from the ⋯
-                  beside the count badge — never a hover overlay here. The
-                  overlay floated over the team banner, so the pencil you
-                  reached for to rename the team was the manager's Edit. */}
-              {menuFor === head.id && <div className="flex items-center gap-1.5 pt-1.5"><Actions u={head} /></div>}
             </div>
           ) : (
             <div className="min-w-0 flex-1 flex items-center gap-2 py-1">
@@ -288,16 +276,10 @@ export default function PeopleChart({
             </div>
           )}
           <span className="text-[11px] font-bold text-white/60 px-2 py-0.5 rounded-full flex-shrink-0" style={{ background: '#242424', border: '1px solid #2a2a2a' }}>{people.length}</span>
-          {head && (
-            <button onClick={() => setMenuFor(menuFor === head.id ? null : head.id)} aria-expanded={menuFor === head.id}
-              title={`${head.name} — edit, login, delete`}
-              className="p-1 -mr-1 rounded-lg text-white/30 hover:text-white flex-shrink-0">
-              <MoreHorizontal size={15} />
-            </button>
-          )}
         </div>
         {!closed && (
           <div>
+            {head && match(head) && <Person u={head} inTeam={false} />}
             {isOver && (
               <div className="m-2 h-10 rounded-lg flex items-center justify-center text-[11px] font-semibold"
                 style={{ border: '1.5px dashed rgba(0,184,148,0.6)', color: '#00b894', background: 'rgba(0,184,148,0.06)' }}>
