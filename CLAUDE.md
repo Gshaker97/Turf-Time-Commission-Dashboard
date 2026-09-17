@@ -501,7 +501,13 @@ alert, their deals still count in org totals + rep scope.
   `active`), but **all their deals/stats stay and still count** — never filter
   aggregates by `active`. When user admin is configured (SUPABASE_SERVICE_KEY
   on the site service), deactivating also
-  bans their auth login so a live token can't keep them in.
+  bans their auth login so a live token can't keep them in. **Reactivation
+  is the labeled "Reactivate" button on the deactivated row** (same
+  `toggleActive` → `set_active true` lifts the ban); a "Deactivated · N"
+  filter pill next to the roster search isolates them. The old grey toggle
+  on a 50%-faded row read as a disabled control, so nobody could find it.
+  Deactivated people stay listed in their team's section (dimmed) — never
+  filtered out of `fetchUsers`, since their deals still count everywhere.
 
 ## Permissions model — who can SEE vs CHANGE
 

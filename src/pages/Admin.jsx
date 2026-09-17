@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Pencil, Trash2, RefreshCw, Activity, KeyRound, UserPlus, Search, ShieldCheck } from 'lucide-react'
+import { Plus, Pencil, Trash2, RefreshCw, Activity, KeyRound, UserPlus, Search, ShieldCheck, UserCheck } from 'lucide-react'
 import {
   fetchUsers, insertUser, updateUser, deleteUser,
   userAdmin, userAdminConfigured, fetchTeamChanges, fetchLeads,
@@ -260,13 +260,20 @@ export default function Admin() {
   const card  = { background: '#242424', border: '1px solid #2e2e2e' }
   const [search, setSearch] = useState('')
   const [showLog, setShowLog] = useState(false)
+  // Deactivated people sit dimmed in their old team's section, which made
+  // them easy to miss in a long roster. This isolates them so reactivating
+  // someone is a two-click job, not a hunt.
+  const [onlyInactive, setOnlyInactive] = useState(false)
+  const inactiveCount = users.filter(u => u.active === false).length
 
   // ── Roster grouping: leadership → each team (under its lead) → unassigned.
   // A "team lead" is anyone people report to (manager_id) — manager, director,
   // or VP alike — plus every manager (even with no reps yet).
   const byName = (a, b) => (a.name || '').localeCompare(b.name || '')
   const q = search.trim().toLowerCase()
-  const match = (u) => !q || (u.name || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q)
+  const match = (u) =>
+    (!onlyInactive || u.active === false) &&
+    (!q || (u.name || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q))
   const reportsTo = {}
   users.forEach(u => { if (u.manager_id) (reportsTo[u.manager_id] ||= []).push(u) })
   // Shared head rule (utils/team.js): direct reports make a team; a manager
@@ -334,11 +341,23 @@ export default function Admin() {
           ) : (
             <span className="text-[10px] text-white/20 hidden md:inline" title="No auth login — use the create-login button or Studio">no login</span>
           )}
-          <button onClick={() => toggleActive(u)} title={u.active === false ? 'Deactivated — click to reactivate' : 'Active — click to deactivate'}
-            className="w-9 h-5 rounded-full flex items-center px-0.5 transition-colors flex-shrink-0"
-            style={{ background: u.active === false ? '#3a3a3a' : '#00b894', justifyContent: u.active === false ? 'flex-start' : 'flex-end' }}>
-            <span className="w-4 h-4 rounded-full bg-white block" />
-          </button>
+          {u.active === false ? (
+            // A grey "off" toggle on a half-faded row read as a disabled
+            // control, not an action — so nobody could find how to bring a
+            // rep back. Say it in words. (Reactivating also lifts the login
+            // ban via set_active, same handler as before.)
+            <button onClick={() => toggleActive(u)} title="Restore site access — their deals and stats never left"
+              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold text-teal transition-colors hover:bg-teal/10"
+              style={{ border: '1px solid #00b89466' }}>
+              <UserCheck size={11} /> Reactivate
+            </button>
+          ) : (
+            <button onClick={() => toggleActive(u)} title="Active — click to deactivate"
+              className="w-9 h-5 rounded-full flex items-center px-0.5 transition-colors flex-shrink-0"
+              style={{ background: '#00b894', justifyContent: 'flex-end' }}>
+              <span className="w-4 h-4 rounded-full bg-white block" />
+            </button>
+          )}
           <button onClick={() => { setEditUser(u); setUserModal(true) }} title="Edit"
             className="p-1.5 rounded-lg text-white/25 hover:text-teal hover:bg-teal/10 transition-colors">
             <Pencil size={14} />
@@ -391,6 +410,15 @@ export default function Admin() {
                 style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }} />
             </div>
             <p className="text-[12px] text-white/40">{users.length} users</p>
+            {inactiveCount > 0 && (
+              <button onClick={() => setOnlyInactive(v => !v)} aria-pressed={onlyInactive}
+                title={onlyInactive ? 'Show everyone' : 'Show only deactivated people'}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors ${
+                  onlyInactive ? 'text-red-300' : 'text-white/40 hover:text-white'}`}
+                style={{ border: `1px solid ${onlyInactive ? '#f8717166' : '#2a2a2a'}`, background: onlyInactive ? '#f871711a' : '#1e1e1e' }}>
+                Deactivated · {inactiveCount}
+              </button>
+            )}
             <button onClick={() => { setEditUser(null); setUserModal(true) }}
               className="ml-auto flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-bold text-dark bg-teal transition-colors">
               <Plus size={13} /> Add User
