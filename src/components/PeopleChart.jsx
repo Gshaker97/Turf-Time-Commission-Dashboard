@@ -258,10 +258,10 @@ export default function PeopleChart({
                   style={{ background: '#242424', border: '1px solid rgba(0,184,148,0.5)' }} />
               ) : (
                 <button type="button" onClick={() => startRename(head)}
-                  title={head.team_name ? 'Rename this team' : 'Give this team an official name'}
-                  className="text-left flex items-start gap-1.5 max-w-full pr-6">
+                  title={head.team_name ? 'Rename team' : 'Name this team'}
+                  className="text-left flex items-start gap-1.5 max-w-full">
                   <span className={`text-[13.5px] font-bold leading-tight break-words ${head.team_name ? 'text-white' : 'text-white/80'}`}>{teamLabel(head)}</span>
-                  <Pencil size={10} className="mt-1 text-white/20 group-hover:text-teal flex-shrink-0 transition-colors" />
+                  <Pencil size={12} className="mt-0.5 text-white/25 group-hover:text-teal flex-shrink-0 transition-colors" />
                 </button>
               )}
               <p className="text-[10px] text-white/35 mt-0.5 flex items-center gap-1.5 flex-wrap">
@@ -274,15 +274,11 @@ export default function PeopleChart({
                 )}
                 {!head.auth_id && <span className="text-[8.5px] font-bold uppercase tracking-wide px-1 rounded" style={{ color: '#f59e0b', border: '1px solid #f59e0b55' }}>no login</span>}
               </p>
-              <div className="hidden md:group-hover:flex absolute right-0 top-1/2 -translate-y-1/2 items-center gap-0.5 rounded-lg pl-1"
-                style={{ background: '#1e1e1e', boxShadow: '-16px 0 14px -6px #1e1e1e' }}>
-                <Actions u={head} />
-              </div>
-              <button onClick={() => setMenuFor(menuFor === head.id ? null : head.id)} aria-expanded={menuFor === head.id}
-                className="md:hidden absolute right-0 top-0 p-1 rounded-lg text-white/40 hover:text-white">
-                <MoreHorizontal size={15} />
-              </button>
-              {menuFor === head.id && <div className="md:hidden flex items-center gap-1.5 pt-1.5"><Actions u={head} /></div>}
+              {/* The lead's OWN actions (edit / login / delete) open from the ⋯
+                  beside the count badge — never a hover overlay here. The
+                  overlay floated over the team banner, so the pencil you
+                  reached for to rename the team was the manager's Edit. */}
+              {menuFor === head.id && <div className="flex items-center gap-1.5 pt-1.5"><Actions u={head} /></div>}
             </div>
           ) : (
             <div className="min-w-0 flex-1 flex items-center gap-2 py-1">
@@ -292,6 +288,13 @@ export default function PeopleChart({
             </div>
           )}
           <span className="text-[11px] font-bold text-white/60 px-2 py-0.5 rounded-full flex-shrink-0" style={{ background: '#242424', border: '1px solid #2a2a2a' }}>{people.length}</span>
+          {head && (
+            <button onClick={() => setMenuFor(menuFor === head.id ? null : head.id)} aria-expanded={menuFor === head.id}
+              title={`${head.name} — edit, login, delete`}
+              className="p-1 -mr-1 rounded-lg text-white/30 hover:text-white flex-shrink-0">
+              <MoreHorizontal size={15} />
+            </button>
+          )}
         </div>
         {!closed && (
           <div>
