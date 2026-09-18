@@ -457,12 +457,17 @@ async function loadRosterResolver() {
 // A mapping may name SEVERAL paths separated by spaces — their values are
 // joined with a space, so a CRM that splits "first name" / "last name"
 // (very common) still fills one Customer Name field.
-function makePicker(fieldMap) {
+// `defaults` = per-field candidate paths tried IN ORDER when the admin hasn't
+// mapped that field — how a known CRM shape (RepCard) works out of the box.
+function makePicker(fieldMap, defaults = {}) {
   return (item, field) => {
     const mapped = fieldMap[field]
     if (!mapped) {
-      const v = item[field]
-      return v === '' || v === undefined ? null : v
+      for (const path of [field, ...(defaults[field] || [])]) {
+        const v = atPath(item, path)
+        if (v !== '' && v !== undefined && v !== null) return v
+      }
+      return null
     }
     const parts = String(mapped).trim().split(/\s+/)
       .map(p => atPath(item, p))
@@ -579,6 +584,22 @@ async function ingestLeads(rawBody) {
 // The activity day is the ARIZONA calendar day of the timestamp (the DB does
 // this for knocks; summaries send a plain date).
 const FIELD_KEYS = ['field_activity_field_map']
+// RepCard's door-knock event shape, seen live 2026-09-18: one contact object
+// per knock — `id`, `createdAt` ("2026-09-18 23:07:45+00:00"), `user`/`owner`
+// { name, email (personal — name is what matches), team }, `hasDoorKnock` /
+// `verifiedDoorKnock` = 1. These paths are tried when the admin hasn't mapped
+// the field, so the feed works the moment it is pointed here; an admin
+// mapping always wins.
+const FIELD_DEFAULTS = {
+  external_id:  ['id', 'eventId', 'event_id'],
+  rep_email:    ['user.email', 'owner.email', 'rep.email'],
+  rep_name:     ['user.name', 'owner.name', 'rep.name', 'userName'],
+  knock_at:     ['createdAt', 'created_at', 'knockedAt', 'timestamp'],
+  knock_flag:   ['hasDoorKnock', 'verifiedDoorKnock', 'isDoorKnock'],
+  activity_date: ['date', 'day'],
+  doors_knocked: ['doors', 'doorsKnocked', 'door_knocks'],
+  // no office default: RepCard's `user.location` is "Corporate Office", not a sales office
+}
 async function loadFieldConfig() {
   try {
     const rows = await restGet(`/rest/v1/app_settings?select=key,value&key=in.(${FIELD_KEYS.join(',')})`)
@@ -609,11 +630,15 @@ async function ingestFieldActivity(rawBody) {
 
   const { fieldMap } = await loadFieldConfig()
   await recordLastPayload(items[0], 'field_last_payload')
-  const pick = makePicker(fieldMap)
+  const pick = makePicker(fieldMap, FIELD_DEFAULTS)
   const resolvePerson = await loadRosterResolver()
 
   const summaries = [], knocks = [], unmatched = new Set(), skipped = []
   for (const i of items) {
+    // RepCard posts the same contact shape for every door interaction; only
+    // events flagged as a knock count. No flag at all = trust the webhook.
+    const flag = pick(i, 'knock_flag')
+    if (flag !== null && ['0', 'false', 'no', 'n'].includes(String(flag).trim().toLowerCase())) { skipped.push('not a door knock'); continue }
     const email = pick(i, 'rep_email'), name = pick(i, 'rep_name')
     const profileId = resolvePerson(email, name)
     if ((email || name) && !profileId) unmatched.add(name || email)
