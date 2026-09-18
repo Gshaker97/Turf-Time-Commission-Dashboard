@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { startOfWeek, endOfWeek, addDays, format as dfFormat } from "date-fns";
 import { Trophy, TrendingUp, Award, Target, ClipboardList, Percent, DollarSign, Wallet, Layers, Flame, Clock, Share2, Check, X } from "lucide-react";
-import { fetchDeals, fetchCompetitions, fetchUsers, fetchWeeklyStats, fetchPersonalGoals, fetchLeads } from "../lib/db";
+import { fetchDeals, fetchCompetitions, fetchUsers, fetchWeeklyStats, fetchPersonalGoals, fetchLeads, fetchTeamChanges } from "../lib/db";
+import { headIdSet, teamKeyFor, buildChangesByProfile } from "../utils/team";
 import { estimatesFor } from "../utils/estimates";
 import { currentPeriods, resolveGoal, goalIsSet, repProduction, periodElapsed, metricProgress, estimateStreak } from "../utils/goals";
 import { onClickUnlessSelecting } from "../utils/selection";
@@ -81,18 +82,28 @@ export default function Home() {
   const viewingOther = !!viewId && viewId !== profile?.id;
 
   const [personalGoals, setPersonalGoals] = useState([]);
+  const [teamChanges, setTeamChanges] = useState([]);
   useEffect(() => {
-    Promise.all([fetchDeals(), fetchCompetitions(), fetchUsers(), fetchWeeklyStats(), fetchPersonalGoals(), fetchLeads()])
-      .then(([{ data: d }, { data: c }, { data: u }, { data: w }, { data: pg }, { data: ld }]) => {
+    Promise.all([fetchDeals(), fetchCompetitions(), fetchUsers(), fetchWeeklyStats(), fetchPersonalGoals(), fetchLeads(), fetchTeamChanges()])
+      .then(([{ data: d }, { data: c }, { data: u }, { data: w }, { data: pg }, { data: ld }, { data: tc }]) => {
         setAllDeals((d ?? []).filter(x => !isCanceled(x)));
         setComps(c || []); setUsers(u || []); setWeekly(w || []);
         setPersonalGoals(pg || []);
         setLeads(ld || []);
+        setTeamChanges(tc || []);
         setLoading(false);
       });
   }, []);
 
   const ghostIds = useMemo(() => new Set(users.filter(u => u.ghost).map(u => u.id)), [users]);
+  // Same date-effective team context the Competitions page scores with, so
+  // the "Your competitions" card can never show a different rank than the
+  // leaderboard it links to.
+  const teamCtx = useMemo(() => ({
+    usersById: Object.fromEntries(users.map(u => [u.id, u])),
+    heads: headIdSet(users),
+    changesByProfile: buildChangesByProfile(teamChanges),
+  }), [users, teamChanges]);
   const monthDeals = useMemo(() => allDeals.filter(d => d.sale_date?.startsWith(mr.key)), [allDeals, mr.key]);
 
   const setterRevForMonth = (key) => allDeals
@@ -189,17 +200,22 @@ export default function Home() {
   const myComps = useMemo(() => {
     const today = dfFormat(new Date(), "yyyy-MM-dd");   // local, not UTC
     const hiddenIds = isAdmin ? null : ghostIds;
+    // Team Average rows match by the viewer's RESOLVED team key (same grouping
+    // the engine scores by); a rep left out of the contest isn't in it.
+    const myTeamKey = viewUser ? teamKeyFor(viewUser, teamCtx.heads) : null;
     return comps
       .filter(c => competitionStatus(c, today) === "active")
       .map(c => {
-        const standings = competitionStandings(c, allDeals, users, { hiddenIds });
-        const mine = standings.find(e => e.id === me || (c.type === "team" && e.id === viewUser?.manager_id));
+        const standings = competitionStandings(c, allDeals, users, { hiddenIds, teamCtx });
+        const mine = standings.find(e => e.id === me
+          || (c.type === "team" && e.id === viewUser?.manager_id)
+          || (c.type === "team_avg" && e.id === myTeamKey && !(c.excluded_ids || []).includes(me)));
         if (!mine) return null;
         const ahead = mine.rank > 1 ? standings[mine.rank - 2] : null;
         return { comp: c, mine, count: standings.length, leader: standings[0], ahead, gap: ahead ? ahead.score - mine.score : 0 };
       })
       .filter(Boolean);
-  }, [comps, allDeals, users, me, viewUser, isAdmin, ghostIds]);
+  }, [comps, allDeals, users, me, viewUser, isAdmin, ghostIds, teamCtx]);
 
   // Tap-to-view breakdown for a stat tile.
   const [drill, setDrill] = useState(null);
@@ -628,11 +644,11 @@ export default function Home() {
                     </span>
                   </div>
                   <div className="text-[11px] text-white/40 mt-1">
-                    You: <span className="text-white/70 font-semibold">{fmtScore(mine.score, comp.metric)}</span>
+                    {comp.type === "team_avg" ? "Your team: " : "You: "}<span className="text-white/70 font-semibold">{fmtScore(mine.score, comp.metric, comp.type === "team_avg")}</span>
                     {target > 0
-                      ? <> · target {fmtScore(target, comp.metric)}</>
+                      ? <> · target {fmtScore(target, comp.metric, comp.type === "team_avg")}</>
                       : ahead
-                        ? <> · <span className="text-amber-300">{fmtScore(gap, comp.metric)}</span> to pass {ahead.name}</>
+                        ? <> · <span className="text-amber-300">{fmtScore(gap, comp.metric, comp.type === "team_avg")}</span> to pass {ahead.name}</>
                         : <> · 🏆 leading</>}
                   </div>
                   <div className="h-1.5 rounded-full overflow-hidden mt-2" style={{ background: "#ffffff12" }}>

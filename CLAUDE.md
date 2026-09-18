@@ -255,8 +255,41 @@ setup + deploy steps.
   tables `sales_teams` / `team_members` / `bonus_tiers` + the
   `team_month_summary()` RPC (see "Bonus pods" below — a model SEPARATE from
   the org chart); `046` adds `profiles.team_name` (a team's official name;
-  see "What teams exist"). Do
-  not re-run `001`/`002` against a populated database.
+  see "What teams exist"); `047` adds `competitions.excluded_ids` (jsonb
+  array of profile ids) for the **Team Average (per rep)** competition type
+  `team_avg` — entrants are TEAM HEADS (any `headIdSet` head, picked in the
+  modal as "Teams competing"), score = the team's metric (deals or baseline
+  revenue, per `credit_mode`, each deal counted ONCE per team like `team`/
+  `squads`) ÷ its REP COUNT. The divisor = active date-effective members as
+  of `min(end_date, today)` ∪ everyone who earned credit in the window (a
+  rep who moved mid-contest counts on BOTH teams, for the deals they made on
+  each) − `excluded_ids`. Excluding a person removes them from BOTH sides —
+  their deals and their headcount — which is how a part-timer is pulled
+  from a contest without warping the average (per Keaton); a deal they
+  shared with a counting teammate still counts via that teammate. The head
+  counts as a rep by default; exclude them via the same chips if they don't
+  sell. Membership is DATE-EFFECTIVE via `teamOfSale` when `opts.teamCtx`
+  is passed (Competitions page AND Home's "my competitions" card — Home
+  fetches `team_changes` too so the two never disagree on rank); without a
+  teamCtx the fallback is the CURRENT grouping via `teamKeyFor` — never raw
+  `manager_id`, which put a manager who reports to a director on both
+  teams. **`teamAvgRoster(headId, deals, users, comp, teamCtx)` is the ONE
+  roster rule** (exported): the engine divides by it minus exclusions, and
+  the modal's "Who counts toward the average" chips render FROM it (it gets
+  `deals` + `teamCtx` props), so "N of M count" always equals the card's
+  "÷ N reps"; deactivated earners are listed with a tag. Known caveat:
+  deactivation isn't date-logged, so a deactivated member who sold nothing
+  in the window drops out of a finished contest's divisor too. Stale
+  exclusions (team unpicked, rep moved) show as an "Also left out" row and
+  are pruned to picked rosters on save; switching type prunes
+  `participant_ids` to the new pick list. A rep in `excluded_ids` gets no
+  "you"/Home-card highlight for that contest (`isMine`/`myComps` match
+  team rows by `teamKeyFor`). Competitions `handleSave` surfaces a failed
+  write as a toast instead of closing the modal. Entries carry `total`
+  + `count` so the page renders "12 deals ÷ 4 reps" under the average, and
+  `fmtScore(v, metric, perRep)` appends " / rep" (`perRepComp(comp)`).
+  `excluded_ids` is saved only for this type, `[]` otherwise.
+  Do not re-run `001`/`002` against a populated database.
 
 ## Leads / appointments (CRM feed, migration 041)
 
