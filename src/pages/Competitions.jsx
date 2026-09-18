@@ -7,7 +7,7 @@ import { fetchCompetitions, fetchDeals, fetchUsers, fetchTeamChanges, insertComp
 import {
   competitionStandings, competitionStatus, competitionEntryDeals,
   compRounds, roundStatus, roundStandings, roundWinner,
-  typeLabel, metricLabel, creditLabel, fmtScore,
+  typeLabel, metricLabel, creditLabel, fmtScore, perRepComp,
 } from '../utils/competition'
 import { headIdSet, teamKeyFor, buildChangesByProfile } from '../utils/team'
 import { fmt } from '../utils/commission'
@@ -34,6 +34,9 @@ const RANK_COLOR = { 1: '#fbbf24', 2: '#cbd5e1', 3: '#fb923c' }
 
 function StandRow({ e, comp, deals, users, canManage, mine, teamCtx }) {
   const metric = comp.metric
+  // Team Average: the score is an AVERAGE (total ÷ rep count), so the row
+  // shows the math under it instead of the deals-type revenue sub-line.
+  const perRep = perRepComp(comp)
   const [open, setOpen] = useState(false)
   const rc = RANK_COLOR[e.rank]
   const hasTarget = e.target > 0
@@ -60,8 +63,10 @@ function StandRow({ e, comp, deals, users, canManage, mine, teamCtx }) {
             style={{ color: '#00b894', border: '1px solid #00b89455' }}>🎉 Earned</span>
         )}
         <span className="text-[13px] font-bold text-white whitespace-nowrap">
-          {fmtScore(e.score, metric)}
-          {metric === 'deals' && e.revenue > 0 && <span className="text-white/40 font-normal text-[11px]"> · {fmt(e.revenue)}</span>}
+          {fmtScore(e.score, metric, perRep)}
+          {perRep
+            ? (!e.manual && <span className="text-white/40 font-normal text-[11px]"> · {fmtScore(e.total, metric)} ÷ {e.count} rep{e.count === 1 ? '' : 's'}</span>)
+            : (metric === 'deals' && e.revenue > 0 && <span className="text-white/40 font-normal text-[11px]"> · {fmt(e.revenue)}</span>)}
         </span>
         {clickable && <ChevronDown size={12} className={`text-white/25 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />}
       </div>
@@ -72,7 +77,7 @@ function StandRow({ e, comp, deals, users, canManage, mine, teamCtx }) {
             <div className="h-full rounded-full transition-all"
               style={{ width: `${(e.progress || 0) * 100}%`, background: e.earned ? '#00b894' : '#2dd4bf' }} />
           </div>
-          <span className="text-[10px] text-white/30 whitespace-nowrap">of {fmtScore(e.target, metric)}</span>
+          <span className="text-[10px] text-white/30 whitespace-nowrap">of {fmtScore(e.target, metric, perRep)}</span>
         </div>
       )}
       {open && (
@@ -108,10 +113,11 @@ function StandRow({ e, comp, deals, users, canManage, mine, teamCtx }) {
                 )
               })}
               <div className="flex items-center justify-between px-1 pt-1.5 mt-1 border-t border-white/5 text-[11px]">
-                <span className="font-bold text-white/50 uppercase tracking-wider text-[9px]">Total</span>
+                <span className="font-bold text-white/50 uppercase tracking-wider text-[9px]">{perRep ? 'Average' : 'Total'}</span>
                 <span className="font-bold text-teal">
-                  {fmtScore(e.score, metric)}
-                  {metric === 'deals' && (
+                  {perRep && <span className="text-white/50 font-semibold">{fmtScore(e.total, metric)} ÷ {e.count} rep{e.count === 1 ? '' : 's'} = </span>}
+                  {fmtScore(e.score, metric, perRep)}
+                  {!perRep && metric === 'deals' && (
                     <span className="text-white/50 font-semibold"> · {fmt(entryDeals.reduce((s, x) => s + (x.canceled ? 0 : (Number(x.deal.baseline_revenue) || 0) * x.credit), 0))}</span>
                   )}
                 </span>
@@ -153,7 +159,7 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, te
   const myTeamKey = me ? teamKeyFor(me, teamCtx?.heads ?? new Set()) : null
   const isMine = (e) =>
     e.id === profileId ||
-    (comp.type === 'team' && me?.manager_id === e.id) ||
+    ((comp.type === 'team' || comp.type === 'team_avg') && me?.manager_id === e.id) ||
     (comp.type === 'squads' && (comp.sides || []).some(s => s.id === e.id &&
       ((s.rep_ids || []).includes(profileId) || (s.team_ids || []).includes(myTeamKey))))
   const myEntry = standings.find(isMine)
@@ -175,7 +181,12 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, te
             </p>
             <p className="text-[10px] text-white/30 mt-0.5">
               {creditLabel(comp.credit_mode)}
-              {comp.goal_mode === 'target' && comp.goal_target ? ` · Goal ${fmtScore(Number(comp.goal_target), comp.metric)}` : ''}
+              {comp.goal_mode === 'target' && comp.goal_target ? ` · Goal ${fmtScore(Number(comp.goal_target), comp.metric, perRepComp(comp))}` : ''}
+              {perRepComp(comp) && (comp.excluded_ids || []).length > 0 && (
+                <span title={(comp.excluded_ids || []).map(id => users.find(u => u.id === id)).filter(u => u && (isAdmin || !u.ghost)).map(u => u.name).join(', ')}>
+                  {` · ${comp.excluded_ids.length} rep${comp.excluded_ids.length === 1 ? '' : 's'} excluded`}
+                </span>
+              )}
             </p>
             {comp.description && <p className="text-[12px] text-white/55 mt-1.5">{comp.description}</p>}
           </div>
@@ -283,6 +294,7 @@ const exHeadCol  = 'rgba(255,255,255,0.3)'
 function CompetitionExportCard({ comp, deals, users, ghostIds, teamCtx }) {
   // Hide ghost names (this image is a team-facing artifact, like what non-admins see).
   const standings = competitionStandings(comp, deals, users, { hiddenIds: ghostIds, teamCtx })
+  const perRep = perRepComp(comp)
   const status = competitionStatus(comp, todayISO())
   const st = STATUS[status]
   return (
@@ -299,7 +311,8 @@ function CompetitionExportCard({ comp, deals, users, ghostIds, teamCtx }) {
         </p>
         <p style={{ fontSize: 11, color: exHeadCol, margin: '2px 0 0' }}>
           {creditLabel(comp.credit_mode)}
-          {comp.goal_mode === 'target' && comp.goal_target ? ` · Goal ${fmtScore(Number(comp.goal_target), comp.metric)}` : ''}
+          {comp.goal_mode === 'target' && comp.goal_target ? ` · Goal ${fmtScore(Number(comp.goal_target), comp.metric, perRep)}` : ''}
+          {perRep && (comp.excluded_ids || []).length > 0 ? ` · ${comp.excluded_ids.length} rep${comp.excluded_ids.length === 1 ? '' : 's'} excluded` : ''}
         </p>
         {comp.description && <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.55)', margin: '8px 0 0' }}>{comp.description}</p>}
 
@@ -319,8 +332,10 @@ function CompetitionExportCard({ comp, deals, users, ghostIds, teamCtx }) {
                   <span style={{ flex: 1, fontSize: 14, color: 'rgba(255,255,255,0.9)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.name}</span>
                   {e.earned && <span style={{ fontSize: 10, fontWeight: 700, color: '#00b894', border: '1px solid #00b89455', borderRadius: 999, padding: '2px 8px' }}>🎉 Earned</span>}
                   <span style={{ fontSize: 14, fontWeight: 700, color: '#fff', whiteSpace: 'nowrap' }}>
-                    {fmtScore(e.score, comp.metric)}
-                    {comp.metric === 'deals' && e.revenue > 0 && <span style={{ color: 'rgba(255,255,255,0.45)', fontWeight: 400, fontSize: 12 }}> · {fmt(e.revenue)}</span>}
+                    {fmtScore(e.score, comp.metric, perRep)}
+                    {perRep
+                      ? (!e.manual && <span style={{ color: 'rgba(255,255,255,0.45)', fontWeight: 400, fontSize: 12 }}> · {fmtScore(e.total, comp.metric)} ÷ {e.count} rep{e.count === 1 ? '' : 's'}</span>)
+                      : (comp.metric === 'deals' && e.revenue > 0 && <span style={{ color: 'rgba(255,255,255,0.45)', fontWeight: 400, fontSize: 12 }}> · {fmt(e.revenue)}</span>)}
                   </span>
                 </div>
                 {hasTarget && (
@@ -329,7 +344,7 @@ function CompetitionExportCard({ comp, deals, users, ghostIds, teamCtx }) {
                     <div style={{ flex: 1, height: 6, borderRadius: 999, background: '#ffffff12', overflow: 'hidden' }}>
                       <div style={{ height: '100%', width: `${Math.min((e.progress || 0) * 100, 100)}%`, background: e.earned ? '#00b894' : '#2dd4bf', borderRadius: 999 }} />
                     </div>
-                    <span style={{ fontSize: 10, color: exHeadCol, whiteSpace: 'nowrap' }}>of {fmtScore(e.target, comp.metric)}</span>
+                    <span style={{ fontSize: 10, color: exHeadCol, whiteSpace: 'nowrap' }}>of {fmtScore(e.target, comp.metric, perRep)}</span>
                   </div>
                 )}
               </div>
@@ -457,7 +472,7 @@ function PastCompRow(props) {
         {winner && winner.score > 0 && (
           <span className="text-[12px] text-white/60 whitespace-nowrap">
             🏆 <span className="font-semibold text-white/85">{winner.name}</span>
-            <span className="text-white/35"> · {fmtScore(winner.score, comp.metric)}</span>
+            <span className="text-white/35"> · {fmtScore(winner.score, comp.metric, perRepComp(comp))}</span>
           </span>
         )}
         <ChevronDown size={13} className={`text-white/25 flex-shrink-0 transition-transform ${expand ? 'rotate-180' : ''}`} />

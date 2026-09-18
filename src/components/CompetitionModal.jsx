@@ -23,6 +23,7 @@ const BLANK = {
   start_date: '', end_date: '',
   participant_ids: [], manual_scores: {},
   sides: [], rounds: [],
+  excluded_ids: [],   // Team Average: people left out of both the total and the head count
 }
 const newId = (p) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
 
@@ -45,6 +46,7 @@ export default function CompetitionModal({ competition, users = [], isAdmin = fa
         manual_scores: competition.manual_scores ?? {},
         sides: competition.sides ?? [],
         rounds: (competition.rounds ?? []).map(r => ({ ...r, prize: r.prize ?? '' })),
+        excluded_ids: competition.excluded_ids ?? [],
       })
     } else setForm(BLANK)
   }, [competition])
@@ -59,9 +61,20 @@ export default function CompetitionModal({ competition, users = [], isAdmin = fa
     return users.filter(u => heads.has(u.id) && visible(u)).sort((a, b) => a.name.localeCompare(b.name))
   }, [users, isAdmin])
   const isSquads = form.type === 'squads'
+  const isTeamAvg = form.type === 'team_avg'
+  const isTeamPick = form.type === 'team' || isTeamAvg   // entrants are TEAMS (head ids)
   const needsPicks = form.type !== 'company' && !isSquads
-  const pickList = form.type === 'team' ? managers : sellers
+  // Team Average picks from every team head (incl. a director with directs,
+  // same rule as the People chart); the older 'team' type keeps managers only.
+  const pickList = isTeamAvg ? teamHeads : form.type === 'team' ? managers : sellers
   const picked = new Set(form.participant_ids)
+  // Team Average: the current roster of each picked team, head first, so the
+  // admin can untick part-timers. Membership during the contest is resolved
+  // date-effectively at score time — this list is just who's on it today.
+  const rosterOf = (head) => [head, ...users.filter(u => u.manager_id === head.id && u.id !== head.id && u.active !== false && visible(u))
+    .sort((a, b) => a.name.localeCompare(b.name))]
+  const excluded = new Set(form.excluded_ids || [])
+  const toggleExcluded = (id) => set('excluded_ids', toggleIn(form.excluded_ids, id))
 
   function togglePick(id) {
     set('participant_ids', picked.has(id) ? form.participant_ids.filter(x => x !== id) : [...form.participant_ids, id])
@@ -132,6 +145,7 @@ export default function CompetitionModal({ competition, users = [], isAdmin = fa
         .filter(r => r.start && r.end)
         .map(r => ({ ...r, name: (r.name || '').trim() || 'Round', prize: (r.prize || '').trim() || null }))
         .sort((a, b) => String(a.start).localeCompare(String(b.start))),
+      excluded_ids: isTeamAvg ? (form.excluded_ids || []) : [],
       active: competition?.active ?? true,
     })
     setSaving(false)
@@ -182,10 +196,12 @@ export default function CompetitionModal({ competition, users = [], isAdmin = fa
               </Sel>
             </Field>
             {form.goal_mode === 'target' && (
-              <Field label={form.metric === 'deals' ? 'Target (deals)' : 'Target ($ baseline)'}>
+              <Field label={isTeamAvg
+                ? (form.metric === 'deals' ? 'Target (avg deals per rep)' : 'Target (avg $ baseline per rep)')
+                : (form.metric === 'deals' ? 'Target (deals)' : 'Target ($ baseline)')}>
                 <Inp type="number" step="any" min="0" value={form.goal_target}
                   onChange={e => set('goal_target', e.target.value)}
-                  placeholder={form.metric === 'deals' ? 'e.g. 20' : 'e.g. 100000'} />
+                  placeholder={isTeamAvg ? (form.metric === 'deals' ? 'e.g. 4' : 'e.g. 25000') : (form.metric === 'deals' ? 'e.g. 20' : 'e.g. 100000')} />
               </Field>
             )}
           </div>
@@ -311,7 +327,7 @@ export default function CompetitionModal({ competition, users = [], isAdmin = fa
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <label className="text-[10px] font-semibold text-white/30 uppercase tracking-widest">
-                  {form.type === 'team' ? 'Teams (pick managers)' : 'Participants'}
+                  {form.type === 'team' ? 'Teams (pick managers)' : isTeamAvg ? 'Teams competing' : 'Participants'}
                 </label>
                 <span className="text-[11px] text-white/30">{form.participant_ids.length} selected</span>
               </div>
@@ -325,13 +341,59 @@ export default function CompetitionModal({ competition, users = [], isAdmin = fa
                         style={on ? { background: '#00b894' } : { border: '1.5px solid rgba(255,255,255,0.3)' }}>
                         {on && <span className="text-dark text-[10px] font-bold">✓</span>}
                       </span>
-                      <span className="text-[13px] text-white/85">{form.type === 'team' ? teamLabel(u) : u.name}</span>
+                      <span className="text-[13px] text-white/85">{isTeamPick ? teamLabel(u) : u.name}</span>
                       <span className="text-[10px] text-white/30 ml-auto uppercase">{u.role}</span>
                     </button>
                   )
                 })}
                 {pickList.length === 0 && <div className="px-3 py-3 text-[12px] text-white/30">No people available.</div>}
               </div>
+
+              {/* Team Average: who counts toward each team's average. Untick a
+                  part-timer and they leave BOTH sides — their deals stop
+                  counting for the team and they stop counting as a rep. */}
+              {isTeamAvg && form.participant_ids.length > 0 && (
+                <div className="mt-3">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-[10px] font-semibold text-white/30 uppercase tracking-widest">Who counts toward the average</label>
+                    <span className="text-[11px] text-white/30">{form.excluded_ids?.length || 0} left out</span>
+                  </div>
+                  <div className="rounded-lg divide-y divide-white/5 max-h-72 overflow-y-auto" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+                    {form.participant_ids.map(hid => {
+                      const head = users.find(u => u.id === hid)
+                      if (!head) return null
+                      const roster = rosterOf(head)
+                      const counted = roster.filter(u => !excluded.has(u.id)).length
+                      return (
+                        <div key={hid} className="px-3 py-2">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[12px] font-semibold text-white/80">{teamLabel(head)}</span>
+                            <span className="text-[10px] text-white/30">{counted} of {roster.length} count</span>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {roster.map(u => {
+                              const on = !excluded.has(u.id)
+                              return (
+                                <button key={u.id} type="button" onClick={() => toggleExcluded(u.id)}
+                                  title={on ? 'Counts — click to leave out' : 'Left out — click to count'}
+                                  className={`px-2 py-1 rounded-full text-[11px] font-medium transition-colors ${on ? 'text-white/85' : 'text-white/30 line-through'}`}
+                                  style={on ? { background: '#00b89422', border: '1px solid #00b89466' } : { border: '1px solid #3a3a3a' }}>
+                                  {u.name}{u.id === head.id ? <span className="text-[9px] uppercase tracking-wide opacity-60"> · {u.role}</span> : ''}
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <p className="text-[10px] text-white/30 mt-1.5">
+                    Each team's score is its {form.metric === 'deals' ? 'deal count' : 'baseline revenue'} ÷ the people who count.
+                    Someone left out contributes no deals and isn't counted as a rep. This shows today's roster; during the contest,
+                    who's on which team follows the sale date like everywhere else.
+                  </p>
+                </div>
+              )}
 
               {/* Optional manual score overrides */}
               {form.participant_ids.length > 0 && (
@@ -340,7 +402,7 @@ export default function CompetitionModal({ competition, users = [], isAdmin = fa
                   <div className="mt-2 space-y-1.5">
                     {form.participant_ids.map(id => (
                       <div key={id} className="flex items-center gap-2">
-                        <span className="text-[12px] text-white/60 flex-1 truncate">{form.type === 'team' ? teamLabel(users.find(x => x.id === id)) : nameOf(id)}</span>
+                        <span className="text-[12px] text-white/60 flex-1 truncate">{isTeamPick ? teamLabel(users.find(x => x.id === id)) : nameOf(id)}</span>
                         <input type="number" step="any" value={form.manual_scores?.[id] ?? ''}
                           onChange={e => setManual(id, e.target.value)} placeholder="auto"
                           style={inputStyle} className="w-28 px-2 py-1.5 rounded-lg text-[12px] text-white text-right focus:outline-none" />

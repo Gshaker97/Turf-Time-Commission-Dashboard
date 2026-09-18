@@ -255,8 +255,27 @@ setup + deploy steps.
   tables `sales_teams` / `team_members` / `bonus_tiers` + the
   `team_month_summary()` RPC (see "Bonus pods" below — a model SEPARATE from
   the org chart); `046` adds `profiles.team_name` (a team's official name;
-  see "What teams exist"). Do
-  not re-run `001`/`002` against a populated database.
+  see "What teams exist"); `047` adds `competitions.excluded_ids` (jsonb
+  array of profile ids) for the **Team Average (per rep)** competition type
+  `team_avg` — entrants are TEAM HEADS (any `headIdSet` head, picked in the
+  modal as "Teams competing"), score = the team's metric (deals or baseline
+  revenue, per `credit_mode`, each deal counted ONCE per team like `team`/
+  `squads`) ÷ its REP COUNT. The divisor = active date-effective members as
+  of `min(end_date, today)` ∪ everyone who earned credit in the window (a
+  rep who moved mid-contest counts on BOTH teams, for the deals they made on
+  each) − `excluded_ids`. Excluding a person removes them from BOTH sides —
+  their deals and their headcount — which is how a part-timer is pulled
+  from a contest without warping the average (per Keaton); a deal they
+  shared with a counting teammate still counts via that teammate. The head
+  counts as a rep by default; exclude them via the same chips if they don't
+  sell. Membership is DATE-EFFECTIVE via `teamOfSale` when `opts.teamCtx`
+  is passed (Competitions page); without it (Home's "my competitions" card)
+  it falls back to the current `manager_id` roster. Entries carry `total`
+  + `count` so the page renders "12 deals ÷ 4 reps" under the average, and
+  `fmtScore(v, metric, perRep)` appends " / rep" (`perRepComp(comp)`).
+  Modal: "Who counts toward the average" lists each picked team's roster as
+  toggle chips (`excluded_ids` is saved only for this type, `[]` otherwise).
+  Do not re-run `001`/`002` against a populated database.
 
 ## Leads / appointments (CRM feed, migration 041)
 

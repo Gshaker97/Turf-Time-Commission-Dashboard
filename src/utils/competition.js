@@ -19,9 +19,12 @@ export const COMP_TYPES = [
   { key: 'individual', label: 'Individual' },
   { key: 'team',       label: 'Team' },
   { key: 'squads',     label: 'Grouped Teams' },
+  { key: 'team_avg',   label: 'Team Average (per rep)' },
   { key: 'company',    label: 'Company-wide' },
   { key: 'matchup',    label: 'Head-to-head' },
 ]
+// A per-rep-average contest: scores are "metric ÷ reps", not raw totals.
+export const perRepComp = (comp) => comp?.type === 'team_avg'
 export const COMP_METRICS = [
   { key: 'revenue', label: 'Revenue (baseline)' },
   { key: 'deals',   label: 'Deals closed' },
@@ -42,9 +45,15 @@ export const typeLabel    = (k) => COMP_TYPES.find(t => t.key === k)?.label   ??
 export const metricLabel  = (k) => COMP_METRICS.find(m => m.key === k)?.label ?? k
 export const creditLabel  = (k) => COMP_CREDIT_MODES.find(c => c.key === k)?.label ?? 'Setter & closer'
 export const goalModeLabel = (k) => COMP_GOAL_MODES.find(g => g.key === k)?.label ?? 'Race'
-export const fmtScore = (value, metric) => metric === 'deals'
-  ? `${Number.isInteger(value) ? value : value.toFixed(1)} deal${value === 1 ? '' : 's'}`
-  : fmt(value)
+// `perRep` renders an AVERAGE ("3.5 deals / rep", "$18,400.00 / rep") — the
+// score of a Team Average contest, or its goal target.
+export const fmtScore = (value, metric, perRep = false) => {
+  const v = Number(value) || 0
+  const base = metric === 'deals'
+    ? `${Number.isInteger(v) ? v : v.toFixed(1)} deal${v === 1 ? '' : 's'}`
+    : fmt(v)
+  return perRep ? `${base} / rep` : base
+}
 
 const inWindow = (deal, comp) => {
   const d = deal.sale_date ?? ''
@@ -168,6 +177,81 @@ function sideScore(side, deals, comp, teamCtx) {
   return { score: total, revenue }
 }
 
+// ── Team Average ("per rep") — a team's metric divided by its head count ──
+// Per Keaton: teams compete on average production per rep, and part-timers
+// can be left out. `comp.excluded_ids` (migration 047) removes a person from
+// BOTH sides of the average — their deals don't count for the team and they
+// aren't counted as a rep — so pulling someone out never warps the number.
+//
+// Numerator: the team's in-window, non-canceled deals, attributed like every
+// team view (date-effective teamOfSale by sale date; current-roster fallback
+// when no teamCtx), credited per credit_mode, skipping excluded people.
+// Denominator ("roster"): active members of the team as of the window end
+// (today while it's running) ∪ everyone who actually earned credit in the
+// window (a rep who left mid-contest still counts on both sides) − excluded.
+// One population on both sides is what makes it an average and not a ratio
+// of two different groups.
+const localToday = () => {
+  const d = new Date(), p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+// The people a deal is credited to for a Team Average team — [] if none.
+// The deal itself counts ONCE (like teamCounts/sideCounts); the ids are
+// returned so the roster can include everyone who actually earned credit.
+function teamAvgCredited(deal, headId, comp, users, teamCtx) {
+  const excluded = new Set(comp.excluded_ids || [])
+  const currentIds = teamCtx ? null
+    : new Set([headId, ...users.filter(u => u.manager_id === headId).map(u => u.id)])
+  const onTeam = (pid, date) => !!pid && !excluded.has(pid) && (teamCtx
+    ? teamOfSale(pid, date, teamCtx.usersById, teamCtx.heads, teamCtx.changesByProfile) === headId
+    : currentIds.has(pid))
+  const effCloser = deal.closer_id ?? deal.setter_id
+  const solo      = !deal.closer_id || deal.setter_id === deal.closer_id
+  const setterOk  = onTeam(deal.setter_id, deal.sale_date)
+  const closerOk  = onTeam(effCloser, deal.sale_date)
+  switch (comp.credit_mode || 'both') {
+    case 'self_gen': return (solo && setterOk) ? [deal.setter_id] : []
+    case 'setter':   return setterOk ? [deal.setter_id] : []
+    case 'closer':   return closerOk ? [effCloser] : []
+    default: {
+      const ids = []
+      if (setterOk) ids.push(deal.setter_id)
+      if (closerOk && effCloser !== deal.setter_id) ids.push(effCloser)
+      return ids
+    }
+  }
+}
+
+function teamAvgScore(headId, deals, users, comp, teamCtx) {
+  const excluded = new Set(comp.excluded_ids || [])
+  let total = 0, revenue = 0
+  const earners = new Set()
+  for (const d of deals) {
+    if (!inWindow(d, comp) || isCanceled(d)) continue
+    const people = teamAvgCredited(d, headId, comp, users, teamCtx)
+    if (!people.length) continue
+    total   += dealValue(d, comp.metric)
+    revenue += Number(d.baseline_revenue) || 0
+    people.forEach(p => earners.add(p))
+  }
+  // Roster as of the window end — today while the contest is still running.
+  const today = localToday()
+  const asOf  = comp.end_date && comp.end_date < today ? comp.end_date : today
+  const currentIds = teamCtx ? null
+    : new Set([headId, ...users.filter(u => u.manager_id === headId).map(u => u.id)])
+  const roster = new Set(earners)
+  for (const u of users) {
+    if (u.active === false || excluded.has(u.id)) continue
+    const onTeam = teamCtx
+      ? teamOfSale(u.id, asOf, teamCtx.usersById, teamCtx.heads, teamCtx.changesByProfile) === headId
+      : currentIds.has(u.id)
+    if (onTeam) roster.add(u.id)
+  }
+  const count = roster.size
+  return { score: count ? total / count : 0, revenue, total, count, roster: [...roster] }
+}
+
 // ── Rounds ────────────────────────────────────────────────────
 // Normalized, chronologically sorted rounds (only rows with both dates count).
 export function compRounds(comp) {
@@ -221,7 +305,9 @@ export function competitionEntryDeals(comp, entrantId, deals = [], users = [], o
       ? (teamCounts(d, ids, comp) ? 1 : 0)
       : comp.type === 'squads'
         ? (side && sideCounts(d, side, comp, opts.teamCtx) ? 1 : 0)
-        : personCredit(d, entrantId, comp)
+        : comp.type === 'team_avg'
+          ? (teamAvgCredited(d, entrantId, comp, users, opts.teamCtx).length ? 1 : 0)
+          : personCredit(d, entrantId, comp)
     if (!credit) continue
     // Include canceled deals too, but flagged & worth 0 — they show struck-out
     // so an admin can see what WOULD count if the job weren't canceled.
@@ -250,7 +336,7 @@ export function competitionStandings(comp, deals = [], users = [], opts = {}) {
   let entrants = []
   if (comp.type === 'company') {
     entrants = users.filter(u => ['rep', 'manager', 'director', 'vp'].includes(u.role)).map(u => ({ id: u.id, name: u.name }))
-  } else if (comp.type === 'team') {
+  } else if (comp.type === 'team' || comp.type === 'team_avg') {
     entrants = (comp.participant_ids || []).map(id => ({ id, name: teamLabel(users.find(u => u.id === id)) }))
   } else if (comp.type === 'squads') {
     entrants = (comp.sides || []).map(s => ({ id: s.id, name: s.name || 'Unnamed side' }))
@@ -269,9 +355,14 @@ export function competitionStandings(comp, deals = [], users = [], opts = {}) {
         ? teamScore(e.id, deals, users, comp)
         : comp.type === 'squads'
           ? sideScore((comp.sides || []).find(s => s.id === e.id) || {}, deals, comp, opts.teamCtx)
-          : personScore(e.id, deals, comp)
-      // revenue stays computed even under a manual score override.
-      return { ...e, score: hasManual ? Number(override) : computed.score, revenue: computed.revenue, manual: hasManual }
+          : comp.type === 'team_avg'
+            ? teamAvgScore(e.id, deals, users, comp, opts.teamCtx)
+            : personScore(e.id, deals, comp)
+      // revenue stays computed even under a manual score override. Team
+      // Average entries also carry the raw total and head count so the page
+      // can show "12 deals ÷ 4 reps" under the average.
+      return { ...e, score: hasManual ? Number(override) : computed.score, revenue: computed.revenue, manual: hasManual,
+               total: computed.total, count: computed.count }
     })
     .sort((a, b) => b.score - a.score)
     .map((e, i) => ({

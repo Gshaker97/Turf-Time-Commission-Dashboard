@@ -193,7 +193,7 @@ export default function Home() {
       .filter(c => competitionStatus(c, today) === "active")
       .map(c => {
         const standings = competitionStandings(c, allDeals, users, { hiddenIds });
-        const mine = standings.find(e => e.id === me || (c.type === "team" && e.id === viewUser?.manager_id));
+        const mine = standings.find(e => e.id === me || ((c.type === "team" || c.type === "team_avg") && e.id === viewUser?.manager_id));
         if (!mine) return null;
         const ahead = mine.rank > 1 ? standings[mine.rank - 2] : null;
         return { comp: c, mine, count: standings.length, leader: standings[0], ahead, gap: ahead ? ahead.score - mine.score : 0 };
@@ -628,11 +628,11 @@ export default function Home() {
                     </span>
                   </div>
                   <div className="text-[11px] text-white/40 mt-1">
-                    You: <span className="text-white/70 font-semibold">{fmtScore(mine.score, comp.metric)}</span>
+                    {comp.type === "team_avg" ? "Your team: " : "You: "}<span className="text-white/70 font-semibold">{fmtScore(mine.score, comp.metric, comp.type === "team_avg")}</span>
                     {target > 0
-                      ? <> · target {fmtScore(target, comp.metric)}</>
+                      ? <> · target {fmtScore(target, comp.metric, comp.type === "team_avg")}</>
                       : ahead
-                        ? <> · <span className="text-amber-300">{fmtScore(gap, comp.metric)}</span> to pass {ahead.name}</>
+                        ? <> · <span className="text-amber-300">{fmtScore(gap, comp.metric, comp.type === "team_avg")}</span> to pass {ahead.name}</>
                         : <> · 🏆 leading</>}
                   </div>
                   <div className="h-1.5 rounded-full overflow-hidden mt-2" style={{ background: "#ffffff12" }}>
