@@ -570,6 +570,7 @@ const FIELD_ACTIVITY_FIELDS = [
   { key: 'last_knock_at',  label: 'Last Knock Time' },
   { key: 'field_minutes',  label: 'Time in Field (minutes)', hint: 'Or map "field_hours" if they send hours' },
   { key: 'knock_at',       label: 'Knock Time', hint: 'Per-knock events — one webhook per door' },
+  { key: 'knock_flag',     label: 'Is a Knock?', hint: 'Events where this is 0/false are ignored' },
   { key: 'external_id',    label: 'Event / Row ID', hint: 'Their unique id — prevents duplicates' },
   { key: 'office',         label: 'Office' },
 ]
@@ -755,7 +756,7 @@ const FieldFeedEditor = () => (
     title="Field Activity Feed (Door Knocks)"
     blurb="Door-knocking data for the Performance page. Point the CRM's activity webhook (or a daily report push) here; the same secret as the lead feed opens it."
     path="/api/field/ingest" fields={FIELD_ACTIVITY_FIELDS} mapKey="field_activity_field_map" lastKey="field_last_payload"
-    footnote="Two shapes work. A payload with a Doors Knocked count is a daily summary for that rep and date. A payload with a Knock Time is one door — the site adds it to that rep's day (doors +1, first/last knock). Until this is connected, admins can import a CSV report from the Performance page." />
+    footnote="RepCard's door-knock events work with nothing mapped: the site already reads id, createdAt, user.name / user.email and hasDoorKnock. Map a field here only to override that. Two shapes work: a payload with a Doors Knocked count is a daily summary for that rep and date; a payload with a Knock Time is one door — the site adds it to that rep's day (doors +1, first/last knock). Admins can also import a CSV report from the Performance page." />
 )
 
 function AddDisposition({ onAdd, existing }) {
