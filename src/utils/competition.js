@@ -13,7 +13,7 @@
 //                  closer share it by credit_split_pct = the closer's share).
 // ============================================================
 import { fmt, isCanceled } from './commission'
-import { teamOfSale, teamLabel } from './team'
+import { teamOfSale, teamLabel, headIdSet } from './team'
 
 export const COMP_TYPES = [
   { key: 'individual', label: 'Individual' },
@@ -196,16 +196,31 @@ const localToday = () => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
+// Membership test for a Team Average team, built ONCE per team: (personId,
+// dateISO) → is this person on `headId`'s team that day. With a teamCtx it is
+// the date-effective rule (`teamOfSale`); without one (Home's card) it falls
+// back to the CURRENT grouping — `teamKeyFor`, the same rule the People chart
+// draws — never raw manager_id, which would put a manager who reports to a
+// director on the director's team as well as their own.
+function teamAvgMembership(headId, users, teamCtx) {
+  if (teamCtx) {
+    const { usersById, heads, changesByProfile } = teamCtx
+    return (pid, date) => !!pid && teamOfSale(pid, date, usersById, heads, changesByProfile) === headId
+  }
+  // No history → teamOfSale with an empty change log = today's grouping,
+  // including the one-hop chain through a demoted ex-head (Tyler → Colt →
+  // Jared) that teamKeyFor alone would file as Unassigned.
+  const usersById = Object.fromEntries(users.map(u => [u.id, u]))
+  const heads = headIdSet(users)
+  const current = new Set(users.filter(u => teamOfSale(u.id, null, usersById, heads, {}) === headId).map(u => u.id))
+  return (pid) => !!pid && current.has(pid)
+}
+
 // The people a deal is credited to for a Team Average team — [] if none.
 // The deal itself counts ONCE (like teamCounts/sideCounts); the ids are
 // returned so the roster can include everyone who actually earned credit.
-function teamAvgCredited(deal, headId, comp, users, teamCtx) {
-  const excluded = new Set(comp.excluded_ids || [])
-  const currentIds = teamCtx ? null
-    : new Set([headId, ...users.filter(u => u.manager_id === headId).map(u => u.id)])
-  const onTeam = (pid, date) => !!pid && !excluded.has(pid) && (teamCtx
-    ? teamOfSale(pid, date, teamCtx.usersById, teamCtx.heads, teamCtx.changesByProfile) === headId
-    : currentIds.has(pid))
+function teamAvgCredited(deal, comp, onTeamFn, excluded) {
+  const onTeam = (pid, date) => !!pid && !excluded.has(pid) && onTeamFn(pid, date)
   const effCloser = deal.closer_id ?? deal.setter_id
   const solo      = !deal.closer_id || deal.setter_id === deal.closer_id
   const setterOk  = onTeam(deal.setter_id, deal.sale_date)
@@ -223,33 +238,44 @@ function teamAvgCredited(deal, headId, comp, users, teamCtx) {
   }
 }
 
-function teamAvgScore(headId, deals, users, comp, teamCtx) {
-  const excluded = new Set(comp.excluded_ids || [])
-  let total = 0, revenue = 0
-  const earners = new Set()
+// Everyone who WOULD count toward a Team Average team before exclusions:
+// active members as of the window end (today while it's running) ∪ everyone
+// who earned credit in the window. This is the ONE roster rule — the engine
+// divides by it (minus `excluded_ids`) and the modal renders its chips from
+// it, so the "N of M count" label and the card's "÷ N reps" always agree.
+// Deactivation isn't date-logged, so a deactivated member who sold nothing in
+// the window drops out even from a finished contest; `excluded_ids` is the
+// admin's explicit tool either way.
+export function teamAvgRoster(headId, deals = [], users = [], comp = {}, teamCtx = null) {
+  const onTeam = teamAvgMembership(headId, users, teamCtx)
+  const none = new Set()
+  const ids = new Set()
   for (const d of deals) {
     if (!inWindow(d, comp) || isCanceled(d)) continue
-    const people = teamAvgCredited(d, headId, comp, users, teamCtx)
-    if (!people.length) continue
-    total   += dealValue(d, comp.metric)
-    revenue += Number(d.baseline_revenue) || 0
-    people.forEach(p => earners.add(p))
+    teamAvgCredited(d, comp, onTeam, none).forEach(p => ids.add(p))
   }
-  // Roster as of the window end — today while the contest is still running.
   const today = localToday()
   const asOf  = comp.end_date && comp.end_date < today ? comp.end_date : today
-  const currentIds = teamCtx ? null
-    : new Set([headId, ...users.filter(u => u.manager_id === headId).map(u => u.id)])
-  const roster = new Set(earners)
   for (const u of users) {
-    if (u.active === false || excluded.has(u.id)) continue
-    const onTeam = teamCtx
-      ? teamOfSale(u.id, asOf, teamCtx.usersById, teamCtx.heads, teamCtx.changesByProfile) === headId
-      : currentIds.has(u.id)
-    if (onTeam) roster.add(u.id)
+    if (u.active === false) continue
+    if (onTeam(u.id, asOf)) ids.add(u.id)
   }
-  const count = roster.size
-  return { score: count ? total / count : 0, revenue, total, count, roster: [...roster] }
+  return [...ids]
+}
+
+function teamAvgScore(headId, deals, users, comp, teamCtx) {
+  const excluded = new Set(comp.excluded_ids || [])
+  const onTeam = teamAvgMembership(headId, users, teamCtx)
+  let total = 0, revenue = 0
+  for (const d of deals) {
+    if (!inWindow(d, comp) || isCanceled(d)) continue
+    if (!teamAvgCredited(d, comp, onTeam, excluded).length) continue
+    total   += dealValue(d, comp.metric)
+    revenue += Number(d.baseline_revenue) || 0
+  }
+  const roster = teamAvgRoster(headId, deals, users, comp, teamCtx).filter(id => !excluded.has(id))
+  const count = roster.length
+  return { score: count ? total / count : 0, revenue, total, count, roster }
 }
 
 // ── Rounds ────────────────────────────────────────────────────
@@ -299,6 +325,8 @@ export function competitionEntryDeals(comp, entrantId, deals = [], users = [], o
     ? new Set([entrantId, ...users.filter(u => u.manager_id === entrantId).map(u => u.id)])
     : null
   const side = comp.type === 'squads' ? (comp.sides || []).find(s => s.id === entrantId) : null
+  const avgOnTeam  = comp.type === 'team_avg' ? teamAvgMembership(entrantId, users, opts.teamCtx) : null
+  const avgExcluded = new Set(comp.excluded_ids || [])
   for (const d of deals) {
     if (!inWindow(d, comp)) continue
     const credit = comp.type === 'team'
@@ -306,7 +334,7 @@ export function competitionEntryDeals(comp, entrantId, deals = [], users = [], o
       : comp.type === 'squads'
         ? (side && sideCounts(d, side, comp, opts.teamCtx) ? 1 : 0)
         : comp.type === 'team_avg'
-          ? (teamAvgCredited(d, entrantId, comp, users, opts.teamCtx).length ? 1 : 0)
+          ? (teamAvgCredited(d, comp, avgOnTeam, avgExcluded).length ? 1 : 0)
           : personCredit(d, entrantId, comp)
     if (!credit) continue
     // Include canceled deals too, but flagged & worth 0 — they show struck-out

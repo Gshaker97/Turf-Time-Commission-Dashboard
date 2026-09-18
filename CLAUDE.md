@@ -269,12 +269,26 @@ setup + deploy steps.
   shared with a counting teammate still counts via that teammate. The head
   counts as a rep by default; exclude them via the same chips if they don't
   sell. Membership is DATE-EFFECTIVE via `teamOfSale` when `opts.teamCtx`
-  is passed (Competitions page); without it (Home's "my competitions" card)
-  it falls back to the current `manager_id` roster. Entries carry `total`
+  is passed (Competitions page AND Home's "my competitions" card — Home
+  fetches `team_changes` too so the two never disagree on rank); without a
+  teamCtx the fallback is the CURRENT grouping via `teamKeyFor` — never raw
+  `manager_id`, which put a manager who reports to a director on both
+  teams. **`teamAvgRoster(headId, deals, users, comp, teamCtx)` is the ONE
+  roster rule** (exported): the engine divides by it minus exclusions, and
+  the modal's "Who counts toward the average" chips render FROM it (it gets
+  `deals` + `teamCtx` props), so "N of M count" always equals the card's
+  "÷ N reps"; deactivated earners are listed with a tag. Known caveat:
+  deactivation isn't date-logged, so a deactivated member who sold nothing
+  in the window drops out of a finished contest's divisor too. Stale
+  exclusions (team unpicked, rep moved) show as an "Also left out" row and
+  are pruned to picked rosters on save; switching type prunes
+  `participant_ids` to the new pick list. A rep in `excluded_ids` gets no
+  "you"/Home-card highlight for that contest (`isMine`/`myComps` match
+  team rows by `teamKeyFor`). Competitions `handleSave` surfaces a failed
+  write as a toast instead of closing the modal. Entries carry `total`
   + `count` so the page renders "12 deals ÷ 4 reps" under the average, and
   `fmtScore(v, metric, perRep)` appends " / rep" (`perRepComp(comp)`).
-  Modal: "Who counts toward the average" lists each picked team's roster as
-  toggle chips (`excluded_ids` is saved only for this type, `[]` otherwise).
+  `excluded_ids` is saved only for this type, `[]` otherwise.
   Do not re-run `001`/`002` against a populated database.
 
 ## Leads / appointments (CRM feed, migration 041)

@@ -15,6 +15,7 @@ import { buildRecordBook } from '../utils/records'
 import { onClickUnlessSelecting } from '../utils/selection'
 import { useSettings } from '../contexts/SettingsContext'
 import CompetitionModal from '../components/CompetitionModal'
+import { toast } from '../lib/toast'
 
 // LOCAL date, never UTC — .toISOString() flips to tomorrow at 5pm Arizona,
 // which ended rounds/comps 7 hours early.
@@ -157,9 +158,14 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, te
   const st = STATUS[status]
   const me = users.find(u => u.id === profileId)
   const myTeamKey = me ? teamKeyFor(me, teamCtx?.heads ?? new Set()) : null
+  // Team rows are "mine" by the viewer's resolved team key (same grouping the
+  // engine scores by — a rep under a demoted ex-manager still lands on the
+  // absorbing team), never raw manager_id. A rep LEFT OUT of a Team Average
+  // contest isn't in it, so their team's row isn't highlighted for them.
   const isMine = (e) =>
     e.id === profileId ||
-    ((comp.type === 'team' || comp.type === 'team_avg') && me?.manager_id === e.id) ||
+    (comp.type === 'team' && me?.manager_id === e.id) ||   // 'team' scores by raw manager_id — match it
+    (comp.type === 'team_avg' && e.id === myTeamKey && !(comp.excluded_ids || []).includes(profileId)) ||
     (comp.type === 'squads' && (comp.sides || []).some(s => s.id === e.id &&
       ((s.rep_ids || []).includes(profileId) || (s.team_ids || []).includes(myTeamKey))))
   const myEntry = standings.find(isMine)
@@ -595,12 +601,16 @@ export default function Competitions() {
   }
 
   async function handleSave(data) {
+    // A failed write (e.g. a column the DB doesn't have yet) must surface, not
+    // vanish behind a closed modal — the "saved details don't stick" class.
+    let res
     if (editComp) {
       setComps(cs => cs.map(c => c.id === editComp.id ? { ...c, ...data } : c))
-      await updateCompetition(editComp.id, data)
+      res = await updateCompetition(editComp.id, data)
     } else {
-      await insertCompetition(data, profile?.id)
+      res = await insertCompetition(data, profile?.id)
     }
+    if (res?.error) { toast.error(`Could not save competition: ${res.error.message || res.error}`); load(); return }
     setModal(false); setEditComp(null); load()
   }
   async function handleDelete(comp) {
@@ -696,7 +706,7 @@ export default function Competitions() {
       )}
 
       {modal && (
-        <CompetitionModal competition={editComp} users={users} isAdmin={isAdmin}
+        <CompetitionModal competition={editComp} users={users} deals={deals} teamCtx={teamCtx} isAdmin={isAdmin}
           onSave={handleSave} onClose={() => { setModal(false); setEditComp(null) }} />
       )}
     </div>
