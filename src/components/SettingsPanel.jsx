@@ -558,7 +558,26 @@ const LEAD_LIFECYCLE = [
   ['canceled',  'Canceled'],
 ]
 
-function LeadFeedEditor() {
+// Door-knocking activity feed (migration 048) — same mapper, different
+// fields. A payload with a doors count is a DAILY SUMMARY; one with a knock
+// time is a PER-KNOCK EVENT (the DB rolls those into the day row).
+const FIELD_ACTIVITY_FIELDS = [
+  { key: 'rep_email',      label: 'Rep Email', hint: 'How we match the rep' },
+  { key: 'rep_name',       label: 'Rep Name', hint: 'Fallback when the email has no match' },
+  { key: 'activity_date',  label: 'Date', hint: 'Daily summaries — the day the doors were knocked' },
+  { key: 'doors_knocked',  label: 'Doors Knocked', hint: 'Daily summaries — the count for that day' },
+  { key: 'first_knock_at', label: 'First Knock Time' },
+  { key: 'last_knock_at',  label: 'Last Knock Time' },
+  { key: 'field_minutes',  label: 'Time in Field (minutes)', hint: 'Or map "field_hours" if they send hours' },
+  { key: 'knock_at',       label: 'Knock Time', hint: 'Per-knock events — one webhook per door' },
+  { key: 'external_id',    label: 'Event / Row ID', hint: 'Their unique id — prevents duplicates' },
+  { key: 'office',         label: 'Office' },
+]
+
+// One CRM feed's admin panel: endpoint URL, the last payload received (real
+// field names to pick from), our-field ← their-field mapping, and — for the
+// leads feed only — the disposition → lifecycle mapper.
+function FeedEditor({ title, blurb, path, fields, mapKey, lastKey, withStatusMap = false, footnote = null }) {
   const { settings, save } = useSettings()
   const [map, setMap] = useState({})
   const [statusMap, setStatusMap] = useState({})
@@ -570,14 +589,14 @@ function LeadFeedEditor() {
   const [copiedPayload, setCopiedPayload] = useState(false)
 
   useEffect(() => {
-    setMap(settings.lead_field_map || {})
+    setMap(settings[mapKey] || {})
     setStatusMap(settings.lead_status_map || {})
     setDirty(false)
-  }, [settings.lead_field_map, settings.lead_status_map])
+  }, [settings[mapKey], settings.lead_status_map, mapKey])
 
-  const last = settings.lead_last_payload || null
+  const last = settings[lastKey] || null
   const incoming = last?.fields ? Object.keys(last.fields).sort() : []
-  const url = `${window.location.origin}/api/leads/ingest`
+  const url = `${window.location.origin}${path}`
 
   const setField = (k, v) => { setMap(m => ({ ...m, [k]: v })); setDirty(true); setSaved(false) }
   const setStatus = (k, v) => { setStatusMap(m => ({ ...m, [k]: v })); setDirty(true); setSaved(false) }
@@ -585,9 +604,12 @@ function LeadFeedEditor() {
   async function onSave() {
     setSaving(true); setError('')
     const cleanMap = Object.fromEntries(Object.entries(map).filter(([, v]) => v))
-    const cleanStatus = Object.fromEntries(Object.entries(statusMap).filter(([, v]) => v))
-    const a = (await save('lead_field_map', cleanMap)) || {}
-    const b = (await save('lead_status_map', cleanStatus)) || {}
+    const a = (await save(mapKey, cleanMap)) || {}
+    let b = {}
+    if (withStatusMap) {
+      const cleanStatus = Object.fromEntries(Object.entries(statusMap).filter(([, v]) => v))
+      b = (await save('lead_status_map', cleanStatus)) || {}
+    }
     setSaving(false)
     if (a.error || b.error) { setError((a.error || b.error).message); return }
     setDirty(false); setSaved(true); setTimeout(() => setSaved(false), 2000)
@@ -598,14 +620,13 @@ function LeadFeedEditor() {
   const seenStatus = last?.sample && map.status ? String(
     String(map.status).split('.').reduce((o, k) => (o == null ? undefined : o[k]), last.sample) ?? '') : ''
   const knownDispositions = [...new Set([...Object.keys(statusMap), seenStatus].filter(Boolean))]
+  const LEAD_FIELDS = fields
 
   return (
     <div className="rounded-xl p-4 md:p-5 space-y-4" style={card}>
       <div>
-        <h3 className="text-[14px] font-semibold text-white">Lead Feed (CRM Webhook)</h3>
-        <p className="text-[11px] text-white/40 mt-0.5">
-          Point your CRM's webhook here and map its fields onto ours — no code change needed when the CRM's format differs.
-        </p>
+        <h3 className="text-[14px] font-semibold text-white">{title}</h3>
+        <p className="text-[11px] text-white/40 mt-0.5">{blurb}</p>
       </div>
 
       {/* Endpoint */}
@@ -691,7 +712,10 @@ function LeadFeedEditor() {
         </p>
       </div>
 
-      {/* Disposition mapping */}
+      {footnote && <p className="text-[10.5px] text-white/30">{footnote}</p>}
+
+      {/* Disposition mapping (leads feed only) */}
+      {withStatusMap && (
       <div>
         <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1.5">Their dispositions → our lifecycle</p>
         <p className="text-[10.5px] text-white/30 mb-2">
@@ -712,11 +736,27 @@ function LeadFeedEditor() {
           <AddDisposition onAdd={d => setStatus(d, 'completed')} existing={knownDispositions} />
         </div>
       </div>
+      )}
 
       <SaveBar dirty={dirty} saving={saving} saved={saved} error={error} onSave={onSave} />
     </div>
   )
 }
+
+const LeadFeedEditor = () => (
+  <FeedEditor
+    title="Lead Feed (CRM Webhook)"
+    blurb="Point your CRM's appointment webhook here and map its fields onto ours — no code change needed when the CRM's format differs."
+    path="/api/leads/ingest" fields={LEAD_FIELDS} mapKey="lead_field_map" lastKey="lead_last_payload" withStatusMap />
+)
+
+const FieldFeedEditor = () => (
+  <FeedEditor
+    title="Field Activity Feed (Door Knocks)"
+    blurb="Door-knocking data for the Performance page. Point the CRM's activity webhook (or a daily report push) here; the same secret as the lead feed opens it."
+    path="/api/field/ingest" fields={FIELD_ACTIVITY_FIELDS} mapKey="field_activity_field_map" lastKey="field_last_payload"
+    footnote="Two shapes work. A payload with a Doors Knocked count is a daily summary for that rep and date. A payload with a Knock Time is one door — the site adds it to that rep's day (doors +1, first/last knock). Until this is connected, admins can import a CSV report from the Performance page." />
+)
 
 function AddDisposition({ onAdd, existing }) {
   const [v, setV] = useState('')
@@ -754,6 +794,7 @@ export default function SettingsPanel() {
       <PayDateRuleEditor />
       <NoteNotifyEditor />
       <LeadFeedEditor />
+      <FieldFeedEditor />
       <ListEditor title="Override Exclusion Items" settingKey="override_exclusion_items"
         hint="Subcontracted products that earn no manager/director/VP override. On a deal, pick the item and enter its price — overrides then compute off baseline minus those amounts (baseline and job price don't change)."
         placeholder="e.g. Electrical" fallback={['Electrical', 'Gas', 'Pergolas']} />

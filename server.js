@@ -412,33 +412,53 @@ async function loadLeadConfig() {
 
 // Remember the most recent payload so the Settings mapper can show exactly
 // what the CRM sent, with real field names to pick from.
-async function recordLastPayload(sample) {
+async function recordLastPayload(sample, key = 'lead_last_payload') {
   try {
     await fetch(`${SUPABASE_URL}/rest/v1/app_settings?on_conflict=key`, {
       method: 'POST',
       headers: { ...jsonHeaders, Prefer: 'resolution=merge-duplicates,return=minimal' },
       body: JSON.stringify([{
-        key: 'lead_last_payload',
+        key,
         value: { at: new Date().toISOString(), fields: flattenPayload(sample), sample },
       }]),
     })
   } catch { /* diagnostics only — never fail an ingest over this */ }
 }
 
-async function ingestLeads(rawBody) {
-  let body
-  try { body = JSON.parse(rawBody || '{}') } catch { return err('Bad JSON body.') }
-  const items = Array.isArray(body) ? body : Array.isArray(body.leads) ? body.leads : [body]
-  if (!items.length) return err('No leads in the payload.')
-  if (items.length > 500) return err('Too many leads in one call (max 500).')
+// Resolve people by email, FALLING BACK TO NAME — shared by every CRM feed.
+// A CRM identifies a rep by their login there, which is usually a personal
+// address (garrison.shaker@gmail.com) — not the company email on our
+// roster. So email alone matched nobody and every feed event arrived
+// ownerless. Names ("Garrison Shaker") do match, and the roster is small
+// enough to fetch whole. A name shared by two people resolves to NEITHER —
+// no owner beats the wrong owner.
+async function loadRosterResolver() {
+  const normName = (n) => String(n || '').trim().toLowerCase().replace(/\s+/g, ' ')
+  const byEmail = {}, byName = {}
+  const dupes = new Set()
+  const profs = await restGet('/rest/v1/profiles?select=id,name,email')
+  for (const p of profs) {
+    if (p.email) byEmail[String(p.email).toLowerCase()] = p.id
+    const n = normName(p.name)
+    if (!n) continue
+    if (byName[n] && byName[n] !== p.id) dupes.add(n)
+    byName[n] = p.id
+  }
+  for (const n of dupes) delete byName[n]
+  return (email, name) => {
+    const e = email ? String(email).trim().toLowerCase() : ''
+    if (e && byEmail[e]) return byEmail[e]
+    const n = normName(name)
+    return (n && byName[n]) || null
+  }
+}
 
-  const { fieldMap, statusMap } = await loadLeadConfig()
-  await recordLastPayload(items[0])
-  // Our field ← whatever the admin mapped it to, else the same-named field.
-  // A mapping may name SEVERAL paths separated by spaces — their values are
-  // joined with a space, so a CRM that splits "first name" / "last name"
-  // (very common) still fills one Customer Name field.
-  const pick = (item, field) => {
+// Our field ← whatever the admin mapped it to, else the same-named field.
+// A mapping may name SEVERAL paths separated by spaces — their values are
+// joined with a space, so a CRM that splits "first name" / "last name"
+// (very common) still fills one Customer Name field.
+function makePicker(fieldMap) {
+  return (item, field) => {
     const mapped = fieldMap[field]
     if (!mapped) {
       const v = item[field]
@@ -450,33 +470,20 @@ async function ingestLeads(rawBody) {
     if (!parts.length) return null
     return parts.length === 1 ? parts[0] : parts.map(String).join(' ')
   }
+}
 
-  // Resolve people by email, FALLING BACK TO NAME.
-  // A CRM identifies a rep by their login there, which is usually a personal
-  // address (garrison.shaker@gmail.com) — not the company email on our
-  // roster. So email alone matched nobody and every feed event arrived
-  // ownerless. Names ("Garrison Shaker") do match, and the roster is small
-  // enough to fetch whole. A name shared by two people resolves to NEITHER —
-  // no owner beats the wrong owner.
-  const normName = (n) => String(n || '').trim().toLowerCase().replace(/\s+/g, ' ')
-  const byEmail = {}, byName = {}
-  {
-    const dupes = new Set()
-    const profs = await restGet('/rest/v1/profiles?select=id,name,email')
-    for (const p of profs) {
-      if (p.email) byEmail[String(p.email).toLowerCase()] = p.id
-      const n = normName(p.name)
-      if (!n) continue
-      if (byName[n] && byName[n] !== p.id) dupes.add(n)
-      byName[n] = p.id
-    }
-    for (const n of dupes) delete byName[n]
-  }
-  const resolvePerson = (email, name) => {
-    if (email && byEmail[email]) return byEmail[email]
-    const n = normName(name)
-    return (n && byName[n]) || null
-  }
+async function ingestLeads(rawBody) {
+  let body
+  try { body = JSON.parse(rawBody || '{}') } catch { return err('Bad JSON body.') }
+  const items = Array.isArray(body) ? body : Array.isArray(body.leads) ? body.leads : [body]
+  if (!items.length) return err('No leads in the payload.')
+  if (items.length > 500) return err('Too many leads in one call (max 500).')
+
+  const { fieldMap, statusMap } = await loadLeadConfig()
+  await recordLastPayload(items[0])
+  const pick = makePicker(fieldMap)
+
+  const resolvePerson = await loadRosterResolver()
 
   const rows = []
   const unmatched = []
@@ -559,6 +566,129 @@ async function ingestLeads(rawBody) {
   })
 }
 
+// ── Field activity feed (door knocking — migration 048) ─────────────────
+// Same contract as the leads feed: admin-mapped fields (Admin → Settings →
+// Field Activity Feed, `field_activity_field_map`), people resolved by email
+// then name, partial updates only. Two payload shapes are accepted and both
+// end up as ONE day row per rep:
+//   • a DAILY SUMMARY carries a doors count (`doors_knocked`) for a day →
+//     upserted on (source, rep_key, activity_date); the summary's numbers win.
+//   • a PER-KNOCK EVENT carries a knock timestamp (`knock_at`) and the CRM's
+//     event id → inserted into field_knocks (duplicates ignored) and the DB
+//     trigger rolls it into the day row: doors +1, first/last knock min/max.
+// The activity day is the ARIZONA calendar day of the timestamp (the DB does
+// this for knocks; summaries send a plain date).
+const FIELD_KEYS = ['field_activity_field_map']
+async function loadFieldConfig() {
+  try {
+    const rows = await restGet(`/rest/v1/app_settings?select=key,value&key=in.(${FIELD_KEYS.join(',')})`)
+    const cfg = {}
+    for (const r of rows) cfg[r.key] = r.value
+    return { fieldMap: cfg.field_activity_field_map || {} }
+  } catch { return { fieldMap: {} } }
+}
+
+const AZ_DAY = (ts) => {
+  // 'yyyy-MM-dd' in America/Phoenix (no DST) for a timestamp — never a UTC slice.
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return null
+  const az = new Date(d.getTime() - 7 * 3600 * 1000)
+  return az.toISOString().slice(0, 10)
+}
+
+async function ingestFieldActivity(rawBody) {
+  let body
+  try { body = JSON.parse(rawBody || '{}') } catch { return err('Bad JSON body.') }
+  const items = Array.isArray(body) ? body
+    : Array.isArray(body.activity) ? body.activity
+    : Array.isArray(body.knocks) ? body.knocks
+    : Array.isArray(body.events) ? body.events
+    : [body]
+  if (!items.length) return err('No activity in the payload.')
+  if (items.length > 2000) return err('Too many rows in one call (max 2000).')
+
+  const { fieldMap } = await loadFieldConfig()
+  await recordLastPayload(items[0], 'field_last_payload')
+  const pick = makePicker(fieldMap)
+  const resolvePerson = await loadRosterResolver()
+
+  const summaries = [], knocks = [], unmatched = new Set(), skipped = []
+  for (const i of items) {
+    const email = pick(i, 'rep_email'), name = pick(i, 'rep_name')
+    const profileId = resolvePerson(email, name)
+    if ((email || name) && !profileId) unmatched.add(name || email)
+    if (!profileId && !name && !email) { skipped.push('no rep on the event'); continue }
+    const source = String(pick(i, 'source') || 'repcard')
+    const office = pick(i, 'office')
+    const doors = pick(i, 'doors_knocked')
+    const knockAt = pick(i, 'knock_at')
+    const extId = pick(i, 'external_id')
+
+    if (doors !== null && doors !== undefined && doors !== '') {
+      // Daily summary. The day is the payload's date, else the day of its
+      // first knock, else today (Arizona).
+      const dayRaw = pick(i, 'activity_date')
+      const first = pick(i, 'first_knock_at'), last = pick(i, 'last_knock_at')
+      const day = (dayRaw && /^\d{4}-\d{2}-\d{2}/.test(String(dayRaw))) ? String(dayRaw).slice(0, 10)
+        : (dayRaw ? AZ_DAY(dayRaw) : null) || (first ? AZ_DAY(first) : null) || AZ_DAY(new Date().toISOString())
+      const row = {
+        source, activity_date: day, doors_knocked: Math.max(0, Math.round(Number(doors) || 0)),
+        rep_name: name ?? email ?? null, raw: i,
+      }
+      const put = (col, v) => { if (v !== null && v !== undefined && v !== '') row[col] = v }
+      if (profileId) row.profile_id = profileId
+      put('rep_email', email ? String(email).trim().toLowerCase() : null)
+      put('first_knock_at', first)
+      put('last_knock_at', last)
+      put('office', office)
+      put('external_id', extId != null ? String(extId) : null)
+      const mins = pick(i, 'field_minutes'), hrs = pick(i, 'field_hours')
+      if (mins !== null && mins !== undefined && mins !== '') row.field_minutes = Math.round(Number(mins) || 0)
+      else if (hrs !== null && hrs !== undefined && hrs !== '') row.field_minutes = Math.round((Number(hrs) || 0) * 60)
+      summaries.push(row)
+    } else if (knockAt) {
+      // Per-knock event — needs the CRM's event id so a re-fire is a no-op.
+      const id = extId != null ? String(extId) : `${profileId || name || email}|${new Date(knockAt).toISOString()}`
+      knocks.push({
+        source, external_id: id, knock_at: knockAt,
+        profile_id: profileId, rep_name: name ?? email ?? null,
+        rep_email: email ? String(email).trim().toLowerCase() : null,
+        office: office || null, raw: i,
+      })
+    } else {
+      skipped.push('neither a doors count nor a knock time')
+    }
+  }
+
+  // PostgREST needs identical keys within one bulk write → batch by shape.
+  const byShape = (rows) => {
+    const m = new Map()
+    for (const r of rows) { const sig = Object.keys(r).sort().join(','); if (!m.has(sig)) m.set(sig, []); m.get(sig).push(r) }
+    return [...m.values()]
+  }
+  for (const batch of byShape(summaries)) {
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/field_activity?on_conflict=source,rep_key,activity_date`, {
+      method: 'POST',
+      headers: { ...jsonHeaders, Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify(batch),
+    })
+    if (!resp.ok) return err(`Write failed (${resp.status}): ${(await resp.text()).slice(0, 300)}`)
+  }
+  for (const batch of byShape(knocks)) {
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/field_knocks?on_conflict=source,external_id`, {
+      method: 'POST',
+      headers: { ...jsonHeaders, Prefer: 'resolution=ignore-duplicates,return=minimal' },
+      body: JSON.stringify(batch),
+    })
+    if (!resp.ok) return err(`Write failed (${resp.status}): ${(await resp.text()).slice(0, 300)}`)
+  }
+  return ok({
+    received: items.length, summaries: summaries.length, knocks: knocks.length,
+    skipped: skipped.length ? [...new Set(skipped)] : [],
+    unmatched_people: [...unmatched],
+  })
+}
+
 const app = express()
 app.use(express.text({ type: '*/*', limit: '1mb' }))
 
@@ -601,6 +731,14 @@ app.post('/api/leads/ingest', async (req, res) => {
   if (!SUPABASE_URL || !SERVICE_KEY) return res.status(503).json(err('Lead ingest is not configured — SUPABASE_SERVICE_KEY is missing on the site service.'))
   if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
   try { res.json(await ingestLeads(req.body)) }
+  catch (e) { res.status(500).json(err(e.message || 'Ingest failed')) }
+})
+
+// Door-knocking activity from the CRM — same auth as the leads feed.
+app.post('/api/field/ingest', async (req, res) => {
+  if (!SUPABASE_URL || !SERVICE_KEY) return res.status(503).json(err('Field ingest is not configured — SUPABASE_SERVICE_KEY is missing on the site service.'))
+  if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
+  try { res.json(await ingestFieldActivity(req.body)) }
   catch (e) { res.status(500).json(err(e.message || 'Ingest failed')) }
 })
 

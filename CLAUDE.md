@@ -288,7 +288,10 @@ setup + deploy steps.
   write as a toast instead of closing the modal. Entries carry `total`
   + `count` so the page renders "12 deals ÷ 4 reps" under the average, and
   `fmtScore(v, metric, perRep)` appends " / rep" (`perRepComp(comp)`).
-  `excluded_ids` is saved only for this type, `[]` otherwise.
+  `excluded_ids` is saved only for this type, `[]` otherwise; `048` adds
+  `field_activity` (door knocks per rep per Arizona day) + `field_knocks`
+  (raw per-door events, rolled up by trigger) for the rebuilt Performance
+  page — see "Field activity feed" below.
   Do not re-run `001`/`002` against a populated database.
 
 ## Leads / appointments (CRM feed, migration 041)
@@ -367,10 +370,12 @@ appointments they set or run; admins edit).
   `weekly_stats` numbers, so June/July history survives. Blank = manual
   everywhere. Credit goes to whoever RAN the appointment — set it AND ran it
   = self-gen estimate, someone else set it = lead estimate. Consumers:
-  `bucketize` (Performance, via `opts.leads`/`opts.estimatesFrom`),
-  `repProduction`/`estimateStreak`/`suggestFromRevenue` (Goals + Home, via the
-  same opts), and Home's month tiles. The Performance page's manual estimate
-  inputs auto-disable for weeks the feed owns and say so.
+  `repProduction`/`estimateStreak`/`suggestFromRevenue` (Goals + Home, via
+  `opts.leads`/`opts.estimatesFrom`) and Home's month tiles. The rebuilt
+  Performance page shows appointment counts (Set / Ran / Sold) straight from
+  the feed regardless of the cutover — it is the feed's page. There is NO
+  UI left for hand-entering `weekly_stats` (it went with the old Performance
+  page); the table stays for pre-cutover history.
 
 ## Bonus pods (`sales_teams`, migration 045 — route `/myteam`, nav "Bonus")
 
@@ -417,71 +422,91 @@ stick per record+period in `tt_rec_dismissed` localStorage).
 
 ## Performance page (`src/pages/Performance.jsx`, manager+)
 
-Phase 1 of the Team-section overhaul (per Keaton; Phase 2 = custom saved
-reports still open. The TEAM PAGE IS RETIRED — `/team` redirects to the
-Goals page, `src/pages/Team.jsx` + `WeeklyStats.jsx` are deleted; weekly
-estimates entry lives on this page's weekly views, comparison/KPIs live
-here, MVP/Recent Wins/coach notes retired outright). Route `/performance`, guarded
-manager/director/vp/admin. Engine in `src/utils/performance.js` (pure):
-`periodsFor` (week Sun–Sat / month / quarter / year buckets), `bucketize`
-(scoped metric aggregation), `resolveTarget`, `fmtMetric`. Scope =
-org | team (date-effective, same `teamOfSale`/`saleOwnerId` attribution as the
-Dashboard — numbers must always match) | office (by `deal.office`; estimates
-aren't office-tracked so estimate/close-rate show "—") | rep (owner-credited).
-Metrics: revenue (baseline), deals (net), estimates (from `weekly_stats`),
-close_rate (closes ÷ estimates), cancel_rate (canceled ÷ all sold, the one
-place canceled deals are counted — the page fetches deals UNFILTERED),
-markup_pct ((job − baseline) ÷ baseline). **`targets` table (migration 037)**:
-scope ('org'|'team'|'office'|'rep') + subject (lead id / office lc / rep id /
-null) + metric + period grain + value + effective date (era-style; percents
-stored human, 40 = 40%). Count/$ targets scale across grains via weeks-per
-(week ×13 → quarter); percent targets apply as-is. RLS anyone-reads /
-admin-writes; admin edits via the amber "Targets" panel on the page. Revenue
-goals FALL BACK to the legacy stores when no target row matches: org+month →
-`monthly_goals`, org+week → `weekly_goal` setting, team/rep+month →
-`rep_goals` (current month only). Chart-type/breakdown picks persist per
-browser (`tt_perf_prefs` localStorage). **Zoom/drill-down:** clicking a
-period on any chart or Change-table row (or the MTD/QTD/YTD quick buttons)
-focuses that single period — the whole page narrows to it, broken into
-sub-periods (`SUB_GRAIN`: month → weeks, quarter/year → months, week → days;
-`periodsInRange` clamps edge weeks so a zoom always sums to its parent), with
-an X banner to exit; scorecard compares the focused period to the previous
-one at the SAME grain, chart goal lines re-resolve at the displayed sub-grain
-(never scaled to days), and week-zooms hide estimates (weekly inputs can't
-split into days). A "Change Over Time" table shows every displayed period vs
-the one before (relative % for $/counts, percentage-point deltas for rates;
-green/red with cancel-rate inverted). Page order: scorecard first (six tiles + a **By-office strip** directly
-under them — per-office deals + revenue for the same period, rendered from
-`officeStats`, shown ONLY at org scope so it can't contradict a
-team/rep-scoped Deals tile), then the
-Contributions row, then Teams-vs-Goal (admin: click a Goal cell to edit
-inline — writes a targets row at the displayed grain effective from the
-current period), charts, Change table, Rep Breakdown. Admin buttons up top:
-"Estimates" (a collapsible weekly-estimates entry panel — per rep per Sun–Sat
-week with ‹ › week nav, writes `weekly_stats` via `upsertWeeklyStat` and
-updates the page's state instantly; same store as Team → Weekly Stats) and
-"Targets". **Contributions row**: donuts of each team's share of Revenue/Deals/
-Estimates + a ranked close-rate bar list + a "By Office" strip (per-office
-revenue/deals/share-of-company with pace deltas; "No office" only when such
-deals exist), ALWAYS org-wide regardless of the
-scope picker, following the current period (grain/zoom); `teamCompare` is
-computed unconditionally (org-wide per-team stats + one stable color per
-team) and feeds both this row and the org-gated Teams-vs-Goal table. **Rep
-Breakdown** groups reps under their CURRENT team (`teamKeyFor`, team header
-rows with the team's color + totals, "No Team" last), each rep showing
-current-period stats with ▲▼ deltas vs the previous period at the same grain
-and a "Mo Avg" column (per-month average over the last 3 full calendar
-months; "new" when no history). Breakdown charts (by team/office)
-group in one pass over ALL deals (incl. historical/former team keys +
-"No office"); goal lines are suppressed on breakdown views. Ghost reps hidden
-from non-admin leaderboards as everywhere else. **Unassigned is EXCLUDED from
-every team view on this page** (scope picker, team breakdown, teams-vs-goal
-table; ownerless deals also skip the rep table) — per Keaton, unlike the
-Dashboard/Team pages which keep their Unassigned bucket. Instead an amber
-data-quality banner flags the FIXABLE cases: a rep who currently HAS a
-reports-to but whose deals resolve to no team (broken attribution), and deals
-with no setter/closer. Reps with no reports-to are unmanaged by design — no
-alert, their deals still count in org totals + rep scope.
+REBUILT (per Keaton, from an approved mockup) as ONE simplified page — the
+single source for the numbers we collect: part from the RepCard webhooks
+(appointments + door knocks), part from the site (deals/revenue). Route
+`/performance`, guarded manager/director/vp/admin. **All math lives in
+`src/utils/perfSummary.js` (`buildPerformance`) — the page only renders.**
+The old engine (`utils/performance.js` — grains, zoom, bucketize,
+targets, donuts, change-over-time table, weekly-estimates entry) is GONE;
+the `targets` table + `rep_goals`/`weekly_stats` stores remain for Goals/
+Home. (There is no longer any UI for hand-entering weekly estimates —
+estimates come from the leads feed; set `estimates_from_leads_date`.)
+- **Controls (sticky on desktop):** Dashboard-style date pills (This week
+  … YTD, no All-time) + custom from/to, a "Compare to previous period"
+  toggle (`getPreviousRange` — the equal-length prior window; MTD compares
+  to the same day-count of last month), team jump chips, Collapse/Expand
+  all. Prefs in `tt_perf2_prefs` localStorage. Admin buttons: **Import
+  field CSV** (`csvToFieldActivity` → `upsertFieldActivity`) and **Floors**
+  (red-flag thresholds → `app_settings.perf_floors`, exposed as `perfFloors`).
+- **Org Scoreboard:** Revenue (baseline), Monthly goal (`monthly_goals`,
+  only when the range sits inside one month), Deals, Avg deal size, Avg
+  markup (DOLLAR-weighted: (Σjob − Σbaseline) ÷ Σbaseline), Rep commissions
+  (admin/VP only). **By office** cards (deals/revenue/markup/avg deal +
+  share bar; "No office" last). **Appointments & field** strip from the
+  RepCard feed: doors → set → ran (show rate) → sold (close rate), self-gen
+  vs lead ran.
+- **Teams:** one collapsible section per org-chart team (`headIdSet`,
+  DATE-EFFECTIVE via `teamOfSale`, same as the Dashboard), sorted by
+  revenue; former-lead teams marked "Former team"; **Unassigned last**
+  (dashed amber — ownerless deals + reps with no team). Team tiles (revenue,
+  deals, avg deal, avg markup, active reps = active members as of the range
+  end) then a rep table split into **Field activity · RepCard** (Doors, Set,
+  Ran, Self-gen/Leads, Doors/day, First knock, Last knock, Field time, Knock
+  days) and **Results · Site** (Deals, Revenue, Markup, Commission —
+  admin/VP only). Head pinned first, then revenue desc; a Team total row.
+  **Every rep row is attributed by date** — a rep who moved mid-range
+  appears under EACH team with only that team's work ("Moved teams" note),
+  so a team's total always equals the sum of its rows. Current members with
+  nothing in range still get a zero row. Ghost rows hidden from non-admins.
+- **Attribution rules** (engine header comment is canonical): deal count +
+  revenue → owner (`saleOwnerId`) on the owner's team as of the sale date;
+  **commission per rep = that rep's OWN share only** (`dealAmounts.setter` /
+  `.closer`, never overrides), landing on each rep's own team — so team
+  commission can differ from "commission on the team's deals". SET credits
+  the setter on the appointment day (any status); RAN = `RAN_STATUSES`
+  credited to whoever ran it (set-and-ran = self-gen, else lead); SOLD =
+  status `sold`. Field activity credits `profile_id` on `activity_date`.
+  Canceled deals never count. `apptDay` for appointment days (never a UTC
+  slice).
+- **Red flags** (`repFlags`): a figure below the admin floor turns red.
+  Door floors (doors/day, knock days, field time) apply only once the TEAM
+  has field activity in range — before the feed is wired every doors figure
+  is 0 and flagging them all would be noise; set/ran floors always apply.
+  Field columns show "—" for a rep with no activity rows while the feed is
+  dark. An amber banner explains the missing feed (admin: link to Settings
+  + Import CSV) and lists door knocks that arrived for names not on the
+  roster (they count in the org total, on no team).
+
+## Field activity feed (door knocks, migration 048)
+
+`field_activity` = ONE row per rep per ARIZONA day (`doors_knocked`,
+`first_knock_at`/`last_knock_at`, `field_minutes` when the CRM reports time
+in field, else derived last − first at display time; `rep_key` is a
+GENERATED column = profile id else lowercased name so the day UNIQUE key
+`(source, rep_key, activity_date)` works for unmatched reps too).
+`field_knocks` = the raw per-door event log (UNIQUE `(source, external_id)`
+so a re-fired webhook is a no-op) with an AFTER INSERT trigger
+`field_knocks_rollup()` that upserts the rep's day row (doors +1, first/last
+min/max; day = `knock_at AT TIME ZONE 'America/Phoenix'`).
+- **Ingest:** `POST /api/field/ingest` on `server.js`, same auth as the
+  leads feed (`LEADS_INGEST_SECRET` / service key). Admin-mapped fields
+  (`app_settings.field_activity_field_map`, Admin → Settings → "Field
+  Activity Feed" — the same `FeedEditor` component as the lead feed; the
+  last payload is stored as `field_last_payload`). People resolve by email
+  then name via the shared `loadRosterResolver()`. A payload with a
+  `doors_knocked` count is a DAILY SUMMARY (upserted on the day key, its
+  numbers win); one with a `knock_at` is a PER-KNOCK EVENT (→ field_knocks →
+  trigger). Partial-update rule as for leads: only columns the payload
+  supplied are written. Unmatched people come back as `unmatched_people`.
+- **CSV fallback:** `csvToFieldActivity(text, profiles)` in
+  `utils/fieldActivity.js` (lenient headers: Rep/User, Date, Doors Knocked,
+  First/Last Door Knock, Time Spent In Field; hours if the header says
+  hours) → `upsertFieldActivity` with source `repcard`, so a report replaces
+  the feed's day row rather than duplicating it.
+- `summarizeActivity(rows)` is the one aggregation rule: doors, knockDays
+  (days with ≥1 door), doorsPerDay, fieldMinutes, and first/last knock as
+  AVERAGE local clock times across knock days (`fmtClock`/`fmtHours`).
 
 ## User management (Admin page)
 
