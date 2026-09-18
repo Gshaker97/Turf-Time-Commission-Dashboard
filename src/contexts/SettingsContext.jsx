@@ -75,6 +75,10 @@ export function SettingsProvider({ children }) {
     // Subcontracted line items whose price earns no override (deal editor
     // dropdown; engine computes overrides off baseline − exclusions).
     overrideExclusionItems: settings.override_exclusion_items ?? ['Electrical', 'Gas', 'Pergolas'],
+    // Performance page red-flag floors per rep for the selected range
+    // ({ doors_per_day, knock_days, set, ran }); merged over the engine's
+    // DEFAULT_FLOORS by the page. Admin edits inline on the page.
+    perfFloors: settings.perf_floors || null,
   }
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>
 }
@@ -84,5 +88,5 @@ export const useSettings = () => useContext(SettingsContext) ?? {
   statuses: DEFAULTS.deal_statuses, statusLabels: DEFAULTS.deal_statuses.map(s => s.label),
   statusColor: () => '#94a3b8', paymentMethods: DEFAULTS.payment_methods, offices: DEFAULTS.offices,
   siteName: 'Turf Time Dashboard', dataStartDate: '2026-06-01', estimatesFrom: null, noteNotify: NOTE_NOTIFY_DEFAULT,
-  overrideExclusionItems: ['Electrical', 'Gas', 'Pergolas'],
+  overrideExclusionItems: ['Electrical', 'Gas', 'Pergolas'], perfFloors: null,
 }

@@ -544,6 +544,33 @@ export async function upsertLeads(rows) {
   return supabase.from('leads').upsert(rows, { onConflict: 'source,external_id' })
 }
 
+// ── Field activity (door knocking, fed by the CRM — migration 048) ──
+let _fieldActivity = []   // demo store
+
+// Day rows (one per rep per Arizona day). Newest first; the Performance page
+// filters to its range client-side like every other aggregate here.
+export async function fetchFieldActivity() {
+  if (DEMO_MODE) return { data: _fieldActivity.map(r => ({ ...r })), error: null }
+  return supabase.from('field_activity')
+    .select('id,source,profile_id,rep_name,rep_email,activity_date,doors_knocked,first_knock_at,last_knock_at,field_minutes,office,updated_at')
+    .order('activity_date', { ascending: false })
+    .limit(5000)
+}
+
+// Admin CSV import / backfill of daily summaries — keyed like the feed
+// (source, rep_key, activity_date) so a day the feed already built is
+// replaced by the report's figures rather than duplicated.
+export async function upsertFieldActivity(rows) {
+  if (DEMO_MODE) {
+    for (const r of rows) {
+      const key = (x) => `${x.source}|${x.profile_id || String(x.rep_name || '').toLowerCase()}|${x.activity_date}`
+      _fieldActivity = [..._fieldActivity.filter(x => key(x) !== key(r)), { ...r, id: 'fa-' + Math.random().toString(36).slice(2) }]
+    }
+    return { error: null }
+  }
+  return supabase.from('field_activity').upsert(rows, { onConflict: 'source,rep_key,activity_date' })
+}
+
 // Admin correction of a single lead (status/owner fixes).
 export async function updateLead(id, patch) {
   if (DEMO_MODE) { _leads = _leads.map(l => l.id === id ? { ...l, ...patch } : l); return { error: null } }
