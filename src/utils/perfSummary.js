@@ -37,14 +37,14 @@ const localToday = () => {
 }
 
 function newStats() {
-  return { revenue: 0, job: 0, deals: 0, commission: 0, set: 0, ran: 0, sgRan: 0, leadRan: 0, sold: 0, activityRows: [] }
+  return { revenue: 0, job: 0, deals: 0, leadCloses: 0, commission: 0, set: 0, ran: 0, sgRan: 0, leadRan: 0, sold: 0, activityRows: [] }
 }
 
 // Derived figures computed once at the end so partial sums never leak out.
 function finish(s) {
   const act = summarizeActivity(s.activityRows)
   return {
-    revenue: s.revenue, job: s.job, deals: s.deals, commission: s.commission,
+    revenue: s.revenue, job: s.job, deals: s.deals, leadCloses: s.leadCloses, commission: s.commission,
     avgDeal:   s.deals ? s.revenue / s.deals : null,
     markupPct: s.revenue > 0 ? ((s.job - s.revenue) / s.revenue) * 100 : null,
     set: s.set, ran: s.ran, sgRan: s.sgRan, leadRan: s.leadRan, sold: s.sold,
@@ -99,6 +99,10 @@ function accumulate({ deals, leads, activity, teamCtx, from, to }) {
     if (d.closer_id && d.closer_id !== d.setter_id) {
       const k = teamOf(d.closer_id, d.sale_date)
       rep(k, d.closer_id).commission += a.closer; team(k).totals.commission += a.closer
+      // A LEAD CLOSE: the setter keeps the deal (owner credit above); the
+      // closer is credited with having closed a lead — same split the Home
+      // card and Dashboard use, never an extra deal.
+      if (d.setter_id) { rep(k, d.closer_id).leadCloses += 1; team(k).totals.leadCloses += 1; org.leadCloses += 1 }
     }
     if (!d.setter_id && !d.closer_id) team(UNASSIGNED).totals.commission += a.repCommission
   }
@@ -225,15 +229,15 @@ export function buildPerformance({
 // Which of a rep row's figures fall below the admin floors. Door floors only
 // apply once field activity exists for the team (before the feed is wired,
 // every doors figure is 0 and flagging all of them would be noise).
-export const DEFAULT_FLOORS = { doors_per_day: 5, knock_days: 3, set: 1, ran: 1 }
+// (First/last knock, field time and knock days are computed but NOT shown —
+// RepCard's knock webhook carries only the knock itself, per Keaton.)
+export const DEFAULT_FLOORS = { doors_per_day: 5, set: 1, ran: 1 }
 export function repFlags(row, floors = DEFAULT_FLOORS, teamHasActivity = false) {
   const f = { ...DEFAULT_FLOORS, ...(floors || {}) }
   const flags = {}
   if (teamHasActivity) {
     if (row.doors <= 0) flags.doors = true
     if ((row.doorsPerDay ?? 0) < Number(f.doors_per_day)) flags.doorsPerDay = true
-    if (row.knockDays < Number(f.knock_days)) flags.knockDays = true
-    if (row.doors > 0 && (row.fieldMinutes ?? 0) <= 0) flags.fieldMinutes = true
   }
   if (row.set < Number(f.set)) flags.set = true
   if (row.ran < Number(f.ran)) flags.ran = true
