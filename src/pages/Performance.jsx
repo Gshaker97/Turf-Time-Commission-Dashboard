@@ -28,6 +28,7 @@ const RANGE_PRESETS = PRESETS.filter(p => p.key !== 'all')   // "All time" has n
 
 const money0 = (v) => (v == null ? '—' : (v < 0 ? '-' : '') + '$' + Math.round(Math.abs(v)).toLocaleString())
 const pct1   = (v) => (v == null ? '—' : `${v.toFixed(1)}%`)
+const pct0   = (v) => (v == null ? '—' : `${Math.round(v)}%`)
 const int0   = (v) => (v == null ? '—' : Math.round(v).toLocaleString())
 const dec1   = (v) => (v == null ? '—' : (Number.isInteger(v) ? String(v) : v.toFixed(1)))
 const fmtDay = (iso) => (iso ? format(new Date(iso + 'T12:00:00'), 'MMM d') : '')
@@ -138,11 +139,11 @@ function ImportActivity({ users, onDone }) {
 }
 
 // ── One team ─────────────────────────────────────────────────────────────
-const TH = ({ children, className = '', right = true }) => (
-  <th className={`py-1.5 px-2 text-[9.5px] font-bold uppercase tracking-[0.06em] text-white/30 whitespace-nowrap ${right ? 'text-right' : 'text-left'} ${className}`}>{children}</th>
+const TH = ({ children, className = '', right = true, title }) => (
+  <th title={title} className={`py-1.5 px-2 text-[9.5px] font-bold uppercase tracking-[0.06em] text-white/30 whitespace-nowrap ${right ? 'text-right' : 'text-left'} ${title ? 'cursor-help' : ''} ${className}`}>{children}</th>
 )
-const TD = ({ children, flag, strong, className = '' }) => (
-  <td className={`py-2 px-2 text-[12px] whitespace-nowrap text-right tabular-nums ${flag ? 'text-red-400 font-bold' : strong ? 'text-white font-semibold' : 'text-white/75'} ${className}`}>{children}</td>
+const TD = ({ children, flag, strong, muted, className = '' }) => (
+  <td className={`py-2 px-2 text-[12px] whitespace-nowrap text-right tabular-nums ${flag ? 'text-red-400 font-bold' : strong ? 'text-white font-semibold' : muted ? 'text-white/45' : 'text-white/75'} ${className}`}>{children}</td>
 )
 
 function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommission }) {
@@ -202,27 +203,30 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
 
           {/* Rep table */}
           <div className="overflow-x-auto -mx-4 px-4 mt-3">
-            <table className="w-full border-collapse min-w-[860px]">
+            <table className="w-full border-collapse min-w-[1040px]">
               <thead>
                 <tr>
                   <th></th>
-                  <th colSpan={6} className="text-left px-2 pt-1 pb-0.5">
+                  <th colSpan={7} className="text-left px-2 pt-1 pb-0.5">
                     <span className="text-[9px] font-extrabold uppercase tracking-[0.1em]" style={{ color: REPCARD }}>Field activity · RepCard</span>
                   </th>
-                  <th colSpan={showCommission ? 5 : 4} className="text-left px-2 pt-1 pb-0.5" style={{ borderLeft: '1px solid #333' }}>
+                  <th colSpan={showCommission ? 7 : 6} className="text-left px-2 pt-1 pb-0.5" style={{ borderLeft: '1px solid #333' }}>
                     <span className="text-[9px] font-extrabold uppercase tracking-[0.1em]" style={{ color: SITE }}>Results · Site</span>
                   </th>
                 </tr>
                 <tr style={{ borderBottom: '1px solid #333' }}>
                   <TH right={false}>Rep</TH>
-                  <TH>Doors</TH><TH>Doors / day</TH><TH>Set</TH><TH>Ran</TH><TH>Self-gen</TH><TH>Leads</TH>
-                  <TH className="border-l border-[#333]">Deals</TH><TH>Lead closes</TH><TH>Revenue</TH><TH>Markup</TH>
+                  <TH>Doors</TH><TH>Doors / day</TH><TH>Set</TH><TH>Ran</TH><TH title="Appointments ran ÷ appointments set">Set → Ran</TH>
+                  <TH>Self-gen ran</TH><TH>Leads ran</TH>
+                  <TH className="border-l border-[#333]">Self-gen deals</TH><TH title="Self-gen deals ÷ self-gen ran">SG close</TH>
+                  <TH>Lead closes</TH><TH title="Lead closes ÷ leads ran">Lead close</TH>
+                  <TH>Revenue</TH><TH>Markup</TH>
                   {showCommission && <TH>Commission</TH>}
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 && (
-                  <tr><td colSpan={12} className="py-3 px-2 text-[12px] text-white/30">Nobody on this team in the selected range.</td></tr>
+                  <tr><td colSpan={15} className="py-3 px-2 text-[12px] text-white/30">Nobody on this team in the selected range.</td></tr>
                 )}
                 {rows.map(r => {
                   const fl = repFlags(r, floors, hasAct)
@@ -240,10 +244,13 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                       <TD flag={fl.doorsPerDay}>{dash ? '—' : dec1(r.doorsPerDay)}</TD>
                       <TD flag={fl.set}>{r.set}</TD>
                       <TD flag={fl.ran}>{r.ran}</TD>
+                      <TD muted>{pct0(r.showRate)}</TD>
                       <TD>{r.sgRan}</TD>
                       <TD>{r.leadRan}</TD>
                       <TD strong className="border-l border-[#333]">{r.deals}</TD>
+                      <TD muted>{pct0(r.sgCloseRate)}</TD>
                       <TD>{r.leadCloses}</TD>
+                      <TD muted>{pct0(r.leadCloseRate)}</TD>
                       <TD strong>{money0(r.revenue)}</TD>
                       <TD>{pct1(r.markupPct)}</TD>
                       {showCommission && <TD strong>{money0(r.commission)}</TD>}
@@ -259,10 +266,13 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                     <TD strong>{hasAct ? dec1(t.doorsPerDay) : '—'}</TD>
                     <TD strong>{t.set}</TD>
                     <TD strong>{t.ran}</TD>
+                    <TD muted>{pct0(t.showRate)}</TD>
                     <TD strong>{t.sgRan}</TD>
                     <TD strong>{t.leadRan}</TD>
                     <TD strong className="border-l border-[#333]">{t.deals}</TD>
+                    <TD muted>{pct0(t.sgCloseRate)}</TD>
                     <TD strong>{t.leadCloses}</TD>
+                    <TD muted>{pct0(t.leadCloseRate)}</TD>
                     <TD strong>{money0(t.revenue)}</TD>
                     <TD strong>{pct1(t.markupPct)}</TD>
                     {showCommission && <TD strong>{money0(t.commission)}</TD>}
@@ -478,9 +488,9 @@ export default function Performance() {
             { l: 'Doors knocked', v: org.hasActivity ? int0(org.doors) : '—', s: org.hasActivity ? <Delta cur={org.doors} prev={po?.doors} prevText={cmp(po?.doors, int0)} /> : <span className="text-[11px] text-white/25">feed not connected</span> },
             { l: 'Appointments set', v: int0(org.set), s: <Delta cur={org.set} prev={po?.set} prevText={cmp(po?.set, int0)} /> },
             { l: 'Ran', v: int0(org.ran), s: <span className="text-[11px] text-white/35">{org.showRate != null ? `${Math.round(org.showRate)}% of set` : ''} {po && <Delta cur={org.ran} prev={po.ran} />}</span> },
-            { l: 'Self-gen ran', v: int0(org.sgRan), s: <span className="text-[11px] text-white/25">set it and ran it {po && <Delta cur={org.sgRan} prev={po.sgRan} />}</span> },
-            { l: 'Leads ran', v: int0(org.leadRan), s: <span className="text-[11px] text-white/25">set by someone else {po && <Delta cur={org.leadRan} prev={po.leadRan} />}</span> },
-            { l: 'Sold', v: int0(org.sold), s: <span className="text-[11px] text-white/35">{org.closeRate != null ? `${Math.round(org.closeRate)}% close rate` : ''} {po && <Delta cur={org.sold} prev={po.sold} />}</span> },
+            { l: 'Self-gen ran', v: int0(org.sgRan), s: <span className="text-[11px] text-white/35">{org.sgCloseRate != null ? `${Math.round(org.sgCloseRate)}% became self-gen deals` : 'set it and ran it'} {po && <Delta cur={org.sgRan} prev={po.sgRan} />}</span> },
+            { l: 'Leads ran', v: int0(org.leadRan), s: <span className="text-[11px] text-white/35">{org.leadCloseRate != null ? `${Math.round(org.leadCloseRate)}% closed` : 'set by someone else'} {po && <Delta cur={org.leadRan} prev={po.leadRan} />}</span> },
+            { l: 'Sold (RepCard)', v: int0(org.sold), s: <span className="text-[11px] text-white/35">{org.closeRate != null ? `${Math.round(org.closeRate)}% of ran` : ''} {po && <Delta cur={org.sold} prev={po.sold} />}</span> },
           ].map((x, i) => (
             <div key={x.l} className="px-3.5 py-3 min-w-0" style={{ borderLeft: i ? '1px solid #2a2a2a' : 'none' }}>
               <p className="text-[9px] font-bold uppercase tracking-[0.1em] text-white/30">{x.l}</p>

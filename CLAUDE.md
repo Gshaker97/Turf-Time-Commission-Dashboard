@@ -452,9 +452,13 @@ estimates come from the leads feed; set `estimates_from_leads_date`.)
   (dashed amber — ownerless deals + reps with no team). Team tiles (revenue,
   deals, avg deal, avg markup, active reps = active members as of the range
   end) then a rep table split into **Field activity · RepCard** (Doors,
-  Doors/day, Set, Ran, Self-gen, Leads — SEPARATE columns, never "a / b")
-  and **Results · Site** (Deals, Lead closes, Revenue, Markup, Commission —
-  admin/VP only). First/last knock, field time and knock days were REMOVED
+  Doors/day, Set, Ran, **Set → Ran %**, Self-gen ran, Leads ran — SEPARATE
+  columns, never "a / b") and **Results · Site** (**Self-gen deals** = the
+  owner-credited deals, **SG close %** = self-gen deals ÷ self-gen ran,
+  Lead closes, **Lead close %** = lead closes ÷ leads ran, Revenue, Markup,
+  Commission — admin/VP only). The three conversion rates come from the
+  engine (`showRate`/`sgCloseRate`/`leadCloseRate` in `finish()`), muted
+  in the table, and echo on the org funnel tiles. First/last knock, field time and knock days were REMOVED
   from the table + mapper (per Keaton: RepCard's knock webhook carries only
   the knock; the engine still computes them and the DB keeps the columns).
   **Lead closes** = deals where the rep is the CLOSER and someone else set
