@@ -72,16 +72,21 @@ function Tile({ label, value, sub, source, children, big = true }) {
 }
 
 // ── Admin: red-flag floors ────────────────────────────────────────────────
-function FloorsEditor({ floors, onSave, onClose }) {
-  const [f, setF] = useState({ ...DEFAULT_FLOORS, ...(floors || {}) })
-  const set = (k, v) => setF(x => ({ ...x, [k]: v }))
-  const Row = ({ k, label, hint }) => (
+// Hoisted (not defined inside FloorsEditor) so React keeps the same input
+// mounted across keystrokes — an inner component type would remount and
+// drop focus on every change.
+function FloorRow({ k, label, hint, value, onChange }) {
+  return (
     <label className="flex items-center justify-between gap-3 text-[12px] text-white/70">
       <span>{label}<span className="block text-[10px] text-white/30">{hint}</span></span>
-      <input type="number" min="0" step="0.5" value={f[k]} onChange={e => set(k, e.target.value)}
+      <input id={`floor-${k}`} type="number" min="0" step="0.5" value={value} onChange={e => onChange(k, e.target.value)}
         className="w-20 px-2 py-1 rounded-lg text-[12px] text-white text-right focus:outline-none" style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }} />
     </label>
   )
+}
+function FloorsEditor({ floors, onSave, onClose }) {
+  const [f, setF] = useState({ ...DEFAULT_FLOORS, ...(floors || {}) })
+  const set = (k, v) => setF(x => ({ ...x, [k]: v }))
   return (
     <div className="rounded-xl p-4 space-y-3 w-full md:w-[360px]" style={CARD2}>
       <div className="flex items-center justify-between">
@@ -89,10 +94,10 @@ function FloorsEditor({ floors, onSave, onClose }) {
         <button onClick={onClose} className="text-[11px] text-white/40 hover:text-white">Close</button>
       </div>
       <p className="text-[10.5px] text-white/35">A rep's number turns red when it's below the floor for the selected range. Door floors only apply once field activity is coming in.</p>
-      <Row k="doors_per_day" label="Doors per knock day" hint="Average doors on days they knocked" />
-      <Row k="knock_days"    label="Knock days"          hint="Days with at least one door" />
-      <Row k="set"           label="Appointments set"    hint="In the selected range" />
-      <Row k="ran"           label="Appointments ran"    hint="In the selected range" />
+      <FloorRow k="doors_per_day" value={f.doors_per_day} onChange={set} label="Doors per knock day" hint="Average doors on days they knocked" />
+      <FloorRow k="knock_days" value={f.knock_days} onChange={set}    label="Knock days"          hint="Days with at least one door" />
+      <FloorRow k="set" value={f.set} onChange={set}           label="Appointments set"    hint="In the selected range" />
+      <FloorRow k="ran" value={f.ran} onChange={set}           label="Appointments ran"    hint="In the selected range" />
       <div className="flex justify-end gap-2 pt-1">
         <button onClick={() => onSave(Object.fromEntries(Object.entries(f).map(([k, v]) => [k, Math.max(0, Number(v) || 0)])))}
           className="px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-teal text-dark">Save floors</button>

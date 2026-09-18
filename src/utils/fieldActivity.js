@@ -133,6 +133,22 @@ function toTimestamp(dayISO, v) {
   return d.toISOString()
 }
 
+// Time in the field → whole minutes. Accepts "279", "4.65H" / "4.65 hrs",
+// "3:36" (h:mm), or a bare number read as hours when the HEADER says hours.
+// Blank → null. Exported for tests.
+export function parseDuration(v, headerIsHours = false) {
+  if (v === null || v === undefined) return null
+  const s = String(v).trim().toLowerCase()
+  if (!s) return null
+  const hm = s.match(/^(\d{1,3}):(\d{2})$/)
+  if (hm) return Number(hm[1]) * 60 + Number(hm[2])
+  const n = parseFloat(s.replace(/,/g, ''))
+  if (!Number.isFinite(n)) return null
+  const saysHours = /h(r|rs|our|ours)?\b/.test(s.replace(/^[\d.,\s]+/, '')) || headerIsHours
+  const saysMinutes = /m(in|ins|inute|inutes)?\b/.test(s.replace(/^[\d.,\s]+/, ''))
+  return Math.round(saysHours && !saysMinutes ? n * 60 : n)
+}
+
 // "9/10/2026", "2026-09-10", "Sep 10, 2026" → 'yyyy-MM-dd' (local), or null.
 function toDayISO(v) {
   if (!v) return null
@@ -196,7 +212,7 @@ export function csvToFieldActivity(text, profiles = [], { source = 'repcard' } =
       doors_knocked: Math.max(0, Math.round(num(get('doors_knocked')))),
       first_knock_at: toTimestamp(day, get('first_knock_at')),
       last_knock_at: toTimestamp(day, get('last_knock_at')),
-      field_minutes: mins === '' ? null : Math.round(isHours ? num(mins) * 60 : num(mins)),
+      field_minutes: parseDuration(mins, isHours),
       office: get('office') || null,
     }
     rows.push(row)
