@@ -10,7 +10,7 @@ import {
 import { PRESETS, getPresetRange, getPreviousRange } from '../utils/dateRanges'
 import { headIdSet, buildChangesByProfile } from '../utils/team'
 import { buildPerformance, repFlags, delta, deltaPts, DEFAULT_FLOORS } from '../utils/perfSummary'
-import { fmtClock, fmtHours, csvToFieldActivity } from '../utils/fieldActivity'
+import { csvToFieldActivity } from '../utils/fieldActivity'
 import DateRangeFilter from '../components/DateRangeFilter'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { toast } from '../lib/toast'
@@ -95,7 +95,6 @@ function FloorsEditor({ floors, onSave, onClose }) {
       </div>
       <p className="text-[10.5px] text-white/35">A rep's number turns red when it's below the floor for the selected range. Door floors only apply once field activity is coming in.</p>
       <FloorRow k="doors_per_day" value={f.doors_per_day} onChange={set} label="Doors per knock day" hint="Average doors on days they knocked" />
-      <FloorRow k="knock_days" value={f.knock_days} onChange={set}    label="Knock days"          hint="Days with at least one door" />
       <FloorRow k="set" value={f.set} onChange={set}           label="Appointments set"    hint="In the selected range" />
       <FloorRow k="ran" value={f.ran} onChange={set}           label="Appointments ran"    hint="In the selected range" />
       <div className="flex justify-end gap-2 pt-1">
@@ -203,28 +202,27 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
 
           {/* Rep table */}
           <div className="overflow-x-auto -mx-4 px-4 mt-3">
-            <table className="w-full border-collapse min-w-[980px]">
+            <table className="w-full border-collapse min-w-[860px]">
               <thead>
                 <tr>
                   <th></th>
-                  <th colSpan={9} className="text-left px-2 pt-1 pb-0.5">
+                  <th colSpan={6} className="text-left px-2 pt-1 pb-0.5">
                     <span className="text-[9px] font-extrabold uppercase tracking-[0.1em]" style={{ color: REPCARD }}>Field activity · RepCard</span>
                   </th>
-                  <th colSpan={showCommission ? 4 : 3} className="text-left px-2 pt-1 pb-0.5" style={{ borderLeft: '1px solid #333' }}>
+                  <th colSpan={showCommission ? 5 : 4} className="text-left px-2 pt-1 pb-0.5" style={{ borderLeft: '1px solid #333' }}>
                     <span className="text-[9px] font-extrabold uppercase tracking-[0.1em]" style={{ color: SITE }}>Results · Site</span>
                   </th>
                 </tr>
                 <tr style={{ borderBottom: '1px solid #333' }}>
                   <TH right={false}>Rep</TH>
-                  <TH>Doors</TH><TH>Set</TH><TH>Ran</TH><TH>Self-gen / Leads</TH><TH>Doors / day</TH>
-                  <TH>First knock</TH><TH>Last knock</TH><TH>Field time</TH><TH>Knock days</TH>
-                  <TH className="border-l border-[#333]">Deals</TH><TH>Revenue</TH><TH>Markup</TH>
+                  <TH>Doors</TH><TH>Doors / day</TH><TH>Set</TH><TH>Ran</TH><TH>Self-gen</TH><TH>Leads</TH>
+                  <TH className="border-l border-[#333]">Deals</TH><TH>Lead closes</TH><TH>Revenue</TH><TH>Markup</TH>
                   {showCommission && <TH>Commission</TH>}
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 && (
-                  <tr><td colSpan={14} className="py-3 px-2 text-[12px] text-white/30">Nobody on this team in the selected range.</td></tr>
+                  <tr><td colSpan={12} className="py-3 px-2 text-[12px] text-white/30">Nobody on this team in the selected range.</td></tr>
                 )}
                 {rows.map(r => {
                   const fl = repFlags(r, floors, hasAct)
@@ -239,15 +237,13 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                         {!r.active && <span className="block text-[9.5px] text-white/30">Deactivated</span>}
                       </td>
                       <TD flag={fl.doors}>{dash ? '—' : int0(r.doors)}</TD>
+                      <TD flag={fl.doorsPerDay}>{dash ? '—' : dec1(r.doorsPerDay)}</TD>
                       <TD flag={fl.set}>{r.set}</TD>
                       <TD flag={fl.ran}>{r.ran}</TD>
-                      <TD>{r.sgRan} / {r.leadRan}</TD>
-                      <TD flag={fl.doorsPerDay}>{dash ? '—' : dec1(r.doorsPerDay)}</TD>
-                      <TD>{dash ? '—' : fmtClock(r.firstKnock)}</TD>
-                      <TD>{dash ? '—' : fmtClock(r.lastKnock)}</TD>
-                      <TD flag={fl.fieldMinutes}>{dash ? '—' : fmtHours(r.fieldMinutes)}</TD>
-                      <TD flag={fl.knockDays}>{dash ? '—' : r.knockDays}</TD>
+                      <TD>{r.sgRan}</TD>
+                      <TD>{r.leadRan}</TD>
                       <TD strong className="border-l border-[#333]">{r.deals}</TD>
+                      <TD>{r.leadCloses}</TD>
                       <TD strong>{money0(r.revenue)}</TD>
                       <TD>{pct1(r.markupPct)}</TD>
                       {showCommission && <TD strong>{money0(r.commission)}</TD>}
@@ -260,14 +256,13 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                   <tr style={{ borderTop: '1px solid #333' }}>
                     <td className="py-2 px-2 text-[9.5px] font-bold uppercase tracking-[0.1em] text-white/40">Team</td>
                     <TD strong>{hasAct ? int0(t.doors) : '—'}</TD>
+                    <TD strong>{hasAct ? dec1(t.doorsPerDay) : '—'}</TD>
                     <TD strong>{t.set}</TD>
                     <TD strong>{t.ran}</TD>
-                    <TD strong>{t.sgRan} / {t.leadRan}</TD>
-                    <TD strong>{hasAct ? dec1(t.doorsPerDay) : '—'}</TD>
-                    <TD></TD><TD></TD>
-                    <TD strong>{hasAct ? fmtHours(t.fieldMinutes) : '—'}</TD>
-                    <TD strong>{hasAct ? t.knockDays : '—'}</TD>
+                    <TD strong>{t.sgRan}</TD>
+                    <TD strong>{t.leadRan}</TD>
                     <TD strong className="border-l border-[#333]">{t.deals}</TD>
+                    <TD strong>{t.leadCloses}</TD>
                     <TD strong>{money0(t.revenue)}</TD>
                     <TD strong>{pct1(t.markupPct)}</TD>
                     {showCommission && <TD strong>{money0(t.commission)}</TD>}
@@ -478,13 +473,14 @@ export default function Performance() {
 
         {/* Appointments & field */}
         <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/30 mt-4 mb-2 flex items-center gap-1.5">Appointments &amp; field <SourceTag kind="repcard" /></p>
-        <div className="grid grid-cols-2 md:grid-cols-5 rounded-xl overflow-hidden" style={CARD}>
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 rounded-xl overflow-hidden" style={CARD}>
           {[
             { l: 'Doors knocked', v: org.hasActivity ? int0(org.doors) : '—', s: org.hasActivity ? <Delta cur={org.doors} prev={po?.doors} prevText={cmp(po?.doors, int0)} /> : <span className="text-[11px] text-white/25">feed not connected</span> },
             { l: 'Appointments set', v: int0(org.set), s: <Delta cur={org.set} prev={po?.set} prevText={cmp(po?.set, int0)} /> },
             { l: 'Ran', v: int0(org.ran), s: <span className="text-[11px] text-white/35">{org.showRate != null ? `${Math.round(org.showRate)}% of set` : ''} {po && <Delta cur={org.ran} prev={po.ran} />}</span> },
+            { l: 'Self-gen ran', v: int0(org.sgRan), s: <span className="text-[11px] text-white/25">set it and ran it {po && <Delta cur={org.sgRan} prev={po.sgRan} />}</span> },
+            { l: 'Leads ran', v: int0(org.leadRan), s: <span className="text-[11px] text-white/25">set by someone else {po && <Delta cur={org.leadRan} prev={po.leadRan} />}</span> },
             { l: 'Sold', v: int0(org.sold), s: <span className="text-[11px] text-white/35">{org.closeRate != null ? `${Math.round(org.closeRate)}% close rate` : ''} {po && <Delta cur={org.sold} prev={po.sold} />}</span> },
-            { l: 'Self-gen / Leads ran', v: `${org.sgRan} / ${org.leadRan}`, s: <span className="text-[11px] text-white/25">ran, by who set it</span> },
           ].map((x, i) => (
             <div key={x.l} className="px-3.5 py-3 min-w-0" style={{ borderLeft: i ? '1px solid #2a2a2a' : 'none' }}>
               <p className="text-[9px] font-bold uppercase tracking-[0.1em] text-white/30">{x.l}</p>

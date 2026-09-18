@@ -451,10 +451,16 @@ estimates come from the leads feed; set `estimates_from_leads_date`.)
   revenue; former-lead teams marked "Former team"; **Unassigned last**
   (dashed amber — ownerless deals + reps with no team). Team tiles (revenue,
   deals, avg deal, avg markup, active reps = active members as of the range
-  end) then a rep table split into **Field activity · RepCard** (Doors, Set,
-  Ran, Self-gen/Leads, Doors/day, First knock, Last knock, Field time, Knock
-  days) and **Results · Site** (Deals, Revenue, Markup, Commission —
-  admin/VP only). Head pinned first, then revenue desc; a Team total row.
+  end) then a rep table split into **Field activity · RepCard** (Doors,
+  Doors/day, Set, Ran, Self-gen, Leads — SEPARATE columns, never "a / b")
+  and **Results · Site** (Deals, Lead closes, Revenue, Markup, Commission —
+  admin/VP only). First/last knock, field time and knock days were REMOVED
+  from the table + mapper (per Keaton: RepCard's knock webhook carries only
+  the knock; the engine still computes them and the DB keeps the columns).
+  **Lead closes** = deals where the rep is the CLOSER and someone else set
+  it — the setter keeps the deal (owner credit), the closer gets the lead
+  close, like the Home card; never an extra deal. Head pinned first, then
+  revenue desc; a Team total row.
   **Every rep row is attributed by date** — a rep who moved mid-range
   appears under EACH team with only that team's work ("Moved teams" note),
   so a team's total always equals the sum of its rows. Current members with
