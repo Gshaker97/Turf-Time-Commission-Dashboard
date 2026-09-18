@@ -48,8 +48,13 @@ function finish(s) {
     avgDeal:   s.deals ? s.revenue / s.deals : null,
     markupPct: s.revenue > 0 ? ((s.job - s.revenue) / s.revenue) * 100 : null,
     set: s.set, ran: s.ran, sgRan: s.sgRan, leadRan: s.leadRan, sold: s.sold,
-    showRate:  s.set ? (s.ran / s.set) * 100 : null,
-    closeRate: s.ran ? (s.sold / s.ran) * 100 : null,
+    // Conversion rates (per Keaton): set → ran; self-gen ran → self-gen
+    // deals (owner-credited deals ÷ self-gen appointments ran); leads ran →
+    // lead closes. `closeRate` is RepCard's own sold outcome ÷ ran.
+    showRate:      s.set ? (s.ran / s.set) * 100 : null,
+    sgCloseRate:   s.sgRan ? (s.deals / s.sgRan) * 100 : null,
+    leadCloseRate: s.leadRan ? (s.leadCloses / s.leadRan) * 100 : null,
+    closeRate:     s.ran ? (s.sold / s.ran) * 100 : null,
     doors: act.doors, knockDays: act.knockDays, doorsPerDay: act.doorsPerDay,
     firstKnock: act.firstKnock, lastKnock: act.lastKnock, fieldMinutes: act.fieldMinutes,
     hasActivity: act.rows > 0,
