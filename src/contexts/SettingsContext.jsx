@@ -79,6 +79,11 @@ export function SettingsProvider({ children }) {
     // ({ doors_per_day, knock_days, set, ran }); merged over the engine's
     // DEFAULT_FLOORS by the page. Admin edits inline on the page.
     perfFloors: settings.perf_floors || null,
+    // Performance page: the head whose team adopts everything Unassigned
+    // (null = seed from the roster: the active director), and people hidden
+    // from that page altogether (null = seed by name: Tanner Arnett).
+    perfDefaultTeam: settings.perf_default_team ?? null,
+    perfExcludedIds: settings.perf_excluded_ids ?? null,
   }
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>
 }
@@ -88,5 +93,5 @@ export const useSettings = () => useContext(SettingsContext) ?? {
   statuses: DEFAULTS.deal_statuses, statusLabels: DEFAULTS.deal_statuses.map(s => s.label),
   statusColor: () => '#94a3b8', paymentMethods: DEFAULTS.payment_methods, offices: DEFAULTS.offices,
   siteName: 'Turf Time Dashboard', dataStartDate: '2026-06-01', estimatesFrom: null, noteNotify: NOTE_NOTIFY_DEFAULT,
-  overrideExclusionItems: ['Electrical', 'Gas', 'Pergolas'], perfFloors: null,
+  overrideExclusionItems: ['Electrical', 'Gas', 'Pergolas'], perfFloors: null, perfDefaultTeam: null, perfExcludedIds: null,
 }

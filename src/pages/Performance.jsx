@@ -21,8 +21,6 @@ import { toast } from '../lib/toast'
 
 const CARD  = { background: '#1e1e1e', border: '1px solid #2a2a2a' }
 const CARD2 = { background: '#242424', border: '1px solid #2e2e2e' }
-const REPCARD = '#a78bfa'   // field-activity + appointment figures (CRM feed)
-const SITE    = '#2dd4bf'   // deals / revenue / commission (this site)
 const PREFS_KEY = 'tt_perf2_prefs'
 const RANGE_PRESETS = PRESETS.filter(p => p.key !== 'all')   // "All time" has no comparable previous period
 
@@ -33,16 +31,6 @@ const int0   = (v) => (v == null ? '—' : Math.round(v).toLocaleString())
 const dec1   = (v) => (v == null ? '—' : (Number.isInteger(v) ? String(v) : v.toFixed(1)))
 const fmtDay = (iso) => (iso ? format(new Date(iso + 'T12:00:00'), 'MMM d') : '')
 const fmtRangeLabel = (from, to) => (!from && !to ? 'All time' : `${fmtDay(from)} – ${fmtDay(to)}`)
-
-function SourceTag({ kind }) {
-  const rc = kind === 'repcard'
-  return (
-    <span className="inline-block text-[8.5px] font-bold uppercase tracking-[0.08em] px-1.5 py-[1px] rounded-full align-middle"
-      style={{ color: rc ? REPCARD : SITE, border: `1px solid ${rc ? REPCARD : SITE}66` }}>
-      {rc ? 'RepCard' : 'Site'}
-    </span>
-  )
-}
 
 // ▲ 12.4% / ▼ 0.9 pt — green up, red down (inverse for lower-is-better).
 function Delta({ cur, prev, rate = false, inverse = false, prevText }) {
@@ -60,11 +48,11 @@ function Delta({ cur, prev, rate = false, inverse = false, prevText }) {
   )
 }
 
-function Tile({ label, value, sub, source, children, big = true }) {
+function Tile({ label, value, sub, children, big = true }) {
   return (
     <div className="rounded-xl px-3.5 py-3 min-w-0" style={CARD}>
       <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/30 flex items-center gap-1.5 flex-wrap">
-        {label}{source && <SourceTag kind={source} />}
+        {label}
       </p>
       <p className={`${big ? 'text-[22px]' : 'text-[17px]'} font-extrabold text-white mt-1 leading-none tabular-nums`}>{value}</p>
       {(sub || children) && <div className="mt-1.5 flex items-center gap-2 flex-wrap min-h-[14px]">{sub}{children}</div>}
@@ -85,22 +73,65 @@ function FloorRow({ k, label, hint, value, onChange }) {
     </label>
   )
 }
-function FloorsEditor({ floors, onSave, onClose }) {
+// Page settings (admin): red-flag floors, the team that adopts everything
+// Unassigned, and people hidden from this page altogether.
+function PageSettings({ floors, defaultTeamId, excludedIds, users, heads, onSave, onClose }) {
   const [f, setF] = useState({ ...DEFAULT_FLOORS, ...(floors || {}) })
+  const [team, setTeam] = useState(defaultTeamId || '')
+  const [ex, setEx] = useState(new Set(excludedIds || []))
+  const [q, setQ] = useState('')
   const set = (k, v) => setF(x => ({ ...x, [k]: v }))
+  const toggle = (id) => setEx(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const headOptions = users.filter(u => heads.has(u.id) || ['director', 'vp'].includes(u.role)).sort((a, b) => a.name.localeCompare(b.name))
+  const people = users.filter(u => u.active !== false && (!q || u.name.toLowerCase().includes(q.toLowerCase()))).sort((a, b) => a.name.localeCompare(b.name))
   return (
-    <div className="rounded-xl p-4 space-y-3 w-full md:w-[360px]" style={CARD2}>
+    <div className="rounded-xl p-4 space-y-4 w-full md:w-[420px]" style={CARD2}>
       <div className="flex items-center justify-between">
-        <p className="text-[12px] font-bold text-white">Red-flag floors</p>
+        <p className="text-[12px] font-bold text-white">Performance page settings</p>
         <button onClick={onClose} className="text-[11px] text-white/40 hover:text-white">Close</button>
       </div>
-      <p className="text-[10.5px] text-white/35">A rep's number turns red when it's below the floor for the selected range. Door floors only apply once field activity is coming in.</p>
-      <FloorRow k="doors_per_day" value={f.doors_per_day} onChange={set} label="Doors per knock day" hint="Average doors on days they knocked" />
-      <FloorRow k="set" value={f.set} onChange={set}           label="Appointments set"    hint="In the selected range" />
-      <FloorRow k="ran" value={f.ran} onChange={set}           label="Appointments ran"    hint="In the selected range" />
+
+      <div className="space-y-2">
+        <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/30">Red-flag floors</p>
+        <p className="text-[10.5px] text-white/35">A rep's number turns red when it's below the floor for the selected range. Door floors only apply once field activity is coming in.</p>
+        <FloorRow k="doors_per_day" value={f.doors_per_day} onChange={set} label="Doors per knock day" hint="Average doors on days they knocked" />
+        <FloorRow k="set" value={f.set} onChange={set}           label="Appointments set"    hint="In the selected range" />
+        <FloorRow k="ran" value={f.ran} onChange={set}           label="Appointments ran"    hint="In the selected range" />
+      </div>
+
+      <div className="space-y-1.5">
+        <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/30">Default team for unassigned</p>
+        <p className="text-[10.5px] text-white/35">Reps on no team and deals with no team owner are filed here instead of an "Unassigned" section.</p>
+        <select id="perf-default-team" value={team} onChange={e => setTeam(e.target.value)}
+          className="w-full px-2 py-1.5 rounded-lg text-[12px] text-white focus:outline-none appearance-none" style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }}>
+          <option value="">Keep a separate "Unassigned" section</option>
+          {headOptions.map(u => <option key={u.id} value={u.id}>{u.name} ({u.role})</option>)}
+        </select>
+      </div>
+
+      <div className="space-y-1.5">
+        <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/30">Hidden from this page</p>
+        <p className="text-[10.5px] text-white/35">Not reps (installers, office staff). They get no row and their deals, appointments and knocks are left out of every total here. The Dashboard and payroll still count them.</p>
+        <input id="perf-exclude-search" value={q} onChange={e => setQ(e.target.value)} placeholder="Search people…"
+          className="w-full px-2 py-1.5 rounded-lg text-[12px] text-white placeholder-white/20 focus:outline-none" style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }} />
+        <div className="max-h-44 overflow-y-auto rounded-lg divide-y divide-white/5" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+          {people.map(u => (
+            <label key={u.id} className="flex items-center gap-2 px-2.5 py-1.5 text-[12px] text-white/75 cursor-pointer hover:bg-white/[0.03]">
+              <input type="checkbox" checked={ex.has(u.id)} onChange={() => toggle(u.id)} className="accent-teal" />
+              <span className="flex-1 truncate">{u.name}</span>
+              <span className="text-[9px] uppercase tracking-wide text-white/30">{u.role}</span>
+            </label>
+          ))}
+          {people.length === 0 && <p className="px-2.5 py-2 text-[11px] text-white/30">No one matches.</p>}
+        </div>
+      </div>
+
       <div className="flex justify-end gap-2 pt-1">
-        <button onClick={() => onSave(Object.fromEntries(Object.entries(f).map(([k, v]) => [k, Math.max(0, Number(v) || 0)])))}
-          className="px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-teal text-dark">Save floors</button>
+        <button onClick={() => onSave({
+          floors: Object.fromEntries(Object.entries(f).map(([k, v]) => [k, Math.max(0, Number(v) || 0)])),
+          defaultTeamId: team || null,
+          excludedIds: [...ex],
+        })} className="px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-teal text-dark">Save settings</button>
       </div>
     </div>
   )
@@ -160,7 +191,7 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
         <span className="text-[11px] text-white/40 truncate">
           {team.unassigned ? 'Owner on no current team'
             : team.historical ? `Former team · led by ${team.head?.name ?? '—'}`
-            : <>Led by <span className="text-white/70">{team.head?.name}</span></>}
+            : <>Led by <span className="text-white/70">{team.head?.name}</span>{team.isDefault && <span className="text-amber-300/70"> · includes unassigned</span>}</>}
           {' · '}{team.members} {team.members === 1 ? 'person' : 'people'}
         </span>
         {collapsed && (
@@ -205,28 +236,21 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
           <div className="overflow-x-auto -mx-4 px-4 mt-3">
             <table className="w-full border-collapse min-w-[1040px]">
               <thead>
-                <tr>
-                  <th></th>
-                  <th colSpan={7} className="text-left px-2 pt-1 pb-0.5">
-                    <span className="text-[9px] font-extrabold uppercase tracking-[0.1em]" style={{ color: REPCARD }}>Field activity · RepCard</span>
-                  </th>
-                  <th colSpan={showCommission ? 7 : 6} className="text-left px-2 pt-1 pb-0.5" style={{ borderLeft: '1px solid #333' }}>
-                    <span className="text-[9px] font-extrabold uppercase tracking-[0.1em]" style={{ color: SITE }}>Results · Site</span>
-                  </th>
-                </tr>
                 <tr style={{ borderBottom: '1px solid #333' }}>
                   <TH right={false}>Rep</TH>
                   <TH>Doors</TH><TH>Doors / day</TH><TH>Set</TH><TH>Ran</TH><TH title="Of the appointments this rep set, how many ran (whoever ran them) ÷ appointments set">Set → Ran</TH>
                   <TH>Self-gen ran</TH><TH>Leads ran</TH>
                   <TH className="border-l border-[#333]">Self-gen deals</TH><TH title="Self-gen deals ÷ self-gen ran">SG close</TH>
                   <TH>Lead closes</TH><TH title="Lead closes ÷ leads ran">Lead close</TH>
-                  <TH>Revenue</TH><TH>Markup</TH>
+                  <TH title="Baseline revenue of this rep's self-gen deals">Revenue</TH>
+                  <TH title="Self-gen revenue + baseline of the deals this rep closed for another setter">Total revenue</TH>
+                  <TH>Markup</TH>
                   {showCommission && <TH>Commission</TH>}
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 && (
-                  <tr><td colSpan={15} className="py-3 px-2 text-[12px] text-white/30">Nobody on this team in the selected range.</td></tr>
+                  <tr><td colSpan={16} className="py-3 px-2 text-[12px] text-white/30">Nobody on this team in the selected range.</td></tr>
                 )}
                 {rows.map(r => {
                   const fl = repFlags(r, floors, hasAct)
@@ -252,6 +276,7 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                       <TD>{r.leadCloses}</TD>
                       <TD muted>{pct0(r.leadCloseRate)}</TD>
                       <TD strong>{money0(r.revenue)}</TD>
+                      <TD>{money0(r.totalRevenue)}</TD>
                       <TD>{pct1(r.markupPct)}</TD>
                       {showCommission && <TD strong>{money0(r.commission)}</TD>}
                     </tr>
@@ -274,6 +299,7 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                     <TD strong>{t.leadCloses}</TD>
                     <TD muted>{pct0(t.leadCloseRate)}</TD>
                     <TD strong>{money0(t.revenue)}</TD>
+                    <TD strong>{money0(t.totalRevenue)}</TD>
                     <TD strong>{pct1(t.markupPct)}</TD>
                     {showCommission && <TD strong>{money0(t.commission)}</TD>}
                   </tr>
@@ -290,7 +316,7 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
 // ── Page ─────────────────────────────────────────────────────────────────
 export default function Performance() {
   const { profile, isAdmin } = useAuth()
-  const { perfFloors, save } = useSettings()
+  const { perfFloors, perfDefaultTeam, perfExcludedIds, save } = useSettings()
 
   const [deals, setDeals] = useState([])
   const [users, setUsers] = useState([])
@@ -335,9 +361,21 @@ export default function Performance() {
   }), [users, teamChanges])
 
   const prevRange = useMemo(() => (prefs.compare ? getPreviousRange(range.preset, range.from, range.to) : null), [prefs.compare, range])
+  // Until an admin saves these, seed from the roster: the active director's
+  // team adopts Unassigned (Garrison), and Tanner Arnett is hidden (not a
+  // rep) — both per Keaton. A saved value, even empty, always wins.
+  const defaultTeamId = useMemo(() => {
+    if (perfDefaultTeam !== null && perfDefaultTeam !== undefined) return perfDefaultTeam || null
+    const byName = users.find(u => u.active !== false && u.name?.trim().toLowerCase() === 'garrison shaker')
+    return (byName || users.find(u => u.active !== false && u.role === 'director'))?.id ?? null
+  }, [perfDefaultTeam, users])
+  const excludedIds = useMemo(() => {
+    if (Array.isArray(perfExcludedIds)) return perfExcludedIds
+    return users.filter(u => u.name?.trim().toLowerCase() === 'tanner arnett').map(u => u.id)
+  }, [perfExcludedIds, users])
   const perf = useMemo(
-    () => buildPerformance({ deals, leads, activity, users, teamCtx, range, prev: prevRange }),
-    [deals, leads, activity, users, teamCtx, range, prevRange]
+    () => buildPerformance({ deals, leads, activity, users, teamCtx, range, prev: prevRange, defaultTeamId, excludedIds }),
+    [deals, leads, activity, users, teamCtx, range, prevRange, defaultTeamId, excludedIds]
   )
   const org = perf.org, po = perf.prevOrg
   const floors = { ...DEFAULT_FLOORS, ...(perfFloors || {}) }
@@ -379,7 +417,7 @@ export default function Performance() {
               <>
                 <ImportActivity users={users} onDone={loadData} />
                 <button onClick={() => setShowFloors(s => !s)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-white/60 hover:text-white" style={{ border: '1px solid #333' }}>
-                  <SlidersHorizontal size={12} /> Floors
+                  <SlidersHorizontal size={12} /> Settings
                 </button>
               </>
             )}
@@ -401,8 +439,14 @@ export default function Performance() {
       </div>
 
       {showFloors && isAdmin && (
-        <FloorsEditor floors={perfFloors} onClose={() => setShowFloors(false)}
-          onSave={async (f) => { const r = await save('perf_floors', f); if (r?.error) toast.error('Could not save floors: ' + r.error.message); else { toast.success('Floors saved'); setShowFloors(false) } }} />
+        <PageSettings floors={perfFloors} defaultTeamId={defaultTeamId} excludedIds={excludedIds} users={users} heads={teamCtx.heads}
+          onClose={() => setShowFloors(false)}
+          onSave={async ({ floors: f, defaultTeamId: t, excludedIds: ex }) => {
+            const rs = await Promise.all([save('perf_floors', f), save('perf_default_team', t ?? ''), save('perf_excluded_ids', ex)])
+            const bad = rs.find(r => r?.error)
+            if (bad) toast.error('Could not save settings: ' + bad.error.message)
+            else { toast.success('Settings saved'); setShowFloors(false) }
+          }} />
       )}
 
       {/* Data quality */}
@@ -432,7 +476,7 @@ export default function Performance() {
           <span className="text-[11px] text-white/35">{fmtRangeLabel(range.from, range.to)}{prevRange ? ` · vs ${fmtRangeLabel(prevRange.from, prevRange.to)}` : ''}</span>
         </div>
         <div className={`grid grid-cols-2 md:grid-cols-3 ${showCommission ? 'xl:grid-cols-6' : 'xl:grid-cols-5'} gap-2.5`}>
-          <Tile label="Revenue" source="site" value={money0(org.revenue)} sub={<Delta cur={org.revenue} prev={po?.revenue} prevText={cmp(po?.revenue, money0)} />} />
+          <Tile label="Revenue" value={money0(org.revenue)} sub={<Delta cur={org.revenue} prev={po?.revenue} prevText={cmp(po?.revenue, money0)} />} />
           {goalMonth && (
             <Tile label="Monthly goal" value={goal ? `${Math.round((org.revenue / goal) * 100)}%` : '—'}
               sub={<span className="text-[11px] text-white/25">{goal ? `of ${money0(goal)}` : 'No goal set for this month'}</span>}>
@@ -443,11 +487,11 @@ export default function Performance() {
               )}
             </Tile>
           )}
-          <Tile label="Deals sold" source="site" value={int0(org.deals)} sub={<Delta cur={org.deals} prev={po?.deals} prevText={cmp(po?.deals, int0)} />} />
+          <Tile label="Deals sold" value={int0(org.deals)} sub={<Delta cur={org.deals} prev={po?.deals} prevText={cmp(po?.deals, int0)} />} />
           <Tile label="Avg deal size" value={money0(org.avgDeal)} sub={<Delta cur={org.avgDeal} prev={po?.avgDeal} prevText={cmp(po?.avgDeal, money0)} />} />
           <Tile label="Avg markup" value={pct1(org.markupPct)} sub={<Delta cur={org.markupPct} prev={po?.markupPct} rate prevText={cmp(po?.markupPct, pct1)} />} />
           {showCommission && (
-            <Tile label="Rep commissions" source="site" value={money0(org.commission)} sub={<Delta cur={org.commission} prev={po?.commission} prevText={cmp(po?.commission, money0)} />} />
+            <Tile label="Rep commissions" value={money0(org.commission)} sub={<Delta cur={org.commission} prev={po?.commission} prevText={cmp(po?.commission, money0)} />} />
           )}
         </div>
 
@@ -482,7 +526,7 @@ export default function Performance() {
         )}
 
         {/* Appointments & field */}
-        <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/30 mt-4 mb-2 flex items-center gap-1.5">Appointments &amp; field <SourceTag kind="repcard" /></p>
+        <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/30 mt-4 mb-2">Appointments &amp; field</p>
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 rounded-xl overflow-hidden" style={CARD}>
           {[
             { l: 'Doors knocked', v: org.hasActivity ? int0(org.doors) : '—', s: org.hasActivity ? <Delta cur={org.doors} prev={po?.doors} prevText={cmp(po?.doors, int0)} /> : <span className="text-[11px] text-white/25">feed not connected</span> },
@@ -514,8 +558,10 @@ export default function Performance() {
         ))}
       </section>
 
-      <p className="text-[10.5px] text-white/25 flex items-center gap-1.5"><Settings2 size={11} />
+      <p className="text-[10.5px] text-white/25 flex items-center gap-1.5 flex-wrap"><Settings2 size={11} />
         Revenue is baseline revenue; canceled deals never count. Set / Ran / Sold are appointments from the RepCard feed. Commission is each rep's own share only.
+        {perf.excluded.length > 0 && <span> · Hidden from this page: {perf.excluded.map(u => u.name).join(', ')}.</span>}
+        {perf.defaultTeamId && <span> · Unassigned reps and deals are filed under {perf.teams.find(t => t.key === perf.defaultTeamId)?.label ?? 'the default team'}.</span>}
       </p>
     </div>
   )
