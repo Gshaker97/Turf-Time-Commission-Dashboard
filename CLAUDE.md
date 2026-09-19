@@ -452,7 +452,10 @@ estimates come from the leads feed; set `estimates_from_leads_date`.)
   (dashed amber — ownerless deals + reps with no team). Team tiles (revenue,
   deals, avg deal, avg markup, active reps = active members as of the range
   end) then a rep table split into **Field activity · RepCard** (Doors,
-  Doors/day, Set, Ran, **Set → Ran %**, Self-gen ran, Leads ran — SEPARATE
+  Doors/day, Set, Ran, **Set → Ran %** = a SETTER stat: of the appointments
+  this rep SET, how many ran whoever ran them (`setRan ÷ set`) — never "ran
+  ÷ set" with ran = appointments the rep ran as a closer, which gave a
+  closer 2300% (per Keaton), Self-gen ran, Leads ran — SEPARATE
   columns, never "a / b") and **Results · Site** (**Self-gen deals** = the
   owner-credited deals, **SG close %** = self-gen deals ÷ self-gen ran,
   Lead closes, **Lead close %** = lead closes ÷ leads ran, Revenue, Markup,
