@@ -245,10 +245,12 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                 <tr style={{ borderBottom: '1px solid #333' }}>
                   <TH right={false}>Rep</TH>
                   <TH>Doors</TH><TH>Doors<br />/ day</TH>
-                  <TH title="Appointments set. Below it: how many of them ran (whoever ran them) ÷ set">Set<br />→ ran %</TH>
-                  <TH>Ran</TH><TH>Self-gen<br />ran</TH><TH>Leads<br />ran</TH>
-                  <TH className="border-l border-[#333]" title="Owner-credited deals. Below it: self-gen deals ÷ self-gen ran">Self-gen<br />deals · close %</TH>
-                  <TH title="Deals closed for another setter. Below it: lead closes ÷ leads ran">Lead<br />closes · close %</TH>
+                  <TH title="Appointments this rep BOOKED. Underneath: how many of them ran, whoever sat them.">Set</TH>
+                  <TH title="Appointments this rep personally SAT — a pure setter shows 0 here even with a high set → ran rate.">Ran</TH>
+                  <TH title="Appointments this rep both booked and sat">Self-gen<br />ran</TH>
+                  <TH title="Appointments this rep sat for another setter">Leads<br />ran</TH>
+                  <TH className="border-l border-[#333]" title="Deals this rep owns. Underneath: self-gen deals ÷ self-gen ran.">Self-gen<br />deals</TH>
+                  <TH title="Deals this rep closed for another setter. Underneath: lead closes ÷ leads ran.">Lead<br />closes</TH>
                   <TH title="Baseline revenue of this rep's self-gen deals">Revenue</TH>
                   <TH title="Self-gen revenue + baseline of the deals this rep closed for another setter">Total<br />revenue</TH>
                   <TH>Markup</TH>
@@ -273,12 +275,12 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                       </td>
                       <TD flag={fl.doors}>{dash ? '—' : int0(r.doors)}</TD>
                       <TD flag={fl.doorsPerDay}>{dash ? '—' : dec1(r.doorsPerDay)}</TD>
-                      <TD flag={fl.set} sub={pct0(r.showRate)}>{r.set}</TD>
+                      <TD flag={fl.set} sub={r.showRate == null ? null : `${pct0(r.showRate)} ran`}>{r.set}</TD>
                       <TD flag={fl.ran}>{r.ran}</TD>
                       <TD>{r.sgRan}</TD>
                       <TD>{r.leadRan}</TD>
-                      <TD strong className="border-l border-[#333]" sub={pct0(r.sgCloseRate)}>{r.deals}</TD>
-                      <TD sub={pct0(r.leadCloseRate)}>{r.leadCloses}</TD>
+                      <TD strong className="border-l border-[#333]" sub={r.sgCloseRate == null ? null : `${pct0(r.sgCloseRate)} close`}>{r.deals}</TD>
+                      <TD sub={r.leadCloseRate == null ? null : `${pct0(r.leadCloseRate)} close`}>{r.leadCloses}</TD>
                       <TD strong>{money0(r.revenue)}</TD>
                       <TD>{money0(r.totalRevenue)}</TD>
                       <TD>{pct1(r.markupPct)}</TD>
@@ -293,12 +295,12 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                     <td className="py-2 px-2 text-[9.5px] font-bold uppercase tracking-[0.1em] text-white/40">Team</td>
                     <TD strong>{hasAct ? int0(t.doors) : '—'}</TD>
                     <TD strong>{hasAct ? dec1(t.doorsPerDay) : '—'}</TD>
-                    <TD strong sub={pct0(t.showRate)}>{t.set}</TD>
+                    <TD strong sub={t.showRate == null ? null : `${pct0(t.showRate)} ran`}>{t.set}</TD>
                     <TD strong>{t.ran}</TD>
                     <TD strong>{t.sgRan}</TD>
                     <TD strong>{t.leadRan}</TD>
-                    <TD strong className="border-l border-[#333]" sub={pct0(t.sgCloseRate)}>{t.deals}</TD>
-                    <TD strong sub={pct0(t.leadCloseRate)}>{t.leadCloses}</TD>
+                    <TD strong className="border-l border-[#333]" sub={t.sgCloseRate == null ? null : `${pct0(t.sgCloseRate)} close`}>{t.deals}</TD>
+                    <TD strong sub={t.leadCloseRate == null ? null : `${pct0(t.leadCloseRate)} close`}>{t.leadCloses}</TD>
                     <TD strong>{money0(t.revenue)}</TD>
                     <TD strong>{money0(t.totalRevenue)}</TD>
                     <TD strong>{pct1(t.markupPct)}</TD>
