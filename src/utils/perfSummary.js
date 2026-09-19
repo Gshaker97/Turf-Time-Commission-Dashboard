@@ -37,7 +37,7 @@ const localToday = () => {
 }
 
 function newStats() {
-  return { revenue: 0, job: 0, deals: 0, leadCloses: 0, commission: 0, set: 0, setRan: 0, ran: 0, sgRan: 0, leadRan: 0, sold: 0, activityRows: [] }
+  return { revenue: 0, job: 0, deals: 0, leadCloses: 0, leadRevenue: 0, commission: 0, set: 0, setRan: 0, ran: 0, sgRan: 0, leadRan: 0, sold: 0, activityRows: [] }
 }
 
 // Derived figures computed once at the end so partial sums never leak out.
@@ -45,6 +45,10 @@ function finish(s) {
   const act = summarizeActivity(s.activityRows)
   return {
     revenue: s.revenue, job: s.job, deals: s.deals, leadCloses: s.leadCloses, commission: s.commission,
+    // Self-gen revenue (owner-credited) + baseline of the deals this rep
+    // closed for another setter. At team/org level this double-counts a deal
+    // whose setter and closer are both in the group — it is a per-rep view.
+    leadRevenue: s.leadRevenue, totalRevenue: s.revenue + s.leadRevenue,
     avgDeal:   s.deals ? s.revenue / s.deals : null,
     markupPct: s.revenue > 0 ? ((s.job - s.revenue) / s.revenue) * 100 : null,
     set: s.set, setRan: s.setRan, ran: s.ran, sgRan: s.sgRan, leadRan: s.leadRan, sold: s.sold,
@@ -63,10 +67,27 @@ function finish(s) {
   }
 }
 
-// One window's raw accumulation: org, offices, and team → rep buckets.
-function accumulate({ deals, leads, activity, teamCtx, from, to }) {
+// Team key for a person on a day — with the page's two overrides:
+//   • defaultTeamId: anything that would land in Unassigned (no owner, owner
+//     on no team) is filed under this head instead (per Keaton: Garrison's
+//     team is the default home for unassigned reps and deals).
+//   • excluded: people removed from this page altogether (per Keaton: Tanner
+//     is not a rep) — they get no row, and their deals, appointments and
+//     door knocks are left out of every total ON THIS PAGE. The Dashboard and
+//     payroll still count them, so this page's org totals can differ from
+//     the Dashboard by exactly their production.
+function makeTeamOf(teamCtx, defaultTeamId) {
   const { usersById, heads, changesByProfile } = teamCtx
-  const teamOf = (pid, day) => (pid ? teamOfSale(pid, day, usersById, heads, changesByProfile) : UNASSIGNED)
+  return (pid, day) => {
+    const k = pid ? teamOfSale(pid, day, usersById, heads, changesByProfile) : UNASSIGNED
+    return k === UNASSIGNED && defaultTeamId ? defaultTeamId : k
+  }
+}
+
+// One window's raw accumulation: org, offices, and team → rep buckets.
+function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId = null, excluded = new Set() }) {
+  const teamOf = makeTeamOf(teamCtx, defaultTeamId)
+  const out = (pid) => !!pid && excluded.has(pid)
 
   const org = newStats()
   const offices = new Map()          // office key (lc) → stats; '' = no office
@@ -90,8 +111,9 @@ function accumulate({ deals, leads, activity, teamCtx, from, to }) {
 
   for (const d of deals) {
     if (isCanceled(d) || !inRange(d.sale_date, from, to)) continue
-    const a = dealAmounts(d)
     const owner = saleOwnerId(d)
+    if (out(owner)) continue                       // an excluded person's deal leaves this page entirely
+    const a = dealAmounts(d)
     const key = teamOf(owner, d.sale_date)
     for (const s of [org, office(d.office), team(key).totals]) {
       s.revenue += a.baseline; s.job += a.job; s.deals += 1
@@ -103,32 +125,36 @@ function accumulate({ deals, leads, activity, teamCtx, from, to }) {
       const k = teamOf(d.setter_id, d.sale_date)
       rep(k, d.setter_id).commission += a.setter; team(k).totals.commission += a.setter
     }
-    if (d.closer_id && d.closer_id !== d.setter_id) {
+    if (d.closer_id && d.closer_id !== d.setter_id && !out(d.closer_id)) {
       const k = teamOf(d.closer_id, d.sale_date)
       rep(k, d.closer_id).commission += a.closer; team(k).totals.commission += a.closer
       // A LEAD CLOSE: the setter keeps the deal (owner credit above); the
       // closer is credited with having closed a lead — same split the Home
-      // card and Dashboard use, never an extra deal.
-      if (d.setter_id) { rep(k, d.closer_id).leadCloses += 1; team(k).totals.leadCloses += 1; org.leadCloses += 1 }
+      // card and Dashboard use, never an extra deal. Its baseline feeds the
+      // closer's TOTAL revenue (self-gen revenue + lead-close revenue).
+      if (d.setter_id) {
+        for (const s of [org, team(k).totals, rep(k, d.closer_id)]) { s.leadCloses += 1; s.leadRevenue += a.baseline }
+      }
     }
-    if (!d.setter_id && !d.closer_id) team(UNASSIGNED).totals.commission += a.repCommission
+    if (!d.setter_id && !d.closer_id) team(key).totals.commission += a.repCommission
   }
 
   for (const l of leads) {
     const day = apptDay(l.appointment_at)
     if (!inRange(day, from, to)) continue
-    if (l.setter_id) {
-      const k = teamOf(l.setter_id, day)
-      org.set += 1; team(k).totals.set += 1; rep(k, l.setter_id).set += 1
+    const setter = out(l.setter_id) ? null : l.setter_id
+    if (setter) {
+      const k = teamOf(setter, day)
+      org.set += 1; team(k).totals.set += 1; rep(k, setter).set += 1
     }
     if (!RAN_STATUSES.has(l.status)) continue
     // The SETTER gets "my appointment ran" credit no matter who ran it.
-    if (l.setter_id) {
-      const k = teamOf(l.setter_id, day)
-      org.setRan += 1; team(k).totals.setRan += 1; rep(k, l.setter_id).setRan += 1
+    if (setter) {
+      const k = teamOf(setter, day)
+      org.setRan += 1; team(k).totals.setRan += 1; rep(k, setter).setRan += 1
     }
     const ranBy = l.closer_id || l.setter_id
-    if (!ranBy) continue
+    if (!ranBy || out(ranBy)) continue
     const selfGen = !l.setter_id || l.setter_id === ranBy
     const k = teamOf(ranBy, day)
     const sold = l.status === 'sold'
@@ -141,6 +167,7 @@ function accumulate({ deals, leads, activity, teamCtx, from, to }) {
 
   for (const row of activity) {
     if (!inRange(row.activity_date, from, to)) continue
+    if (out(row.profile_id)) continue
     org.activityRows.push(row)
     if (!row.profile_id) {
       const n = row.rep_name || 'Unknown rep'
@@ -159,28 +186,36 @@ function accumulate({ deals, leads, activity, teamCtx, from, to }) {
 const memberTeam = (u, asOf, teamCtx) =>
   teamOfSale(u.id, asOf, teamCtx.usersById, teamCtx.heads, teamCtx.changesByProfile)
 
+// opts.defaultTeamId — head id that adopts everything Unassigned (null = keep
+// an Unassigned section). opts.excludedIds — profile ids removed from this
+// page altogether (see makeTeamOf).
 export function buildPerformance({
   deals = [], leads = [], activity = [], users = [], teamCtx,
-  range = {}, prev = null,
+  range = {}, prev = null, defaultTeamId = null, excludedIds = [],
 }) {
   const { usersById, heads } = teamCtx
   const today = localToday()
   const asOf = range.to && range.to < today ? range.to : today
+  const excluded = new Set((excludedIds || []).filter(Boolean))
+  const defTeam = defaultTeamId && usersById[defaultTeamId] ? defaultTeamId : null
+  const acc = (from, to) => accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId: defTeam, excluded })
 
-  const cur = accumulate({ deals, leads, activity, teamCtx, from: range.from, to: range.to })
-  const prv = prev ? accumulate({ deals, leads, activity, teamCtx, from: prev.from, to: prev.to }) : null
+  const cur = acc(range.from, range.to)
+  const prv = prev ? acc(prev.from, prev.to) : null
 
   // Roster as of the range end: every active person gets a row on their team
   // even with nothing in the window, and a head's team exists even when idle.
   const roster = new Map()   // teamKey → Set(repId)
   for (const u of users) {
-    if (u.active === false) continue
+    if (u.active === false || excluded.has(u.id)) continue
     if (!['rep', 'manager', 'director', 'vp'].includes(u.role) && !heads.has(u.id)) continue
-    const k = memberTeam(u, asOf, teamCtx)
+    let k = memberTeam(u, asOf, teamCtx)
+    if (k === UNASSIGNED && defTeam) k = defTeam
     if (!roster.has(k)) roster.set(k, new Set())
     roster.get(k).add(u.id)
   }
-  for (const h of heads) if (!roster.has(h)) roster.set(h, new Set([h]))
+  for (const h of heads) if (!roster.has(h) && !excluded.has(h)) roster.set(h, new Set([h]))
+  if (defTeam && !roster.has(defTeam)) roster.set(defTeam, new Set([defTeam]))
 
   const teamKeys = new Set([...roster.keys(), ...cur.teams.keys()])
   const teams = []
@@ -210,7 +245,8 @@ export function buildPerformance({
       key,
       label: key === UNASSIGNED ? 'Unassigned' : teamLabel(head),
       head,
-      historical: key !== UNASSIGNED && !heads.has(key),   // a former lead's old team
+      isDefault: key === defTeam,                          // adopts everything unassigned
+      historical: key !== UNASSIGNED && key !== defTeam && !heads.has(key),   // a former lead's old team
       unassigned: key === UNASSIGNED,
       members: rows.filter(r => r.member).length,
       knockers: rows.filter(r => r.doors > 0).length,
@@ -235,6 +271,8 @@ export function buildPerformance({
     teams,
     unmatched: [...cur.unmatched.entries()].map(([name, doors]) => ({ name, doors })).sort((a, b) => b.doors - a.doors),
     hasActivity: org.hasActivity,
+    excluded: [...excluded].map(id => usersById[id]).filter(Boolean).map(u => ({ id: u.id, name: u.name })),
+    defaultTeamId: defTeam,
   }
 }
 

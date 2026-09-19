@@ -458,10 +458,30 @@ estimates come from the leads feed; set `estimates_from_leads_date`.)
   closer 2300% (per Keaton), Self-gen ran, Leads ran — SEPARATE
   columns, never "a / b") and **Results · Site** (**Self-gen deals** = the
   owner-credited deals, **SG close %** = self-gen deals ÷ self-gen ran,
-  Lead closes, **Lead close %** = lead closes ÷ leads ran, Revenue, Markup,
-  Commission — admin/VP only). The three conversion rates come from the
-  engine (`showRate`/`sgCloseRate`/`leadCloseRate` in `finish()`), muted
-  in the table, and echo on the org funnel tiles. First/last knock, field time and knock days were REMOVED
+  Lead closes, **Lead close %** = lead closes ÷ leads ran, **Revenue** =
+  self-gen (owner-credited) baseline, **Total revenue** = self-gen revenue +
+  baseline of the deals the rep CLOSED for another setter (`leadRevenue`;
+  a per-rep view — a team's Total revenue double-counts a deal whose setter
+  and closer are both on it), Markup, Commission — admin/VP only). The
+  three conversion rates come from the engine
+  (`showRate`/`sgCloseRate`/`leadCloseRate` in `finish()`), muted in the
+  table, and echo on the org funnel tiles. The "Field activity · RepCard" /
+  "Results · Site" group labels were removed (per Keaton) — a thin divider
+  still separates the two halves.
+  **Default team + hidden people (per Keaton):** `buildPerformance` takes
+  `defaultTeamId` (everything that would be Unassigned — no owner, owner on
+  no team, reps with no team — is filed under that head; the section is
+  tagged "includes unassigned" and never rendered as "Former team") and
+  `excludedIds` (people who are not reps, e.g. Tanner Arnett: no row, AND
+  their deals/appointments/knocks leave every total ON THIS PAGE, so org
+  totals here can differ from the Dashboard by exactly their production;
+  a lead close by an excluded closer is dropped but the setter keeps the
+  deal). Stored as `app_settings.perf_default_team` (head id, '' = keep an
+  Unassigned section) and `perf_excluded_ids` (ids), edited in the page's
+  admin **Settings** panel (with the floors). Until saved, the page SEEDS
+  them from the roster: default team = "Garrison Shaker" (else the active
+  director), excluded = anyone named "Tanner Arnett". A saved value, even
+  empty, always wins over the seed. The footer names both. First/last knock, field time and knock days were REMOVED
   from the table + mapper (per Keaton: RepCard's knock webhook carries only
   the knock; the engine still computes them and the DB keeps the columns).
   **Lead closes** = deals where the rep is the CLOSER and someone else set
