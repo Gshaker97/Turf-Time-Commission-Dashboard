@@ -522,6 +522,27 @@ GENERATED column = profile id else lowercased name so the day UNIQUE key
 so a re-fired webhook is a no-op) with an AFTER INSERT trigger
 `field_knocks_rollup()` that upserts the rep's day row (doors +1, first/last
 min/max; day = `knock_at AT TIME ZONE 'America/Phoenix'`).
+- **ONE URL HANDLES BOTH FEEDS.** RepCard posts the SAME contact object for
+  an appointment and for a door knock, and a vendor webhook usually points at
+  one url — so a knock sent to `/api/leads/ingest` became a junk "Not Home"
+  appointment and never reached Performance. `routeCrmEvents(rawBody,
+  arrivedAt)` now CLASSIFIES every event and hands it to the right handler
+  regardless of which endpoint it hit: an appointment time → leads, a knock
+  flag / doors count / admin-mapped knock time → field activity, BOTH → both
+  (a knock that booked an appointment is genuinely both), neither → the
+  endpoint it arrived at. **A knock TIME alone is not a knock signal unless
+  the admin explicitly mapped that field** — the default path reads RepCard's
+  `createdAt`, which every contact carries, so trusting it would turn every
+  appointment into a door knock. An explicit knock flag decides outright
+  (truthy = knock, falsy = never a knock). The router records the payload +
+  result under the feed(s) that actually handled the call, so the right
+  Settings panel shows it.
+- **Last result** (`lead_last_result` / `field_last_result` in app_settings,
+  rendered under "Last received" in each feed panel): what the site DID with
+  the last call — knocks recorded, appointments upserted, per-event lines
+  (who, knock/day-summary/skipped + why, roster match), unmatched names, or
+  the write error. The vendor's webhook screen never shows our response, so
+  this is the only place to read it.
 - **Ingest:** `POST /api/field/ingest` on `server.js`, same auth as the
   leads feed (`LEADS_INGEST_SECRET` / service key). Admin-mapped fields
   (`app_settings.field_activity_field_map`, Admin → Settings → "Field
