@@ -452,11 +452,13 @@ estimates come from the leads feed; set `estimates_from_leads_date`.)
   (dashed amber — ownerless deals + reps with no team). Team tiles (revenue,
   deals, avg deal, avg markup, active reps = active members as of the range
   end) then a rep table split into **Field activity · RepCard** (Doors,
-  Doors/day, Set, Ran, **Set → Ran %** = a SETTER stat: of the appointments
-  this rep SET, how many ran whoever ran them (`setRan ÷ set`) — never "ran
-  ÷ set" with ran = appointments the rep ran as a closer, which gave a
-  closer 2300% (per Keaton), Self-gen ran, Leads ran — SEPARATE
-  columns, never "a / b") and **Results · Site** (**Self-gen deals** = the
+  Doors/day, **Set** = appointments this rep BOOKED, **Sets ran** = how many
+  of THOSE ran whoever sat them (`setRan`, with the % as its sub-line), then
+  **Ran** = appointments this rep personally SAT, split into Self-gen ran +
+  Leads ran. Set/Sets ran/Ran are SEPARATE columns, never "a / b" and never
+  one percentage standing in for the count: a pure setter reads Set 20 ·
+  Sets ran 15 (75%) · Ran 0, and the earlier "ran ÷ set" version showed a
+  closer 2300% (per Keaton, twice — first the math, then the labelling)) and **Results · Site** (**Self-gen deals** = the
   owner-credited deals, **SG close %** = self-gen deals ÷ self-gen ran,
   Lead closes, **Lead close %** = lead closes ÷ leads ran, **Revenue** =
   self-gen (owner-credited) baseline, **Total revenue** = self-gen revenue +

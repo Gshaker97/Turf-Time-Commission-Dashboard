@@ -245,8 +245,9 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                 <tr style={{ borderBottom: '1px solid #333' }}>
                   <TH right={false}>Rep</TH>
                   <TH>Doors</TH><TH>Doors<br />/ day</TH>
-                  <TH title="Appointments this rep BOOKED. Underneath: how many of them ran, whoever sat them.">Set</TH>
-                  <TH title="Appointments this rep personally SAT — a pure setter shows 0 here even with a high set → ran rate.">Ran</TH>
+                  <TH title="Appointments this rep BOOKED, whoever ended up sitting them">Set</TH>
+                  <TH title="How many of THIS REP'S SETS actually ran, whoever sat them. A setter's sets are usually run by closers.">Sets<br />ran</TH>
+                  <TH title="Appointments this rep personally SAT. A pure setter shows 0 here — their sets are counted in the two columns to the left.">Ran</TH>
                   <TH title="Appointments this rep both booked and sat">Self-gen<br />ran</TH>
                   <TH title="Appointments this rep sat for another setter">Leads<br />ran</TH>
                   <TH className="border-l border-[#333]" title="Deals this rep owns. Underneath: self-gen deals ÷ self-gen ran.">Self-gen<br />deals</TH>
@@ -259,7 +260,7 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
               </thead>
               <tbody>
                 {rows.length === 0 && (
-                  <tr><td colSpan={13} className="py-3 px-2 text-[12px] text-white/30">Nobody on this team in the selected range.</td></tr>
+                  <tr><td colSpan={14} className="py-3 px-2 text-[12px] text-white/30">Nobody on this team in the selected range.</td></tr>
                 )}
                 {rows.map(r => {
                   const fl = repFlags(r, floors, hasAct)
@@ -275,7 +276,8 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                       </td>
                       <TD flag={fl.doors}>{dash ? '—' : int0(r.doors)}</TD>
                       <TD flag={fl.doorsPerDay}>{dash ? '—' : dec1(r.doorsPerDay)}</TD>
-                      <TD flag={fl.set} sub={r.showRate == null ? null : `${pct0(r.showRate)} ran`}>{r.set}</TD>
+                      <TD flag={fl.set}>{r.set}</TD>
+                      <TD sub={r.showRate == null ? null : pct0(r.showRate)}>{r.setRan}</TD>
                       <TD flag={fl.ran}>{r.ran}</TD>
                       <TD>{r.sgRan}</TD>
                       <TD>{r.leadRan}</TD>
@@ -295,7 +297,8 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                     <td className="py-2 px-2 text-[9.5px] font-bold uppercase tracking-[0.1em] text-white/40">Team</td>
                     <TD strong>{hasAct ? int0(t.doors) : '—'}</TD>
                     <TD strong>{hasAct ? dec1(t.doorsPerDay) : '—'}</TD>
-                    <TD strong sub={t.showRate == null ? null : `${pct0(t.showRate)} ran`}>{t.set}</TD>
+                    <TD strong>{t.set}</TD>
+                    <TD strong sub={t.showRate == null ? null : pct0(t.showRate)}>{t.setRan}</TD>
                     <TD strong>{t.ran}</TD>
                     <TD strong>{t.sgRan}</TD>
                     <TD strong>{t.leadRan}</TD>
@@ -533,7 +536,7 @@ export default function Performance() {
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 rounded-xl overflow-hidden" style={CARD}>
           {[
             { l: 'Doors knocked', v: org.hasActivity ? int0(org.doors) : '—', s: org.hasActivity ? <Delta cur={org.doors} prev={po?.doors} prevText={cmp(po?.doors, int0)} /> : <span className="text-[11px] text-white/25">feed not connected</span> },
-            { l: 'Appointments set', v: int0(org.set), s: <Delta cur={org.set} prev={po?.set} prevText={cmp(po?.set, int0)} /> },
+            { l: 'Appointments set', v: int0(org.set), s: <span className="text-[11px] text-white/35">{org.showRate != null ? `${int0(org.setRan)} ran (${Math.round(org.showRate)}%)` : ''} {po && <Delta cur={org.set} prev={po.set} />}</span> },
             { l: 'Ran', v: int0(org.ran), s: <span className="text-[11px] text-white/35">{org.showRate != null ? `${Math.round(org.showRate)}% of set` : ''} {po && <Delta cur={org.ran} prev={po.ran} />}</span> },
             { l: 'Self-gen ran', v: int0(org.sgRan), s: <span className="text-[11px] text-white/35">{org.sgCloseRate != null ? `${Math.round(org.sgCloseRate)}% became self-gen deals` : 'set it and ran it'} {po && <Delta cur={org.sgRan} prev={po.sgRan} />}</span> },
             { l: 'Leads ran', v: int0(org.leadRan), s: <span className="text-[11px] text-white/35">{org.leadCloseRate != null ? `${Math.round(org.leadCloseRate)}% closed` : 'set by someone else'} {po && <Delta cur={org.leadRan} prev={po.leadRan} />}</span> },
