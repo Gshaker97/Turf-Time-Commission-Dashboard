@@ -633,16 +633,19 @@ async function ingestFieldActivity(rawBody) {
   const pick = makePicker(fieldMap, FIELD_DEFAULTS)
   const resolvePerson = await loadRosterResolver()
 
-  const summaries = [], knocks = [], unmatched = new Set(), skipped = []
+  const summaries = [], knocks = [], unmatched = new Set(), skipped = [], detail = []
   for (const i of items) {
+    const email = pick(i, 'rep_email'), name = pick(i, 'rep_name')
+    const who = name || email || '(no rep on the event)'
     // RepCard posts the same contact shape for every door interaction; only
     // events flagged as a knock count. No flag at all = trust the webhook.
     const flag = pick(i, 'knock_flag')
-    if (flag !== null && ['0', 'false', 'no', 'n'].includes(String(flag).trim().toLowerCase())) { skipped.push('not a door knock'); continue }
-    const email = pick(i, 'rep_email'), name = pick(i, 'rep_name')
+    if (flag !== null && ['0', 'false', 'no', 'n'].includes(String(flag).trim().toLowerCase())) {
+      skipped.push('not a door knock'); detail.push({ who, did: 'skipped', why: 'not a door knock (knock flag was 0/false)' }); continue
+    }
     const profileId = resolvePerson(email, name)
     if ((email || name) && !profileId) unmatched.add(name || email)
-    if (!profileId && !name && !email) { skipped.push('no rep on the event'); continue }
+    if (!profileId && !name && !email) { skipped.push('no rep on the event'); detail.push({ who, did: 'skipped', why: 'no rep name or email on the event' }); continue }
     const source = String(pick(i, 'source') || 'repcard')
     const office = pick(i, 'office')
     const doors = pick(i, 'doors_knocked')
@@ -671,6 +674,7 @@ async function ingestFieldActivity(rawBody) {
       if (mins !== null && mins !== undefined && mins !== '') row.field_minutes = Math.round(Number(mins) || 0)
       else if (hrs !== null && hrs !== undefined && hrs !== '') row.field_minutes = Math.round((Number(hrs) || 0) * 60)
       summaries.push(row)
+      detail.push({ who, did: 'day summary', matched: !!profileId, day, doors: row.doors_knocked })
     } else if (knockAt) {
       // Per-knock event — needs the CRM's event id so a re-fire is a no-op.
       const id = extId != null ? String(extId) : `${profileId || name || email}|${new Date(knockAt).toISOString()}`
@@ -680,8 +684,10 @@ async function ingestFieldActivity(rawBody) {
         rep_email: email ? String(email).trim().toLowerCase() : null,
         office: office || null, raw: i,
       })
+      detail.push({ who, did: 'knock', matched: !!profileId, day: AZ_DAY(knockAt), at: knockAt })
     } else {
       skipped.push('neither a doors count nor a knock time')
+      detail.push({ who, did: 'skipped', why: 'neither a doors count nor a knock time — map Knock Time (or Doors Knocked + Date) in Settings' })
     }
   }
 
@@ -711,7 +717,22 @@ async function ingestFieldActivity(rawBody) {
     received: items.length, summaries: summaries.length, knocks: knocks.length,
     skipped: skipped.length ? [...new Set(skipped)] : [],
     unmatched_people: [...unmatched],
+    detail: detail.slice(0, 20),
   })
+}
+
+// Remember what the site DID with the last webhook call (not just what it
+// received) so Admin → Settings can say "1 knock recorded for Joseph Burgos"
+// or "skipped: not a door knock" or the write error — the vendor's webhook
+// screen never shows our response, so this is the only place to read it.
+async function recordLastResult(key, result) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/app_settings?on_conflict=key`, {
+      method: 'POST',
+      headers: { ...jsonHeaders, Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify([{ key, value: { at: new Date().toISOString(), ...result } }]),
+    })
+  } catch { /* diagnostics only */ }
 }
 
 const app = express()
@@ -755,16 +776,20 @@ function ingestAuthorized(req) {
 app.post('/api/leads/ingest', async (req, res) => {
   if (!SUPABASE_URL || !SERVICE_KEY) return res.status(503).json(err('Lead ingest is not configured — SUPABASE_SERVICE_KEY is missing on the site service.'))
   if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
-  try { res.json(await ingestLeads(req.body)) }
-  catch (e) { res.status(500).json(err(e.message || 'Ingest failed')) }
+  let result
+  try { result = await ingestLeads(req.body); res.json(result) }
+  catch (e) { result = err(e.message || 'Ingest failed'); res.status(500).json(result) }
+  await recordLastResult('lead_last_result', result)
 })
 
 // Door-knocking activity from the CRM — same auth as the leads feed.
 app.post('/api/field/ingest', async (req, res) => {
   if (!SUPABASE_URL || !SERVICE_KEY) return res.status(503).json(err('Field ingest is not configured — SUPABASE_SERVICE_KEY is missing on the site service.'))
   if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
-  try { res.json(await ingestFieldActivity(req.body)) }
-  catch (e) { res.status(500).json(err(e.message || 'Ingest failed')) }
+  let result
+  try { result = await ingestFieldActivity(req.body); res.json(result) }
+  catch (e) { result = err(e.message || 'Ingest failed'); res.status(500).json(result) }
+  await recordLastResult('field_last_result', result)
 })
 
 app.post('/api/user-admin', async (req, res) => {

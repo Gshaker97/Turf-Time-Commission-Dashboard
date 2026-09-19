@@ -575,7 +575,7 @@ const FIELD_ACTIVITY_FIELDS = [
 // One CRM feed's admin panel: endpoint URL, the last payload received (real
 // field names to pick from), our-field ← their-field mapping, and — for the
 // leads feed only — the disposition → lifecycle mapper.
-function FeedEditor({ title, blurb, path, fields, mapKey, lastKey, withStatusMap = false, footnote = null }) {
+function FeedEditor({ title, blurb, path, fields, mapKey, lastKey, resultKey, withStatusMap = false, footnote = null }) {
   const { settings, save } = useSettings()
   const [map, setMap] = useState({})
   const [statusMap, setStatusMap] = useState({})
@@ -593,6 +593,7 @@ function FeedEditor({ title, blurb, path, fields, mapKey, lastKey, withStatusMap
   }, [settings[mapKey], settings.lead_status_map, mapKey])
 
   const last = settings[lastKey] || null
+  const result = resultKey ? settings[resultKey] || null : null
   const incoming = last?.fields ? Object.keys(last.fields).sort() : []
   const url = `${window.location.origin}${path}`
 
@@ -677,6 +678,41 @@ function FeedEditor({ title, blurb, path, fields, mapKey, lastKey, withStatusMap
         )}
       </div>
 
+      {/* What the site DID with the last call — the vendor's webhook screen never shows our answer. */}
+      {result && (
+        <div>
+          <div className="flex items-baseline justify-between gap-2 mb-1.5">
+            <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest">Last result</p>
+            {result.at && <p className="text-[10px] text-white/25">{new Date(result.at).toLocaleString()}</p>}
+          </div>
+          <div className="rounded-lg px-3 py-2.5 space-y-1" style={inputStyle}>
+            {result.ok === false ? (
+              <p className="text-[12px] text-red-300">Failed: {result.error}</p>
+            ) : (
+              <>
+                <p className="text-[12px] text-white/70">
+                  Received {result.received ?? '?'}
+                  {result.knocks != null && <> · <span className="text-teal font-semibold">{result.knocks} knock{result.knocks === 1 ? '' : 's'} recorded</span></>}
+                  {result.summaries ? <> · {result.summaries} day summar{result.summaries === 1 ? 'y' : 'ies'}</> : null}
+                  {result.skipped?.length ? <> · <span className="text-amber-300">skipped: {result.skipped.join('; ')}</span></> : null}
+                </p>
+                {(result.unmatched_people?.length > 0) && (
+                  <p className="text-[11px] text-amber-300">Not on the roster (landed by name only): {result.unmatched_people.join(', ')}</p>
+                )}
+                {(result.detail || []).map((d, i) => (
+                  <p key={i} className="text-[11px] text-white/50">
+                    <span className="text-white/75">{d.who}</span> — {d.did}
+                    {d.day ? ` on ${d.day}` : ''}{d.doors != null ? ` (${d.doors} doors)` : ''}
+                    {d.matched === false ? <span className="text-amber-300"> · no roster match</span> : ''}
+                    {d.why ? <span className="text-amber-300"> · {d.why}</span> : ''}
+                  </p>
+                ))}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Field mapping */}
       <div>
         <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-2">Field mapping</p>
@@ -745,14 +781,14 @@ const LeadFeedEditor = () => (
   <FeedEditor
     title="Lead Feed (CRM Webhook)"
     blurb="Point your CRM's appointment webhook here and map its fields onto ours — no code change needed when the CRM's format differs."
-    path="/api/leads/ingest" fields={LEAD_FIELDS} mapKey="lead_field_map" lastKey="lead_last_payload" withStatusMap />
+    path="/api/leads/ingest" fields={LEAD_FIELDS} mapKey="lead_field_map" lastKey="lead_last_payload" resultKey="lead_last_result" withStatusMap />
 )
 
 const FieldFeedEditor = () => (
   <FeedEditor
     title="Field Activity Feed (Door Knocks)"
     blurb="Door-knocking data for the Performance page. Point the CRM's activity webhook (or a daily report push) here; the same secret as the lead feed opens it."
-    path="/api/field/ingest" fields={FIELD_ACTIVITY_FIELDS} mapKey="field_activity_field_map" lastKey="field_last_payload"
+    path="/api/field/ingest" fields={FIELD_ACTIVITY_FIELDS} mapKey="field_activity_field_map" lastKey="field_last_payload" resultKey="field_last_result"
     footnote="RepCard's door-knock events work with nothing mapped: the site already reads id, createdAt, user.name / user.email and hasDoorKnock. Map a field here only to override that. Two shapes work: a payload with a Doors Knocked count is a daily summary for that rep and date; a payload with a Knock Time is one door — the site adds it to that rep's day (doors +1, first/last knock). Admins can also import a CSV report from the Performance page." />
 )
 
