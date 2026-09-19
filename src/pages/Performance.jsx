@@ -170,11 +170,17 @@ function ImportActivity({ users, onDone }) {
 }
 
 // ── One team ─────────────────────────────────────────────────────────────
+// Compact cells so the whole table fits a laptop screen with no sideways
+// scroll: 13 columns, 11px numbers, headers wrap to two lines, and the three
+// conversion rates ride UNDER their counts (`sub`) instead of taking columns.
 const TH = ({ children, className = '', right = true, title }) => (
-  <th title={title} className={`py-1.5 px-2 text-[9.5px] font-bold uppercase tracking-[0.06em] text-white/30 whitespace-nowrap ${right ? 'text-right' : 'text-left'} ${title ? 'cursor-help' : ''} ${className}`}>{children}</th>
+  <th title={title} className={`py-1.5 px-1.5 text-[9px] font-bold uppercase tracking-[0.05em] text-white/30 leading-tight align-bottom ${right ? 'text-right' : 'text-left'} ${title ? 'cursor-help' : ''} ${className}`}>{children}</th>
 )
-const TD = ({ children, flag, strong, muted, className = '' }) => (
-  <td className={`py-2 px-2 text-[12px] whitespace-nowrap text-right tabular-nums ${flag ? 'text-red-400 font-bold' : strong ? 'text-white font-semibold' : muted ? 'text-white/45' : 'text-white/75'} ${className}`}>{children}</td>
+const TD = ({ children, sub, flag, strong, muted, className = '' }) => (
+  <td className={`py-1.5 px-1.5 text-[11.5px] whitespace-nowrap text-right tabular-nums leading-tight ${flag ? 'text-red-400 font-bold' : strong ? 'text-white font-semibold' : muted ? 'text-white/45' : 'text-white/75'} ${className}`}>
+    {children}
+    {sub != null && <span className="block text-[9.5px] font-normal text-white/35">{sub}</span>}
+  </td>
 )
 
 function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommission }) {
@@ -234,30 +240,31 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
 
           {/* Rep table */}
           <div className="overflow-x-auto -mx-4 px-4 mt-3">
-            <table className="w-full border-collapse min-w-[1040px]">
+            <table className="w-full border-collapse">
               <thead>
                 <tr style={{ borderBottom: '1px solid #333' }}>
                   <TH right={false}>Rep</TH>
-                  <TH>Doors</TH><TH>Doors / day</TH><TH>Set</TH><TH>Ran</TH><TH title="Of the appointments this rep set, how many ran (whoever ran them) ÷ appointments set">Set → Ran</TH>
-                  <TH>Self-gen ran</TH><TH>Leads ran</TH>
-                  <TH className="border-l border-[#333]">Self-gen deals</TH><TH title="Self-gen deals ÷ self-gen ran">SG close</TH>
-                  <TH>Lead closes</TH><TH title="Lead closes ÷ leads ran">Lead close</TH>
+                  <TH>Doors</TH><TH>Doors<br />/ day</TH>
+                  <TH title="Appointments set. Below it: how many of them ran (whoever ran them) ÷ set">Set<br />→ ran %</TH>
+                  <TH>Ran</TH><TH>Self-gen<br />ran</TH><TH>Leads<br />ran</TH>
+                  <TH className="border-l border-[#333]" title="Owner-credited deals. Below it: self-gen deals ÷ self-gen ran">Self-gen<br />deals · close %</TH>
+                  <TH title="Deals closed for another setter. Below it: lead closes ÷ leads ran">Lead<br />closes · close %</TH>
                   <TH title="Baseline revenue of this rep's self-gen deals">Revenue</TH>
-                  <TH title="Self-gen revenue + baseline of the deals this rep closed for another setter">Total revenue</TH>
+                  <TH title="Self-gen revenue + baseline of the deals this rep closed for another setter">Total<br />revenue</TH>
                   <TH>Markup</TH>
                   {showCommission && <TH>Commission</TH>}
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 && (
-                  <tr><td colSpan={16} className="py-3 px-2 text-[12px] text-white/30">Nobody on this team in the selected range.</td></tr>
+                  <tr><td colSpan={13} className="py-3 px-2 text-[12px] text-white/30">Nobody on this team in the selected range.</td></tr>
                 )}
                 {rows.map(r => {
                   const fl = repFlags(r, floors, hasAct)
                   const dash = !hasAct && r.doors === 0
                   return (
                     <tr key={r.id} style={{ borderBottom: '1px solid #262626' }} className="hover:bg-white/[0.02]">
-                      <td className="py-2 px-2 text-[12.5px] text-white/85 whitespace-nowrap">
+                      <td className="py-1.5 px-1.5 text-[12px] text-white/85 min-w-[120px]">
                         <span className="font-semibold">{r.name}</span>
                         {r.isHead && <span className="ml-1.5 text-[8.5px] font-bold uppercase tracking-[0.08em] text-teal">{r.role}</span>}
                         {r.ghost && isAdmin && <span className="ml-1.5 text-[8.5px] font-bold uppercase tracking-[0.08em] text-white/30">ghost</span>}
@@ -266,15 +273,12 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                       </td>
                       <TD flag={fl.doors}>{dash ? '—' : int0(r.doors)}</TD>
                       <TD flag={fl.doorsPerDay}>{dash ? '—' : dec1(r.doorsPerDay)}</TD>
-                      <TD flag={fl.set}>{r.set}</TD>
+                      <TD flag={fl.set} sub={pct0(r.showRate)}>{r.set}</TD>
                       <TD flag={fl.ran}>{r.ran}</TD>
-                      <TD muted>{pct0(r.showRate)}</TD>
                       <TD>{r.sgRan}</TD>
                       <TD>{r.leadRan}</TD>
-                      <TD strong className="border-l border-[#333]">{r.deals}</TD>
-                      <TD muted>{pct0(r.sgCloseRate)}</TD>
-                      <TD>{r.leadCloses}</TD>
-                      <TD muted>{pct0(r.leadCloseRate)}</TD>
+                      <TD strong className="border-l border-[#333]" sub={pct0(r.sgCloseRate)}>{r.deals}</TD>
+                      <TD sub={pct0(r.leadCloseRate)}>{r.leadCloses}</TD>
                       <TD strong>{money0(r.revenue)}</TD>
                       <TD>{money0(r.totalRevenue)}</TD>
                       <TD>{pct1(r.markupPct)}</TD>
@@ -289,15 +293,12 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                     <td className="py-2 px-2 text-[9.5px] font-bold uppercase tracking-[0.1em] text-white/40">Team</td>
                     <TD strong>{hasAct ? int0(t.doors) : '—'}</TD>
                     <TD strong>{hasAct ? dec1(t.doorsPerDay) : '—'}</TD>
-                    <TD strong>{t.set}</TD>
+                    <TD strong sub={pct0(t.showRate)}>{t.set}</TD>
                     <TD strong>{t.ran}</TD>
-                    <TD muted>{pct0(t.showRate)}</TD>
                     <TD strong>{t.sgRan}</TD>
                     <TD strong>{t.leadRan}</TD>
-                    <TD strong className="border-l border-[#333]">{t.deals}</TD>
-                    <TD muted>{pct0(t.sgCloseRate)}</TD>
-                    <TD strong>{t.leadCloses}</TD>
-                    <TD muted>{pct0(t.leadCloseRate)}</TD>
+                    <TD strong className="border-l border-[#333]" sub={pct0(t.sgCloseRate)}>{t.deals}</TD>
+                    <TD strong sub={pct0(t.leadCloseRate)}>{t.leadCloses}</TD>
                     <TD strong>{money0(t.revenue)}</TD>
                     <TD strong>{money0(t.totalRevenue)}</TD>
                     <TD strong>{pct1(t.markupPct)}</TD>
@@ -392,7 +393,7 @@ export default function Performance() {
   if (loading) return <div className="p-6 text-white/40 text-sm">Loading performance…</div>
 
   return (
-    <div className="p-4 md:p-6 space-y-5 max-w-[1280px] mx-auto">
+    <div className="p-4 md:p-6 space-y-5 max-w-[1600px] mx-auto">
       {/* Sticky controls */}
       {/* Sticky on desktop only — on a phone the bar is taller than the screen's worth of content it would pin over. */}
       <div className="md:sticky top-0 z-20 -mx-4 md:-mx-6 px-4 md:px-6 pt-3 pb-3" style={{ background: 'rgba(20,20,20,0.96)', backdropFilter: 'blur(6px)', borderBottom: '1px solid #262626' }}>
