@@ -485,7 +485,6 @@ async function ingestLeads(rawBody) {
   if (items.length > 500) return err('Too many leads in one call (max 500).')
 
   const { fieldMap, statusMap } = await loadLeadConfig()
-  await recordLastPayload(items[0])
   const pick = makePicker(fieldMap)
 
   const resolvePerson = await loadRosterResolver()
@@ -629,7 +628,6 @@ async function ingestFieldActivity(rawBody) {
   if (items.length > 2000) return err('Too many rows in one call (max 2000).')
 
   const { fieldMap } = await loadFieldConfig()
-  await recordLastPayload(items[0], 'field_last_payload')
   const pick = makePicker(fieldMap, FIELD_DEFAULTS)
   const resolvePerson = await loadRosterResolver()
 
@@ -735,6 +733,81 @@ async function recordLastResult(key, result) {
   } catch { /* diagnostics only */ }
 }
 
+
+// ── One webhook URL, two kinds of event ─────────────────────────────────────
+// RepCard posts the SAME contact object for an appointment and for a door
+// knock, and a vendor webhook usually points at ONE url. So both endpoints
+// CLASSIFY each event and hand it to the right handler instead of trusting
+// the url it arrived at:
+//   • an appointment time  → the leads feed
+//   • a knock flag / knock time / doors count → the field-activity feed
+//   • both  → both (a knock that booked an appointment is genuinely both)
+//   • neither → whichever endpoint it was sent to
+// Without this, a door knock posted to /api/leads/ingest became a junk
+// "Not Home" appointment and never reached the Performance page.
+const TRUTHY = (v) => v !== null && v !== undefined && v !== ''
+  && !['0', 'false', 'no', 'n'].includes(String(v).trim().toLowerCase())
+
+async function routeCrmEvents(rawBody, arrivedAt) {
+  let body
+  try { body = JSON.parse(rawBody || '{}') } catch { return err('Bad JSON body.') }
+  const items = Array.isArray(body) ? body
+    : Array.isArray(body.leads) ? body.leads
+    : Array.isArray(body.activity) ? body.activity
+    : Array.isArray(body.knocks) ? body.knocks
+    : Array.isArray(body.events) ? body.events
+    : [body]
+  if (!items.length) return err('No events in the payload.')
+  if (items.length > 2000) return err('Too many events in one call (max 2000).')
+
+  const [{ fieldMap: leadMap }, { fieldMap: fldMap }] = await Promise.all([loadLeadConfig(), loadFieldConfig()])
+  const lp = makePicker(leadMap), fp = makePicker(fldMap, FIELD_DEFAULTS)
+
+  // A knock time alone is NOT a knock signal unless the admin mapped that
+  // field on purpose: the default path reads RepCard's `createdAt`, which
+  // every contact carries, so trusting it would turn every appointment into
+  // a door knock too.
+  const knockTimeIsExplicit = !!fldMap.knock_at
+  const apptItems = [], knockItems = []
+  for (const i of items) {
+    const hasAppt = TRUTHY(lp(i, 'appointment_at'))
+    const flag = fp(i, 'knock_flag')
+    const hasKnock = flag !== null && flag !== undefined && flag !== ''
+      ? TRUTHY(flag)                                   // an explicit flag decides it outright
+      : TRUTHY(fp(i, 'doors_knocked')) || (knockTimeIsExplicit && TRUTHY(fp(i, 'knock_at')))
+    if (hasAppt) apptItems.push(i)
+    if (hasKnock) knockItems.push(i)
+    if (!hasAppt && !hasKnock) (arrivedAt === 'field' ? knockItems : apptItems).push(i)
+  }
+
+  const leadRes  = apptItems.length  ? await ingestLeads(JSON.stringify(apptItems)) : null
+  const fieldRes = knockItems.length ? await ingestFieldActivity(JSON.stringify(knockItems)) : null
+
+  const routed = { appointments: apptItems.length, knocks: knockItems.length }
+  const merged = {
+    received: items.length,
+    routed,
+    // Field-feed figures so the Settings "Last result" box reads the same
+    // whichever panel you look at.
+    knocks: fieldRes?.knocks ?? 0,
+    summaries: fieldRes?.summaries ?? 0,
+    appointments: leadRes?.received ?? 0,
+    skipped: [...new Set([...(fieldRes?.skipped || []), ...(leadRes?.skipped || [])])],
+    detail: fieldRes?.detail || [],
+    unmatched_people: [...new Set([...(leadRes?.unmatched_people || []), ...(fieldRes?.unmatched_people || [])])],
+  }
+  const failed = [leadRes, fieldRes].find(r => r && r.ok === false)
+  const result = failed ? { ...failed, routed } : ok(merged)
+
+  // Record the payload + outcome under the feed(s) that actually handled it,
+  // so the right Settings panel shows it no matter which url the CRM uses.
+  const jobs = []
+  if (apptItems.length)  jobs.push(recordLastPayload(apptItems[0]), recordLastResult('lead_last_result', result))
+  if (knockItems.length) jobs.push(recordLastPayload(knockItems[0], 'field_last_payload'), recordLastResult('field_last_result', result))
+  await Promise.all(jobs)
+  return result
+}
+
 const app = express()
 app.use(express.text({ type: '*/*', limit: '1mb' }))
 
@@ -776,20 +849,16 @@ function ingestAuthorized(req) {
 app.post('/api/leads/ingest', async (req, res) => {
   if (!SUPABASE_URL || !SERVICE_KEY) return res.status(503).json(err('Lead ingest is not configured — SUPABASE_SERVICE_KEY is missing on the site service.'))
   if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
-  let result
-  try { result = await ingestLeads(req.body); res.json(result) }
-  catch (e) { result = err(e.message || 'Ingest failed'); res.status(500).json(result) }
-  await recordLastResult('lead_last_result', result)
+  try { res.json(await routeCrmEvents(req.body, 'leads')) }
+  catch (e) { res.status(500).json(err(e.message || 'Ingest failed')) }
 })
 
 // Door-knocking activity from the CRM — same auth as the leads feed.
 app.post('/api/field/ingest', async (req, res) => {
   if (!SUPABASE_URL || !SERVICE_KEY) return res.status(503).json(err('Field ingest is not configured — SUPABASE_SERVICE_KEY is missing on the site service.'))
   if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
-  let result
-  try { result = await ingestFieldActivity(req.body); res.json(result) }
-  catch (e) { result = err(e.message || 'Ingest failed'); res.status(500).json(result) }
-  await recordLastResult('field_last_result', result)
+  try { res.json(await routeCrmEvents(req.body, 'field')) }
+  catch (e) { res.status(500).json(err(e.message || 'Ingest failed')) }
 })
 
 app.post('/api/user-admin', async (req, res) => {

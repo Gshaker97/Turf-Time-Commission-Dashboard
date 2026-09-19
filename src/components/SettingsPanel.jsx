@@ -692,10 +692,17 @@ function FeedEditor({ title, blurb, path, fields, mapKey, lastKey, resultKey, wi
               <>
                 <p className="text-[12px] text-white/70">
                   Received {result.received ?? '?'}
-                  {result.knocks != null && <> · <span className="text-teal font-semibold">{result.knocks} knock{result.knocks === 1 ? '' : 's'} recorded</span></>}
+                  {result.knocks != null && <> · <span className="text-teal font-semibold">{result.knocks} door knock{result.knocks === 1 ? '' : 's'}</span></>}
+                  {result.appointments != null && <> · <span className="text-teal font-semibold">{result.appointments} appointment{result.appointments === 1 ? '' : 's'}</span></>}
                   {result.summaries ? <> · {result.summaries} day summar{result.summaries === 1 ? 'y' : 'ies'}</> : null}
                   {result.skipped?.length ? <> · <span className="text-amber-300">skipped: {result.skipped.join('; ')}</span></> : null}
                 </p>
+                {result.routed && (
+                  <p className="text-[11px] text-white/35">
+                    The site sorts each event by its shape, so one webhook URL handles both feeds — this call was read as{' '}
+                    {result.routed.knocks} door knock{result.routed.knocks === 1 ? '' : 's'} and {result.routed.appointments} appointment{result.routed.appointments === 1 ? '' : 's'}.
+                  </p>
+                )}
                 {(result.unmatched_people?.length > 0) && (
                   <p className="text-[11px] text-amber-300">Not on the roster (landed by name only): {result.unmatched_people.join(', ')}</p>
                 )}
