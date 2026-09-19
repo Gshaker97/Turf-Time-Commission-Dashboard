@@ -37,7 +37,7 @@ const localToday = () => {
 }
 
 function newStats() {
-  return { revenue: 0, job: 0, deals: 0, leadCloses: 0, commission: 0, set: 0, ran: 0, sgRan: 0, leadRan: 0, sold: 0, activityRows: [] }
+  return { revenue: 0, job: 0, deals: 0, leadCloses: 0, commission: 0, set: 0, setRan: 0, ran: 0, sgRan: 0, leadRan: 0, sold: 0, activityRows: [] }
 }
 
 // Derived figures computed once at the end so partial sums never leak out.
@@ -47,11 +47,13 @@ function finish(s) {
     revenue: s.revenue, job: s.job, deals: s.deals, leadCloses: s.leadCloses, commission: s.commission,
     avgDeal:   s.deals ? s.revenue / s.deals : null,
     markupPct: s.revenue > 0 ? ((s.job - s.revenue) / s.revenue) * 100 : null,
-    set: s.set, ran: s.ran, sgRan: s.sgRan, leadRan: s.leadRan, sold: s.sold,
-    // Conversion rates (per Keaton): set → ran; self-gen ran → self-gen
-    // deals (owner-credited deals ÷ self-gen appointments ran); leads ran →
-    // lead closes. `closeRate` is RepCard's own sold outcome ÷ ran.
-    showRate:      s.set ? (s.ran / s.set) * 100 : null,
+    set: s.set, setRan: s.setRan, ran: s.ran, sgRan: s.sgRan, leadRan: s.leadRan, sold: s.sold,
+    // Conversion rates (per Keaton): set → ran is a SETTER stat — of the
+    // appointments this rep set, how many ran (whoever ran them), so a
+    // closer's lead volume never inflates it; self-gen ran → self-gen deals
+    // (owner-credited deals ÷ self-gen appointments ran); leads ran → lead
+    // closes. `closeRate` is RepCard's own sold outcome ÷ ran.
+    showRate:      s.set ? (s.setRan / s.set) * 100 : null,
     sgCloseRate:   s.sgRan ? (s.deals / s.sgRan) * 100 : null,
     leadCloseRate: s.leadRan ? (s.leadCloses / s.leadRan) * 100 : null,
     closeRate:     s.ran ? (s.sold / s.ran) * 100 : null,
@@ -120,6 +122,11 @@ function accumulate({ deals, leads, activity, teamCtx, from, to }) {
       org.set += 1; team(k).totals.set += 1; rep(k, l.setter_id).set += 1
     }
     if (!RAN_STATUSES.has(l.status)) continue
+    // The SETTER gets "my appointment ran" credit no matter who ran it.
+    if (l.setter_id) {
+      const k = teamOf(l.setter_id, day)
+      org.setRan += 1; team(k).totals.setRan += 1; rep(k, l.setter_id).setRan += 1
+    }
     const ranBy = l.closer_id || l.setter_id
     if (!ranBy) continue
     const selfGen = !l.setter_id || l.setter_id === ranBy

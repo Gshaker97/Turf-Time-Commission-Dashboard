@@ -216,7 +216,7 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                 </tr>
                 <tr style={{ borderBottom: '1px solid #333' }}>
                   <TH right={false}>Rep</TH>
-                  <TH>Doors</TH><TH>Doors / day</TH><TH>Set</TH><TH>Ran</TH><TH title="Appointments ran ÷ appointments set">Set → Ran</TH>
+                  <TH>Doors</TH><TH>Doors / day</TH><TH>Set</TH><TH>Ran</TH><TH title="Of the appointments this rep set, how many ran (whoever ran them) ÷ appointments set">Set → Ran</TH>
                   <TH>Self-gen ran</TH><TH>Leads ran</TH>
                   <TH className="border-l border-[#333]">Self-gen deals</TH><TH title="Self-gen deals ÷ self-gen ran">SG close</TH>
                   <TH>Lead closes</TH><TH title="Lead closes ÷ leads ran">Lead close</TH>
