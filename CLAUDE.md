@@ -499,9 +499,19 @@ estimates come from the leads feed; set `estimates_from_leads_date`.)
   row keeps the name in `setter_name` text while `setter_id` stays null, so
   the Leads select read "— none —" and the name was invisible; it now shows
   under the select as "feed: <name>"). The page flags all this in the amber
-  banner, and the link goes to `/leads?missing=setter`
-  (the Leads page reads that param into its "data gaps" filter, which also
-  offers Missing closer). NOTE the deliberate asymmetry with DEALS:
+  banner, and the link goes to `/leads?missing=info`.
+  **The Leads page has ONE "Missing info" filter** (per Keaton — not one per
+  field), backed by `hasGap`/`gapReasons` in `src/utils/leadGaps.js`: no
+  setter, OR it RAN with no closer recorded, OR its time has passed and the
+  status is still `scheduled` (the CRM never sent an outcome, so it counts
+  as neither ran nor cancelled anywhere). Deliberately NOT "any empty
+  field" — a FUTURE appointment with no closer yet is normal, and flagging
+  it would bury the real gaps. Each row states which gap(s) it has under the
+  customer name, naming an unmatched setter. Any `?missing=…` value turns
+  the filter on, so older `?missing=setter` links still work.
+  **The Leads page carries no team/rep stat board** — those stats live on
+  Performance now; this page is the appointments themselves.
+  NOTE the deliberate asymmetry with DEALS:
   `saleOwnerId` still falls back to the closer so no deal vanishes, so a
   setter-less deal is a self-gen DEAL while a setter-less appointment is a
   lead RAN) and **Results · Site** (**Self-gen deals** = the

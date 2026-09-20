@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState, Fragment } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { format } from 'date-fns'
-import { CalendarCheck, Search, Link2, Upload, X, ChevronDown } from 'lucide-react'
+import { CalendarCheck, Search, Link2, Upload, X } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchLeads, fetchUsers, updateLead, upsertLeads, fetchLeadHistory } from '../lib/db'
 import { csvToLeads } from '../utils/leadImport'
-import { headIdSet, teamKeyFor, teamLabel } from '../utils/team'
+import { hasGap, gapReasons } from '../utils/leadGaps'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { toast } from '../lib/toast'
 import { useSettings } from '../contexts/SettingsContext'
@@ -14,7 +14,6 @@ import { apptDay } from '../utils/estimates'
 
 // The lifecycle the site reasons about (migration 041). RUN = the appointment
 // actually happened, which is what counts as an estimate.
-const PALETTE = ['#00b894', '#74b9ff', '#a78bfa', '#fbbf24', '#fb923c', '#f87171', '#34d399', '#60a5fa']
 const STATUSES = [
   { key: 'scheduled', label: 'Scheduled', color: '#74b9ff' },
   { key: 'completed', label: 'Ran',       color: '#00b894' },
@@ -47,6 +46,7 @@ const APPT_RANGES = [
   ['last_week', 'Last Week'], ['month', 'This Month'], ['all', 'All'],
 ]
 const RAN = new Set(['completed', 'sold'])   // an estimate was run
+
 const dt = (iso) => iso ? format(new Date(iso), 'EEE, MMM d · h:mma') : '—'
 // Inside a day group the date is already in the header, so rows show the time
 // only — it reads like the calendar the appointments came from.
@@ -91,25 +91,15 @@ export default function Leads() {
   const [preset, setPreset]     = useState('week')
   const [search, setSearch]     = useState('')
   const [repFilter, setRepFilter]       = useState('')
-  // The rep board is collapsible so the appointment list can be the focus.
-  const [showBoard, setShowBoard] = useState(() => {
-    try { return localStorage.getItem('tt_leads_board') !== 'off' } catch { return true }
-  })
-  const toggleBoard = () => setShowBoard(v => {
-    const next = !v
-    try { localStorage.setItem('tt_leads_board', next ? 'on' : 'off') } catch { /* ignore */ }
-    return next
-  })
   const [statusFilter, setStatusFilter] = useState('')
   // Data-gap filter. The Performance page links here as ?missing=setter when
   // it finds appointments it can't credit — an appointment with no setter
   // counts as a LEAD ran for whoever sat it and toward nobody's Set, so this
   // is the worklist for fixing them at the source.
   const [searchParams] = useSearchParams()
-  const [missing, setMissing] = useState(() => {
-    const m = searchParams.get('missing')
-    return m === 'setter' || m === 'closer' ? m : ''
-  })
+  // Any ?missing=… value (the Performance banner still sends 'setter') turns
+  // the single filter on.
+  const [missing, setMissing] = useState(() => (searchParams.get('missing') ? 'info' : ''))
 
   const feed = useMemo(
     () => leadFeedHealth(leads, settings?.lead_last_payload?.at),
@@ -130,14 +120,14 @@ export default function Leads() {
   const dayOf = (l) => apptDay(l.appointment_at) || ''
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
+    const nowISO = new Date().toISOString()   // both sides are ISO-8601 UTC, so string compare is exact
     return scoped.filter(l => {
       const d = dayOf(l)
       if (dateFrom && d && d < dateFrom) return false
       if (dateTo && d && d > dateTo) return false
       if (statusFilter && l.status !== statusFilter) return false
       if (repFilter && l.setter_id !== repFilter && l.closer_id !== repFilter) return false
-      if (missing === 'setter' && l.setter_id) return false
-      if (missing === 'closer' && l.closer_id) return false
+      if (missing && !hasGap(l, nowISO)) return false
       if (q) {
         const hay = [l.customer_name, l.address, l.setter?.name, l.closer?.name, l.setter_name, l.closer_name]
           .filter(Boolean).join(' ').toLowerCase()
@@ -179,43 +169,6 @@ export default function Leads() {
       sold: g.rows.filter(l => l.status === 'sold').length,
     }))
   }, [filtered])
-
-  // Per-rep funnel for the period — the automatic replacement for the
-  // hand-entered Weekly Stats estimates — grouped under each rep's CURRENT
-  // team with team totals, same shape as Performance's Rep Breakdown.
-  const byTeam = useMemo(() => {
-    const heads = headIdSet(users)
-    const m = {}
-    const row = (id, name) => (m[id] ??= { id, name, set: 0, ran: 0, sold: 0 })
-    for (const l of filtered) {
-      const id = l.setter_id || l.closer_id
-      if (!id) continue
-      const name = l.setter?.name || l.closer?.name || l.setter_name || l.closer_name || 'Unknown'
-      const r = row(id, name)
-      r.set += 1
-      if (RAN.has(l.status)) r.ran += 1
-      if (l.status === 'sold') r.sold += 1
-    }
-    const reps = Object.values(m).filter(r => isAdmin || !users.find(u => u.id === r.id)?.ghost)
-
-    const groups = {}
-    for (const r of reps) {
-      const u = users.find(x => x.id === r.id)
-      const tk = u ? teamKeyFor(u, heads) : 'unassigned'
-      ;(groups[tk] ??= []).push(r)
-    }
-    return Object.entries(groups).map(([tk, rows], i) => {
-      const lead = users.find(u => u.id === tk)
-      rows.sort((a, b) => b.ran - a.ran || b.set - a.set)
-      const sum = (k) => rows.reduce((s, r) => s + r[k], 0)
-      return {
-        key: tk,
-        name: tk === 'unassigned' ? 'No Team' : lead ? teamLabel(lead) : 'Former Team',
-        color: PALETTE[i % PALETTE.length],
-        rows, set: sum('set'), ran: sum('ran'), sold: sum('sold'),
-      }
-    }).sort((a, b) => (a.key === 'unassigned') - (b.key === 'unassigned') || b.ran - a.ran || b.set - a.set)
-  }, [filtered, users, isAdmin])
 
   // ── CSV backfill ──────────────────────────────────────────
   // The webhook only fires on events from the moment it's configured, so
@@ -527,10 +480,9 @@ export default function Leads() {
           </select>
         )}
         <select value={missing} onChange={e => setMissing(e.target.value)} style={selStyle} className={selCls}
-          title="Appointments the feed left incomplete — a missing setter makes the appointment count as a lead for whoever ran it">
-          <option value="">No data gaps filter</option>
-          <option value="setter">Missing setter</option>
-          <option value="closer">Missing closer</option>
+          title="Appointments with something missing: no setter, no outcome logged after their time passed, or no closer on one that ran. Each row says which.">
+          <option value="">All appointments</option>
+          <option value="info">Missing info</option>
         </select>
       </div>
 
@@ -543,62 +495,6 @@ export default function Leads() {
         <Kpi label="Appt Close %"     value={kpis.closeRate == null ? '—' : `${kpis.closeRate.toFixed(0)}%`} sub="sold ÷ ran" color="#a78bfa" />
         <Kpi label="No Shows"         value={kpis.noShow} color="#fb923c" />
       </div>
-
-      {byTeam.length > 0 && (
-        <div className="rounded-xl p-4 md:p-5" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-          <button onClick={toggleBoard}
-            className="flex items-center gap-1.5 text-[13px] font-semibold text-white hover:text-teal transition-colors">
-            <ChevronDown size={13} className={`text-white/30 transition-transform ${showBoard ? '' : '-rotate-90'}`} />
-            By Team &amp; Rep
-          </button>
-          <p className="text-[10px] text-white/30 mb-3 mt-0.5">
-            Set → ran → sold, credited to whoever ran the appointment. <span className="text-white/45">Ran</span> is the estimate
-            count feeding close rates site-wide; <span className="text-white/45">Sold</span> is the appointment's outcome, not a deal record.
-          </p>
-          {showBoard && (
-          <div className="overflow-x-auto">
-            <table className="w-full text-[12px] min-w-[440px]">
-              <thead>
-                <tr className="text-left text-[9px] uppercase tracking-widest text-white/30">
-                  <th className="pb-2 pr-3">Rep</th>
-                  <th className="pb-2 pr-3 text-right">Set</th>
-                  <th className="pb-2 pr-3 text-right">Ran</th>
-                  <th className="pb-2 pr-3 text-right">Sold</th>
-                  <th className="pb-2 text-right">Close %</th>
-                </tr>
-              </thead>
-              <tbody>
-                {byTeam.map(t => (
-                  <Fragment key={t.key}>
-                    <tr className="border-t" style={{ borderColor: '#2a2a2a', background: '#232323' }}>
-                      <td className="py-2 pr-3">
-                        <span className="flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: t.color }} />
-                          <span className="text-[12px] font-bold text-white whitespace-nowrap">{t.name}</span>
-                        </span>
-                      </td>
-                      <td className="py-2 pr-3 text-right font-bold text-white/70">{t.set}</td>
-                      <td className="py-2 pr-3 text-right font-bold text-teal">{t.ran}</td>
-                      <td className="py-2 pr-3 text-right font-bold text-white">{t.sold}</td>
-                      <td className="py-2 text-right font-bold text-white/70">{t.ran > 0 ? `${Math.round((t.sold / t.ran) * 100)}%` : '—'}</td>
-                    </tr>
-                    {t.rows.map(r => (
-                      <tr key={r.id} className="border-t" style={{ borderColor: '#262626' }}>
-                        <td className="py-2 pr-3 pl-4 text-white/85 whitespace-nowrap">{r.name}</td>
-                        <td className="py-2 pr-3 text-right text-white/70">{r.set}</td>
-                        <td className="py-2 pr-3 text-right text-teal">{r.ran}</td>
-                        <td className="py-2 pr-3 text-right text-white">{r.sold}</td>
-                        <td className="py-2 text-right text-white/60">{r.ran > 0 ? `${Math.round((r.sold / r.ran) * 100)}%` : '—'}</td>
-                      </tr>
-                    ))}
-                  </Fragment>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          )}
-        </div>
-      )}
 
       {filtered.length === 0 && (
         <div className="rounded-xl" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
@@ -627,6 +523,7 @@ export default function Leads() {
         </div>
         {g.rows.map(l => {
           const s = stat(l.status)
+          const gaps = gapReasons(l, new Date().toISOString())
           return (
             <div key={l.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 border-b border-white/5 last:border-0">
               <div className="text-[11px] font-semibold text-white/45 tabular-nums w-[58px] flex-shrink-0">
@@ -645,6 +542,11 @@ export default function Leads() {
                 {l.pinned && (
                   <p className="text-[9.5px] text-amber-400/70 truncate mt-0.5">
                     Edited here — the CRM feed won't change its status or people
+                  </p>
+                )}
+                {gaps.length > 0 && (
+                  <p className="text-[9.5px] text-amber-400/80 truncate mt-0.5" title={`Missing info: ${gaps.join('; ')}`}>
+                    Missing info — {gaps.join(' · ')}
                   </p>
                 )}
               </div>
