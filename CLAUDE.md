@@ -1068,7 +1068,14 @@ used by `managerAsOf`). Derive the local day from `new Date(ts)` with
 ## Build / verify
 
 - `npm install && npm run build` should pass with zero warnings (prebuild
-  runs ESLint with `no-undef` as an error).
+  runs ESLint with `no-undef` AND **`no-use-before-define` (variables)** as
+  errors). The second rule exists because a `const` read ABOVE its own
+  declaration builds fine and only throws when that line runs: a `useMemo`
+  in `Leads.jsx` read `scoped` two hooks before `scoped` was declared, which
+  white-screened the page in production while every node-level unit test
+  passed. Hoisted `function` declarations are exempt — the codebase relies
+  on those. If the rule fires, MOVE the declaration above its use (or the
+  handler below it); never silence it.
 - **The DealModal saves only CHANGED fields** (diff vs the deal it opened
   with, `saveDeal` in DealModal.jsx) so a save can't stomp fields the sync or
   an inline edit updated while the modal sat open; stored `*_amount` values

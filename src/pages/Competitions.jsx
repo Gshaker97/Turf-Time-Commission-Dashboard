@@ -550,6 +550,13 @@ export default function Competitions() {
     setExporting(true)
     try { await downloadComp(comp) } finally { setExporting(false) }
   }
+  // Declared before its first use: a const read above its declaration is a
+  // temporal-dead-zone throw the build cannot see (it white-screened Leads).
+  const sorted = useMemo(() => {
+    const rank = { active: 0, upcoming: 1, ended: 2 }
+    return [...comps].sort((a, b) => rank[competitionStatus(a, todayISO())] - rank[competitionStatus(b, todayISO())])
+  }, [comps])
+
   async function copyOne(comp) {
     if (exporting) return
     setExporting(true)
@@ -581,10 +588,6 @@ export default function Competitions() {
     changesByProfile: buildChangesByProfile(teamChanges),
   }), [users, teamChanges])
 
-  const sorted = useMemo(() => {
-    const rank = { active: 0, upcoming: 1, ended: 2 }
-    return [...comps].sort((a, b) => rank[competitionStatus(a, todayISO())] - rank[competitionStatus(b, todayISO())])
-  }, [comps])
   // Finished comps auto-collapse into the Past section; live ones show full.
   const liveComps = useMemo(() => sorted.filter(c => competitionStatus(c, todayISO()) !== 'ended'), [sorted])
   const pastComps = useMemo(() => {
