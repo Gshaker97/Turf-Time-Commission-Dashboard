@@ -97,7 +97,12 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
   const offices = new Map()          // office key (lc) → stats; '' = no office
   const teams = new Map()            // teamKey → { totals, reps: Map(repId → stats) }
   const unmatched = new Map()        // rep_name → doors (activity rows with no profile)
-  const gaps = { noSetter: 0, noSetterRan: 0 }   // appointments we can't credit properly
+  // Appointments we can't credit. `unmatchedSetter` is the FIXABLE case: the
+  // feed sent a setter NAME but it matched no profile (spelling, a nickname,
+  // someone off the roster, or a name two profiles share — which resolves to
+  // neither on purpose), so `setter_id` stayed null and every total ignores
+  // the person the CRM clearly recorded.
+  const gaps = { noSetter: 0, noSetterRan: 0, unmatchedSetter: 0 }
 
   const team = (k) => {
     if (!teams.has(k)) teams.set(k, { totals: newStats(), reps: new Map() })
@@ -153,7 +158,11 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
   for (const l of leads) {
     const day = apptDay(l.appointment_at)
     if (!inRange(day, from, to)) continue
-    if (!l.setter_id) { gaps.noSetter += 1; if (RAN_STATUSES.has(l.status)) gaps.noSetterRan += 1 }
+    if (!l.setter_id) {
+      gaps.noSetter += 1
+      if (RAN_STATUSES.has(l.status)) gaps.noSetterRan += 1
+      if (String(l.setter_name || '').trim()) gaps.unmatchedSetter += 1
+    }
     const setter = out(l.setter_id) ? null : l.setter_id
     if (setter) {
       const k = teamOf(setter, day)

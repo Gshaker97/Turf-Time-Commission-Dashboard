@@ -650,16 +650,28 @@ export default function Leads() {
               </div>
               {isAdmin ? (
                 <div className="flex flex-col gap-1 min-w-[168px]">
-                  {[['setter_id', 'SET', l.setter_id], ['closer_id', 'RUN', l.closer_id]].map(([field, tag, val]) => (
-                    <span key={field} className="flex items-center gap-1.5">
-                      <span className="text-[9px] text-white/25 w-6">{tag}</span>
-                      <select value={val || ''} onChange={e => setPerson(l, field, e.target.value)}
-                        style={{ background: '#242424', border: '1px solid #333' }}
-                        className="h-6 px-1.5 rounded text-[11px] text-white/80 focus:outline-none max-w-[136px]"
-                        title={tag === 'SET' ? 'Who booked it' : 'Who runs it (reassign here)'}>
-                        <option value="">— none —</option>
-                        {pickUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-                      </select>
+                  {[['setter_id', 'SET', l.setter_id, l.setter_name], ['closer_id', 'RUN', l.closer_id, l.closer_name]].map(([field, tag, val, named]) => (
+                    <span key={field} className="flex flex-col gap-0.5">
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-[9px] text-white/25 w-6">{tag}</span>
+                        <select value={val || ''} onChange={e => setPerson(l, field, e.target.value)}
+                          style={{ background: '#242424', border: '1px solid #333' }}
+                          className="h-6 px-1.5 rounded text-[11px] text-white/80 focus:outline-none max-w-[136px]"
+                          title={tag === 'SET' ? 'Who booked it' : 'Who runs it (reassign here)'}>
+                          <option value="">— none —</option>
+                          {pickUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                        </select>
+                      </span>
+                      {/* The feed sent a name but it matched no profile, so the
+                          select reads "none" and every total ignores this
+                          person. Showing the name turns a mystery into a
+                          one-click fix. */}
+                      {!val && String(named || '').trim() && (
+                        <span className="text-[9.5px] text-amber-400/80 pl-[30px] truncate max-w-[136px]"
+                          title={`The feed sent "${named}" but no roster profile matched. Pick the right person above.`}>
+                          feed: {named}
+                        </span>
+                      )}
                     </span>
                   ))}
                 </div>
