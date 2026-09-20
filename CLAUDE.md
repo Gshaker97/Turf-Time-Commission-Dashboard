@@ -772,7 +772,14 @@ min/max; day = `knock_at AT TIME ZONE 'America/Phoenix'`).
   manager-override default only applies when the reports-to person is an
   actual MANAGER — the sync (`profById` role guard) stamps `deal.manager_id`
   null otherwise, so a director never double-dips manager + director override.
-- **Deactivation:** the Active toggle flips `profiles.active`. A deactivated
+- **Deactivation:** the **Deactivate** button (UserMinus) on a person's row in
+  the People chart, beside Edit and Delete, flips `profiles.active`.
+  **Deactivate is how someone LEAVES; Delete is only for a row created by
+  mistake** — a real person's deals still reference them. The action lived
+  only in the old Users list, so when `PeopleChart` replaced that list it was
+  lost and Delete became the only exit on the row: `onToggleActive` was wired
+  through but called ONLY by the drawer's Reactivate, and `UserModal` has no
+  Active field. Keep both directions reachable. A deactivated
   user is signed out and blocked at login (`AuthContext.fetchProfile` checks
   `active`), but **all their deals/stats stay and still count** — never filter
   aggregates by `active`. When user admin is configured (SUPABASE_SERVICE_KEY

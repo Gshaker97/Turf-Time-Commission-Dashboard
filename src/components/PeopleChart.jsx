@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Search, Plus, KeyRound, UserPlus, Pencil, Trash2, UserCheck, ShieldCheck,
+  Search, Plus, KeyRound, UserPlus, Pencil, Trash2, UserCheck, UserMinus, ShieldCheck,
   ChevronDown, GripVertical, MoreHorizontal,
 } from 'lucide-react'
 import { headIdSet, teamLabel } from '../utils/team'
@@ -21,6 +21,9 @@ import { headIdSet, teamLabel } from '../utils/team'
 //     deserves the Edit form, not a drop.
 //   • Deactivated people live ONLY in a drawer at the bottom, collapsed by
 //     default, each with a Reactivate button. They're never faded in place.
+//   • A row's actions are key · edit · DEACTIVATE · delete. Deactivate is how
+//     someone leaves; Delete is only for a row added by mistake, since a real
+//     person's deals still reference them.
 //   • Phones: columns stack and each becomes collapsible; row actions fold
 //     into a ⋯ menu that also offers "Move to…" since touch has no drag.
 // Presentational + drag state only — every write goes back up as a handler.
@@ -219,7 +222,15 @@ export default function PeopleChart({
           ? (hasUserAdmin && <button onClick={() => onResetLogin?.(u)} disabled={busyUser === u.id} title="Reset their password" className={`${act} hover:text-amber-400 hover:bg-amber-500/10`}><KeyRound size={13} /></button>)
           : (hasUserAdmin && <button onClick={() => onCreateLogin?.(u)} disabled={busyUser === u.id} title="No login yet — create one" className={`${act} hover:text-teal hover:bg-teal/10`}><UserPlus size={13} /></button>)}
         <button onClick={() => onEdit?.(u)} title="Edit" className={`${act} hover:text-teal hover:bg-teal/10`}><Pencil size={13} /></button>
-        <button onClick={() => onDelete?.(u.id)} title="Delete" className={`${act} hover:text-red-400 hover:bg-red-500/10`}><Trash2 size={13} /></button>
+        {/* Deactivate is the normal way someone LEAVES — it cuts their login
+            while every deal, appointment and payout they touched stays put.
+            It sat only in the old Users list, so when this chart replaced that
+            list the action vanished and Delete was the only exit on the row.
+            Delete stays, but Deactivate comes first because it is what you
+            almost always want. */}
+        <button onClick={() => onToggleActive?.(u)} title="Deactivate — cuts their login, keeps all their deals and stats"
+          className={`${act} hover:text-amber-400 hover:bg-amber-500/10`}><UserMinus size={13} /></button>
+        <button onClick={() => onDelete?.(u.id)} title="Delete from the roster — only for a row created by mistake" className={`${act} hover:text-red-400 hover:bg-red-500/10`}><Trash2 size={13} /></button>
       </>
     )
   }
