@@ -124,6 +124,10 @@ export default function Deals() {
   // note thread (and clears filters that could hide the deal).
   const [searchParams] = useSearchParams()
   const noteDealId = searchParams.get('note')
+  // Declared before its first use: a const read above its declaration is a
+  // temporal-dead-zone throw the build cannot see (it white-screened Leads).
+  const canStage = isAdmin || profile?.role === 'vp'
+  const [reviewTab, setReviewTab] = useState('all')   // 'review' | 'all'
   useEffect(() => {
     if (!noteDealId || loading) return
     const d = deals.find(x => x.id === noteDealId)
@@ -232,12 +236,10 @@ export default function Deals() {
   // Deliberately computed from ALL deals, not the filtered view — the worklist
   // ignores search/filters/date range so nothing needing attention can hide.
   // The page always lands on All deals; review is an explicit toggle.
-  const canStage = isAdmin || profile?.role === 'vp'
   const needsReview = useMemo(
     () => canStage ? deals.filter(d => dealNeedsReview(d, dataStartDate)) : [],
     [deals, canStage, dataStartDate]
   )
-  const [reviewTab, setReviewTab] = useState('all')   // 'review' | 'all'
   const onReview = canStage && reviewTab === 'review'
   const shownDeals = onReview ? needsReview : filtered
 

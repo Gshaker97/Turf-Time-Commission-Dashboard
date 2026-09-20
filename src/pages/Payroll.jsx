@@ -345,30 +345,6 @@ export default function Payroll() {
   }
   const viewLabel  = view === 'overdue' ? 'Overdue (unpaid)' : (fmtDay(view) || '—')
 
-  async function lockRun() {
-    if (!view || view === 'overdue') return
-    const unpaid = runDeals.filter(d => d.status !== PAID).length
-    const msg = unpaid
-      ? `Lock the ${viewLabel} run? ${unpaid} deal(s) are not marked Paid yet — locking freezes them as-is.`
-      : `Lock the ${viewLabel} run? Its deals and adjustments become read-only until unlocked.`
-    if (!confirm(msg)) return
-    const snapshot = {
-      total: summary.total,
-      payees: payees.map(p => ({ id: p.id, name: p.name, total: +p.total.toFixed(2) })),
-      deals: runDeals.length,
-    }
-    const res = await lockPayrollRun(view, snapshot, profile?.id)
-    if (res?.error) { toast.error('Could not lock the run: ' + (res.error.message || 'unknown error') + '\n(Has migration 028 been run?)'); return }
-    const { data } = await fetchPayrollLocks(); setLocks(data || [])
-  }
-  async function unlockRun() {
-    if (!runLock) return
-    if (!confirm(`Unlock the ${viewLabel} run? Its deals become editable again.`)) return
-    const res = await unlockPayrollRun(runLock.pay_date)
-    if (res?.error) { toast.error('Could not unlock: ' + (res.error.message || 'unknown error')); return }
-    const { data } = await fetchPayrollLocks(); setLocks(data || [])
-  }
-
   // Optional filter: scope the run to a single payee/rep. Auto-clears if that
   // person isn't in the current run.
   const effFilter = repFilter && payees.some(p => p.id === repFilter) ? repFilter : ''
@@ -397,6 +373,33 @@ export default function Payroll() {
     return { total, paid, remaining: allPaid ? 0 : total - paid, pending, pendingCount, finalizedCount, adjTotal,
              count: shownDeals.length, paidCount, payees: shownPayees.length }
   })()
+
+  // Declared before its first use: `summary` is built from shownDeals/shownPayees below, so these
+  // two handlers sit after it rather than hoisting it past its own inputs.
+  async function lockRun() {
+    if (!view || view === 'overdue') return
+    const unpaid = runDeals.filter(d => d.status !== PAID).length
+    const msg = unpaid
+      ? `Lock the ${viewLabel} run? ${unpaid} deal(s) are not marked Paid yet — locking freezes them as-is.`
+      : `Lock the ${viewLabel} run? Its deals and adjustments become read-only until unlocked.`
+    if (!confirm(msg)) return
+    const snapshot = {
+      total: summary.total,
+      payees: payees.map(p => ({ id: p.id, name: p.name, total: +p.total.toFixed(2) })),
+      deals: runDeals.length,
+    }
+    const res = await lockPayrollRun(view, snapshot, profile?.id)
+    if (res?.error) { toast.error('Could not lock the run: ' + (res.error.message || 'unknown error') + '\n(Has migration 028 been run?)'); return }
+    const { data } = await fetchPayrollLocks(); setLocks(data || [])
+  }
+  async function unlockRun() {
+    if (!runLock) return
+    if (!confirm(`Unlock the ${viewLabel} run? Its deals become editable again.`)) return
+    const res = await unlockPayrollRun(runLock.pay_date)
+    if (res?.error) { toast.error('Could not unlock: ' + (res.error.message || 'unknown error')); return }
+    const { data } = await fetchPayrollLocks(); setLocks(data || [])
+  }
+
 
   // Advancing a deal collapses it — you've dealt with it, so the run reads
   // top-to-bottom as you work. Re-click the row to open it again.

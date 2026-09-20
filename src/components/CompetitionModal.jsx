@@ -81,6 +81,9 @@ export default function CompetitionModal({ competition, users = [], deals = [], 
   const rosterOf = (head) => teamAvgRoster(head.id, deals, users, rosterComp, teamCtx)
     .map(id => usersById[id]).filter(u => u && visible(u))
     .sort((a, b) => (a.id === head.id ? -1 : b.id === head.id ? 1 : a.name.localeCompare(b.name)))
+  // Declared before its first use: a const read above its declaration is a
+  // temporal-dead-zone throw the build cannot see (it white-screened Leads).
+  const toggleIn = (list = [], id) => list.includes(id) ? list.filter(x => x !== id) : [...list, id]
   const excluded = new Set(form.excluded_ids || [])
   const toggleExcluded = (id) => set('excluded_ids', toggleIn(form.excluded_ids, id))
   // Every id that can legitimately be excluded = the union of picked rosters.
@@ -110,7 +113,6 @@ export default function CompetitionModal({ competition, users = [], deals = [], 
   const addSide = () => set('sides', [...form.sides, { id: newId('s'), name: `Side ${form.sides.length + 1}`, team_ids: [], rep_ids: [] }])
   const patchSide = (id, patch) => set('sides', form.sides.map(s => s.id === id ? { ...s, ...patch } : s))
   const removeSide = (id) => set('sides', form.sides.filter(s => s.id !== id))
-  const toggleIn = (list = [], id) => list.includes(id) ? list.filter(x => x !== id) : [...list, id]
 
   // ── Rounds ──
   const addRound = () => set('rounds', [...form.rounds, { id: newId('r'), name: `Round ${form.rounds.length + 1}`, start: '', end: '', prize: '', winner_id: null }])

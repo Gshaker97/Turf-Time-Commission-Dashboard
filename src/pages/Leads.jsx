@@ -100,9 +100,6 @@ export default function Leads() {
   // Any ?missing=… value turns the single filter on, so older
   // ?missing=setter links still work.
   const [missing, setMissing] = useState(() => (searchParams.get('missing') ? 'info' : ''))
-  // Duplicates are found across everything in view, not just the current
-  // filter — otherwise filtering to one day would hide a row's own twin.
-  const dupes = useMemo(() => duplicateIds(scoped), [scoped])
   // Feed names that are not field reps (inside sales, people who have left):
   // a known blank, not a gap to chase. Admin → Settings → Feed: Not Field Reps.
   const nonReps = useMemo(() => nonRepSet(feedNonReps), [feedNonReps])
@@ -121,6 +118,10 @@ export default function Leads() {
   const scoped = useMemo(
     () => (role === 'rep' && !isAdmin) ? leads.filter(mine) : leads,
     [leads, role, isAdmin, profile?.id])
+
+  // Duplicates are found across everything in view, not just the current
+  // filter — otherwise filtering to one day would hide a row's own twin.
+  const dupes = useMemo(() => duplicateIds(scoped), [scoped])
 
   // Local calendar day — a 6:30pm appointment is tomorrow in UTC.
   const dayOf = (l) => apptDay(l.appointment_at) || ''
