@@ -398,7 +398,7 @@ export default function Dashboard() {
         const mgr = u ? users.find(m => m.id === u.manager_id) : null
         map[id]   = { id, name: u?.name ?? '—', team: mgr?.name ?? '—',
           deals: 0, revenue: 0, leads: 0, leadRevenue: 0, commission: 0,
-          closed: 0, closedRevenue: 0, selfGens: 0 }
+          selfGens: 0, setForOthers: 0 }
       }
       return map[id]
     }
@@ -416,11 +416,22 @@ export default function Dashboard() {
       const cid = deal.closer_id
       const bl  = parseFloat(deal.baseline_revenue) || 0
       const a   = dealAmounts(deal)
+      // Who actually closed it. A deal with a setter but no closer_id was
+      // closed by the setter themselves — the same rule dealAmounts() uses to
+      // pay them the whole rep pool.
+      const closerOwn = deal.closer_id || deal.setter_id || null
       if (sid) {
         const s = ensure(sid)
-        s.deals      += 1
+        s.deals      += 1                       // every deal they own (drives Personal Rev)
         s.revenue    += bl
         s.commission += deal.setter_id ? a.setter : a.closer
+        // A SELF-GEN IS NOT A SET (per Keaton). The three count columns are
+        // mutually exclusive, so each deal a rep touched lands in exactly one:
+        // they set AND closed it → Self Gen; they set it and someone else
+        // closed it → Set for Others; someone else set it and they closed it
+        // → Lead Closes (the `leads` bucket below).
+        if (closerOwn === sid) s.selfGens += 1
+        else                   s.setForOthers += 1
       }
       // Leads + lead revenue credit the CLOSER when they aren't the setter —
       // they closed someone else's lead, and earn their closer share.
@@ -429,18 +440,6 @@ export default function Dashboard() {
         c.leads       += 1
         c.leadRevenue += bl
         c.commission  += a.closer
-      }
-      // Closed + closed revenue credit whoever RAN the appointment, self-gen
-      // or not. A deal with a setter but no closer_id was closed by the setter
-      // themselves — the same rule dealAmounts() uses to pay them the full rep
-      // pool — so fall back to the setter rather than crediting nobody.
-      // By construction: closed === selfGens + leads.
-      const closerOwn = deal.closer_id || deal.setter_id || null
-      if (closerOwn) {
-        const c = ensure(closerOwn)
-        c.closed        += 1
-        c.closedRevenue += bl
-        if (closerOwn === sid) c.selfGens += 1
       }
     }
     // Total revenue = every deal they set OR closed. `leadRevenue` only counts
@@ -479,12 +478,12 @@ export default function Dashboard() {
   // Copy the current leaderboard to the clipboard as a real table (HTML) with a
   // tab-separated fallback — pastes cleanly into Canva, Sheets, Docs, etc.
   async function copyLeaderboard() {
-    const cols = ['#', 'Rep', 'Total Rev', 'Personal Rev', 'Comm', 'Closed', 'Self Gen', 'Set']
+    const cols = ['#', 'Rep', 'Total Rev', 'Personal Rev', 'Comm', 'Self Gen', 'Set for Others', 'Lead Closes']
     // The export is a shareable artifact, so ghost reps are always dropped —
     // even for an admin, who sees them on-screen. (Re-rank after filtering.)
     const rows = rankedReps
       .filter(r => !ghostIds.has(r.id))
-      .map((r, i) => [i + 1, r.name, fmt(r.totalRevenue), fmt(r.revenue), fmt(r.commission), r.closed, r.selfGens, r.deals])
+      .map((r, i) => [i + 1, r.name, fmt(r.totalRevenue), fmt(r.revenue), fmt(r.commission), r.selfGens, r.setForOthers, r.leads])
     const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     const tsv = [cols, ...rows].map(r => r.join('\t')).join('\n')
     const html =
@@ -820,7 +819,7 @@ export default function Dashboard() {
             )}
           </div>
           {/* Scrolls both ways: vertically through the rankings, and
-              horizontally on a phone to reach Closed Rev / Self Gen. */}
+              horizontally on a phone to reach the count columns. */}
           <div className="max-h-[460px] overflow-y-auto overflow-x-auto">
           <table className="w-full min-w-[520px]">
             <thead className="sticky top-0 z-10" style={{ background: '#242424' }}>
@@ -833,12 +832,12 @@ export default function Dashboard() {
                   active={repSort.key === 'revenue'} dir={repSort.dir} onClick={() => toggleRepSort('revenue')} />
                 <SortTh label="Comm" align="right"
                   active={repSort.key === 'commission'} dir={repSort.dir} onClick={() => toggleRepSort('commission')} />
-                <SortTh label="Closed" align="center" title="Deals they closed — their own plus other reps' leads"
-                  active={repSort.key === 'closed'} dir={repSort.dir} onClick={() => toggleRepSort('closed')} />
-                <SortTh label="Self Gen" align="center" title="Deals they both set and closed themselves"
+                <SortTh label="Self Gen" align="center" title="Deals they set AND closed themselves"
                   active={repSort.key === 'selfGens'} dir={repSort.dir} onClick={() => toggleRepSort('selfGens')} />
-                <SortTh label="Set" align="center" title="Deals they set (generated), however they were closed"
-                  active={repSort.key === 'deals'} dir={repSort.dir} onClick={() => toggleRepSort('deals')} />
+                <SortTh label="Set for Others" align="center" title="Deals they set that another rep closed — a self-gen is never counted here"
+                  active={repSort.key === 'setForOthers'} dir={repSort.dir} onClick={() => toggleRepSort('setForOthers')} />
+                <SortTh label="Lead Closes" align="center" title="Deals they closed that another rep set"
+                  active={repSort.key === 'leads'} dir={repSort.dir} onClick={() => toggleRepSort('leads')} />
               </tr>
             </thead>
             <tbody>
@@ -856,13 +855,13 @@ export default function Dashboard() {
                     </td>
                     <td className="py-2 text-[12px] font-semibold text-emerald-400 text-right whitespace-nowrap">{fmt(rep.commission)}</td>
                     <td className="py-2 text-[12px] text-center">
-                      {rep.closed > 0 ? <span className="text-white/80 font-semibold">{rep.closed}</span> : <span className="text-white/20">—</span>}
+                      {rep.selfGens > 0 ? <span className="text-white/80 font-semibold">{rep.selfGens}</span> : <span className="text-white/20">—</span>}
                     </td>
                     <td className="py-2 text-[12px] text-center">
-                      {rep.selfGens > 0 ? <span className="text-white/60">{rep.selfGens}</span> : <span className="text-white/20">—</span>}
+                      {rep.setForOthers > 0 ? <span className="text-white/60">{rep.setForOthers}</span> : <span className="text-white/20">—</span>}
                     </td>
                     <td className="py-2 text-[12px] text-center">
-                      {rep.deals > 0 ? <span className="text-white/60">{rep.deals}</span> : <span className="text-white/20">—</span>}
+                      {rep.leads > 0 ? <span className="text-white/60">{rep.leads}</span> : <span className="text-white/20">—</span>}
                     </td>
                   </tr>
                 )
