@@ -836,6 +836,9 @@ export default function SettingsPanel() {
       <NoteNotifyEditor />
       <LeadFeedEditor />
       <FieldFeedEditor />
+      <ListEditor title="Feed: Not Field Reps" settingKey="feed_non_reps"
+        hint="Names the CRM sends that aren't field reps — inside sales, or someone who's left. Their appointments still count in full for whoever RAN them; the name just stops being flagged as a missing setter forever. Match is on the whole name, case-insensitive."
+        placeholder="e.g. Josh Hilton" />
       <ListEditor title="Override Exclusion Items" settingKey="override_exclusion_items"
         hint="Subcontracted products that earn no manager/director/VP override. On a deal, pick the item and enter its price — overrides then compute off baseline minus those amounts (baseline and job price don't change)."
         placeholder="e.g. Electrical" fallback={['Electrical', 'Gas', 'Pergolas']} />

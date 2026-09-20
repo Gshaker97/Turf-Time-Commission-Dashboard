@@ -511,6 +511,25 @@ estimates come from the leads feed; set `estimates_from_leads_date`.)
   it would bury the real gaps. Each row states which gap(s) it has under the
   customer name, naming an unmatched setter. Any `?missing=…` value turns
   the filter on, so older `?missing=setter` links still work.
+  **Names that are NOT field reps (`app_settings.feed_non_reps`, Admin →
+  Settings → "Feed: Not Field Reps", exposed as `feedNonReps`).** The CRM
+  names people who will never match a profile — INSIDE SALES (Josh Hilton)
+  and reps who have LEFT (Jack Darrah, Axcel Fragoso) — so without this
+  every one of their appointments reads as a missing setter forever and the
+  worklist never empties. `nonRepSet(names)` / `isNonRep(name, set)` in
+  `leadGaps.js` are the one rule: whole trimmed name, case-insensitive,
+  NEVER a substring (which would make "Jack" swallow "Jackson"). Consumers:
+  `hasGap`/`gapReasons`/`needsAttention` (4th arg) and `buildPerformance`
+  (`nonRepNames`, which stops the `gaps` tally counting them).
+  **It changes NO count** (per Keaton: "keep the appointment, drop Josh") —
+  inside sales books it, a field rep runs it, and the field rep keeps that
+  Leads-ran credit; the name just stops being a fixable gap. That makes it
+  a DIFFERENT decision from the two neighbours it is easily confused with:
+  `leads.ignored` drops the row from every count, and `perf_excluded_ids`
+  hides a real PROFILE from the Performance page. A non-rep name still shows
+  as "feed: <name>" under the empty select, but muted grey instead of amber.
+  A non-rep setter does NOT excuse the other gaps — a past-due row with no
+  outcome is still flagged.
   **The Leads page carries no team/rep stat board** — those stats live on
   Performance now; this page is the appointments themselves.
   **Duplicates + `leads.ignored` (migration 049).** RepCard creates a NEW
@@ -592,9 +611,14 @@ estimates come from the leads feed; set `estimates_from_leads_date`.)
   has field activity in range — before the feed is wired every doors figure
   is 0 and flagging them all would be noise; set/ran floors always apply.
   Field columns show "—" for a rep with no activity rows while the feed is
-  dark. An amber banner explains the missing feed (admin: link to Settings
-  + Import CSV) and lists door knocks that arrived for names not on the
-  roster (they count in the org total, on no team).
+  dark.
+- **There is NO data-quality banner** (removed per Keaton — it said the same
+  three things on every load and dominated the top of the page). The engine
+  still returns `gaps` (noSetter/noSetterRan/unmatchedSetter) and `unmatched`
+  (door knocks for names not on the roster — their doors count in the org
+  total, on no team); nothing renders them. Do not re-add a standing banner:
+  gaps belong where they can be acted on — the Leads page's "Needs attention"
+  filter, and the `feed_non_reps` list for names that will never match.
 
 ## Field activity feed (door knocks, migration 048)
 

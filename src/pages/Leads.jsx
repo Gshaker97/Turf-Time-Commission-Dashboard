@@ -5,7 +5,7 @@ import { CalendarCheck, Search, Link2, Upload, X } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchLeads, fetchUsers, updateLead, upsertLeads, fetchLeadHistory } from '../lib/db'
 import { csvToLeads } from '../utils/leadImport'
-import { gapReasons, duplicateIds, needsAttention } from '../utils/leadGaps'
+import { gapReasons, duplicateIds, needsAttention, nonRepSet, isNonRep } from '../utils/leadGaps'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { toast } from '../lib/toast'
 import { useSettings } from '../contexts/SettingsContext'
@@ -80,7 +80,7 @@ function Kpi({ label, value, sub, color = '#00b894' }) {
 
 export default function Leads() {
   const { profile, isAdmin } = useAuth()
-  const { settings } = useSettings()
+  const { settings, feedNonReps } = useSettings()
   const role = profile?.role ?? 'rep'
   const [leads, setLeads] = useState([])
   const [users, setUsers] = useState([])
@@ -97,12 +97,15 @@ export default function Leads() {
   // counts as a LEAD ran for whoever sat it and toward nobody's Set, so this
   // is the worklist for fixing them at the source.
   const [searchParams] = useSearchParams()
-  // Any ?missing=… value (the Performance banner still sends 'setter') turns
-  // the single filter on.
+  // Any ?missing=… value turns the single filter on, so older
+  // ?missing=setter links still work.
   const [missing, setMissing] = useState(() => (searchParams.get('missing') ? 'info' : ''))
   // Duplicates are found across everything in view, not just the current
   // filter — otherwise filtering to one day would hide a row's own twin.
   const dupes = useMemo(() => duplicateIds(scoped), [scoped])
+  // Feed names that are not field reps (inside sales, people who have left):
+  // a known blank, not a gap to chase. Admin → Settings → Feed: Not Field Reps.
+  const nonReps = useMemo(() => nonRepSet(feedNonReps), [feedNonReps])
 
   const feed = useMemo(
     () => leadFeedHealth(leads, settings?.lead_last_payload?.at),
@@ -130,7 +133,7 @@ export default function Leads() {
       if (dateTo && d && d > dateTo) return false
       if (statusFilter && l.status !== statusFilter) return false
       if (repFilter && l.setter_id !== repFilter && l.closer_id !== repFilter) return false
-      if (missing && !needsAttention(l, nowISO, dupes)) return false
+      if (missing && !needsAttention(l, nowISO, dupes, nonReps)) return false
       if (q) {
         const hay = [l.customer_name, l.address, l.setter?.name, l.closer?.name, l.setter_name, l.closer_name]
           .filter(Boolean).join(' ').toLowerCase()
@@ -537,7 +540,7 @@ export default function Leads() {
         </div>
         {g.rows.map(l => {
           const s = stat(l.status)
-          const gaps = l.ignored ? [] : gapReasons(l, new Date().toISOString())
+          const gaps = l.ignored ? [] : gapReasons(l, new Date().toISOString(), nonReps)
           const isDupe = !l.ignored && dupes.has(l.id)
           return (
             <div key={l.id} className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 border-b border-white/5 last:border-0 ${l.ignored ? 'opacity-45' : ''}`}>
@@ -593,10 +596,19 @@ export default function Leads() {
                           person. Showing the name turns a mystery into a
                           one-click fix. */}
                       {!val && String(named || '').trim() && (
-                        <span className="text-[9.5px] text-amber-400/80 pl-[30px] truncate max-w-[136px]"
-                          title={`The feed sent "${named}" but no roster profile matched. Pick the right person above.`}>
-                          feed: {named}
-                        </span>
+                        isNonRep(named, nonReps) ? (
+                          // A known non-rep: the blank select is correct, so
+                          // this reads as information, not a thing to fix.
+                          <span className="text-[9.5px] text-white/30 pl-[30px] truncate max-w-[136px]"
+                            title={`"${named}" is on the Not Field Reps list, so this appointment credits nobody's Set. Whoever ran it still gets their Leads ran.`}>
+                            feed: {named}
+                          </span>
+                        ) : (
+                          <span className="text-[9.5px] text-amber-400/80 pl-[30px] truncate max-w-[136px]"
+                            title={`The feed sent "${named}" but no roster profile matched. Pick the right person above.`}>
+                            feed: {named}
+                          </span>
+                        )
                       )}
                     </span>
                   ))}
