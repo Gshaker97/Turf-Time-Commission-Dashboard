@@ -287,7 +287,7 @@ export function buildPerformance({
 // every doors figure is 0 and flagging all of them would be noise).
 // (First/last knock, field time and knock days are computed but NOT shown —
 // RepCard's knock webhook carries only the knock itself, per Keaton.)
-export const DEFAULT_FLOORS = { doors_per_day: 5, set: 1, ran: 1 }
+export const DEFAULT_FLOORS = { doors_per_day: 5, set: 1 }
 export function repFlags(row, floors = DEFAULT_FLOORS, teamHasActivity = false) {
   const f = { ...DEFAULT_FLOORS, ...(floors || {}) }
   const flags = {}
@@ -296,7 +296,6 @@ export function repFlags(row, floors = DEFAULT_FLOORS, teamHasActivity = false) 
     if ((row.doorsPerDay ?? 0) < Number(f.doors_per_day)) flags.doorsPerDay = true
   }
   if (row.set < Number(f.set)) flags.set = true
-  if (row.ran < Number(f.ran)) flags.ran = true
   return flags
 }
 
