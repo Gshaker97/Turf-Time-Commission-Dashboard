@@ -96,7 +96,6 @@ function PageSettings({ floors, defaultTeamId, excludedIds, users, heads, onSave
         <p className="text-[10.5px] text-white/35">A rep's number turns red when it's below the floor for the selected range. Door floors only apply once field activity is coming in.</p>
         <FloorRow k="doors_per_day" value={f.doors_per_day} onChange={set} label="Doors per knock day" hint="Average doors on days they knocked" />
         <FloorRow k="set" value={f.set} onChange={set}           label="Appointments set"    hint="In the selected range" />
-        <FloorRow k="ran" value={f.ran} onChange={set}           label="Appointments ran"    hint="In the selected range" />
       </div>
 
       <div className="space-y-1.5">
@@ -247,9 +246,8 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                   <TH>Doors</TH><TH>Doors<br />/ day</TH>
                   <TH title="Appointments this rep BOOKED, whoever ended up sitting them">Set</TH>
                   <TH title="How many of THIS REP'S SETS actually ran, whoever sat them. A setter's sets are usually run by closers.">Sets<br />ran</TH>
-                  <TH title="Appointments this rep personally SAT. A pure setter shows 0 here — their sets are counted in the two columns to the left.">Ran</TH>
-                  <TH title="Appointments this rep both booked and sat">Self-gen<br />ran</TH>
-                  <TH title="Appointments this rep sat for another setter">Leads<br />ran</TH>
+                  <TH className="border-l border-[#2a2a2a]" title="Appointments this rep booked AND sat themselves">Self-gen<br />ran</TH>
+                  <TH title="Appointments this rep sat for another setter. Self-gen ran + Leads ran = every appointment they sat.">Leads<br />ran</TH>
                   <TH className="border-l border-[#333]" title="Deals this rep owns. Underneath: self-gen deals ÷ self-gen ran.">Self-gen<br />deals</TH>
                   <TH title="Deals this rep closed for another setter. Underneath: lead closes ÷ leads ran.">Lead<br />closes</TH>
                   <TH title="Baseline revenue of this rep's self-gen deals">Revenue</TH>
@@ -260,7 +258,7 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
               </thead>
               <tbody>
                 {rows.length === 0 && (
-                  <tr><td colSpan={14} className="py-3 px-2 text-[12px] text-white/30">Nobody on this team in the selected range.</td></tr>
+                  <tr><td colSpan={13} className="py-3 px-2 text-[12px] text-white/30">Nobody on this team in the selected range.</td></tr>
                 )}
                 {rows.map(r => {
                   const fl = repFlags(r, floors, hasAct)
@@ -278,8 +276,7 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                       <TD flag={fl.doorsPerDay}>{dash ? '—' : dec1(r.doorsPerDay)}</TD>
                       <TD flag={fl.set}>{r.set}</TD>
                       <TD sub={r.showRate == null ? null : pct0(r.showRate)}>{r.setRan}</TD>
-                      <TD flag={fl.ran}>{r.ran}</TD>
-                      <TD>{r.sgRan}</TD>
+                      <TD className="border-l border-[#2a2a2a]">{r.sgRan}</TD>
                       <TD>{r.leadRan}</TD>
                       <TD strong className="border-l border-[#333]" sub={r.sgCloseRate == null ? null : `${pct0(r.sgCloseRate)} close`}>{r.deals}</TD>
                       <TD sub={r.leadCloseRate == null ? null : `${pct0(r.leadCloseRate)} close`}>{r.leadCloses}</TD>
@@ -299,8 +296,7 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                     <TD strong>{hasAct ? dec1(t.doorsPerDay) : '—'}</TD>
                     <TD strong>{t.set}</TD>
                     <TD strong sub={t.showRate == null ? null : pct0(t.showRate)}>{t.setRan}</TD>
-                    <TD strong>{t.ran}</TD>
-                    <TD strong>{t.sgRan}</TD>
+                    <TD strong className="border-l border-[#2a2a2a]">{t.sgRan}</TD>
                     <TD strong>{t.leadRan}</TD>
                     <TD strong className="border-l border-[#333]" sub={t.sgCloseRate == null ? null : `${pct0(t.sgCloseRate)} close`}>{t.deals}</TD>
                     <TD strong sub={t.leadCloseRate == null ? null : `${pct0(t.leadCloseRate)} close`}>{t.leadCloses}</TD>
