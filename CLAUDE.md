@@ -102,10 +102,11 @@ setup + deploy steps.
      (per Keaton: "if the same person set and closed it, that's a self-gen,
      not a set"): **Self Gen** = set AND closed by them (a deal with a setter
      and no `closer_id` counts here — the setter closed it, same rule
-     `dealAmounts` pays by), **Set for Others** = they set it, another rep
-     closed it, **Lead Closes** = another rep set it, they closed it. Every
-     deal a rep touched lands in exactly ONE of the three, and Self Gen +
-     Set for Others = the deals they OWN (which is what Personal Rev is the
+     `dealAmounts` pays by), **Set** = they set it, another rep
+     closed it (the column is LABELLED just "Set" — per Keaton — but it
+     excludes self-gens), **Lead Closes** = another rep set it, they closed
+     it. Every deal a rep touched lands in exactly ONE of the three, and
+     Self Gen + Set = the deals they OWN (which is what Personal Rev is the
      revenue of). There is no combined "Closed" column any more — it was
      Self Gen + Lead Closes and double-counted a self-gen as a set. NOTE the
      unit differs from the Performance page, where Set/Ran are APPOINTMENTS;
