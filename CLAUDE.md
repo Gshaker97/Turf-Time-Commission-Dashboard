@@ -469,16 +469,25 @@ estimates come from the leads feed; set `estimates_from_leads_date`.)
   (dashed amber — ownerless deals + reps with no team). Team tiles (revenue,
   deals, avg deal, avg markup, active reps = active members as of the range
   end) then a rep table split into **Field activity · RepCard** (Doors,
-  Doors/day, then FOUR appointment columns in two pairs, divided: what they
-  BOOKED — **Set** = appointments this rep booked, **Sets ran** = how many of
-  THOSE ran whoever sat them (`setRan`, % as its sub-line) — then what they
-  SAT — **Self-gen ran** (booked and sat it) + **Leads ran** (sat another
-  rep's). **There is no combined "Ran" column**: it was exactly Self-gen ran
-  + Leads ran, and five appointment columns was one too many to hold in your
-  head (per Keaton — the third round on these columns: first the math, then
-  the labelling, then the count). `ran` is still computed in the engine; only
-  the column and its red-flag floor are gone. A pure setter reads Set 20 ·
-  Sets ran 15 (75%) · Self-gen ran 0 · Leads ran 0.
+  Doors/day, then THREE appointment columns: **Set** = appointments this rep
+  booked; **Self-gen ran** = how many of THOSE ran — **credited to the SETTER
+  whoever sat it** (per Keaton), with the % of their sets that ran as its
+  sub-line; **Leads ran** = appointments they SAT for another setter.
+  This went four rounds (the math, the labelling, the count, then the
+  definition): there is no "Ran" column (it was self-gen + leads ran) and no
+  separate "Sets ran" (it IS self-gen ran under this rule).
+  **`sgRan` and `leadRan` are per-person CREDIT columns, NOT a partition of
+  `ran`** — one appointment set by A and sat by B gives A a self-gen ran AND
+  B a leads ran, so at org/team level the two can sum past `ran`. That is
+  why the org funnel strip shows only Doors → Set → Ran → Sold: `ran`
+  (appointments a person SAT) stays a true count, and mixing credit columns
+  into a funnel would double-count. A pure setter reads Set 20 · Self-gen
+  ran 15 (75%) · Leads ran 0. A pure closer reads Set 0 · Self-gen ran 0 ·
+  Leads ran 40. Bonus: SG close % finally compares like with like, since
+  both sides now follow the setter (deals they own ÷ their appointments that
+  ran). NOTE `estimates.js` still defines a self-gen estimate as one the rep
+  set AND ran, so the Goals page's SG-estimate metric does not follow this
+  rule — align it if that ever matters.
   **An appointment with NO SETTER recorded counts as a LEAD ran, never a
   self-gen** (per Keaton) — the old rule credited the runner, which showed a
   closer 10 self-gen ran against 3 set. Same rule in `estimates.js`
