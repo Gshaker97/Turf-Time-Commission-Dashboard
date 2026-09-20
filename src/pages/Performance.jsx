@@ -464,7 +464,7 @@ export default function Performance() {
                 {perf.gaps.unmatchedSetter > 0 && (
                   <span className="text-amber-100">{perf.gaps.unmatchedSetter} of them DO carry a setter name from the feed that matched no one on the roster — a spelling difference, a nickname, someone not on the roster, or a name two people share. </span>
                 )}
-                <Link to="/leads?missing=setter" className="underline">Find and fix them →</Link>
+                <Link to="/leads?missing=info" className="underline">Find and fix them →</Link>
               </p>
             )}
             {perf.unmatched.length > 0 && (
