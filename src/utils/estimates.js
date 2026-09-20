@@ -43,6 +43,7 @@ const dayOf = apptDay
 export function leadEstimates(leads = [], repId, start, end, from = null) {
   let sgEst = 0, leadEst = 0
   for (const l of leads) {
+    if (l.ignored) continue          // an admin marked it a duplicate (049)
     const d = dayOf(l.appointment_at)
     if (!d || d < start || d > end) continue
     if (from && d < from) continue

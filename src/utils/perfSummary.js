@@ -174,6 +174,7 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
   }
 
   for (const l of leads) {
+    if (l.ignored) continue          // an admin marked it a duplicate (049)
     const day = apptDay(l.appointment_at)
     if (!inRange(day, from, to)) continue
     if (!l.setter_id) {
