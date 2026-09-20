@@ -13,6 +13,11 @@
 // Credit rule — the rep who RAN the appointment owns the estimate:
 //   • they set it AND ran it            → self-gen estimate
 //   • someone else set it, they ran it  → lead estimate
+//   • NO SETTER RECORDED, they ran it   → LEAD estimate (per Keaton). We
+//     don't know who generated it, and guessing "they did" inflated closers'
+//     self-gen numbers — a closer showed 10 self-gen ran against 3 set.
+//     Counting it as a lead is the conservative read; the Performance page
+//     flags these so the missing setter can be fixed at the source.
 // (matches how `weekly_stats.self_gen_estimates` / `lead_estimates` were used)
 // ============================================================
 import { weekStartOf } from './dateRanges'
@@ -45,8 +50,8 @@ export function leadEstimates(leads = [], repId, start, end, from = null) {
     const ranBy = l.closer_id || l.setter_id
     if (!ranBy) continue
     if (repId && ranBy !== repId) continue
-    if (l.setter_id && l.setter_id !== ranBy) leadEst += 1
-    else sgEst += 1
+    if (l.setter_id && l.setter_id === ranBy) sgEst += 1
+    else leadEst += 1
   }
   return { sgEst, leadEst }
 }

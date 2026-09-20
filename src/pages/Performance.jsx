@@ -452,13 +452,19 @@ export default function Performance() {
       )}
 
       {/* Data quality */}
-      {(!perf.hasActivity || perf.unmatched.length > 0) && (
+      {(!perf.hasActivity || perf.unmatched.length > 0 || perf.gaps.noSetter > 0) && (
         <div className="rounded-xl px-4 py-2.5 flex items-start gap-2.5 text-[12px]" style={{ background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.3)' }}>
           <AlertTriangle size={14} className="text-amber-300 flex-shrink-0 mt-0.5" />
           <div className="text-amber-200/90 space-y-0.5">
             {!perf.hasActivity && (
               <p>No door-knock data in this range yet. Field activity columns show "—" until the RepCard activity feed is connected
                 {isAdmin ? <> (<Link to="/admin" className="underline">Admin → Settings → Field Activity Feed</Link>) or a report is imported with <span className="font-semibold">Import field CSV</span>.</> : '.'}
+              </p>
+            )}
+            {perf.gaps.noSetter > 0 && (
+              <p>{perf.gaps.noSetter} appointment{perf.gaps.noSetter === 1 ? '' : 's'} in this range {perf.gaps.noSetter === 1 ? 'has' : 'have'} no setter recorded
+                {perf.gaps.noSetterRan > 0 ? ` (${perf.gaps.noSetterRan} of them ran)` : ''}. They count as Leads ran for whoever sat them, and toward nobody's Set.{' '}
+                <Link to="/leads?missing=setter" className="underline">Find and fix them →</Link>
               </p>
             )}
             {perf.unmatched.length > 0 && (
