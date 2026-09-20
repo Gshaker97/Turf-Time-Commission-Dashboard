@@ -5,7 +5,7 @@ import { CalendarCheck, Search, Link2, Upload, X } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchLeads, fetchUsers, updateLead, upsertLeads, fetchLeadHistory } from '../lib/db'
 import { csvToLeads } from '../utils/leadImport'
-import { hasGap, gapReasons } from '../utils/leadGaps'
+import { gapReasons, duplicateIds, needsAttention } from '../utils/leadGaps'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { toast } from '../lib/toast'
 import { useSettings } from '../contexts/SettingsContext'
@@ -100,6 +100,9 @@ export default function Leads() {
   // Any ?missing=… value (the Performance banner still sends 'setter') turns
   // the single filter on.
   const [missing, setMissing] = useState(() => (searchParams.get('missing') ? 'info' : ''))
+  // Duplicates are found across everything in view, not just the current
+  // filter — otherwise filtering to one day would hide a row's own twin.
+  const dupes = useMemo(() => duplicateIds(scoped), [scoped])
 
   const feed = useMemo(
     () => leadFeedHealth(leads, settings?.lead_last_payload?.at),
@@ -127,7 +130,7 @@ export default function Leads() {
       if (dateTo && d && d > dateTo) return false
       if (statusFilter && l.status !== statusFilter) return false
       if (repFilter && l.setter_id !== repFilter && l.closer_id !== repFilter) return false
-      if (missing && !hasGap(l, nowISO)) return false
+      if (missing && !needsAttention(l, nowISO, dupes)) return false
       if (q) {
         const hay = [l.customer_name, l.address, l.setter?.name, l.closer?.name, l.setter_name, l.closer_name]
           .filter(Boolean).join(' ').toLowerCase()
@@ -136,18 +139,20 @@ export default function Leads() {
       return true
     // Chronological — the list reads like the calendar it came from.
     }).sort((a, b) => String(a.appointment_at ?? '').localeCompare(String(b.appointment_at ?? '')))
-  }, [scoped, dateFrom, dateTo, statusFilter, repFilter, search, missing])
+  }, [scoped, dateFrom, dateTo, statusFilter, repFilter, search, missing, dupes])
 
   const kpis = useMemo(() => {
-    const set = filtered.length
-    const ran = filtered.filter(l => RAN.has(l.status)).length
-    const sold = filtered.filter(l => l.status === 'sold').length
-    const noShow = filtered.filter(l => l.status === 'no_show').length
+    // Ignored rows (duplicates) count nowhere — same rule the stats pages use.
+    const counted = filtered.filter(l => !l.ignored)
+    const set = counted.length
+    const ran = counted.filter(l => RAN.has(l.status)).length
+    const sold = counted.filter(l => l.status === 'sold').length
+    const noShow = counted.filter(l => l.status === 'no_show').length
+    const held = set - counted.filter(l => l.status === 'canceled').length
     return {
       set, ran, sold, noShow,
       closeRate: ran > 0 ? (sold / ran) * 100 : null,
-      showRate: set - filtered.filter(l => l.status === 'canceled').length > 0
-        ? (ran / (set - filtered.filter(l => l.status === 'canceled').length)) * 100 : null,
+      showRate: held > 0 ? (ran / held) * 100 : null,
     }
   }, [filtered])
 
@@ -165,8 +170,8 @@ export default function Leads() {
     return days.map(g => ({
       ...g,
       ...dayMeta(g.day),
-      ran: g.rows.filter(l => RAN.has(l.status)).length,
-      sold: g.rows.filter(l => l.status === 'sold').length,
+      ran: g.rows.filter(l => !l.ignored && RAN.has(l.status)).length,
+      sold: g.rows.filter(l => !l.ignored && l.status === 'sold').length,
     }))
   }, [filtered])
 
@@ -263,6 +268,15 @@ export default function Leads() {
   function setPerson(l, field, id) {
     const u = users.find(x => x.id === id)
     patchLead(l, { [field]: id || null, [`${field.replace('_id', '')}_name`]: u?.name ?? null })
+  }
+  // Ignore/restore is its own thing — no pin. Pinning freezes status and
+  // people against the feed; ignoring just takes the row out of the counts.
+  async function toggleIgnore(l) {
+    const next = !l.ignored
+    if (next && !confirm(`Ignore this appointment?\n\n${l.customer_name || 'Unnamed'} — it stays on this page, greyed, but stops counting anywhere.`)) return
+    setLeads(ls => ls.map(x => x.id === l.id ? { ...x, ignored: next } : x))
+    const res = await updateLead(l.id, { ignored: next })
+    if (res?.error) { toast.error('Could not update: ' + (res.error.message || 'unknown error')); load() }
   }
   async function unpin(l) {
     setLeads(ls => ls.map(x => x.id === l.id ? { ...x, pinned: false } : x))
@@ -480,9 +494,9 @@ export default function Leads() {
           </select>
         )}
         <select value={missing} onChange={e => setMissing(e.target.value)} style={selStyle} className={selCls}
-          title="Appointments with something missing: no setter, no outcome logged after their time passed, or no closer on one that ran. Each row says which.">
+          title="Anything a human should look at: missing setter, no outcome logged after its time passed, a ran appointment with no closer, or a likely duplicate. Each row says which.">
           <option value="">All appointments</option>
-          <option value="info">Missing info</option>
+          <option value="info">Needs attention</option>
         </select>
       </div>
 
@@ -523,9 +537,10 @@ export default function Leads() {
         </div>
         {g.rows.map(l => {
           const s = stat(l.status)
-          const gaps = gapReasons(l, new Date().toISOString())
+          const gaps = l.ignored ? [] : gapReasons(l, new Date().toISOString())
+          const isDupe = !l.ignored && dupes.has(l.id)
           return (
-            <div key={l.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 border-b border-white/5 last:border-0">
+            <div key={l.id} className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 border-b border-white/5 last:border-0 ${l.ignored ? 'opacity-45' : ''}`}>
               <div className="text-[11px] font-semibold text-white/45 tabular-nums w-[58px] flex-shrink-0">
                 {tm(l.appointment_at)}
               </div>
@@ -548,6 +563,15 @@ export default function Leads() {
                   <p className="text-[9.5px] text-amber-400/80 truncate mt-0.5" title={`Missing info: ${gaps.join('; ')}`}>
                     Missing info — {gaps.join(' · ')}
                   </p>
+                )}
+                {isDupe && (
+                  <p className="text-[9.5px] text-amber-400/80 truncate mt-0.5"
+                    title="Another appointment has the same customer at the same time. The CRM makes a new record when one is reassigned, so one of these is probably a leftover — ignore whichever is wrong.">
+                    Possible duplicate — same customer and time as another appointment
+                  </p>
+                )}
+                {l.ignored && (
+                  <p className="text-[9.5px] text-white/40 truncate mt-0.5">Ignored — counts nowhere</p>
                 )}
               </div>
               {isAdmin ? (
@@ -586,11 +610,19 @@ export default function Leads() {
                 </div>
               )}
               {isAdmin ? (
-                <select value={l.status} onChange={e => setStatus(l, e.target.value)}
-                  style={{ background: '#242424', border: `1px solid ${s.color}55`, color: s.color }}
-                  className="h-7 px-2 rounded-full text-[11px] font-semibold focus:outline-none">
-                  {STATUSES.map(x => <option key={x.key} value={x.key} style={{ color: '#fff' }}>{x.label}</option>)}
-                </select>
+                <span className="flex items-center gap-1.5">
+                  <select value={l.status} onChange={e => setStatus(l, e.target.value)}
+                    style={{ background: '#242424', border: `1px solid ${s.color}55`, color: s.color }}
+                    className="h-7 px-2 rounded-full text-[11px] font-semibold focus:outline-none">
+                    {STATUSES.map(x => <option key={x.key} value={x.key} style={{ color: '#fff' }}>{x.label}</option>)}
+                  </select>
+                  <button onClick={() => toggleIgnore(l)}
+                    className={`h-7 px-2 rounded-full text-[10px] font-semibold whitespace-nowrap transition-colors ${l.ignored ? 'text-teal hover:bg-teal/10' : 'text-white/30 hover:text-amber-300'}`}
+                    style={{ border: '1px solid #333' }}
+                    title={l.ignored ? 'Count this appointment again' : 'Take this appointment out of every count — use it on the leftover half of a duplicate'}>
+                    {l.ignored ? 'Restore' : 'Ignore'}
+                  </button>
+                </span>
               ) : (
                 <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap"
                   style={{ color: s.color, border: `1px solid ${s.color}40` }}>{s.label}</span>

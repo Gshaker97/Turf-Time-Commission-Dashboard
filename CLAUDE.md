@@ -268,7 +268,9 @@ setup + deploy steps.
   tables `sales_teams` / `team_members` / `bonus_tiers` + the
   `team_month_summary()` RPC (see "Bonus pods" below — a model SEPARATE from
   the org chart); `046` adds `profiles.team_name` (a team's official name;
-  see "What teams exist"); `047` adds `competitions.excluded_ids` (jsonb
+  see "What teams exist"); `049` adds `leads.ignored` (take a duplicate
+  appointment out of every count without deleting it — see the Leads
+  section); `047` adds `competitions.excluded_ids` (jsonb
   array of profile ids) for the **Team Average (per rep)** competition type
   `team_avg` — entrants are TEAM HEADS (any `headIdSet` head, picked in the
   modal as "Teams competing"), score = the team's metric (deals or baseline
@@ -511,6 +513,23 @@ estimates come from the leads feed; set `estimates_from_leads_date`.)
   the filter on, so older `?missing=setter` links still work.
   **The Leads page carries no team/rep stat board** — those stats live on
   Performance now; this page is the appointments themselves.
+  **Duplicates + `leads.ignored` (migration 049).** RepCard creates a NEW
+  appointment record when one is REASSIGNED to another closer instead of
+  updating the original, so the same doorstep arrives twice with two
+  different `external_id`s — dedup can't help, both are genuine records to
+  the feed (real case: "Eda", 6:30pm, 860132 → Jordan and 860191 → Stephen,
+  52 minutes apart; six such pairs live). `duplicateIds` groups by
+  source + lowercased customer + exact `appointment_at` (NOT address — a
+  reassignment can reformat it), skips unnamed rows, and ignores... ignored
+  ones, so ignoring one of a pair clears the flag on its survivor. The
+  single **"Needs attention"** filter = `needsAttention` (a gap OR a
+  duplicate, never an ignored row). An admin's **Ignore** button sets
+  `ignored` — NOT `pinned`, which is a different decision (pinning freezes
+  status/people against the feed). An ignored row stays visible but greyed
+  and is skipped by `perfSummary`, `estimates.js` and the Leads KPIs/day
+  counts. It is a FLAG, not a delete, because the feed is keyed on
+  `(source, external_id)` and would recreate a deleted row on the next event;
+  it survives because the feed only writes columns its payload supplied.
   NOTE the deliberate asymmetry with DEALS:
   `saleOwnerId` still falls back to the closer so no deal vanishes, so a
   setter-less deal is a self-gen DEAL while a setter-less appointment is a

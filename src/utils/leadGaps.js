@@ -26,6 +26,40 @@ export function hasGap(l, nowISO) {
   return ranPast(l, nowISO)
 }
 
+// ── Duplicates ──────────────────────────────────────────────────────────
+// RepCard creates a NEW appointment record when one is reassigned to another
+// closer, so the same doorstep arrives twice with two different ids. Both are
+// genuine records to the feed; only a human can say which is the duplicate.
+// Grouping key: same customer at the same minute. Address is deliberately NOT
+// part of it — a reassignment can arrive with a differently formatted address
+// and we would miss the pair.
+const dupeKey = (l) => {
+  const name = String(l.customer_name || '').trim().toLowerCase()
+  if (!name || !l.appointment_at) return null       // never group the unnamed
+  return `${l.source || 'repcard'}|${name}|${l.appointment_at}`
+}
+
+// ids of every appointment that shares its customer+time with another one.
+// Ignored rows don't count toward a group: once one of a pair is ignored the
+// other is no longer a duplicate of anything.
+export function duplicateIds(leads = []) {
+  const groups = new Map()
+  for (const l of leads) {
+    if (l.ignored) continue
+    const k = dupeKey(l)
+    if (!k) continue
+    if (!groups.has(k)) groups.set(k, [])
+    groups.get(k).push(l.id)
+  }
+  const out = new Set()
+  for (const ids of groups.values()) if (ids.length > 1) ids.forEach(id => out.add(id))
+  return out
+}
+
+// One filter, one question: does this row need a human? (per Keaton)
+export const needsAttention = (l, nowISO, dupes) =>
+  !l.ignored && (hasGap(l, nowISO) || (dupes ? dupes.has(l.id) : false))
+
 // What exactly is missing, so the row can say it in plain words.
 export function gapReasons(l, nowISO) {
   const out = []
