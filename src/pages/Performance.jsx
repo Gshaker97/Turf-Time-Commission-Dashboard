@@ -464,6 +464,9 @@ export default function Performance() {
             {perf.gaps.noSetter > 0 && (
               <p>{perf.gaps.noSetter} appointment{perf.gaps.noSetter === 1 ? '' : 's'} in this range {perf.gaps.noSetter === 1 ? 'has' : 'have'} no setter recorded
                 {perf.gaps.noSetterRan > 0 ? ` (${perf.gaps.noSetterRan} of them ran)` : ''}. They count as Leads ran for whoever sat them, and toward nobody's Set.{' '}
+                {perf.gaps.unmatchedSetter > 0 && (
+                  <span className="text-amber-100">{perf.gaps.unmatchedSetter} of them DO carry a setter name from the feed that matched no one on the roster — a spelling difference, a nickname, someone not on the roster, or a name two people share. </span>
+                )}
                 <Link to="/leads?missing=setter" className="underline">Find and fix them →</Link>
               </p>
             )}

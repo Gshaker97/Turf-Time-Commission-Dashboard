@@ -483,8 +483,14 @@ estimates come from the leads feed; set `estimates_from_leads_date`.)
   self-gen** (per Keaton) — the old rule credited the runner, which showed a
   closer 10 self-gen ran against 3 set. Same rule in `estimates.js`
   (`leadEstimates`), so Goals/Home self-gen estimate counts follow. The
-  engine tallies these as `gaps.noSetter` / `noSetterRan`, the page flags
-  them in the amber banner, and the link goes to `/leads?missing=setter`
+  engine tallies these as `gaps.noSetter` / `noSetterRan` /
+  **`unmatchedSetter`** (the FIXABLE half: the feed DID send a setter name,
+  it just matched no profile — spelling, a nickname, someone off the roster,
+  or a name two profiles share, which resolves to NEITHER by design. The
+  row keeps the name in `setter_name` text while `setter_id` stays null, so
+  the Leads select read "— none —" and the name was invisible; it now shows
+  under the select as "feed: <name>"). The page flags all this in the amber
+  banner, and the link goes to `/leads?missing=setter`
   (the Leads page reads that param into its "data gaps" filter, which also
   offers Missing closer). NOTE the deliberate asymmetry with DEALS:
   `saleOwnerId` still falls back to the closer so no deal vanishes, so a
