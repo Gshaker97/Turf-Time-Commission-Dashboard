@@ -522,6 +522,12 @@ export default function Performance() {
                   <span className="text-right text-white font-semibold tabular-nums">{pct1(o.markupPct)}{o.prev && <span className="ml-2"><Delta cur={o.markupPct} prev={o.prev.markupPct} rate /></span>}</span>
                   <span className="text-[9.5px] font-bold uppercase tracking-[0.08em] text-white/30 self-center">Avg deal</span>
                   <span className="text-right text-white font-semibold tabular-nums">{money0(o.avgDeal)}</span>
+                  {showCommission && (
+                    <>
+                      <span className="text-[9.5px] font-bold uppercase tracking-[0.08em] text-white/30 self-center" title="Rep commissions on this office's deals — setter + closer shares only, never overrides">Commission</span>
+                      <span className="text-right text-white font-semibold tabular-nums">{money0(o.commission)}{o.prev && <span className="ml-2"><Delta cur={o.commission} prev={o.prev.commission} /></span>}</span>
+                    </>
+                  )}
                 </div>
                 <div className="h-1.5 rounded-full overflow-hidden mt-2.5" style={{ background: '#ffffff12' }}>
                   <div className="h-full rounded-full" style={{ width: `${Math.round(o.share * 100)}%`, background: '#2dd4bf' }} />
