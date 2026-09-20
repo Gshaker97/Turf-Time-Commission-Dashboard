@@ -14,9 +14,13 @@
 //     sum of its reps' commission, which can differ from "commission on the
 //     team's deals". Org commission = sum of all rep shares.
 //   • Appointments (leads feed): SET credits the setter on the appointment
-//     day; RAN (status completed/sold) credits whoever ran it — set it and
-//     ran it = self-gen, someone else set it = lead; SOLD is a ran that
-//     closed. An appointment with NO SETTER recorded counts as a LEAD ran,
+//     day. SELF-GEN RAN credits the SETTER when their appointment ran, no
+//     matter who sat it; LEADS RAN credits whoever SAT an appointment they
+//     did not set. So the two are per-person CREDIT columns, not a partition
+//     of the ran count: one appointment set by A and sat by B gives A a
+//     self-gen ran AND B a leads ran. `ran` (appointments a person sat)
+//     stays a true count, which is what the org funnel uses.
+//     An appointment with NO SETTER recorded counts as a LEAD ran,
 //     never a self-gen (per Keaton) — we don't know who generated it, and
 //     assuming the runner did inflated closers' self-gen counts. Those rows
 //     are tallied as `noSetter` so the page can flag them for fixing.
@@ -41,7 +45,7 @@ const localToday = () => {
 }
 
 function newStats() {
-  return { revenue: 0, job: 0, deals: 0, leadCloses: 0, leadRevenue: 0, commission: 0, set: 0, setRan: 0, ran: 0, sgRan: 0, leadRan: 0, sold: 0, activityRows: [] }
+  return { revenue: 0, job: 0, deals: 0, leadCloses: 0, leadRevenue: 0, commission: 0, set: 0, ran: 0, sgRan: 0, leadRan: 0, sold: 0, activityRows: [] }
 }
 
 // A deal-over-appointment rate, or null when it can't be read as a rate:
@@ -63,7 +67,7 @@ function finish(s) {
     leadRevenue: s.leadRevenue, totalRevenue: s.revenue + s.leadRevenue,
     avgDeal:   s.deals ? s.revenue / s.deals : null,
     markupPct: s.revenue > 0 ? ((s.job - s.revenue) / s.revenue) * 100 : null,
-    set: s.set, setRan: s.setRan, ran: s.ran, sgRan: s.sgRan, leadRan: s.leadRan, sold: s.sold,
+    set: s.set, ran: s.ran, sgRan: s.sgRan, leadRan: s.leadRan, sold: s.sold,
     // Conversion rates (per Keaton): set → ran is a SETTER stat — of the
     // appointments this rep set, how many ran (whoever ran them), so a
     // closer's lead volume never inflates it; self-gen ran → self-gen deals
@@ -75,7 +79,7 @@ function finish(s) {
     // a rep can close a sale without ever logging an appointment — so there
     // will always be deals with no appointment behind them. A rate over 100%
     // is that gap, not performance, and showing "250% close" reads as a bug.
-    showRate:      s.set ? (s.setRan / s.set) * 100 : null,
+    showRate:      s.set ? (s.sgRan / s.set) * 100 : null,
     sgCloseRate:   rateOrNull(s.deals, s.sgRan),
     leadCloseRate: rateOrNull(s.leadCloses, s.leadRan),
     closeRate:     s.ran ? (s.sold / s.ran) * 100 : null,
@@ -183,19 +187,22 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
       org.set += 1; team(k).totals.set += 1; rep(k, setter).set += 1
     }
     if (!RAN_STATUSES.has(l.status)) continue
-    // The SETTER gets "my appointment ran" credit no matter who ran it.
+    // SELF-GEN RAN = "an appointment I generated ran", credited to the
+    // SETTER whoever ended up sitting it (per Keaton). A separate "sets ran"
+    // column was the same number by another name.
     if (setter) {
       const k = teamOf(setter, day)
-      org.setRan += 1; team(k).totals.setRan += 1; rep(k, setter).setRan += 1
+      org.sgRan += 1; team(k).totals.sgRan += 1; rep(k, setter).sgRan += 1
     }
     const ranBy = l.closer_id || l.setter_id
     if (!ranBy || out(ranBy)) continue
-    const selfGen = !!l.setter_id && l.setter_id === ranBy
     const k = teamOf(ranBy, day)
     const sold = l.status === 'sold'
     for (const s of [org, team(k).totals, rep(k, ranBy)]) {
       s.ran += 1
-      if (selfGen) s.sgRan += 1; else s.leadRan += 1
+      // LEADS RAN = "I sat someone else's appointment". A rep who set AND
+      // sat it already has it under self-gen ran, so it is never both.
+      if (!l.setter_id || l.setter_id !== ranBy) s.leadRan += 1
       if (sold) s.sold += 1
     }
   }
