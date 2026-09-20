@@ -442,8 +442,12 @@ estimates come from the leads feed; set `estimates_from_leads_date`.)
 - **Org Scoreboard:** Revenue (baseline), Monthly goal (`monthly_goals`,
   only when the range sits inside one month), Deals, Avg deal size, Avg
   markup (DOLLAR-weighted: (Σjob − Σbaseline) ÷ Σbaseline), Rep commissions
-  (admin/VP only). **By office** cards (deals/revenue/markup/avg deal +
-  share bar; "No office" last). **Appointments & field** strip from the
+  (admin/VP only). **By office** cards (deals/revenue/markup/avg deal/
+  **commission** + share bar; "No office" last). Office commission is the
+  deal's WHOLE rep commission (setter + closer shares, NEVER overrides), so
+  the offices always sum to the org Rep-commissions tile — unlike the
+  team/rep numbers, which split that same money by who earned which share.
+  Admin/VP only, like every other commission figure here. **Appointments & field** strip from the
   RepCard feed: doors → set → ran (show rate) → sold (close rate), self-gen
   vs lead ran.
 - **Teams:** one collapsible section per org-chart team (`headIdSet`,

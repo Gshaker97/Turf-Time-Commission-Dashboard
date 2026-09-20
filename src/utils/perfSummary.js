@@ -115,10 +115,16 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
     if (out(owner)) continue                       // an excluded person's deal leaves this page entirely
     const a = dealAmounts(d)
     const key = teamOf(owner, d.sale_date)
-    for (const s of [org, office(d.office), team(key).totals]) {
+    const off = office(d.office)
+    for (const s of [org, off, team(key).totals]) {
       s.revenue += a.baseline; s.job += a.job; s.deals += 1
     }
+    // REP commission only (setter + closer shares) — never overrides. Org and
+    // office both take the deal's whole rep commission, so the offices always
+    // sum to the org figure; the per-team/per-rep numbers below instead split
+    // it by who earned which share.
     org.commission += a.repCommission
+    off.commission += a.repCommission
     if (owner) { const r = rep(key, owner); r.revenue += a.baseline; r.job += a.job; r.deals += 1 }
     // Commission follows each rep's own share to each rep's own team.
     if (d.setter_id) {
