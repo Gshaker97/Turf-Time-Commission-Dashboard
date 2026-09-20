@@ -478,7 +478,7 @@ export default function Dashboard() {
   // Copy the current leaderboard to the clipboard as a real table (HTML) with a
   // tab-separated fallback — pastes cleanly into Canva, Sheets, Docs, etc.
   async function copyLeaderboard() {
-    const cols = ['#', 'Rep', 'Total Rev', 'Personal Rev', 'Comm', 'Self Gen', 'Set for Others', 'Lead Closes']
+    const cols = ['#', 'Rep', 'Total Rev', 'Personal Rev', 'Comm', 'Self Gen', 'Set', 'Lead Closes']
     // The export is a shareable artifact, so ghost reps are always dropped —
     // even for an admin, who sees them on-screen. (Re-rank after filtering.)
     const rows = rankedReps
@@ -834,7 +834,7 @@ export default function Dashboard() {
                   active={repSort.key === 'commission'} dir={repSort.dir} onClick={() => toggleRepSort('commission')} />
                 <SortTh label="Self Gen" align="center" title="Deals they set AND closed themselves"
                   active={repSort.key === 'selfGens'} dir={repSort.dir} onClick={() => toggleRepSort('selfGens')} />
-                <SortTh label="Set for Others" align="center" title="Deals they set that another rep closed — a self-gen is never counted here"
+                <SortTh label="Set" align="center" title="Deals they set that another rep closed — a self-gen is never counted here"
                   active={repSort.key === 'setForOthers'} dir={repSort.dir} onClick={() => toggleRepSort('setForOthers')} />
                 <SortTh label="Lead Closes" align="center" title="Deals they closed that another rep set"
                   active={repSort.key === 'leads'} dir={repSort.dir} onClick={() => toggleRepSort('leads')} />
