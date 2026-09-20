@@ -44,6 +44,14 @@ function newStats() {
   return { revenue: 0, job: 0, deals: 0, leadCloses: 0, leadRevenue: 0, commission: 0, set: 0, setRan: 0, ran: 0, sgRan: 0, leadRan: 0, sold: 0, activityRows: [] }
 }
 
+// A deal-over-appointment rate, or null when it can't be read as a rate:
+// nothing to divide by, or more deals than logged appointments.
+const rateOrNull = (deals, ran) => {
+  if (!ran) return null
+  const pct = (deals / ran) * 100
+  return pct > 100 ? null : pct
+}
+
 // Derived figures computed once at the end so partial sums never leak out.
 function finish(s) {
   const act = summarizeActivity(s.activityRows)
@@ -61,9 +69,15 @@ function finish(s) {
     // closer's lead volume never inflates it; self-gen ran → self-gen deals
     // (owner-credited deals ÷ self-gen appointments ran); leads ran → lead
     // closes. `closeRate` is RepCard's own sold outcome ÷ ran.
+    //
+    // The two DEAL-over-APPOINTMENT rates are BLANK when they'd exceed 100%
+    // (per Keaton). Deals come from the site, appointments from the CRM, and
+    // a rep can close a sale without ever logging an appointment — so there
+    // will always be deals with no appointment behind them. A rate over 100%
+    // is that gap, not performance, and showing "250% close" reads as a bug.
     showRate:      s.set ? (s.setRan / s.set) * 100 : null,
-    sgCloseRate:   s.sgRan ? (s.deals / s.sgRan) * 100 : null,
-    leadCloseRate: s.leadRan ? (s.leadCloses / s.leadRan) * 100 : null,
+    sgCloseRate:   rateOrNull(s.deals, s.sgRan),
+    leadCloseRate: rateOrNull(s.leadCloses, s.leadRan),
     closeRate:     s.ran ? (s.sold / s.ran) * 100 : null,
     doors: act.doors, knockDays: act.knockDays, doorsPerDay: act.doorsPerDay,
     firstKnock: act.firstKnock, lastKnock: act.lastKnock, fieldMinutes: act.fieldMinutes,

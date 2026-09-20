@@ -495,9 +495,17 @@ estimates come from the leads feed; set `estimates_from_leads_date`.)
   offers Missing closer). NOTE the deliberate asymmetry with DEALS:
   `saleOwnerId` still falls back to the closer so no deal vanishes, so a
   setter-less deal is a self-gen DEAL while a setter-less appointment is a
-  lead RAN — which can push SG close % over 100%) and **Results · Site** (**Self-gen deals** = the
+  lead RAN) and **Results · Site** (**Self-gen deals** = the
   owner-credited deals, **SG close %** = self-gen deals ÷ self-gen ran,
-  Lead closes, **Lead close %** = lead closes ÷ leads ran, **Revenue** =
+  Lead closes, **Lead close %** = lead closes ÷ leads ran. **Both
+  deal-over-appointment rates render BLANK when they would exceed 100%**
+  (`rateOrNull`, per Keaton): DEALS come from the site (ArcSite sync) and
+  APPOINTMENTS come from the CRM, and **a rep can close a sale without ever
+  logging an appointment**, so some deals will always have no appointment
+  behind them. A rate over 100% measures that gap, not performance — one row
+  read "250% close". Never CAP it at 100% either: blank says "can't be read
+  as a rate", a cap would lie. `showRate` needs no guard since `setRan`
+  counts a subset of `set`. **Revenue** =
   self-gen (owner-credited) baseline, **Total revenue** = self-gen revenue +
   baseline of the deals the rep CLOSED for another setter (`leadRevenue`;
   a per-rep view — a team's Total revenue double-counts a deal whose setter

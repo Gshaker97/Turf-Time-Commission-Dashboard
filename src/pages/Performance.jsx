@@ -248,8 +248,8 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                   <TH title="How many of THIS REP'S SETS actually ran, whoever sat them. A setter's sets are usually run by closers.">Sets<br />ran</TH>
                   <TH className="border-l border-[#2a2a2a]" title="Appointments this rep booked AND sat themselves">Self-gen<br />ran</TH>
                   <TH title="Appointments this rep sat for another setter. Self-gen ran + Leads ran = every appointment they sat.">Leads<br />ran</TH>
-                  <TH className="border-l border-[#333]" title="Deals this rep owns. Underneath: self-gen deals ÷ self-gen ran.">Self-gen<br />deals</TH>
-                  <TH title="Deals this rep closed for another setter. Underneath: lead closes ÷ leads ran.">Lead<br />closes</TH>
+                  <TH className="border-l border-[#333]" title="Deals this rep owns. Underneath: self-gen deals ÷ self-gen ran — blank when there are more deals than logged appointments, since a sale can be closed without an appointment ever being logged.">Self-gen<br />deals</TH>
+                  <TH title="Deals this rep closed for another setter. Underneath: lead closes ÷ leads ran — blank when there are more closes than logged appointments.">Lead<br />closes</TH>
                   <TH title="Baseline revenue of this rep's self-gen deals">Revenue</TH>
                   <TH title="Self-gen revenue + baseline of the deals this rep closed for another setter">Total<br />revenue</TH>
                   <TH>Markup</TH>
