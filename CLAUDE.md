@@ -478,10 +478,18 @@ estimates come from the leads feed; set `estimates_from_leads_date`.)
   head (per Keaton — the third round on these columns: first the math, then
   the labelling, then the count). `ran` is still computed in the engine; only
   the column and its red-flag floor are gone. A pure setter reads Set 20 ·
-  Sets ran 15 (75%) · Self-gen ran 0 · Leads ran 0. CAVEAT worth knowing:
-  `estimates.js` treats an appointment with NO setter recorded as the
-  runner's SELF-GEN, so a closer's Self-gen ran can exceed their Set when the
-  feed sends appointments without a setter) and **Results · Site** (**Self-gen deals** = the
+  Sets ran 15 (75%) · Self-gen ran 0 · Leads ran 0.
+  **An appointment with NO SETTER recorded counts as a LEAD ran, never a
+  self-gen** (per Keaton) — the old rule credited the runner, which showed a
+  closer 10 self-gen ran against 3 set. Same rule in `estimates.js`
+  (`leadEstimates`), so Goals/Home self-gen estimate counts follow. The
+  engine tallies these as `gaps.noSetter` / `noSetterRan`, the page flags
+  them in the amber banner, and the link goes to `/leads?missing=setter`
+  (the Leads page reads that param into its "data gaps" filter, which also
+  offers Missing closer). NOTE the deliberate asymmetry with DEALS:
+  `saleOwnerId` still falls back to the closer so no deal vanishes, so a
+  setter-less deal is a self-gen DEAL while a setter-less appointment is a
+  lead RAN — which can push SG close % over 100%) and **Results · Site** (**Self-gen deals** = the
   owner-credited deals, **SG close %** = self-gen deals ÷ self-gen ran,
   Lead closes, **Lead close %** = lead closes ÷ leads ran, **Revenue** =
   self-gen (owner-credited) baseline, **Total revenue** = self-gen revenue +

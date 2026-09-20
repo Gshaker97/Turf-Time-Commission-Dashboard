@@ -15,7 +15,11 @@
 //     team's deals". Org commission = sum of all rep shares.
 //   • Appointments (leads feed): SET credits the setter on the appointment
 //     day; RAN (status completed/sold) credits whoever ran it — set it and
-//     ran it = self-gen, someone else set it = lead; SOLD is a ran that closed.
+//     ran it = self-gen, someone else set it = lead; SOLD is a ran that
+//     closed. An appointment with NO SETTER recorded counts as a LEAD ran,
+//     never a self-gen (per Keaton) — we don't know who generated it, and
+//     assuming the runner did inflated closers' self-gen counts. Those rows
+//     are tallied as `noSetter` so the page can flag them for fixing.
 //   • Field activity: day rows credit profile_id on activity_date.
 //   • A rep who moved teams mid-range appears under EACH team with only the
 //     work attributed there, so a team's total row always equals the sum of
@@ -93,6 +97,7 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
   const offices = new Map()          // office key (lc) → stats; '' = no office
   const teams = new Map()            // teamKey → { totals, reps: Map(repId → stats) }
   const unmatched = new Map()        // rep_name → doors (activity rows with no profile)
+  const gaps = { noSetter: 0, noSetterRan: 0 }   // appointments we can't credit properly
 
   const team = (k) => {
     if (!teams.has(k)) teams.set(k, { totals: newStats(), reps: new Map() })
@@ -148,6 +153,7 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
   for (const l of leads) {
     const day = apptDay(l.appointment_at)
     if (!inRange(day, from, to)) continue
+    if (!l.setter_id) { gaps.noSetter += 1; if (RAN_STATUSES.has(l.status)) gaps.noSetterRan += 1 }
     const setter = out(l.setter_id) ? null : l.setter_id
     if (setter) {
       const k = teamOf(setter, day)
@@ -161,7 +167,7 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
     }
     const ranBy = l.closer_id || l.setter_id
     if (!ranBy || out(ranBy)) continue
-    const selfGen = !l.setter_id || l.setter_id === ranBy
+    const selfGen = !!l.setter_id && l.setter_id === ranBy
     const k = teamOf(ranBy, day)
     const sold = l.status === 'sold'
     for (const s of [org, team(k).totals, rep(k, ranBy)]) {
@@ -185,7 +191,7 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
     rep(k, row.profile_id).activityRows.push(row)
   }
 
-  return { org, offices, teams, unmatched }
+  return { org, offices, teams, unmatched, gaps }
 }
 
 // The team a user is on as of `asOf` (their own id if they head one).
@@ -277,6 +283,7 @@ export function buildPerformance({
     teams,
     unmatched: [...cur.unmatched.entries()].map(([name, doors]) => ({ name, doors })).sort((a, b) => b.doors - a.doors),
     hasActivity: org.hasActivity,
+    gaps: cur.gaps,
     excluded: [...excluded].map(id => usersById[id]).filter(Boolean).map(u => ({ id: u.id, name: u.name })),
     defaultTeamId: defTeam,
   }

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, Fragment } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { format } from 'date-fns'
 import { CalendarCheck, Search, Link2, Upload, X, ChevronDown } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
@@ -100,6 +101,15 @@ export default function Leads() {
     return next
   })
   const [statusFilter, setStatusFilter] = useState('')
+  // Data-gap filter. The Performance page links here as ?missing=setter when
+  // it finds appointments it can't credit — an appointment with no setter
+  // counts as a LEAD ran for whoever sat it and toward nobody's Set, so this
+  // is the worklist for fixing them at the source.
+  const [searchParams] = useSearchParams()
+  const [missing, setMissing] = useState(() => {
+    const m = searchParams.get('missing')
+    return m === 'setter' || m === 'closer' ? m : ''
+  })
 
   const feed = useMemo(
     () => leadFeedHealth(leads, settings?.lead_last_payload?.at),
@@ -126,6 +136,8 @@ export default function Leads() {
       if (dateTo && d && d > dateTo) return false
       if (statusFilter && l.status !== statusFilter) return false
       if (repFilter && l.setter_id !== repFilter && l.closer_id !== repFilter) return false
+      if (missing === 'setter' && l.setter_id) return false
+      if (missing === 'closer' && l.closer_id) return false
       if (q) {
         const hay = [l.customer_name, l.address, l.setter?.name, l.closer?.name, l.setter_name, l.closer_name]
           .filter(Boolean).join(' ').toLowerCase()
@@ -134,7 +146,7 @@ export default function Leads() {
       return true
     // Chronological — the list reads like the calendar it came from.
     }).sort((a, b) => String(a.appointment_at ?? '').localeCompare(String(b.appointment_at ?? '')))
-  }, [scoped, dateFrom, dateTo, statusFilter, repFilter, search])
+  }, [scoped, dateFrom, dateTo, statusFilter, repFilter, search, missing])
 
   const kpis = useMemo(() => {
     const set = filtered.length
@@ -514,6 +526,12 @@ export default function Leads() {
             {pickUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select>
         )}
+        <select value={missing} onChange={e => setMissing(e.target.value)} style={selStyle} className={selCls}
+          title="Appointments the feed left incomplete — a missing setter makes the appointment count as a lead for whoever ran it">
+          <option value="">No data gaps filter</option>
+          <option value="setter">Missing setter</option>
+          <option value="closer">Missing closer</option>
+        </select>
       </div>
 
       <div className="grid grid-cols-2 md:flex gap-2 md:gap-3">
