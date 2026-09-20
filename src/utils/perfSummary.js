@@ -34,6 +34,7 @@ import { dealAmounts, isCanceled } from './commission'
 import { saleOwnerId, teamOfSale, teamLabel } from './team'
 import { RAN_STATUSES, apptDay } from './estimates'
 import { summarizeActivity } from './fieldActivity'
+import { nonRepSet, isNonRep } from './leadGaps'
 
 const UNASSIGNED = 'unassigned'
 
@@ -107,7 +108,7 @@ function makeTeamOf(teamCtx, defaultTeamId) {
 }
 
 // One window's raw accumulation: org, offices, and team → rep buckets.
-function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId = null, excluded = new Set() }) {
+function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId = null, excluded = new Set(), nonReps = new Set() }) {
   const teamOf = makeTeamOf(teamCtx, defaultTeamId)
   const out = (pid) => !!pid && excluded.has(pid)
 
@@ -177,7 +178,11 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
     if (l.ignored) continue          // an admin marked it a duplicate (049)
     const day = apptDay(l.appointment_at)
     if (!inRange(day, from, to)) continue
-    if (!l.setter_id) {
+    // A name on the admin's "not a field rep" list (inside sales, someone who
+    // has left) is a KNOWN blank, not a fixable gap — it would otherwise sit
+    // in this banner forever. The appointment itself is untouched: it still
+    // counts as a Leads ran for whoever sat it.
+    if (!l.setter_id && !isNonRep(l.setter_name, nonReps)) {
       gaps.noSetter += 1
       if (RAN_STATUSES.has(l.status)) gaps.noSetterRan += 1
       if (String(l.setter_name || '').trim()) gaps.unmatchedSetter += 1
@@ -231,17 +236,19 @@ const memberTeam = (u, asOf, teamCtx) =>
 
 // opts.defaultTeamId — head id that adopts everything Unassigned (null = keep
 // an Unassigned section). opts.excludedIds — profile ids removed from this
-// page altogether (see makeTeamOf).
+// page altogether (see makeTeamOf). opts.nonRepNames — feed names that are not
+// field reps, so they stop reading as fixable gaps (see nonRepSet).
 export function buildPerformance({
   deals = [], leads = [], activity = [], users = [], teamCtx,
-  range = {}, prev = null, defaultTeamId = null, excludedIds = [],
+  range = {}, prev = null, defaultTeamId = null, excludedIds = [], nonRepNames = [],
 }) {
   const { usersById, heads } = teamCtx
   const today = localToday()
   const asOf = range.to && range.to < today ? range.to : today
   const excluded = new Set((excludedIds || []).filter(Boolean))
+  const nonReps = nonRepSet(nonRepNames)
   const defTeam = defaultTeamId && usersById[defaultTeamId] ? defaultTeamId : null
-  const acc = (from, to) => accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId: defTeam, excluded })
+  const acc = (from, to) => accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId: defTeam, excluded, nonReps })
 
   const cur = acc(range.from, range.to)
   const prv = prev ? acc(prev.from, prev.to) : null

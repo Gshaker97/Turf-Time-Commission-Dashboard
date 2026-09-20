@@ -84,6 +84,9 @@ export function SettingsProvider({ children }) {
     // from that page altogether (null = seed by name: Tanner Arnett).
     perfDefaultTeam: settings.perf_default_team ?? null,
     perfExcludedIds: settings.perf_excluded_ids ?? null,
+    // Names the CRM feed sends that are not field reps (inside sales, people
+    // who have left). See nonRepSet in utils/leadGaps.js.
+    feedNonReps: settings.feed_non_reps || [],
   }
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>
 }
@@ -94,4 +97,5 @@ export const useSettings = () => useContext(SettingsContext) ?? {
   statusColor: () => '#94a3b8', paymentMethods: DEFAULTS.payment_methods, offices: DEFAULTS.offices,
   siteName: 'Turf Time Dashboard', dataStartDate: '2026-06-01', estimatesFrom: null, noteNotify: NOTE_NOTIFY_DEFAULT,
   overrideExclusionItems: ['Electrical', 'Gas', 'Pergolas'], perfFloors: null, perfDefaultTeam: null, perfExcludedIds: null,
+  feedNonReps: [],
 }
