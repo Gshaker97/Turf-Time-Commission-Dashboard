@@ -98,6 +98,18 @@ setup + deploy steps.
      or no people at all) so they always sum exactly to the company totals.
      Closed leads are NOT extra sales for the closer — their pay shows in
      commission columns only.
+   - **Dashboard Rep Leaderboard count columns are MUTUALLY EXCLUSIVE**
+     (per Keaton: "if the same person set and closed it, that's a self-gen,
+     not a set"): **Self Gen** = set AND closed by them (a deal with a setter
+     and no `closer_id` counts here — the setter closed it, same rule
+     `dealAmounts` pays by), **Set for Others** = they set it, another rep
+     closed it, **Lead Closes** = another rep set it, they closed it. Every
+     deal a rep touched lands in exactly ONE of the three, and Self Gen +
+     Set for Others = the deals they OWN (which is what Personal Rev is the
+     revenue of). There is no combined "Closed" column any more — it was
+     Self Gen + Lead Closes and double-counted a self-gen as a set. NOTE the
+     unit differs from the Performance page, where Set/Ran are APPOINTMENTS;
+     here every count is DEALS.
    - **Dashboard Rep Leaderboard under a TEAM FILTER lists that team's
      MEMBERS, not everyone who touched the team's deals** (per Keaton). It
      credits each rep from every deal in the date range (`dateFiltered`),
