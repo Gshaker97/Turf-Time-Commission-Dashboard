@@ -56,6 +56,20 @@ function Card({ label, value, color = '#fff', sub }) {
 // What the run's list shows per COLUMN. Read straight off the deal + its
 // amounts rather than from dealPayouts, because that helper drops zero-dollar
 // shares — a setter earning $0 must still show as the setter.
+// The Adjustments cell: a signed total plus WHY, in as few words as the count
+// allows. One item shows its own note; several show what kind they are, since
+// listing three notes on one row would truncate all of them.
+function adjSummary(adjustments = []) {
+  if (!adjustments.length) return null
+  const neg = adjustments.filter(a => Number(a.amount) < 0).length
+  const pos = adjustments.length - neg
+  if (adjustments.length === 1) return adjustments[0].note || 'Adjustment'
+  const parts = []
+  if (neg) parts.push(`${neg} deduction${neg === 1 ? '' : 's'}`)
+  if (pos) parts.push(`${pos} addition${pos === 1 ? '' : 's'}`)
+  return `${adjustments.length} items · ${parts.join(', ')}`
+}
+
 function rowFacts(d, a, userById = {}) {
   const nameOf = (joined, id) => (id ? (userById[id]?.name || joined?.name || '(unknown)') : null)
   const solo = !d.closer_id || d.closer_id === d.setter_id
@@ -126,6 +140,19 @@ const COL = {
 function statusWidth(labels = []) {
   const longest = labels.reduce((m, l) => Math.max(m, String(l || '').length), 4)
   return Math.min(190, Math.max(92, Math.round(longest * 6.4) + 24))
+}
+
+// "Who gets paid" column widths, shared by the heading row, every payee row
+// and the totals row. Person grows; the money columns stay fixed so every
+// figure sits in one vertical line — the old two-column grid had different
+// widths per side, so no amount aligned with any other amount.
+const PCOL = {
+  person: { flex: '1 1 0%', minWidth: 150 },
+  deals:  { flex: '0 0 auto', width: 44 },
+  money:  { flex: '0 0 auto', width: 98 },
+  adj:    { flex: '1.5 1 0%', minWidth: 210 },
+  net:    { flex: '0 0 auto', width: 106 },
+  act:    { flex: '0 0 auto', width: 54 },
 }
 
 const asPct = (ratio) => { const v = (Number(ratio) || 0) * 100; return (Number.isInteger(v) ? v : +v.toFixed(2)) + '%' }
@@ -333,6 +360,14 @@ export default function Payroll() {
       p.total += Number(adj.amount)
       p.adjustments.push(adj)
     }
+    // DEAL PAY vs ADJUSTMENTS vs NET. `total` has always folded adjustments
+    // in, so the headline figure per person silently mixed the two and what
+    // someone actually earned from deals appeared NOWHERE on the page — you
+    // had to read the sub-lines and subtract (per Keaton's review).
+    for (const p of Object.values(m)) {
+      p.adjTotal = p.adjustments.reduce((s2, a) => s2 + Number(a.amount), 0)
+      p.dealPay  = p.total - p.adjTotal
+    }
     return Object.values(m).sort((a, b) => b.total - a.total)
   }, [runDeals, runAdjustments, users])
 
@@ -538,6 +573,22 @@ export default function Payroll() {
 
   const onThisRun  = useMemo(() => openLedger.filter(d => (payeeTotals[d.payee_id] ?? 0) > 0).length, [openLedger, payeeTotals])
   const checkCount = checks.length + (openLedger.length > 0 ? 1 : 0)
+
+  // Deal pay / adjustments / net for the run-total row, so the headline
+  // figure reconciles instead of having to be trusted.
+  const payTotals = useMemo(() => {
+    const dealPay = shownPayees.reduce((s2, p) => s2 + p.dealPay, 0)
+    const adj     = shownPayees.reduce((s2, p) => s2 + p.adjTotal, 0)
+    return {
+      dealPay, adj,
+      // The row sums ITS OWN column, never the run headline. They differ when
+      // a deal carries a share with nobody assigned: that money is in the
+      // run's total but reaches no payee, so pinning the footer to the
+      // headline would make the column visibly fail to add up.
+      net: dealPay + adj,
+      people: shownPayees.filter(p => p.adjustments.length > 0).length,
+    }
+  }, [shownPayees])
 
   const summary = (() => {
     let total = 0, paid = 0, paidCount = 0, pending = 0, pendingCount = 0, finalizedCount = 0
@@ -1171,105 +1222,185 @@ export default function Payroll() {
                 )}
               </div>
               {showPayees && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 px-4 pb-3 pt-1 items-start">
-                  {shownPayees.map(p => (
-                    <div key={p.id} className="py-1 border-t border-white/5">
-                      <div className="flex items-center justify-between gap-2">
-                        <button onClick={onClickUnlessSelecting(() => togglePayee(p.id))}
-                          className="flex items-center gap-1 text-[13px] text-white/80 truncate mr-1 text-left min-w-0 hover:text-white transition-colors"
-                          title="Show the deals in this payout">
+                <>
+                  {/* Column headings. Deliberately the same shape as the
+                      "Deals in this run" table below, so the page reads as one
+                      thing. The old layout was a TWO-COLUMN grid, which went
+                      ragged because each person carries a different number of
+                      adjustment lines — nothing aligned across the gutter and
+                      the order snaked (biggest top-left, second top-RIGHT). */}
+                  <div className="hidden sm:flex items-center gap-2.5 px-4 py-1.5 border-b border-white/10" style={{ background: '#1a1a1a' }}>
+                    <span className="w-[12px] flex-shrink-0" />
+                    <span style={PCOL.person} className="min-w-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Person</span>
+                    <span style={PCOL.deals} className="text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30 text-right">Deals</span>
+                    <span style={PCOL.money} className="text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30 text-right">Deal pay</span>
+                    <span style={PCOL.adj} className="hidden lg:block min-w-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Adjustments</span>
+                    <span style={PCOL.net} className="text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30 text-right">Net pay</span>
+                    <span style={PCOL.act} className="flex-shrink-0" />
+                  </div>
+
+                  {shownPayees.map(p => {
+                    const why = adjSummary(p.adjustments)
+                    const isOpen = openPayees.has(p.id)
+                    return (
+                      <div key={p.id} className="border-t border-white/5 first:border-t-0">
+                        {/* Click anywhere to expand; the buttons stop it. */}
+                        <div onClick={onClickUnlessSelecting(() => togglePayee(p.id))}
+                          className="flex items-center gap-2.5 px-4 py-2 cursor-pointer hover:bg-white/[0.02] transition-colors"
+                          style={isOpen ? { background: 'rgba(255,255,255,0.02)' } : undefined}>
                           <ChevronDown size={12}
-                            className={`text-white/25 flex-shrink-0 transition-transform ${openPayees.has(p.id) ? 'rotate-180' : ''}`} />
-                          <span className="truncate">
-                            {p.name}
-                            <span className="text-white/30 text-[11px]"> · {p.dealIds.size} deal{p.dealIds.size === 1 ? '' : 's'}</span>
+                            className={`text-white/25 flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                          <span style={PCOL.person} className="min-w-0 text-[12.5px] font-semibold text-white truncate" title={p.name}>{p.name}</span>
+                          <span style={PCOL.deals} className="text-[11.5px] text-white/35 text-right tabular-nums">{p.dealIds.size || '—'}</span>
+                          <span style={PCOL.money} className="text-[12px] text-white/60 text-right tabular-nums">{fmt(p.dealPay)}</span>
+                          <span style={PCOL.adj} className="hidden lg:flex items-center gap-2 min-w-0">
+                            {p.adjustments.length === 0 ? (
+                              <span className="text-[12px] text-white/25">—</span>
+                            ) : (
+                              <>
+                                <span className={`text-[12px] font-bold tabular-nums flex-shrink-0 ${p.adjTotal < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                                  {p.adjTotal < 0 ? '−' : '+'}{fmt(Math.abs(p.adjTotal))}
+                                </span>
+                                <span className="text-[11px] text-white/35 truncate" title={why}>{why}</span>
+                              </>
+                            )}
                           </span>
-                        </button>
-                        <span className="flex items-center gap-1.5 flex-shrink-0">
-                          <span className="text-[13px] font-semibold text-white whitespace-nowrap">{fmt(p.total)}</span>
-                          {isAdmin && view !== 'overdue' && !runLock && (
-                            <button onClick={() => { setAdjFor(adjFor === p.id ? '' : p.id); setAdjAmt(''); setAdjNote('') }}
-                              title="Add a payroll adjustment (+/−)"
-                              className="p-1 rounded text-white/30 hover:text-teal hover:bg-teal/10 transition-colors"><Plus size={13} /></button>
-                          )}
-                          {isAdmin && (
-                            <button onClick={() => copyPayee(p)} title="Copy this rep's pay statement to email"
-                              className={`p-1 rounded transition-colors ${copiedId === p.id ? 'text-emerald-400' : 'text-white/30 hover:text-teal hover:bg-teal/10'}`}>
-                              {copiedId === p.id ? <Check size={13} /> : <Copy size={13} />}
-                            </button>
-                          )}
-                        </span>
-                      </div>
-                      {/* Expanded — every deal feeding this person's payout,
-                          with the role they earned it in and any deduction. */}
-                      {openPayees.has(p.id) && (
-                        p.lines.length === 0 ? (
-                          <p className="text-[11px] text-white/30 pl-4 mt-0.5">Adjustments only — no deals on this run.</p>
-                        ) : (
-                          <div className="pl-4 mt-1 mb-1 rounded-lg overflow-hidden" style={{ background: '#171717', border: '1px solid #262626' }}>
-                            {p.lines.map((l, i) => (
-                              <div key={i} className="px-2.5 py-1.5 border-b border-white/5 last:border-0">
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="text-[11.5px] text-white/70 truncate">
-                                    {l.deal}
-                                    <span className="text-white/30"> · {l.selfGen ? 'Self-Gen' : l.role}</span>
-                                  </span>
-                                  <span className="text-[11.5px] font-semibold text-white whitespace-nowrap">{fmt(l.amount)}</span>
-                                </div>
-                                {l.ded > 0 && (
-                                  <p className="text-[10px] text-red-400/80 truncate">− {l.note || 'deduction'} · {fmt(l.ded)}</p>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        )
-                      )}
-                      {p.adjustments.map(a => {
-                        // A RECOVERY (migration 050) names its job and, when
-                        // it's a partial take, says how much is still owed —
-                        // per Keaton, the cheque has to show both numbers.
-                        const debt = a.parent_id ? ledgerById[a.parent_id] : null
-                        const line = debt ? recoveryLine(a, debt) : null
-                        return (
-                        <div key={a.id} className="pl-3 mt-0.5">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[11px] text-white/40 truncate">
-                            {debt
-                              ? <>↳ deduction{dealById[a.deal_id] ? ` · ${dealById[a.deal_id].deal_name}` : ''}{a.note ? ` · ${a.note}` : ''}</>
-                              : <>↳ adjustment{a.note ? ` · ${a.note}` : ''}</>}
-                          </span>
-                          <span className="flex items-center gap-1.5 flex-shrink-0">
-                            <span className={`text-[11px] font-semibold whitespace-nowrap ${Number(a.amount) < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
-                              {Number(a.amount) < 0 ? '−' : '+'}{fmt(Math.abs(Number(a.amount)))}
-                            </span>
-                            {isAdmin && !runLock && (
-                              <button onClick={() => removeAdjustment(a.id)} title={debt ? 'Undo this recovery — the balance goes back to outstanding' : 'Remove adjustment'}
-                                className="p-0.5 rounded text-white/25 hover:text-red-400"><Trash2 size={11} /></button>
+                          <span style={PCOL.net} className="text-[13px] font-bold text-teal text-right tabular-nums">{fmt(p.total)}</span>
+                          <span style={PCOL.act} className="flex items-center justify-end gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                            {isAdmin && view !== 'overdue' && !runLock && (
+                              <button onClick={() => { setAdjFor(adjFor === p.id ? '' : p.id); setAdjAmt(''); setAdjNote('') }}
+                                title="Add a payroll adjustment (+/−)"
+                                className="p-1 rounded text-white/30 hover:text-teal hover:bg-teal/10 transition-colors"><Plus size={13} /></button>
+                            )}
+                            {isAdmin && (
+                              <button onClick={() => copyPayee(p)} title="Copy this rep's pay statement to email"
+                                className={`p-1 rounded transition-colors ${copiedId === p.id ? 'text-emerald-400' : 'text-white/30 hover:text-teal hover:bg-teal/10'}`}>
+                                {copiedId === p.id ? <Check size={13} /> : <Copy size={13} />}
+                              </button>
                             )}
                           </span>
                         </div>
-                        {line?.detail && (
-                          <p className="text-[10px] text-amber-300/80 pl-3">{line.detail}</p>
+
+                        {/* Expanded — the deals behind the payout, then the
+                            adjustments in full with their delete buttons. */}
+                        {isOpen && (
+                          <div className="pl-8 pr-4 pb-2.5" style={{ background: '#161717' }}>
+                            {p.lines.length > 0 && (
+                              <>
+                                <p className="text-[9px] font-bold uppercase tracking-[0.1em] text-white/25 pt-2 pb-1">
+                                  {p.dealIds.size} deal{p.dealIds.size === 1 ? '' : 's'}
+                                </p>
+                                {p.lines.map((l, i) => (
+                                  <div key={i} className="py-[3px]">
+                                    <div className="flex items-center justify-between gap-3">
+                                      <span className="text-[11.5px] text-white/65 truncate">
+                                        {l.deal}<span className="text-white/30"> · {l.selfGen ? 'Self-Gen' : l.role}</span>
+                                      </span>
+                                      <span className="text-[11.5px] text-white/80 whitespace-nowrap tabular-nums">{fmt(l.amount)}</span>
+                                    </div>
+                                    {l.ded > 0 && (
+                                      <p className="text-[10px] text-red-400/80 truncate">− {l.note || 'deduction'} · {fmt(l.ded)}</p>
+                                    )}
+                                  </div>
+                                ))}
+                              </>
+                            )}
+
+                            {p.adjustments.length > 0 && (
+                              <>
+                                <p className="text-[9px] font-bold uppercase tracking-[0.1em] text-white/25 pt-2.5 pb-1">Adjustments</p>
+                                {p.adjustments.map(a => {
+                                  // A RECOVERY (migration 050) names its job and, when it's a
+                                  // partial take, says how much is still owed — per Keaton,
+                                  // the cheque has to show both numbers.
+                                  const debt = a.parent_id ? ledgerById[a.parent_id] : null
+                                  const line = debt ? recoveryLine(a, debt) : null
+                                  return (
+                                    <div key={a.id} className="py-[3px]">
+                                      <div className="flex items-center justify-between gap-3">
+                                        <span className="text-[11.5px] text-white/65 truncate">
+                                          {debt && dealById[a.deal_id] ? <span className="text-white/80">{dealById[a.deal_id].deal_name} · </span> : null}
+                                          {a.note || (debt ? 'Deduction' : 'Adjustment')}
+                                        </span>
+                                        <span className="flex items-center gap-1.5 flex-shrink-0">
+                                          <span className={`text-[11.5px] font-semibold whitespace-nowrap tabular-nums ${Number(a.amount) < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                                            {Number(a.amount) < 0 ? '−' : '+'}{fmt(Math.abs(Number(a.amount)))}
+                                          </span>
+                                          {isAdmin && !runLock && (
+                                            <button onClick={() => removeAdjustment(a.id)}
+                                              title={debt ? 'Undo this recovery — the balance goes back to outstanding' : 'Remove adjustment'}
+                                              className="p-0.5 rounded text-white/25 hover:text-red-400"><Trash2 size={11} /></button>
+                                          )}
+                                        </span>
+                                      </div>
+                                      {line?.detail && <p className="text-[10px] text-amber-300/80">{line.detail}</p>}
+                                    </div>
+                                  )
+                                })}
+                              </>
+                            )}
+
+                            {p.lines.length === 0 && p.adjustments.length === 0 && (
+                              <p className="text-[11px] text-white/30 py-2">Nothing on this run.</p>
+                            )}
+                          </div>
                         )}
-                        </div>
-                      )})}
-                      {isAdmin && adjFor === p.id && (
-                        <div className="flex items-center gap-1.5 pl-3 mt-1">
-                          <input autoFocus type="number" step="0.01" value={adjAmt} onChange={e => setAdjAmt(e.target.value)}
-                            onKeyDown={e => { if (e.key === 'Enter') saveAdjustment(p.id); if (e.key === 'Escape') setAdjFor('') }}
-                            placeholder="± $" className="w-20 rounded px-2 py-1 text-[12px] text-white focus:outline-none"
-                            style={{ background: '#1a1a1a', border: '1px solid rgba(0,184,148,0.4)' }} />
-                          <input value={adjNote} onChange={e => setAdjNote(e.target.value)}
-                            onKeyDown={e => { if (e.key === 'Enter') saveAdjustment(p.id); if (e.key === 'Escape') setAdjFor('') }}
-                            placeholder="note (e.g. missed deduction)" className="flex-1 min-w-0 rounded px-2 py-1 text-[12px] text-white focus:outline-none"
-                            style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }} />
-                          <button onClick={() => saveAdjustment(p.id)} className="p-1 rounded text-emerald-400 hover:bg-emerald-400/10"><Check size={14} /></button>
-                          <button onClick={() => setAdjFor('')} className="p-1 rounded text-white/30 hover:bg-white/5"><X size={14} /></button>
-                        </div>
-                      )}
+
+                        {/* Inline "+" editor */}
+                        {isAdmin && adjFor === p.id && (
+                          <div className="flex items-center gap-1.5 pl-8 pr-4 pb-2.5 flex-wrap">
+                            <input autoFocus type="number" step="0.01" value={adjAmt} onChange={e => setAdjAmt(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter') saveAdjustment(p.id); if (e.key === 'Escape') setAdjFor('') }}
+                              placeholder="± $" className="w-20 rounded px-2 py-1 text-[12px] text-white focus:outline-none"
+                              style={{ background: '#1a1a1a', border: '1px solid rgba(0,184,148,0.4)' }} />
+                            <input value={adjNote} onChange={e => setAdjNote(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter') saveAdjustment(p.id); if (e.key === 'Escape') setAdjFor('') }}
+                              placeholder="note (e.g. missed deduction)" className="flex-1 min-w-[160px] rounded px-2 py-1 text-[12px] text-white focus:outline-none"
+                              style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }} />
+                            <button onClick={() => saveAdjustment(p.id)} className="p-1 rounded text-emerald-400 hover:bg-emerald-400/10"><Check size={14} /></button>
+                            <button onClick={() => setAdjFor('')} className="p-1 rounded text-white/30 hover:bg-white/5"><X size={14} /></button>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+
+                  {/* Run total — deal pay − adjustments = net. The headline
+                      figure becomes something you can CHECK rather than
+                      trust (per Keaton's review). */}
+                  {shownPayees.length > 0 && (
+                    <div className="hidden sm:flex items-center gap-2.5 px-4 py-2 border-t border-white/10" style={{ background: '#1a1a1a' }}>
+                      <span className="w-[12px] flex-shrink-0" />
+                      <span style={PCOL.person} className="min-w-0 text-[9px] font-bold uppercase tracking-[0.1em] text-white/35">Run total</span>
+                      <span style={PCOL.deals} className="text-[11.5px] text-white/35 text-right tabular-nums"
+                        title="Finalized deals on this run — a deal pays several people, so this is not the sum of the column">
+                        {summary.finalizedCount}
+                      </span>
+                      <span style={PCOL.money} className="text-[12px] font-bold text-white/80 text-right tabular-nums">{fmt(payTotals.dealPay)}</span>
+                      <span style={PCOL.adj} className="hidden lg:flex items-center gap-2 min-w-0">
+                        {payTotals.adj === 0 ? (
+                          <span className="text-[12px] text-white/25">—</span>
+                        ) : (
+                          <>
+                            <span className={`text-[12px] font-bold tabular-nums flex-shrink-0 ${payTotals.adj < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                              {payTotals.adj < 0 ? '−' : '+'}{fmt(Math.abs(payTotals.adj))}
+                            </span>
+                            <span className="text-[11px] text-white/35 truncate">
+                              across {payTotals.people} {payTotals.people === 1 ? 'person' : 'people'}
+                            </span>
+                          </>
+                        )}
+                      </span>
+                      <span style={PCOL.net} className="text-[13.5px] font-extrabold text-teal text-right tabular-nums">{fmt(payTotals.net)}</span>
+                      <span style={PCOL.act} className="flex-shrink-0" />
                     </div>
-                  ))}
-                </div>
+                  )}
+                  {shownPayees.length > 0 && Math.abs(summary.total - payTotals.net) > 0.005 && (
+                    <p className="px-4 py-1.5 text-[11px] text-amber-300/90" style={{ background: '#1a1a1a' }}>
+                      {fmt(summary.total - payTotals.net)} of this run&rsquo;s total reaches nobody — a deal has commission with no rep assigned, so it is in the headline figure but on no pay statement.
+                    </p>
+                  )}
+                </>
               )}
             </div>
           )}
