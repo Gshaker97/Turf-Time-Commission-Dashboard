@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronLeft, ChevronRight, ChevronDown, Download, Pencil, AlertTriangle, CheckCircle2, Wallet, BadgeCheck, Copy, Check, Plus, X, Trash2, Lock } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronDown, Download, Pencil, AlertTriangle, CheckCircle2, Wallet, BadgeCheck, Copy, Check, Plus, X, Trash2, Lock, Ban } from 'lucide-react'
 import { format } from 'date-fns'
-import { fetchDeals, fetchUsers, updateDeal, fetchPayrollAdjustments, addPayrollAdjustment, deletePayrollAdjustment, fetchPayrollLocks, lockPayrollRun, unlockPayrollRun } from '../lib/db'
+import { fetchDeals, fetchUsers, updateDeal, fetchPayrollAdjustments, addPayrollAdjustment, deletePayrollAdjustment, updatePayrollAdjustment,
+  writeOffDeduction, reopenDeduction, fetchPayrollLocks, lockPayrollRun, unlockPayrollRun } from '../lib/db'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import { dealAmounts, fmt, activeDeals, deductionLabel } from '../utils/commission'
 import { onClickUnlessSelecting } from '../utils/selection'
 import DealModal from '../components/DealModal'
 import { toast } from '../lib/toast'
+import DeductionModal from '../components/DeductionModal'
+import { buildLedger, openDebts, ledgerTotals, suggestedTake, wouldGoNegative, recoveryLine, STATUS_LABEL } from '../utils/deductions'
 
 // LOCAL date, never UTC — .toISOString() rolls to tomorrow at 5pm Arizona.
 const todayISO = () => format(new Date(), 'yyyy-MM-dd')
@@ -126,6 +129,13 @@ export default function Payroll() {
   const [adjAmt, setAdjAmt] = useState('')
   const [adjNote, setAdjNote] = useState('')
   const [locks, setLocks] = useState([])              // locked pay runs (migration 028)
+  // Deduction ledger (migration 050): a debt is an adjustment with NO pay
+  // date. Nothing is ever taken automatically — Keaton clicks, and he types
+  // how much comes out of each cheque.
+  const [dedModal, setDedModal] = useState(null)      // {} = new, {edit: debt} = editing
+  const [applyFor, setApplyFor] = useState('')        // debt id whose amount box is open
+  const [applyAmt, setApplyAmt] = useState('')
+  const [dedFilter, setDedFilter] = useState('open')  // open | all
   const today = todayISO()
 
   useEffect(() => { load() }, [])
@@ -208,6 +218,7 @@ export default function Payroll() {
   )
 
   const userById = useMemo(() => Object.fromEntries(users.map(u => [u.id, u])), [users])
+  const dealById = useMemo(() => Object.fromEntries(deals.map(d => [d.id, d])), [deals])
 
   // Deals on this run with commission owed to NOBODY (missing setter/closer) —
   // that money would fall out of every payee's statement. Flag before payout.
@@ -274,6 +285,12 @@ export default function Payroll() {
     return Object.values(m).sort((a, b) => b.total - a.total)
   }, [runDeals, runAdjustments, users])
 
+  // What each person is currently owed on THIS run — the number the tray
+  // prefills a recovery with, so a take never quietly exceeds the cheque.
+  const payeeTotals = useMemo(
+    () => Object.fromEntries(payees.map(p => [p.id, p.total])),
+    [payees])
+
   // All deals that carry a deduction — across all time, for the Deductions tab.
   // A deduction is "applied" once its deal is Paid; otherwise it's still pending.
   const deductions = useMemo(() => {
@@ -319,6 +336,67 @@ export default function Payroll() {
     () => runDeals.filter(d => d.commission_verified !== true && dealAmounts(d).totalCommission !== 0),
     [runDeals]
   )
+
+  // ── Deduction ledger (migration 050) ─────────────────────────────────
+  // Every debt with the recoveries taken against it. All the math lives in
+  // utils/deductions.js; this page only renders and writes.
+  const ledger    = useMemo(() => buildLedger(adjustments), [adjustments])
+  const ledgerById = useMemo(() => Object.fromEntries(ledger.map(d => [d.id, d])), [ledger])
+  const openLedger = useMemo(() => openDebts(ledger), [ledger])
+  const owedTotals = useMemo(() => ledgerTotals(ledger), [ledger])
+
+  async function saveDeduction(input) {
+    const res = input.id
+      ? await updatePayrollAdjustment(input.id, {
+          payee_id: input.payeeId, deal_id: input.dealId, amount: input.amount, note: input.note, pay_date: input.payDate,
+        })
+      : await addPayrollAdjustment(input, profile?.id)
+    if (res?.error) { toast.error('Could not save the deduction: ' + (res.error.message || 'unknown error') + '\n(Has migration 050 been run?)'); return false }
+    toast.success(input.payDate ? 'Deduction added to that run' : 'Deduction logged — it will show on every run until it is recovered')
+    reloadAdjustments()
+    return true
+  }
+
+  // Take some (or all) of a debt on the CURRENT run. Never automatic: this
+  // only ever runs from a click, with an amount Keaton can type over.
+  async function applyDeduction(debt, rawAmount) {
+    if (!view || view === 'overdue') return
+    const take = Math.round(Math.abs(parseFloat(rawAmount) || 0) * 100) / 100
+    if (!take) { setApplyFor(''); return }
+    if (take > debt.remaining && !confirm(`Take ${fmt(take)} against a balance of only ${fmt(debt.remaining)}? The extra isn't owed.`)) return
+    const res = await addPayrollAdjustment({
+      payeeId: debt.payee_id, payDate: view, amount: -take,
+      note: debt.note, dealId: debt.deal_id, parentId: debt.id,
+    }, profile?.id)
+    if (res?.error) { toast.error('Could not apply it: ' + (res.error.message || 'unknown error')); return }
+    const left = Math.max(0, Math.round((debt.remaining - take) * 100) / 100)
+    toast.success(left > 0 ? `${fmt(take)} taken · ${fmt(left)} still owed, carried to the next run` : `${fmt(take)} taken · settled`)
+    setApplyFor(''); setApplyAmt('')
+    reloadAdjustments()
+  }
+
+  async function writeOff(debt) {
+    const why = prompt(`Write off ${fmt(debt.remaining)} still owed by ${userById[debt.payee_id]?.name || 'this rep'}?\n\nIt stops appearing on every run but stays on the record. Reason (optional):`)
+    if (why === null) return
+    const res = await writeOffDeduction(debt.id, why.trim() || null, profile?.id)
+    if (res?.error) { toast.error('Could not write it off: ' + (res.error.message || 'unknown error')); return }
+    reloadAdjustments()
+  }
+  async function reopen(debt) {
+    const res = await reopenDeduction(debt.id)
+    if (res?.error) { toast.error('Could not reopen it: ' + (res.error.message || 'unknown error')); return }
+    reloadAdjustments()
+  }
+  async function deleteDebt(debt) {
+    if (debt.recoveries.length) {
+      toast.error('Money has already come out against this one. Write it off instead — deleting it would erase what was paid.')
+      return
+    }
+    if (!confirm('Delete this deduction? Nothing has been collected against it.')) return
+    const res = await deletePayrollAdjustment(debt.id)
+    if (res?.error) { toast.error('Could not delete it: ' + (res.error.message || 'unknown error')); return }
+    reloadAdjustments()
+  }
 
   // Is the current run locked? A locked run is frozen — no status changes,
   // deal edits, or adjustments (enforced in the DB by migration 028's trigger;
@@ -511,22 +589,44 @@ export default function Payroll() {
     // applied, then any manual adjustments. Net total is authoritative (p.total).
     const items = []
     for (const l of sorted) {
-      items.push({ deal: l.deal, baseline: fmt(l.baseline || 0), role: roleLabel(l), pct: asPct(l.pct), amount: l.amount })
-      if (l.ded > 0) items.push({ deal: '', baseline: '', role: l.note || 'Deduction', pct: '', amount: -l.ded, dim: true })
+      items.push({ grp: 'deal', deal: l.deal, baseline: fmt(l.baseline || 0), role: roleLabel(l), pct: asPct(l.pct), amount: l.amount })
+      if (l.ded > 0) items.push({ grp: 'deal', deal: '', baseline: '', role: l.note || 'Deduction', pct: '', amount: -l.ded, dim: true })
     }
-    for (const adj of p.adjustments) items.push({ deal: 'Adjustment', baseline: '', role: adj.note || '—', pct: '', amount: Number(adj.amount) })
+    for (const adj of p.adjustments) {
+      // A recovery against a logged deduction (migration 050) names its job,
+      // and a PARTIAL take spells out the whole balance and what is left —
+      // per Keaton, the statement shows both so nobody has to ask.
+      const debt = adj.parent_id ? ledgerById[adj.parent_id] : null
+      const line = debt ? recoveryLine(adj, debt) : null
+      const job  = adj.deal_id ? dealById[adj.deal_id]?.deal_name : ''
+      items.push({
+        grp: 'adj',
+        deal: debt ? (job || 'Deduction') : 'Adjustment',
+        baseline: '',
+        role: adj.note || (debt ? 'Deduction' : '—'),
+        pct: '', amount: Number(adj.amount),
+      })
+      if (line?.detail) items.push({ grp: 'adj', deal: '', baseline: '', role: line.detail, pct: '', amount: 0, dim: true, noAmount: true })
+    }
     const text = `Pay statement — ${p.name} — ${viewLabel}\n\n`
-      + items.map(l => `• ${l.deal ? l.deal + (l.baseline ? ` (baseline ${l.baseline})` : '') + ' — ' : ''}${l.role}${l.pct ? ` (${l.pct})` : ''}: ${fmt(l.amount)}`).join('\n')
+      + items.map(l => l.noAmount
+          ? `    ${l.role}`
+          : `• ${l.deal ? l.deal + (l.baseline ? ` (baseline ${l.baseline})` : '') + ' — ' : ''}${l.role}${l.pct ? ` (${l.pct})` : ''}: ${fmt(l.amount)}`).join('\n')
       + `\n\nNet total: ${fmt(p.total)}`
 
     // Styled statement (inline CSS only — it's pasted into email clients).
     const F = 'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Arial,sans-serif'
     const money = (v) => `<span style="color:${v < 0 ? '#dc2626' : '#111827'};font-weight:600;white-space:nowrap">${fmt(v)}</span>`
-    const dealRows = items.filter(l => l.deal !== 'Adjustment')
-    const adjRows  = items.filter(l => l.deal === 'Adjustment')
+    // Each item is tagged at push time — never inferred from its deal name,
+    // which would misfile a recovery whose job the rep is also being paid for
+    // on this same run.
+    const dealRows = items.filter(l => l.grp === 'deal')
+    const adjRows  = items.filter(l => l.grp === 'adj')
     const th = (label, align = 'left') =>
       `<td style="padding:8px 12px;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:#6b7280;font-weight:700;text-align:${align};border-bottom:2px solid #e5e7eb">${label}</td>`
-    const row = (l, last) => l.dim
+    const row = (l, last) => l.noAmount
+      ? `<tr><td colspan="5" style="padding:0 12px 8px 24px;font-size:12px;color:#b45309;font-style:italic;${last ? '' : 'border-bottom:1px solid #f3f4f6'}">${esc(l.role)}</td></tr>`
+      : l.dim
       ? `<tr><td colspan="4" style="padding:2px 12px 8px 24px;font-size:12px;color:#dc2626;font-style:italic;${last ? '' : 'border-bottom:1px solid #f3f4f6'}">− ${esc(l.role)}</td>` +
         `<td style="padding:2px 12px 8px;font-size:12px;text-align:right;color:#dc2626;font-style:italic;${last ? '' : 'border-bottom:1px solid #f3f4f6'}">${fmt(l.amount)}</td></tr>`
       : `<tr>` +
@@ -658,6 +758,106 @@ export default function Payroll() {
                   Unlock
                 </button>
               )}
+            </div>
+          )}
+
+          {/* ── Outstanding deductions (migration 050) ──────────────────
+              What is owed but not yet taken. It sits above every run so a
+              deduction can never be forgotten, and NOTHING here happens on
+              its own — every dollar comes out of a click (per Keaton). */}
+          {view !== 'overdue' && openLedger.length > 0 && (
+            <div className="mb-3 rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid rgba(245,158,11,0.38)' }}>
+              <div className="flex items-center gap-3 flex-wrap px-4 py-3" style={{ background: 'rgba(245,158,11,0.07)', borderBottom: '1px solid rgba(245,158,11,0.22)' }}>
+                <AlertTriangle size={14} className="text-amber-300 flex-shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[12.5px] font-bold text-amber-300">
+                    {owedTotals.count} outstanding deduction{owedTotals.count === 1 ? '' : 's'} · {fmt(owedTotals.owed)} owed
+                  </p>
+                  <p className="text-[11px] text-white/45">
+                    {openLedger.filter(d => (payeeTotals[d.payee_id] ?? 0) > 0).length} belong to reps getting paid on this run. They stay here until they are recovered or written off.
+                  </p>
+                </div>
+                {isAdmin && !runLock && (
+                  <button onClick={() => setDedModal({})}
+                    className="px-3 py-1.5 rounded-lg text-[11.5px] font-bold text-white/65 hover:text-white transition-colors flex-shrink-0"
+                    style={{ border: '1px solid #333' }}>+ Log a deduction</button>
+                )}
+              </div>
+
+              {openLedger.map(d => {
+                const pay  = payeeTotals[d.payee_id] ?? 0
+                const has  = pay > 0
+                const open = applyFor === d.id
+                const typed = open ? (parseFloat(applyAmt) || 0) : 0
+                const negative = open && wouldGoNegative(typed, pay)
+                return (
+                  <div key={d.id} className="px-4 py-2.5 border-t border-white/5" style={has ? undefined : { opacity: 0.68 }}>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <div className="w-[150px] flex-shrink-0 min-w-0">
+                        <p className="text-[12.5px] font-semibold text-white truncate">{userById[d.payee_id]?.name || 'Unknown rep'}</p>
+                        <p className="text-[10.5px] text-white/40">{has ? `on this run · ${fmt(pay)}` : 'no pay on this run'}</p>
+                      </div>
+                      <div className="w-[82px] flex-shrink-0 text-right">
+                        <span className="text-[14.5px] font-extrabold text-red-400 tabular-nums">−{fmt(d.remaining)}</span>
+                        {d.recovered > 0 && <p className="text-[10px] text-white/35 tabular-nums">of {fmt(d.owed)}</p>}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[12px] text-white/70 truncate">
+                          {dealById[d.deal_id]?.deal_name || 'No job'}
+                          {d.note ? <span className="text-white/45"> · {d.note}</span> : null}
+                        </p>
+                        <p className="text-[10.5px] text-white/35">
+                          logged {d.created_at ? format(new Date(d.created_at), 'MMM d') : '—'}
+                          {d.recovered > 0 ? ` · ${fmt(d.recovered)} already recovered` : ''}
+                        </p>
+                      </div>
+                      {isAdmin && !runLock && (
+                        open ? null : (
+                          <span className="flex items-center gap-1.5 flex-shrink-0">
+                            <button onClick={() => { setApplyFor(d.id); setApplyAmt(String(suggestedTake(d.remaining, pay) || d.remaining)) }}
+                              className="px-3 h-8 rounded-lg text-[11.5px] font-bold transition-colors"
+                              style={{ background: 'rgba(0,184,148,0.12)', border: '1px solid rgba(0,184,148,0.4)', color: '#00b894' }}>
+                              Take from this run
+                            </button>
+                            <button onClick={() => setDedModal({ edit: d })} title="Edit"
+                              className="p-1.5 rounded-lg text-white/30 hover:text-teal hover:bg-teal/10"><Pencil size={13} /></button>
+                            <button onClick={() => writeOff(d)} title="Write it off — stops it appearing, keeps the record"
+                              className="p-1.5 rounded-lg text-white/30 hover:text-amber-400 hover:bg-amber-500/10"><Ban size={13} /></button>
+                            {!d.recoveries.length && (
+                              <button onClick={() => deleteDebt(d)} title="Delete"
+                                className="p-1.5 rounded-lg text-white/25 hover:text-red-400 hover:bg-red-500/10"><Trash2 size={13} /></button>
+                            )}
+                          </span>
+                        )
+                      )}
+                    </div>
+
+                    {/* How much comes out — Keaton types the number (per Keaton). */}
+                    {open && (
+                      <div className="mt-2 ml-[150px] flex items-center gap-2 flex-wrap">
+                        <label htmlFor={`take-${d.id}`} className="text-[11px] text-white/45">Take</label>
+                        <input id={`take-${d.id}`} autoFocus type="number" step="0.01" min="0" value={applyAmt}
+                          onChange={e => setApplyAmt(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') applyDeduction(d, applyAmt); if (e.key === 'Escape') setApplyFor('') }}
+                          className="w-24 h-8 px-2 rounded-lg text-[12.5px] text-white tabular-nums focus:outline-none"
+                          style={{ background: '#1a1a1a', border: '1px solid rgba(0,184,148,0.45)' }} />
+                        <span className="text-[11px] text-white/35">of {fmt(d.remaining)} owed</span>
+                        <button onClick={() => applyDeduction(d, applyAmt)}
+                          className="px-3 h-8 rounded-lg text-[11.5px] font-bold bg-teal text-dark">Take it</button>
+                        <button onClick={() => setApplyFor('')} className="px-2 h-8 rounded-lg text-[11.5px] text-white/45 hover:text-white">Cancel</button>
+                        {typed > 0 && typed < d.remaining && (
+                          <span className="text-[11px] text-amber-300">
+                            leaves {fmt(d.remaining - typed)} owed — carries to the next run
+                          </span>
+                        )}
+                        {negative && (
+                          <span className="text-[11px] text-red-400">more than the {fmt(pay)} they earn this run — their cheque would go negative</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
 
@@ -864,20 +1064,35 @@ export default function Payroll() {
                           </div>
                         )
                       )}
-                      {p.adjustments.map(a => (
-                        <div key={a.id} className="flex items-center justify-between gap-2 pl-3 mt-0.5">
-                          <span className="text-[11px] text-white/40 truncate">↳ adjustment{a.note ? ` · ${a.note}` : ''}</span>
+                      {p.adjustments.map(a => {
+                        // A RECOVERY (migration 050) names its job and, when
+                        // it's a partial take, says how much is still owed —
+                        // per Keaton, the cheque has to show both numbers.
+                        const debt = a.parent_id ? ledgerById[a.parent_id] : null
+                        const line = debt ? recoveryLine(a, debt) : null
+                        return (
+                        <div key={a.id} className="pl-3 mt-0.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] text-white/40 truncate">
+                            {debt
+                              ? <>↳ deduction{dealById[a.deal_id] ? ` · ${dealById[a.deal_id].deal_name}` : ''}{a.note ? ` · ${a.note}` : ''}</>
+                              : <>↳ adjustment{a.note ? ` · ${a.note}` : ''}</>}
+                          </span>
                           <span className="flex items-center gap-1.5 flex-shrink-0">
                             <span className={`text-[11px] font-semibold whitespace-nowrap ${Number(a.amount) < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
                               {Number(a.amount) < 0 ? '−' : '+'}{fmt(Math.abs(Number(a.amount)))}
                             </span>
                             {isAdmin && !runLock && (
-                              <button onClick={() => removeAdjustment(a.id)} title="Remove adjustment"
+                              <button onClick={() => removeAdjustment(a.id)} title={debt ? 'Undo this recovery — the balance goes back to outstanding' : 'Remove adjustment'}
                                 className="p-0.5 rounded text-white/25 hover:text-red-400"><Trash2 size={11} /></button>
                             )}
                           </span>
                         </div>
-                      ))}
+                        {line?.detail && (
+                          <p className="text-[10px] text-amber-300/80 pl-3">{line.detail}</p>
+                        )}
+                        </div>
+                      )})}
                       {isAdmin && adjFor === p.id && (
                         <div className="flex items-center gap-1.5 pl-3 mt-1">
                           <input autoFocus type="number" step="0.01" value={adjAmt} onChange={e => setAdjAmt(e.target.value)}
@@ -1026,6 +1241,99 @@ export default function Payroll() {
 
       {tab === 'deductions' && (
         <>
+          {/* ── Logged deductions (the ledger, migration 050) ───────────────
+              What people OWE, separate from the deductions priced into a deal.
+              A debt here never altered its job's commission — it rides on a
+              future cheque instead. */}
+          <div className="mb-4 rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+            <div className="flex items-center gap-3 flex-wrap px-4 py-3 border-b border-white/5">
+              <span className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">Logged after payout</span>
+              {owedTotals.count > 0 && (
+                <span className="text-[11px] font-bold text-amber-300">{fmt(owedTotals.owed)} owed across {owedTotals.people} {owedTotals.people === 1 ? 'person' : 'people'}</span>
+              )}
+              <span className="flex-1" />
+              <span className="flex gap-1">
+                {[['open', 'Outstanding'], ['all', 'All']].map(([k, label]) => (
+                  <button key={k} onClick={() => setDedFilter(k)}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors ${dedFilter === k ? 'bg-teal/15 text-teal border border-teal/30' : 'text-white/45 hover:text-white border border-transparent'}`}>
+                    {label}
+                  </button>
+                ))}
+              </span>
+              {isAdmin && (
+                <button onClick={() => setDedModal({})}
+                  className="px-3 py-1.5 rounded-lg text-[11.5px] font-bold bg-teal text-dark">+ Log a deduction</button>
+              )}
+            </div>
+            {(() => {
+              const rows = dedFilter === 'open' ? openLedger : ledger
+              if (!rows.length) {
+                return <p className="px-4 py-8 text-center text-white/30 text-sm">
+                  {dedFilter === 'open' ? 'Nothing owed — every logged deduction has been recovered or written off.' : 'No deductions logged yet.'}
+                </p>
+              }
+              return rows.map(d => (
+                <div key={d.id} className="px-4 py-3 border-b border-white/5 last:border-0"
+                  style={d.status === 'open' || d.status === 'partial' ? undefined : { opacity: 0.66 }}>
+                  <div className="flex items-start gap-3 flex-wrap">
+                    <div className="w-[150px] flex-shrink-0 min-w-0">
+                      <p className="text-[13px] font-semibold text-white truncate">{userById[d.payee_id]?.name || 'Unknown rep'}</p>
+                      <p className="text-[10.5px] text-white/35">logged {d.created_at ? format(new Date(d.created_at), 'MMM d, yyyy') : '—'}</p>
+                    </div>
+                    <div className="w-[96px] flex-shrink-0 text-right">
+                      <p className="text-[13.5px] font-extrabold text-red-400 tabular-nums">{fmt(d.remaining)}</p>
+                      <p className="text-[10px] text-white/35 tabular-nums">of {fmt(d.owed)}</p>
+                    </div>
+                    <div className="flex-1 min-w-[180px]">
+                      <p className="text-[12.5px] text-white/75 truncate">
+                        {dealById[d.deal_id]?.deal_name || 'No job'}
+                        {d.note ? <span className="text-white/45"> · {d.note}</span> : null}
+                      </p>
+                      {d.recoveries.length > 0 && (
+                        <div className="mt-1.5 pl-3 border-l-2 border-white/10 space-y-0.5">
+                          {d.recoveries.map(r => (
+                            <p key={r.id} className="text-[11px] text-white/45 tabular-nums">
+                              {fmt(Math.abs(Number(r.amount)))} came out {fmtDay(r.pay_date)}
+                            </p>
+                          ))}
+                          {d.remaining > 0 && <p className="text-[11px] text-amber-300 tabular-nums">{fmt(d.remaining)} rolls to their next run</p>}
+                        </div>
+                      )}
+                      {d.writtenOff && d.written_off_note && (
+                        <p className="text-[11px] text-white/35 mt-1">written off — {d.written_off_note}</p>
+                      )}
+                    </div>
+                    <span className="flex items-center gap-1.5 flex-shrink-0">
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide"
+                        style={d.status === 'settled'
+                          ? { color: '#6ee7b7', background: 'rgba(16,185,129,0.13)', border: '1px solid rgba(16,185,129,0.35)' }
+                          : d.status === 'written_off'
+                          ? { color: 'rgba(255,255,255,0.55)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.18)' }
+                          : { color: '#fcd34d', background: 'rgba(245,158,11,0.13)', border: '1px solid rgba(245,158,11,0.35)' }}>
+                        {STATUS_LABEL[d.status]}
+                      </span>
+                      {isAdmin && d.status !== 'settled' && (
+                        d.writtenOff
+                          ? <button onClick={() => reopen(d)} title="Reopen — it starts showing on runs again"
+                              className="p-1.5 rounded-lg text-white/30 hover:text-teal hover:bg-teal/10"><CheckCircle2 size={13} /></button>
+                          : <>
+                              <button onClick={() => setDedModal({ edit: d })} title="Edit"
+                                className="p-1.5 rounded-lg text-white/30 hover:text-teal hover:bg-teal/10"><Pencil size={13} /></button>
+                              <button onClick={() => writeOff(d)} title="Write it off"
+                                className="p-1.5 rounded-lg text-white/30 hover:text-amber-400 hover:bg-amber-500/10"><Ban size={13} /></button>
+                              {!d.recoveries.length && (
+                                <button onClick={() => deleteDebt(d)} title="Delete"
+                                  className="p-1.5 rounded-lg text-white/25 hover:text-red-400 hover:bg-red-500/10"><Trash2 size={13} /></button>
+                              )}
+                            </>
+                      )}
+                    </span>
+                  </div>
+                </div>
+              ))
+            })()}
+          </div>
+
           {/* Deduction summary */}
           <div className="grid grid-cols-3 gap-2 md:gap-3 mb-4">
             <Card label="Total deductions" value={fmt(deductionTotals.total)} color="#f87171" sub={`${deductionTotals.count} total`} />
@@ -1077,6 +1385,13 @@ export default function Payroll() {
             ))}
           </div>
         </>
+      )}
+
+      {dedModal && (
+        <DeductionModal
+          deals={deals} users={users} payDates={payDates}
+          currentRun={view} edit={dedModal.edit}
+          onClose={() => setDedModal(null)} onSave={saveDeduction} />
       )}
 
       {modal && (

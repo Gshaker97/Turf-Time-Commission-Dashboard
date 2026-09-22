@@ -624,14 +624,43 @@ export async function fetchPayrollAdjustments() {
   return supabase.from('payroll_adjustments').select('*').order('created_at', { ascending: true })
 }
 
-export async function addPayrollAdjustment({ payeeId, payDate, amount, note }, createdBy) {
-  if (DEMO_MODE) {
-    const row = { id: 'adj-' + Math.random().toString(36).slice(2, 9), payee_id: payeeId, pay_date: payDate, amount, note: note || null, created_at: new Date().toISOString() }
-    _payrollAdjustments = [..._payrollAdjustments, row]
-    return { data: [row], error: null }
+export async function addPayrollAdjustment({ payeeId, payDate, amount, note, dealId, parentId }, createdBy) {
+  const row = {
+    payee_id: payeeId,
+    // NULL pay_date is the whole point of migration 050: a DEBT with no run
+    // attached. Anything with a date is an ordinary adjustment or a recovery.
+    pay_date: payDate || null,
+    amount,
+    note: note || null,
+    deal_id: dealId || null,
+    parent_id: parentId || null,
   }
-  return supabase.from('payroll_adjustments')
-    .insert([{ payee_id: payeeId, pay_date: payDate, amount, note: note || null, created_by: createdBy }]).select()
+  if (DEMO_MODE) {
+    const r = { id: 'adj-' + Math.random().toString(36).slice(2, 9), ...row, created_at: new Date().toISOString() }
+    _payrollAdjustments = [..._payrollAdjustments, r]
+    return { data: [r], error: null }
+  }
+  return supabase.from('payroll_adjustments').insert([{ ...row, created_by: createdBy }]).select()
+}
+
+// Edit a debt that hasn't been collected against yet (amount, note, deal).
+export async function updatePayrollAdjustment(id, patch) {
+  if (DEMO_MODE) {
+    _payrollAdjustments = _payrollAdjustments.map(a => a.id === id ? { ...a, ...patch } : a)
+    return { data: _payrollAdjustments.filter(a => a.id === id), error: null }
+  }
+  return requireRow(await supabase.from('payroll_adjustments').update(patch).eq('id', id).select())
+}
+
+// Close a debt that will never be collected (a rep who has left). Stamped,
+// never deleted — the record of what happened is the point.
+export async function writeOffDeduction(id, note, byProfileId) {
+  const patch = { written_off_at: new Date().toISOString(), written_off_by: byProfileId || null, written_off_note: note || null }
+  return updatePayrollAdjustment(id, patch)
+}
+
+export async function reopenDeduction(id) {
+  return updatePayrollAdjustment(id, { written_off_at: null, written_off_by: null, written_off_note: null })
 }
 
 export async function deletePayrollAdjustment(id) {
