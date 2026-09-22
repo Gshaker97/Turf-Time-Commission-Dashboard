@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronLeft, ChevronRight, ChevronDown, Download, Pencil, AlertTriangle, CheckCircle2, Wallet, BadgeCheck, Copy, Check, Plus, X, Trash2, Lock, Ban } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronDown, Download, Pencil, AlertTriangle, CheckCircle2, Wallet, BadgeCheck, Copy, Check, Plus, X, Trash2, Lock, Ban, MinusCircle } from 'lucide-react'
 import { format } from 'date-fns'
 import { fetchDeals, fetchUsers, updateDeal, fetchPayrollAdjustments, addPayrollAdjustment, deletePayrollAdjustment, updatePayrollAdjustment,
   writeOffDeduction, reopenDeduction, fetchPayrollLocks, lockPayrollRun, unlockPayrollRun } from '../lib/db'
@@ -685,11 +685,23 @@ export default function Payroll() {
           <p className="text-[12px] text-white/40 mt-0.5">Review deals due for pay, approve them, and track deductions.</p>
         </div>
         {tab === 'run' && (
-          <button onClick={exportCsv} disabled={!shownDeals.length}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold text-white/70 hover:text-white disabled:opacity-40 transition-colors"
-            style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-            <Download size={14} /> Export CSV
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {/* Always here, not only inside the outstanding tray — that only
+                renders once something is owed, so logging the FIRST deduction
+                used to mean switching tabs (per Keaton). */}
+            {isAdmin && (
+              <button onClick={() => setDedModal({})} title="Log a deduction against any job, even one that already paid out"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold text-white/70 hover:text-white transition-colors"
+                style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+                <MinusCircle size={14} className="text-red-400/80" /> Log a deduction
+              </button>
+            )}
+            <button onClick={exportCsv} disabled={!shownDeals.length}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold text-white/70 hover:text-white disabled:opacity-40 transition-colors"
+              style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+              <Download size={14} /> Export CSV
+            </button>
+          </div>
         )}
       </div>
 
@@ -777,11 +789,6 @@ export default function Payroll() {
                     {openLedger.filter(d => (payeeTotals[d.payee_id] ?? 0) > 0).length} belong to reps getting paid on this run. They stay here until they are recovered or written off.
                   </p>
                 </div>
-                {isAdmin && !runLock && (
-                  <button onClick={() => setDedModal({})}
-                    className="px-3 py-1.5 rounded-lg text-[11.5px] font-bold text-white/65 hover:text-white transition-colors flex-shrink-0"
-                    style={{ border: '1px solid #333' }}>+ Log a deduction</button>
-                )}
               </div>
 
               {openLedger.map(d => {
