@@ -1017,7 +1017,30 @@ sat between the money and the payee list. Now:
    copy, adjustments, deduction takes). The rep filter and the bulk actions
    (Approve all / Mark all paid / Lock run) moved INTO its header rather than
    occupying two more strips above it.
-4. **Deals in this run** — unchanged, below; it is the audit trail.
+4. **Deals in this run** — below, the audit trail, now a real COLUMN table
+   (per Keaton, from a mockup drawn at 1100px = a 1280 laptop minus the
+   sidebar, because he always runs payroll from a laptop): Deal · Install ·
+   Office · Setter · Closer · Overrides · Baseline · Commission · Status ·
+   actions, with a heading row. The row was previously a name and ~600px of
+   nothing, and **the INSTALL DATE — the sort key, the whole reason the list
+   matches the Google Calendar — was hidden inside the expander.**
+   `rowFacts(d, a, userById)` feeds the people columns; it reads the deal's
+   own ids rather than `dealPayouts`, which drops zero-dollar shares (a setter
+   earning $0 must still show as the setter). A share with money and nobody to
+   pay reads amber "Unassigned"; a solo deal's closer reads "self-gen"; the
+   Overrides column is a COUNT + total (`3 · $389.36`) because at laptop width
+   there is room for two people, not five. Columns drop as the window
+   narrows: below `xl` office/overrides/baseline, below `lg` the people,
+   below `md` everything but name/commission/actions (phones get install +
+   setter as a second line under the name).
+   **Clicking anywhere on the row still expands it** (per Keaton) — only the
+   NAME (opens the editor) and the action buttons stop propagation. The
+   expanded card carries what the row can't: sale date, job price, rep pool,
+   pay date, payment method, every payee with their role and — for
+   manager/director/VP — the EFFECTIVE override rate (amount ÷ baseline, so
+   exclusions read 2.7% not 3%), the deduction breakdown, and Edit deal.
+   A "Show amounts" density toggle was mocked and NOT built: Keaton picked the
+   single-line table plus the existing expander instead.
 The rep filter is now `RepMultiSelect` (searchable, MULTI-select — `repFilters`
 is an array pruned to people on the run, `effFilters`/`effSet`/`filtered`),
 matching the Deals page instead of a bare `<select>`.

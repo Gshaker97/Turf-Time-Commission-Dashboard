@@ -16,6 +16,9 @@ import { buildLedger, openDebts, ledgerTotals, suggestedTake, wouldGoNegative, r
 // LOCAL date, never UTC — .toISOString() rolls to tomorrow at 5pm Arizona.
 const todayISO = () => format(new Date(), 'yyyy-MM-dd')
 const fmtDay   = (iso) => iso ? format(new Date(iso + 'T12:00:00'), 'EEE, MMM d, yyyy') : null
+// Compact form for the run list's Install column — the full date is in the
+// expanded card, and a column 56px wide can't hold a weekday and a year.
+const fmtShort = (iso) => iso ? format(new Date(iso + 'T12:00:00'), 'MMM d') : null
 const APPROVED = 'Pay Finalized'
 const PAID     = 'Paid'
 const ISSUE    = 'Sales Issue'
@@ -50,6 +53,26 @@ function Card({ label, value, color = '#fff', sub }) {
 }
 
 // Per-deal payout breakdown — who earns what on a single deal.
+// What the run's list shows per COLUMN. Read straight off the deal + its
+// amounts rather than from dealPayouts, because that helper drops zero-dollar
+// shares — a setter earning $0 must still show as the setter.
+function rowFacts(d, a, userById = {}) {
+  const nameOf = (joined, id) => (id ? (userById[id]?.name || joined?.name || '(unknown)') : null)
+  const solo = !d.closer_id || d.closer_id === d.setter_id
+  const overrideIds = [d.manager_id, d.director_id, d.vp_id].filter(Boolean)
+  return {
+    setter: nameOf(d.setter, d.setter_id),
+    // A share with money behind it and nobody to pay — the same amber the
+    // "Before you pay" card counts.
+    setterUnassigned: !d.setter_id && a.setter !== 0,
+    closer: solo ? null : nameOf(d.closer, d.closer_id),
+    closerSolo: solo,
+    closerUnassigned: !solo && !d.closer_id && a.closer !== 0,
+    overrideCount: overrideIds.length,
+    overrideTotal: a.manager + a.director + a.vp,
+  }
+}
+
 function dealPayouts(d, userById = null) {
   const a = dealAmounts(d)
   const out = []
@@ -1245,6 +1268,29 @@ export default function Payroll() {
           </div>
 
           <div className="rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+            {/* Column headings — the row used to be a name and ~600px of
+                nothing, and the INSTALL DATE, which is what the list is sorted
+                by so it reads against the calendar, was hidden in the
+                expander (per Keaton). Columns drop as the window narrows:
+                below xl the office/overrides/baseline go, below lg the
+                people, below md everything but name/commission/actions. */}
+            {shownDeals.length > 0 && (
+              <div className="hidden md:flex items-center gap-2.5 px-3 md:px-4 py-1.5 border-b border-white/10"
+                style={{ background: '#1a1a1a' }}>
+                <span className="w-[13px] flex-shrink-0" />
+                <span className="w-2 flex-shrink-0" />
+                <span className="flex-1 min-w-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Deal</span>
+                <span className="w-[56px] flex-shrink-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Install</span>
+                <span className="hidden xl:block w-[62px] flex-shrink-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Office</span>
+                <span className="hidden lg:block w-[104px] flex-shrink-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Setter</span>
+                <span className="hidden lg:block w-[104px] flex-shrink-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Closer</span>
+                <span className="hidden xl:block w-[86px] flex-shrink-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Overrides</span>
+                <span className="hidden xl:block w-[76px] flex-shrink-0 text-right text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Baseline</span>
+                <span className="w-[86px] flex-shrink-0 text-right text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Commission</span>
+                <span className="hidden sm:block w-[84px] flex-shrink-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Status</span>
+                <span className="w-[52px] flex-shrink-0" />
+              </div>
+            )}
             {shownDeals.map(d => {
               const a = dealAmounts(d)
               const color = statusColor(d.status)
@@ -1252,6 +1298,7 @@ export default function Payroll() {
               const dealLocked = isRunLocked(d.pay_date)
               const isOpen = expanded.has(d.id)
               const payouts = isOpen ? dealPayouts(d, userById) : []
+              const f = rowFacts(d, a, userById)
               return (
                 <div key={d.id} className="border-b border-white/5 last:border-0">
                   {/* Row — click anywhere (except the name/actions) to expand */}
@@ -1266,14 +1313,47 @@ export default function Payroll() {
                     <div className="min-w-0 flex-1">
                       <button onClick={e => { e.stopPropagation(); openEdit(d) }}
                         className="block w-fit max-w-full text-[13px] font-semibold text-white truncate text-left hover:text-teal transition-colors"
-                        title="Click the name to edit this deal">
+                        title={`${d.deal_name} — click the name to edit this deal`}>
                         {d.deal_name}
                       </button>
+                      {/* Phones get the two facts the columns can't show. */}
+                      <p className="md:hidden text-[10.5px] text-white/35 truncate">
+                        {[fmtShort(d.install_date) || 'No install date', f.setter].filter(Boolean).join(' · ')}
+                      </p>
                     </div>
-                    {d.commission_verified === true && <BadgeCheck size={13} className="flex-shrink-0" style={{ color: '#fbbf24' }} title="Commission verified" />}
-                    <span className="hidden sm:block text-[11px] flex-shrink-0" style={{ color }}>{d.status}</span>
-                    <span className="text-[13px] font-bold text-teal flex-shrink-0 w-[88px] text-right">{fmt(a.totalCommission)}</span>
-                    <div className="flex items-center gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
+
+                    <span className={`hidden md:block w-[56px] flex-shrink-0 text-[11.5px] truncate ${d.install_date ? 'text-white/60' : 'text-amber-400/80'}`}>
+                      {fmtShort(d.install_date) || 'TBD'}
+                    </span>
+                    <span className={`hidden xl:block w-[62px] flex-shrink-0 text-[11.5px] truncate ${d.office ? 'text-white/60' : 'text-amber-400/80'}`}
+                      title={d.office || 'No office set — the override rate may be wrong'}>
+                      {d.office || '—'}
+                    </span>
+                    <span className={`hidden lg:block w-[104px] flex-shrink-0 text-[11.5px] truncate ${f.setterUnassigned ? 'text-amber-400' : 'text-white/60'}`}
+                      title={f.setter || ''}>
+                      {f.setter || (f.setterUnassigned ? 'Unassigned' : '—')}
+                    </span>
+                    <span className={`hidden lg:block w-[104px] flex-shrink-0 text-[11.5px] truncate ${f.closerUnassigned ? 'text-amber-400' : f.closerSolo ? 'text-white/30' : 'text-white/60'}`}
+                      title={f.closer || (f.closerSolo ? 'The setter closed it themselves' : '')}>
+                      {f.closer || (f.closerUnassigned ? 'Unassigned' : 'self-gen')}
+                    </span>
+                    <span className="hidden xl:block w-[86px] flex-shrink-0 text-[11.5px] text-white/50 truncate"
+                      title={f.overrideCount ? `Manager / director / VP overrides — ${fmt(f.overrideTotal)}. Open the row for the breakdown.` : 'No overrides on this deal'}>
+                      {f.overrideCount ? `${f.overrideCount} · ${fmt(f.overrideTotal)}` : '—'}
+                    </span>
+                    <span className="hidden xl:block w-[76px] flex-shrink-0 text-right text-[11.5px] text-white/60 tabular-nums">{fmt(a.baseline)}</span>
+
+                    <span className="text-[13px] font-bold text-teal flex-shrink-0 w-[86px] text-right tabular-nums">
+                      {fmt(a.totalCommission)}
+                      {a.deduction > 0 && (
+                        <span className="block text-[9.5px] font-semibold text-red-400/90">−{fmt(a.deduction)}</span>
+                      )}
+                    </span>
+                    <span className="hidden sm:flex items-center gap-1 w-[84px] flex-shrink-0">
+                      {d.commission_verified === true && <BadgeCheck size={12} className="flex-shrink-0" style={{ color: '#fbbf24' }} title="Commission verified" />}
+                      <span className="text-[11px] truncate" style={{ color }}>{d.status}</span>
+                    </span>
+                    <div className="flex items-center justify-end gap-1 flex-shrink-0 w-[52px]" onClick={e => e.stopPropagation()}>
                       {dealLocked && <Lock size={13} className="text-white/30" title={`The ${fmtDay(d.pay_date)} pay run is locked`} />}
                       {canApprove && !dealLocked && !isPaid && d.status !== APPROVED && (
                         <button onClick={() => approveAndCollapse(d.id)} title={`Move to ${APPROVED}`}
@@ -1296,7 +1376,9 @@ export default function Payroll() {
                   {/* Expanded — the full payout card, inline */}
                   {isOpen && (
                     <div className="px-3 md:px-4 pb-3 pt-1">
-                      <p className="text-[11px] text-white/40 mb-2">{[d.office, d.payment_method].filter(Boolean).join(' · ') || 'No office / payment set'}</p>
+                      <p className="text-[11px] text-white/40 mb-2">
+                        {[d.office, d.payment_method].filter(Boolean).join(' · ') || 'No office / payment set'}
+                      </p>
 
                       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-4 gap-y-2 text-[12px]">
                         <div><p className="text-white/30 text-[10px] uppercase">Sold</p><p className="text-white/80">{fmtDay(d.sale_date) || '—'}</p></div>
@@ -1318,7 +1400,17 @@ export default function Payroll() {
                                 <AlertTriangle size={11} /> Unassigned <span className="text-amber-400/60">· {p.role} — set the {p.role.toLowerCase()} on the deal</span>
                               </span>
                             ) : (
-                              <span className="text-white/70 truncate mr-2">{p.name} <span className="text-white/30">· {p.role}</span></span>
+                              <span className="text-white/70 truncate mr-2">
+                                {p.name}
+                                <span className="text-white/30"> · {p.selfGen ? 'Self-Gen' : p.role}</span>
+                                {/* The EFFECTIVE rate — amount ÷ baseline, so
+                                    override exclusions show as e.g. 2.7% not
+                                    3%. This is what the row's "3 · $389"
+                                    overrides column summarizes. */}
+                                {a.baseline > 0 && ['Manager', 'Director', 'VP'].includes(p.role) && (
+                                  <span className="text-white/25"> · {asPct(p.amount / a.baseline)}</span>
+                                )}
+                              </span>
                             )}
                             <span className={`font-semibold whitespace-nowrap ${p.unassigned ? 'text-amber-400' : 'text-white'}`}>{fmt(p.amount)}</span>
                           </div>
