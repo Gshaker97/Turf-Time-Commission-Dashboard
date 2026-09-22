@@ -8,6 +8,7 @@ import { useSettings } from '../contexts/SettingsContext'
 import { dealAmounts, fmt, activeDeals, deductionLabel } from '../utils/commission'
 import { onClickUnlessSelecting } from '../utils/selection'
 import DealModal from '../components/DealModal'
+import RepMultiSelect from '../components/RepMultiSelect'
 import { toast } from '../lib/toast'
 import DeductionModal from '../components/DeductionModal'
 import { buildLedger, openDebts, ledgerTotals, suggestedTake, wouldGoNegative, recoveryLine, STATUS_LABEL } from '../utils/deductions'
@@ -124,7 +125,7 @@ export default function Payroll() {
   const togglePayee = (id) => setOpenPayees(s => {
     const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n
   })
-  const [repFilter, setRepFilter] = useState('')
+  const [repFilters, setRepFilters] = useState([])   // profile ids; empty = everyone
   const [adjFor, setAdjFor] = useState('')            // payee id whose adjustment editor is open
   const [adjAmt, setAdjAmt] = useState('')
   const [adjNote, setAdjNote] = useState('')
@@ -136,6 +137,9 @@ export default function Payroll() {
   const [applyFor, setApplyFor] = useState('')        // debt id whose amount box is open
   const [applyAmt, setApplyAmt] = useState('')
   const [dedFilter, setDedFilter] = useState('open')  // open | all
+  // "Before you pay" — which checklist rows are expanded.
+  const [openChecks, setOpenChecks] = useState(() => new Set())
+  const toggleCheck = (k) => setOpenChecks(s => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n })
   const today = todayISO()
 
   useEffect(() => { load() }, [])
@@ -425,14 +429,65 @@ export default function Payroll() {
 
   // Optional filter: scope the run to a single payee/rep. Auto-clears if that
   // person isn't in the current run.
-  const effFilter = repFilter && payees.some(p => p.id === repFilter) ? repFilter : ''
-  const shownDeals  = effFilter ? runDeals.filter(d => dealPayouts(d, userById).some(p => p.id === effFilter)) : runDeals
-  const shownPayees = effFilter ? payees.filter(p => p.id === effFilter) : payees
+  // Pruned to people actually on this run, so a selection made on one run
+  // can't silently empty the next one.
+  const effFilters = useMemo(
+    () => repFilters.filter(id => payees.some(p => p.id === id)),
+    [repFilters, payees])
+  const effSet = useMemo(() => new Set(effFilters), [effFilters])
+  const filtered = effFilters.length > 0
+  const shownDeals  = filtered ? runDeals.filter(d => dealPayouts(d, userById).some(p => effSet.has(p.id))) : runDeals
+  const shownPayees = filtered ? payees.filter(p => effSet.has(p.id)) : payees
+  // ── Where this run is in its life (per Keaton's review) ──────────────
+  // Review → approve → pay → lock. The bar tracks the PAYOUT (paid of
+  // finalized), because that is the thing that finishes; verification and
+  // approval read as counts beside it.
+  const runStage = useMemo(() => {
+    const total     = shownDeals.length
+    const verified  = shownDeals.filter(d => d.commission_verified === true).length
+    const finalized = shownDeals.filter(isFinalized).length
+    const paid      = shownDeals.filter(d => d.status === PAID).length
+    const pct = runLock ? 100 : finalized > 0 ? Math.round((paid / finalized) * 100) : 0
+    const label =
+      runLock                          ? 'Locked'
+      : total === 0                    ? 'Nothing on this run'
+      : finalized > 0 && paid >= finalized ? 'Paid — ready to lock'
+      : finalized >= total             ? 'Approved — ready to pay'
+      : paid > 0                       ? 'Paying'
+                                       : 'In review'
+    const color = runLock ? '#00b894' : (finalized > 0 && paid >= finalized) ? '#00b894'
+                : finalized >= total && total > 0 ? '#fbbf24' : '#fdcb6e'
+    return { total, verified, finalized, paid, pct, label, color }
+  }, [shownDeals, runLock])
+
+  // The three deal-level problems, as one list. They used to be three amber
+  // banners of identical construction stacked on top of each other.
+  const checks = useMemo(() => ([
+    {
+      key: 'unverified', deals: runUnverified,
+      label: 'aren\u2019t gold-checked yet',
+      hint: 'Verify commissions in Deals \u2192 Needs review, or click one to review it here.',
+    },
+    {
+      key: 'office', deals: noOfficeDeals,
+      label: 'have no office \u2014 override rates may be wrong',
+      hint: 'Set the office to apply the correct director/VP rate. Click a deal to fix it.',
+    },
+    {
+      key: 'unassigned', deals: unassignedDeals,
+      label: 'have commission with nobody assigned to pay it to',
+      hint: 'The share exists but there is nobody to pay it to \u2014 it will not appear on any pay statement.',
+    },
+  ].filter(c => c.deals.length > 0)), [runUnverified, noOfficeDeals, unassignedDeals])
+
+  const onThisRun  = useMemo(() => openLedger.filter(d => (payeeTotals[d.payee_id] ?? 0) > 0).length, [openLedger, payeeTotals])
+  const checkCount = checks.length + (openLedger.length > 0 ? 1 : 0)
+
   const summary = (() => {
     let total = 0, paid = 0, paidCount = 0, pending = 0, pendingCount = 0, finalizedCount = 0
     for (const d of shownDeals) {
-      const amt = effFilter
-        ? dealPayouts(d, userById).filter(p => p.id === effFilter).reduce((s, p) => s + p.amount, 0)
+      const amt = filtered
+        ? dealPayouts(d, userById).filter(p => effSet.has(p.id)).reduce((s, p) => s + p.amount, 0)
         : dealAmounts(d).totalCommission
       if (isFinalized(d)) {
         total += amt; finalizedCount++
@@ -508,7 +563,24 @@ export default function Payroll() {
   async function markAll(status) {
     const ids = shownDeals.filter(d => d.status !== status && (!isRunLocked(d.pay_date) || (status === PAID && d.status === APPROVED))).map(d => d.id)
     if (!ids.length) return
-    if (!confirm(`Mark ${ids.length} deal${ids.length === 1 ? '' : 's'} as "${status}"?`)) return
+    // Name the outstanding problems in the confirm (per Keaton's review).
+    // The warnings sit in the "Before you pay" card above, which is one
+    // scroll away and easy to have skimmed — and this is money going out.
+    const set = new Set(ids)
+    const among = (list) => list.filter(d => set.has(d.id)).length
+    const flags = [
+      [among(runUnverified),   'not gold-checked'],
+      [among(noOfficeDeals),   'missing an office'],
+      [among(unassignedDeals), 'have commission with nobody assigned'],
+    ].filter(([n]) => n > 0).map(([n, what]) => `${n} ${what}`)
+    const owed = status === PAID
+      ? openLedger.filter(d => (payeeTotals[d.payee_id] ?? 0) > 0).reduce((s2, d) => s2 + d.remaining, 0)
+      : 0
+    const warn = [
+      flags.length ? `Of those, ${flags.join(', ')}.` : '',
+      owed > 0 ? `${fmt(owed)} in logged deductions has not been taken off this run yet.` : '',
+    ].filter(Boolean).join('\n')
+    if (!confirm(`Mark ${ids.length} deal${ids.length === 1 ? '' : 's'} as "${status}"?` + (warn ? `\n\n${warn}` : ''))) return
     setDeals(ds => ds.map(d => ids.includes(d.id) ? { ...d, status } : d))
     const results = await Promise.all(ids.map(id => updateDeal(id, { status })))
     const failed = results.filter(r => r?.error)
@@ -538,12 +610,12 @@ export default function Payroll() {
   // deduction, then the deal total. Manual adjustments and the grand total last.
   function exportCsv() {
     const rows = [['Deal', 'Baseline', 'Paid to', 'Role', '%', 'Commission $', 'Note']]
-    const repFilterId = effFilter || null
+    const scoped = filtered
     for (const d of shownDeals) {
       if (!isFinalized(d)) continue
       const a = dealAmounts(d)
       let payouts = dealPayouts(d, userById)
-      if (repFilterId) payouts = payouts.filter(p => p.id === repFilterId)   // rep-scoped export
+      if (scoped) payouts = payouts.filter(p => effSet.has(p.id))   // rep-scoped export
       if (!payouts.length) continue
       rows.push([d.deal_name || '—', a.baseline.toFixed(2), '', '', '', '', d.office || ''])
       for (const p of payouts) {
@@ -552,13 +624,13 @@ export default function Payroll() {
         const pctRatio = a.baseline > 0 ? p.amount / a.baseline : 0   // effective rate (reflects exclusions)
         rows.push(['', '', p.name, roleCell, asPct(pctRatio), p.amount.toFixed(2), ''])
       }
-      if (!repFilterId && a.deduction > 0)
+      if (!scoped && a.deduction > 0)
         rows.push(['', '', '', 'Deduction (already in takes)', '', (-a.deduction).toFixed(2), deductionLabel(d, a)])
-      const dealTotal = repFilterId ? payouts.reduce((s, p) => s + p.amount, 0) : a.totalCommission
+      const dealTotal = scoped ? payouts.reduce((s, p) => s + p.amount, 0) : a.totalCommission
       rows.push(['', '', '', 'Deal total', '', dealTotal.toFixed(2), ''])
     }
     // Manual payroll adjustments for this run.
-    const adjList = repFilterId ? runAdjustments.filter(x => x.payee_id === repFilterId) : runAdjustments
+    const adjList = scoped ? runAdjustments.filter(x => effSet.has(x.payee_id)) : runAdjustments
     if (adjList.length) {
       rows.push([])
       rows.push(['Manual adjustments', '', '', '', '', '', ''])
@@ -573,7 +645,9 @@ export default function Payroll() {
     for (const p of shownPayees) rows.push(['', '', p.name, '', '', p.total.toFixed(2), ''])
     rows.push([])
     rows.push(['TOTAL', '', '', '', '', summary.total.toFixed(2), ''])
-    downloadCsv(`payroll-${view === 'overdue' ? 'overdue' : view}${effFilter ? '-' + (users.find(u => u.id === effFilter)?.name || 'rep') : ''}.csv`, rows)
+    const who = effFilters.length === 1 ? (users.find(u => u.id === effFilters[0])?.name || 'rep')
+              : effFilters.length > 1 ? `${effFilters.length}-reps` : ''
+    downloadCsv(`payroll-${view === 'overdue' ? 'overdue' : view}${who ? '-' + who : ''}.csv`, rows)
   }
 
   // Copy one rep's pay statement to the clipboard — a styled table (text/html,
@@ -773,250 +847,262 @@ export default function Payroll() {
             </div>
           )}
 
-          {/* ── Outstanding deductions (migration 050) ──────────────────
-              What is owed but not yet taken. It sits above every run so a
-              deduction can never be forgotten, and NOTHING here happens on
-              its own — every dollar comes out of a click (per Keaton). */}
-          {view !== 'overdue' && openLedger.length > 0 && (
-            <div className="mb-3 rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid rgba(245,158,11,0.38)' }}>
-              <div className="flex items-center gap-3 flex-wrap px-4 py-3" style={{ background: 'rgba(245,158,11,0.07)', borderBottom: '1px solid rgba(245,158,11,0.22)' }}>
-                <AlertTriangle size={14} className="text-amber-300 flex-shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-[12.5px] font-bold text-amber-300">
-                    {owedTotals.count} outstanding deduction{owedTotals.count === 1 ? '' : 's'} · {fmt(owedTotals.owed)} owed
-                  </p>
-                  <p className="text-[11px] text-white/45">
-                    {openLedger.filter(d => (payeeTotals[d.payee_id] ?? 0) > 0).length} belong to reps getting paid on this run. They stay here until they are recovered or written off.
-                  </p>
+          {/* ── Run status (per Keaton's review) ────────────────────────
+              A pay run is a process — review, approve, pay, lock — and the
+              page used to show four flat tiles that never said which stage
+              you were at. "Deals 2/19" was a progress bar pretending to be a
+              statistic; this is the progress bar. */}
+          <div className="mb-3 rounded-xl p-4" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+            <div className="flex flex-wrap items-start gap-x-8 gap-y-4">
+              <div className="min-w-[190px]">
+                <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/35">
+                  {filtered ? 'Rep payout' : 'Total payout'}
+                </p>
+                <p className="text-[26px] font-extrabold text-teal mt-1 leading-none tabular-nums">{fmt(summary.total)}</p>
+                <p className="text-[11px] text-white/40 mt-1.5">
+                  {summary.adjTotal ? (
+                    <span className={summary.adjTotal < 0 ? 'text-red-400/90' : 'text-emerald-400/90'}>
+                      incl. {summary.adjTotal < 0 ? '−' : '+'}{fmt(Math.abs(summary.adjTotal))} adjustments ·{' '}
+                    </span>
+                  ) : null}
+                  {summary.payees} payee{summary.payees === 1 ? '' : 's'}
+                </p>
+              </div>
+
+              <div className="flex-1 min-w-[280px]">
+                <div className="flex items-center justify-between gap-3 mb-2">
+                  <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/35">Run progress</p>
+                  <span className="text-[11.5px] font-bold" style={{ color: runStage.color }}>{runStage.label}</span>
+                </div>
+                <div className="h-[7px] rounded-full overflow-hidden flex" style={{ background: '#262626' }}>
+                  <div style={{ width: `${runStage.pct}%`, background: runStage.color, transition: 'width .3s' }} />
+                </div>
+                <div className="flex items-center justify-between gap-3 flex-wrap mt-2 text-[11px]">
+                  <span className={runStage.verified >= runStage.total && runStage.total > 0 ? 'text-emerald-400/90' : 'text-white/40'}>
+                    {runStage.verified}/{runStage.total} verified
+                  </span>
+                  <span className={runStage.finalized >= runStage.total && runStage.total > 0 ? 'text-emerald-400/90' : 'text-white/40'}>
+                    {runStage.finalized}/{runStage.total} approved
+                  </span>
+                  <span className={runStage.paid >= runStage.finalized && runStage.finalized > 0 ? 'text-emerald-400/90' : 'text-amber-300'}>
+                    {runStage.paid}/{runStage.finalized} paid
+                  </span>
+                  <span className="text-white/40">
+                    {summary.remaining > 0 ? `${fmt(summary.remaining)} remaining` : runLock ? 'locked' : 'nothing outstanding'}
+                  </span>
                 </div>
               </div>
-
-              {openLedger.map(d => {
-                const pay  = payeeTotals[d.payee_id] ?? 0
-                const has  = pay > 0
-                const open = applyFor === d.id
-                const typed = open ? (parseFloat(applyAmt) || 0) : 0
-                const negative = open && wouldGoNegative(typed, pay)
-                return (
-                  <div key={d.id} className="px-4 py-2.5 border-t border-white/5" style={has ? undefined : { opacity: 0.68 }}>
-                    <div className="flex items-center gap-3 flex-wrap">
-                      <div className="w-[150px] flex-shrink-0 min-w-0">
-                        <p className="text-[12.5px] font-semibold text-white truncate">{userById[d.payee_id]?.name || 'Unknown rep'}</p>
-                        <p className="text-[10.5px] text-white/40">{has ? `on this run · ${fmt(pay)}` : 'no pay on this run'}</p>
-                      </div>
-                      <div className="w-[82px] flex-shrink-0 text-right">
-                        <span className="text-[14.5px] font-extrabold text-red-400 tabular-nums">−{fmt(d.remaining)}</span>
-                        {d.recovered > 0 && <p className="text-[10px] text-white/35 tabular-nums">of {fmt(d.owed)}</p>}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[12px] text-white/70 truncate">
-                          {dealById[d.deal_id]?.deal_name || 'No job'}
-                          {d.note ? <span className="text-white/45"> · {d.note}</span> : null}
-                        </p>
-                        <p className="text-[10.5px] text-white/35">
-                          logged {d.created_at ? format(new Date(d.created_at), 'MMM d') : '—'}
-                          {d.recovered > 0 ? ` · ${fmt(d.recovered)} already recovered` : ''}
-                        </p>
-                      </div>
-                      {isAdmin && !runLock && (
-                        open ? null : (
-                          <span className="flex items-center gap-1.5 flex-shrink-0">
-                            <button onClick={() => { setApplyFor(d.id); setApplyAmt(String(suggestedTake(d.remaining, pay) || d.remaining)) }}
-                              className="px-3 h-8 rounded-lg text-[11.5px] font-bold transition-colors"
-                              style={{ background: 'rgba(0,184,148,0.12)', border: '1px solid rgba(0,184,148,0.4)', color: '#00b894' }}>
-                              Take from this run
-                            </button>
-                            <button onClick={() => setDedModal({ edit: d })} title="Edit"
-                              className="p-1.5 rounded-lg text-white/30 hover:text-teal hover:bg-teal/10"><Pencil size={13} /></button>
-                            <button onClick={() => writeOff(d)} title="Write it off — stops it appearing, keeps the record"
-                              className="p-1.5 rounded-lg text-white/30 hover:text-amber-400 hover:bg-amber-500/10"><Ban size={13} /></button>
-                            {!d.recoveries.length && (
-                              <button onClick={() => deleteDebt(d)} title="Delete"
-                                className="p-1.5 rounded-lg text-white/25 hover:text-red-400 hover:bg-red-500/10"><Trash2 size={13} /></button>
-                            )}
-                          </span>
-                        )
-                      )}
-                    </div>
-
-                    {/* How much comes out — Keaton types the number (per Keaton). */}
-                    {open && (
-                      <div className="mt-2 ml-[150px] flex items-center gap-2 flex-wrap">
-                        <label htmlFor={`take-${d.id}`} className="text-[11px] text-white/45">Take</label>
-                        <input id={`take-${d.id}`} autoFocus type="number" step="0.01" min="0" value={applyAmt}
-                          onChange={e => setApplyAmt(e.target.value)}
-                          onKeyDown={e => { if (e.key === 'Enter') applyDeduction(d, applyAmt); if (e.key === 'Escape') setApplyFor('') }}
-                          className="w-24 h-8 px-2 rounded-lg text-[12.5px] text-white tabular-nums focus:outline-none"
-                          style={{ background: '#1a1a1a', border: '1px solid rgba(0,184,148,0.45)' }} />
-                        <span className="text-[11px] text-white/35">of {fmt(d.remaining)} owed</span>
-                        <button onClick={() => applyDeduction(d, applyAmt)}
-                          className="px-3 h-8 rounded-lg text-[11.5px] font-bold bg-teal text-dark">Take it</button>
-                        <button onClick={() => setApplyFor('')} className="px-2 h-8 rounded-lg text-[11.5px] text-white/45 hover:text-white">Cancel</button>
-                        {typed > 0 && typed < d.remaining && (
-                          <span className="text-[11px] text-amber-300">
-                            leaves {fmt(d.remaining - typed)} owed — carries to the next run
-                          </span>
-                        )}
-                        {negative && (
-                          <span className="text-[11px] text-red-400">more than the {fmt(pay)} they earn this run — their cheque would go negative</span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
             </div>
-          )}
 
-          {/* Summary */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mb-3">
-            <Card label={effFilter ? "Rep payout" : "Total payout"} value={fmt(summary.total)} color="#00b894"
-              sub={summary.adjTotal ? `incl. ${summary.adjTotal < 0 ? '−' : '+'}${fmt(Math.abs(summary.adjTotal))} adjustments` : `${viewLabel} · finalized`} />
-            <Card label="Remaining" value={fmt(summary.remaining)} color="#fdcb6e" sub="finalized, not yet paid" />
-            <Card label="Deals" value={`${summary.paidCount}/${summary.finalizedCount}`} sub="paid / finalized" />
-            <Card label="Payees" value={summary.payees} sub="people to pay" />
+            {/* Deals carrying this pay date that aren't finalized aren't being
+                paid, so they stay out of the total above. */}
+            {summary.pending > 0 && (
+              <p className="text-[11px] text-white/35 mt-3 pt-3 border-t border-white/5">
+                + {fmt(summary.pending)} across {summary.pendingCount} deal{summary.pendingCount === 1 ? '' : 's'} not yet finalized — excluded from the total until they reach “{APPROVED}”.
+              </p>
+            )}
           </div>
 
-          {/* Not-yet-finalized deals carry this pay date but aren't being paid
-              out yet, so they're excluded from the total above. */}
-          {summary.pending > 0 && (
-            <p className="text-[11px] text-white/40 mb-3 -mt-1">
-              + {fmt(summary.pending)} across {summary.pendingCount} deal{summary.pendingCount === 1 ? '' : 's'} not yet finalized — excluded from the total until they reach “{APPROVED}”.
-            </p>
-          )}
-
-          {/* Unassigned-commission warning — a share of the pool has no person
-              to pay. Assign the setter/closer before this run pays out. */}
-          {unassignedDeals.length > 0 && (
-            <div className="mb-3 rounded-xl p-3" style={{ background: '#f59e0b14', border: '1px solid #f59e0b55' }}>
-              <div className="flex items-center gap-2 mb-1">
-                <AlertTriangle size={14} style={{ color: '#f59e0b' }} />
-                <span className="text-[12px] font-semibold" style={{ color: '#f59e0b' }}>
-                  {unassignedDeals.length} deal{unassignedDeals.length === 1 ? '' : 's'} on this run {unassignedDeals.length === 1 ? 'has' : 'have'} commission with NO rep assigned
+          {/* ── Before you pay (per Keaton's review) ─────────────────────
+              This replaced THREE separate amber banners (unassigned
+              commission, missing office, not gold-checked) that had identical
+              construction and stacked into one wall of yellow, plus the
+              standalone deductions tray. One card, one line per problem,
+              each expanding to the same chips as before. A clean run says so
+              in a single green line rather than rendering nothing, which
+              reads as reassurance instead of absence. */}
+          {(checks.length > 0 || openLedger.length > 0) ? (
+            <div className="mb-3 rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid rgba(245,158,11,0.38)' }}>
+              <div className="flex items-center gap-3 flex-wrap px-4 py-2.5"
+                style={{ background: 'rgba(245,158,11,0.07)', borderBottom: '1px solid rgba(245,158,11,0.22)' }}>
+                <AlertTriangle size={14} className="text-amber-300 flex-shrink-0" />
+                <span className="text-[12.5px] font-bold text-amber-300">
+                  Before you pay — {checkCount} thing{checkCount === 1 ? '' : 's'} to look at
                 </span>
+                <span className="flex-1" />
+                <span className="text-[11px] text-white/35">none of these block payment</span>
               </div>
-              <p className="text-[11px] text-white/40 mb-2">
-                The setter/closer share exists but there is nobody to pay it to — it will not appear on any pay statement. Click a deal and assign the missing person.
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {unassignedDeals.map(d => (
-                  <button key={d.id} onClick={() => openEdit(d)}
-                    className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-white/80 hover:text-white transition-colors"
-                    style={{ background: '#1e1e1e', border: '1px solid #f59e0b40' }}>
-                    {d.deal_name}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
 
-          {/* Missing-office warning — these deals likely have the wrong override
-              rate until an office is set. Click one to fix it inline. */}
-          {noOfficeDeals.length > 0 && (
-            <div className="mb-3 rounded-xl p-3" style={{ background: '#f59e0b14', border: '1px solid #f59e0b55' }}>
-              <div className="flex items-center gap-2 mb-1">
-                <AlertTriangle size={14} style={{ color: '#f59e0b' }} />
-                <span className="text-[12px] font-semibold" style={{ color: '#f59e0b' }}>
-                  {noOfficeDeals.length} deal{noOfficeDeals.length === 1 ? '' : 's'} on this run {noOfficeDeals.length === 1 ? 'has' : 'have'} no office — override rates may be wrong
-                </span>
-              </div>
-              <p className="text-[11px] text-white/40 mb-2">
-                Set the office to apply the correct director/VP rate (Tucson 3.75%, otherwise 5%). Click a deal to fix it.
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {noOfficeDeals.map(d => (
-                  <button key={d.id} onClick={() => openEdit(d)}
-                    className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-white/80 hover:text-white transition-colors"
-                    style={{ background: '#1e1e1e', border: '1px solid #f59e0b40' }}>
-                    {d.deal_name}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+              {/* Deal-level problems */}
+              {checks.map(c => (
+                <div key={c.key} className="border-t border-white/5">
+                  <div className="flex items-center gap-3 px-4 py-2.5">
+                    <span className="w-[76px] flex-shrink-0 text-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide"
+                      style={{ color: '#fcd34d', background: 'rgba(245,158,11,0.13)', border: '1px solid rgba(245,158,11,0.35)' }}>
+                      {c.deals.length} deal{c.deals.length === 1 ? '' : 's'}
+                    </span>
+                    <span className="flex-1 min-w-0 text-[12.5px] text-white/75">{c.label}</span>
+                    <button onClick={() => toggleCheck(c.key)}
+                      className="px-3 h-8 rounded-lg text-[11.5px] font-bold text-white/55 hover:text-white transition-colors flex-shrink-0"
+                      style={{ border: '1px solid #333' }}>
+                      {openChecks.has(c.key) ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                  {openChecks.has(c.key) && (
+                    <div className="px-4 pb-3 -mt-0.5">
+                      <p className="text-[11px] text-white/35 mb-2">{c.hint}</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {c.deals.map(d => (
+                          <button key={d.id} onClick={() => openEdit(d)}
+                            className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-white/80 hover:text-white transition-colors"
+                            style={{ background: '#171717', border: '1px solid #f59e0b40' }}>
+                            {d.deal_name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
 
-          {/* Pre-payout safety net: every deal should carry the gold check
-              before money goes out. Verify from Deals → Needs review, or click
-              a deal here to open it. */}
-          {runUnverified.length > 0 && (
-            <div className="mb-3 rounded-xl p-3" style={{ background: '#fbbf2414', border: '1px solid #fbbf2455' }}>
-              <div className="flex items-center gap-2 mb-1">
-                <BadgeCheck size={14} style={{ color: '#fbbf24' }} />
-                <span className="text-[12px] font-semibold" style={{ color: '#fbbf24' }}>
-                  {runUnverified.length} deal{runUnverified.length === 1 ? '' : 's'} on this run {runUnverified.length === 1 ? 'isn\u2019t' : 'aren\u2019t'} gold-checked yet
-                </span>
-              </div>
-              <p className="text-[11px] text-white/40 mb-2">
-                Verify commissions in Deals → Needs review, or click a deal to review it here.
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {runUnverified.map(d => (
-                  <button key={d.id} onClick={() => openEdit(d)}
-                    className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-white/80 hover:text-white transition-colors"
-                    style={{ background: '#1e1e1e', border: '1px solid #fbbf2440' }}>
-                    {d.deal_name}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+              {/* Deductions owed (migration 050) — now a row of this card
+                  rather than its own block above the money. */}
+              {openLedger.length > 0 && (
+                <div className="border-t border-white/5">
+                  <div className="flex items-center gap-3 px-4 py-2.5">
+                    <span className="w-[76px] flex-shrink-0 text-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide tabular-nums"
+                      style={{ color: '#fcd34d', background: 'rgba(245,158,11,0.13)', border: '1px solid rgba(245,158,11,0.35)' }}>
+                      {fmt(owedTotals.owed)}
+                    </span>
+                    <span className="flex-1 min-w-0 text-[12.5px] text-white/75">
+                      in deductions owed — {onThisRun} of {owedTotals.count} {onThisRun === 1 ? 'is a rep' : 'are reps'} getting paid on this run
+                    </span>
+                    <button onClick={() => toggleCheck('deductions')}
+                      className={`px-3 h-8 rounded-lg text-[11.5px] font-bold transition-colors flex-shrink-0 ${openChecks.has('deductions') ? 'text-teal' : 'text-white/55 hover:text-white'}`}
+                      style={{ border: `1px solid ${openChecks.has('deductions') ? 'rgba(0,184,148,0.4)' : '#333'}` }}>
+                      {openChecks.has('deductions') ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
 
-          {/* Filter by rep */}
-          {payees.length > 0 && (
-            <div className="flex items-center gap-2 mb-3 flex-wrap">
-              <span className="text-[11px] text-white/30">Filter by rep:</span>
-              <select value={effFilter} onChange={e => setRepFilter(e.target.value)}
-                className="px-3 py-1.5 rounded-lg text-[12px] font-semibold text-white focus:outline-none"
-                style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-                <option value="">All reps</option>
-                {payees.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-              {effFilter && (
-                <button onClick={() => setRepFilter('')} className="text-[11px] text-white/40 hover:text-white transition-colors">Clear</button>
+                  {openChecks.has('deductions') && openLedger.map(d => {
+                    const pay  = payeeTotals[d.payee_id] ?? 0
+                    const has  = pay > 0
+                    const open = applyFor === d.id
+                    const typed = open ? (parseFloat(applyAmt) || 0) : 0
+                    const negative = open && wouldGoNegative(typed, pay)
+                    return (
+                      <div key={d.id} className="px-4 py-2.5 border-t border-white/5" style={has ? undefined : { opacity: 0.68 }}>
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <div className="w-[150px] flex-shrink-0 min-w-0">
+                            <p className="text-[12.5px] font-semibold text-white truncate">{userById[d.payee_id]?.name || 'Unknown rep'}</p>
+                            <p className="text-[10.5px] text-white/40">{has ? `on this run · ${fmt(pay)}` : 'no pay on this run'}</p>
+                          </div>
+                          <div className="w-[82px] flex-shrink-0 text-right">
+                            <span className="text-[14.5px] font-extrabold text-red-400 tabular-nums">−{fmt(d.remaining)}</span>
+                            {d.recovered > 0 && <p className="text-[10px] text-white/35 tabular-nums">of {fmt(d.owed)}</p>}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[12px] text-white/70 truncate">
+                              {dealById[d.deal_id]?.deal_name || 'No job'}
+                              {d.note ? <span className="text-white/45"> · {d.note}</span> : null}
+                            </p>
+                            <p className="text-[10.5px] text-white/35">
+                              logged {d.created_at ? format(new Date(d.created_at), 'MMM d') : '—'}
+                              {d.recovered > 0 ? ` · ${fmt(d.recovered)} already recovered` : ''}
+                            </p>
+                          </div>
+                          {isAdmin && !runLock && !open && (
+                            <span className="flex items-center gap-1.5 flex-shrink-0">
+                              <button onClick={() => { setApplyFor(d.id); setApplyAmt(String(suggestedTake(d.remaining, pay) || d.remaining)) }}
+                                className="px-3 h-8 rounded-lg text-[11.5px] font-bold transition-colors"
+                                style={{ background: 'rgba(0,184,148,0.12)', border: '1px solid rgba(0,184,148,0.4)', color: '#00b894' }}>
+                                Take from this run
+                              </button>
+                              <button onClick={() => setDedModal({ edit: d })} title="Edit"
+                                className="p-1.5 rounded-lg text-white/30 hover:text-teal hover:bg-teal/10"><Pencil size={13} /></button>
+                              <button onClick={() => writeOff(d)} title="Write it off — stops it appearing, keeps the record"
+                                className="p-1.5 rounded-lg text-white/30 hover:text-amber-400 hover:bg-amber-500/10"><Ban size={13} /></button>
+                              {!d.recoveries.length && (
+                                <button onClick={() => deleteDebt(d)} title="Delete"
+                                  className="p-1.5 rounded-lg text-white/25 hover:text-red-400 hover:bg-red-500/10"><Trash2 size={13} /></button>
+                              )}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* How much comes out — Keaton types the number. */}
+                        {open && (
+                          <div className="mt-2 ml-[150px] flex items-center gap-2 flex-wrap">
+                            <label htmlFor={`take-${d.id}`} className="text-[11px] text-white/45">Take</label>
+                            <input id={`take-${d.id}`} autoFocus type="number" step="0.01" min="0" value={applyAmt}
+                              onChange={e => setApplyAmt(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter') applyDeduction(d, applyAmt); if (e.key === 'Escape') setApplyFor('') }}
+                              className="w-24 h-8 px-2 rounded-lg text-[12.5px] text-white tabular-nums focus:outline-none"
+                              style={{ background: '#1a1a1a', border: '1px solid rgba(0,184,148,0.45)' }} />
+                            <span className="text-[11px] text-white/35">of {fmt(d.remaining)} owed</span>
+                            <button onClick={() => applyDeduction(d, applyAmt)}
+                              className="px-3 h-8 rounded-lg text-[11.5px] font-bold bg-teal text-dark">Take it</button>
+                            <button onClick={() => setApplyFor('')} className="px-2 h-8 rounded-lg text-[11.5px] text-white/45 hover:text-white">Cancel</button>
+                            {typed > 0 && typed < d.remaining && (
+                              <span className="text-[11px] text-amber-300">leaves {fmt(d.remaining - typed)} owed — carries to the next run</span>
+                            )}
+                            {negative && (
+                              <span className="text-[11px] text-red-400">more than the {fmt(pay)} they earn this run — their cheque would go negative</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
               )}
             </div>
-          )}
-
-          {/* Bulk actions */}
-          {view !== 'overdue' && shownDeals.length > 0 && (
-            <div className="flex items-center gap-2 mb-4 flex-wrap">
-              {canApprove && (
-                <button onClick={() => markAll(APPROVED)}
-                  className="px-3 py-2 rounded-lg text-[12px] font-semibold text-white/80 hover:text-white transition-colors"
-                  style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-                  Approve all → {APPROVED}
-                </button>
-              )}
-              {canPay && (
-                <button onClick={() => markAll(PAID)}
-                  className="px-3 py-2 rounded-lg text-[12px] font-bold text-dark transition-colors"
-                  style={{ background: '#00b894' }}>
-                  Mark all paid
-                </button>
-              )}
-              {isAdmin && !runLock && (
-                <button onClick={lockRun} title="Freeze this run — its deals and adjustments become read-only until unlocked"
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold text-white/70 hover:text-white transition-colors ml-auto"
-                  style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-                  <Lock size={13} /> Lock run
-                </button>
-              )}
+          ) : shownDeals.length > 0 && (
+            <div className="mb-3 rounded-xl px-4 py-2.5 flex items-center gap-2.5"
+              style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.28)' }}>
+              <CheckCircle2 size={14} className="text-emerald-400 flex-shrink-0" />
+              <span className="text-[12.5px] text-emerald-300/90">
+                Everything checks out — all deals verified, offices set, every share assigned, nothing owed.
+              </span>
             </div>
           )}
 
-          {/* Payee totals — compact summary of each person's lump sum for the run */}
+          {/* Who gets paid — the run's workspace (per Keaton's review).
+              Everything you actually DO lives in here (copy a statement, add
+              an adjustment, take a deduction), so the rep filter and the bulk
+              actions moved into its header instead of sitting in two more
+              strips above it. */}
           {shownPayees.length > 0 && (
             <div className="mb-4 rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-              <button onClick={() => setShowPayees(s => !s)}
-                className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-white/[0.02] transition-colors">
-                <span className="text-[11px] uppercase tracking-wider text-white/40 font-semibold">
-                  Payee totals · {shownPayees.length} {shownPayees.length === 1 ? 'person' : 'people'}
-                </span>
-                <span className="flex items-center gap-2">
-                  <span className="text-[13px] font-bold text-teal">{fmt(summary.total)}</span>
+              <div className="flex items-center gap-2 flex-wrap px-4 py-2.5 border-b border-white/5">
+                <button onClick={() => setShowPayees(s => !s)}
+                  className="flex items-center gap-2 text-left hover:opacity-80 transition-opacity">
                   <ChevronDown size={14} className={`text-white/30 transition-transform ${showPayees ? 'rotate-180' : ''}`} />
-                </span>
-              </button>
+                  <span className="text-[11px] uppercase tracking-wider text-white/40 font-semibold">
+                    Who gets paid · {shownPayees.length} {shownPayees.length === 1 ? 'person' : 'people'}
+                  </span>
+                  <span className="text-[13px] font-bold text-teal">{fmt(summary.total)}</span>
+                </button>
+                <span className="flex-1" />
+                {payees.length > 1 && (
+                  <RepMultiSelect users={payees} value={effFilters} onChange={setRepFilters} minW="130px" />
+                )}
+                {view !== 'overdue' && shownDeals.length > 0 && (
+                  <>
+                    {canApprove && (
+                      <button onClick={() => markAll(APPROVED)}
+                        className="px-3 py-1.5 rounded-lg text-[11.5px] font-semibold text-white/70 hover:text-white transition-colors"
+                        style={{ background: '#1a1a1a', border: '1px solid #2e2e2e' }}>
+                        Approve all
+                      </button>
+                    )}
+                    {canPay && (
+                      <button onClick={() => markAll(PAID)}
+                        className="px-3 py-1.5 rounded-lg text-[11.5px] font-bold text-dark transition-colors"
+                        style={{ background: '#00b894' }}>
+                        Mark all paid
+                      </button>
+                    )}
+                    {isAdmin && !runLock && (
+                      <button onClick={lockRun} title="Freeze this run — its deals and adjustments become read-only until unlocked"
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11.5px] font-semibold text-white/60 hover:text-white transition-colors"
+                        style={{ background: '#1a1a1a', border: '1px solid #2e2e2e' }}>
+                        <Lock size={12} /> Lock run
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
               {showPayees && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 px-4 pb-3 pt-1 items-start">
                   {shownPayees.map(p => (
@@ -1238,7 +1324,7 @@ export default function Payroll() {
             })}
             {shownDeals.length === 0 && (
               <div className="px-4 py-6 text-white/30 text-sm text-center">
-                {effFilter ? 'No deals for this rep in this run.' : 'No deals in this run.'}
+                {filtered ? 'No deals for the selected rep(s) in this run.' : 'No deals in this run.'}
               </div>
             )}
           </div>
