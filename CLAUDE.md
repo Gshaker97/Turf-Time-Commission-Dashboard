@@ -1033,8 +1033,11 @@ missing concept is a **balance owed**, not another adjustment. It all lives in
   a rep who left never has another run, so it would nag on every run forever.
   Stamped, never deleted. A debt with recoveries can't be deleted at all (it
   would erase money already paid); the UI says to write it off instead.
-- Surfaces: the Payroll run's amber **outstanding tray** above the summary
-  tiles; the **Deductions tab**'s "Logged after payout" list (Outstanding/All,
+- Surfaces: a **"Log a deduction" button in the Payroll page header**, always
+  there on the Pay run tab for admins (per Keaton) — the tray's copy was
+  removed because the tray only renders once something is owed, so logging the
+  FIRST one meant switching tabs; the run's amber **outstanding tray** above
+  the summary tiles; the **Deductions tab**'s "Logged after payout" list (Outstanding/All,
   with per-instalment history) — which sits ABOVE the older read-only report of
   deductions already priced into deals, a different thing; and the rep's own
   **Commissions page** card ("$X in deductions still to come out"), because a
