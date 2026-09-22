@@ -993,6 +993,38 @@ deals sink to the bottom. The sheet carries no install TIME, so within a day
 the calendar's order can't be reproduced. The per-payee statement copy
 (`copyPayee`) keeps its ROLE grouping — that's a pay stub, not a job list.
 
+**Payroll page layout (rebuilt from a design review Keaton approved).** The
+page had drifted into FOURTEEN stacked blocks with the actual work at 13 and
+14: three separate amber banners of identical construction (unassigned
+commission / missing office / not gold-checked), plus the deductions tray, all
+sat between the money and the payee list. Now:
+1. **Run status card** — total payout + a real **progress bar** (`runStage`:
+   total/verified/finalized/paid, %, a stage label `In review` → `Approved —
+   ready to pay` → `Paid — ready to lock` → `Locked`). It replaced four flat
+   tiles, one of which ("Deals 2/19") was a progress bar pretending to be a
+   statistic. The not-yet-finalized line lives inside it.
+2. **"Before you pay"** — ONE amber card, one row per problem, each expanding
+   to the same deal chips as before (`checks` = the three deal-level lists,
+   filtered to non-empty; the deduction ledger is a fourth row). A CLEAN run
+   renders a single green "Everything checks out" line instead of nothing,
+   which reads as reassurance rather than absence. **Do not re-add a
+   standalone banner here** — add a row to `checks` instead.
+3. **"Who gets paid"** — the payee panel, which is the workspace (statement
+   copy, adjustments, deduction takes). The rep filter and the bulk actions
+   (Approve all / Mark all paid / Lock run) moved INTO its header rather than
+   occupying two more strips above it.
+4. **Deals in this run** — unchanged, below; it is the audit trail.
+The rep filter is now `RepMultiSelect` (searchable, MULTI-select — `repFilters`
+is an array pruned to people on the run, `effFilters`/`effSet`/`filtered`),
+matching the Deals page instead of a bare `<select>`.
+**`markAll` names the outstanding problems in its confirm** — "Mark 19 deals as
+Paid? Of those, 3 not gold-checked, 2 missing an office. $810 in logged
+deductions has not been taken off this run yet." The warnings are a scroll away
+and this is money going out, so the confirm repeats them.
+Deliberately KEPT (all judged right in the review): the DB-guarded lock system,
+install-date ordering of run deals, inline deal expansion, and the role-grouped
+pay statement.
+
 **Deductions owed — the ledger (migration 050, `src/utils/deductions.js`).**
 The case: the office emails a deduction for a job that ALREADY PAID OUT. A
 payroll adjustment forces a pay date on the spot, and when the rep has no pay
@@ -1036,8 +1068,9 @@ missing concept is a **balance owed**, not another adjustment. It all lives in
 - Surfaces: a **"Log a deduction" button in the Payroll page header**, always
   there on the Pay run tab for admins (per Keaton) — the tray's copy was
   removed because the tray only renders once something is owed, so logging the
-  FIRST one meant switching tabs; the run's amber **outstanding tray** above
-  the summary tiles; the **Deductions tab**'s "Logged after payout" list (Outstanding/All,
+  FIRST one meant switching tabs; a **row of the run's "Before you pay" card**
+  (see the Payroll layout note below) that expands to the per-rep take boxes;
+  the **Deductions tab**'s "Logged after payout" list (Outstanding/All,
   with per-instalment history) — which sits ABOVE the older read-only report of
   deductions already priced into deals, a different thing; and the rep's own
   **Commissions page** card ("$X in deductions still to come out"), because a
