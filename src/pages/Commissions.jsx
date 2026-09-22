@@ -8,6 +8,7 @@ import { useSettings } from '../contexts/SettingsContext'
 import { dealAmounts, getUserCommission, fmt, activeDeals, deductionLabel } from '../utils/commission'
 import { getPresetRange, presetLabel } from '../utils/dateRanges'
 import { onClickUnlessSelecting } from '../utils/selection'
+import { buildLedger, openDebts, recoveryLine } from '../utils/deductions'
 import DateRangeFilter from '../components/DateRangeFilter'
 
 // LOCAL dates, never UTC — .toISOString() rolls to tomorrow at 5pm Arizona.
@@ -374,6 +375,19 @@ export default function Commissions() {
     return { paydays, overdue }
   }, [allMine, id, adjustments, dataStartDate])
 
+  // ── What this person still OWES (the deduction ledger, migration 050) ──
+  // Per Keaton, a rep can see their own. The page is already siloed by
+  // identity, and knowing a deduction is coming beats being surprised by a
+  // short cheque.
+  const ledger     = useMemo(() => buildLedger(adjustments), [adjustments])
+  const ledgerById = useMemo(() => Object.fromEntries(ledger.map(d => [d.id, d])), [ledger])
+  const myDebts    = useMemo(() => openDebts(ledger).filter(d => d.payee_id === id), [ledger, id])
+  const myOwed     = useMemo(() => myDebts.reduce((s, d) => s + d.remaining, 0), [myDebts])
+  const dealName   = useMemo(() => {
+    const m = Object.fromEntries(allDeals.map(d => [d.id, d.deal_name]))
+    return (dealId) => (dealId ? m[dealId] : null)
+  }, [allDeals])
+
   const payIdx = Math.min(paydayIdx, Math.max(paydays.length - 1, 0))
   const selPayday = paydays[payIdx] || null
   useEffect(() => { setPaydayIdx(0) }, [id])
@@ -580,23 +594,60 @@ export default function Commissions() {
               ) : (
                 <>
                   {selPayday.deals.map(d => <DealRow key={d.id} deal={d} id={id} statusColor={statusColor} />)}
-                  {selPayday.adjustments.map(adj => (
+                  {selPayday.adjustments.map(adj => {
+                    const debt = adj.parent_id ? ledgerById[adj.parent_id] : null
+                    const line = debt ? recoveryLine(adj, debt) : null
+                    return (
                     <div key={adj.id} className="flex items-center justify-between px-4 py-3 border-b border-white/5 last:border-0">
                       <div className="min-w-0 flex-1">
-                        <p className="text-[13px] font-semibold text-white/90">Manual adjustment</p>
-                        <p className="text-[11px] text-white/40 mt-0.5">{adj.note || 'Payroll adjustment'}</p>
+                        <p className="text-[13px] font-semibold text-white/90">
+                          {debt ? (dealName(adj.deal_id) || 'Deduction') : 'Manual adjustment'}
+                        </p>
+                        <p className="text-[11px] text-white/40 mt-0.5">{adj.note || (debt ? 'Deduction' : 'Payroll adjustment')}</p>
+                        {line?.detail && <p className="text-[11px] text-amber-300/80 mt-0.5">{line.detail}</p>}
                       </div>
                       <span className={`text-[14px] font-bold whitespace-nowrap ${num(adj.amount) < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
                         {num(adj.amount) < 0 ? '−' : '+'}{fmt(Math.abs(num(adj.amount)))}
                       </span>
                     </div>
-                  ))}
+                  )})}
                   <div className="flex items-center justify-between px-4 py-3 bg-white/[0.02]">
                     <span className="text-[12px] font-semibold text-white/50">Total this paycheck</span>
                     <span className="text-[15px] font-bold text-teal">{fmt(selPayday.total)}</span>
                   </div>
                 </>
               )}
+            </div>
+          )}
+
+          {/* ── What you still owe (deduction ledger, migration 050) ──────
+              Shown to the rep themselves (per Keaton). A deduction logged
+              against a job that already paid out comes off a FUTURE cheque,
+              so seeing it here beats being surprised by a short one. */}
+          {myDebts.length > 0 && (
+            <div className="mb-3 rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid rgba(245,158,11,0.32)' }}>
+              <div className="flex items-center gap-2.5 px-4 py-2.5" style={{ background: 'rgba(245,158,11,0.06)', borderBottom: '1px solid rgba(245,158,11,0.2)' }}>
+                <AlertTriangle size={13} className="text-amber-300 flex-shrink-0" />
+                <p className="text-[12px] font-bold text-amber-300 flex-1 min-w-0">
+                  {fmt(myOwed)} in deductions still to come out
+                </p>
+                <span className="text-[11px] text-white/35">{myDebts.length} item{myDebts.length === 1 ? '' : 's'}</span>
+              </div>
+              {myDebts.map(d => (
+                <div key={d.id} className="flex items-start justify-between gap-3 px-4 py-2.5 border-b border-white/5 last:border-0">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[12.5px] text-white/80 truncate">{dealName(d.deal_id) || 'No job'}</p>
+                    {d.note && <p className="text-[11px] text-white/40 mt-0.5 truncate">{d.note}</p>}
+                    {d.recovered > 0 && (
+                      <p className="text-[11px] text-white/35 mt-0.5 tabular-nums">{fmt(d.recovered)} of {fmt(d.owed)} already taken</p>
+                    )}
+                  </div>
+                  <span className="text-[13px] font-bold text-red-400 whitespace-nowrap tabular-nums">{fmt(d.remaining)}</span>
+                </div>
+              ))}
+              <p className="px-4 py-2 text-[11px] text-white/35" style={{ background: 'rgba(255,255,255,0.02)' }}>
+                It comes off a future paycheck — the run it lands on is set by leadership, not automatically.
+              </p>
             </div>
           )}
 

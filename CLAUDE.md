@@ -270,7 +270,9 @@ setup + deploy steps.
   the org chart); `046` adds `profiles.team_name` (a team's official name;
   see "What teams exist"); `049` adds `leads.ignored` (take a duplicate
   appointment out of every count without deleting it — see the Leads
-  section); `047` adds `competitions.excluded_ids` (jsonb
+  section); `050` makes `payroll_adjustments.pay_date` NULLABLE and adds
+  `deal_id` / `parent_id` / `written_off_*` — the DEDUCTION LEDGER (see
+  "Deductions owed" below); `047` adds `competitions.excluded_ids` (jsonb
   array of profile ids) for the **Team Average (per rep)** competition type
   `team_avg` — entrants are TEAM HEADS (any `headIdSet` head, picked in the
   modal as "Teams competing"), score = the team's metric (deals or baseline
@@ -990,6 +992,54 @@ Keaton); same-day ties fall back to sale date then name, no-install-date
 deals sink to the bottom. The sheet carries no install TIME, so within a day
 the calendar's order can't be reproduced. The per-payee statement copy
 (`copyPayee`) keeps its ROLE grouping — that's a pay stub, not a job list.
+
+**Deductions owed — the ledger (migration 050, `src/utils/deductions.js`).**
+The case: the office emails a deduction for a job that ALREADY PAID OUT. A
+payroll adjustment forces a pay date on the spot, and when the rep has no pay
+that week there is no right answer, so it fell back on Keaton's memory. The
+missing concept is a **balance owed**, not another adjustment. It all lives in
+`payroll_adjustments`:
+- **`pay_date` NULL = the DEBT.** What is owed, no run attached. It shows on
+  every run until recovered or written off.
+- **`pay_date` set + `parent_id` = a RECOVERY** of that debt. A recovery is an
+  ordinary dated adjustment, which is exactly what Payroll already sums — so
+  run totals, payee rows, pay statements, the CSV export and the lock guard
+  needed NO changes. Migration 034's guard already tests `pay_date IS NOT
+  NULL`, so a debt row passes through it and **no trigger changed**.
+- **`pay_date` set, no parent** = the plain +/− that existed before. Untouched.
+- **NEVER write to `deals.deduction_amount` for this.** That column feeds
+  `dealAmounts()`, so editing it on a paid job silently rewrites that deal's
+  commission on every page and in the backup spreadsheet — and the lock trigger
+  rejects it anyway. A debt REFERENCES its deal (`deal_id`, nullable: a tool or
+  an advance has no job).
+- `buildLedger(adjustments)` is the ONE rule — returns each debt with `owed` /
+  `recovered` / `remaining` / `recoveries` / `status` (`open` | `partial` |
+  `settled` | `written_off`), in POSITIVE dollars though the rows stay signed.
+  Over-collection clamps to settled, never to "we owe them" (that needs a
+  human, not arithmetic). Sorted as a worklist: anything owed above anything
+  closed.
+- **Nothing is ever taken automatically and KEATON TYPES THE AMOUNT** (both
+  per Keaton). The Payroll tray's Apply opens a number box prefilled with
+  `suggestedTake` = min(remaining, their pay this run) — a starting point, not
+  a cap; typing more warns (`wouldGoNegative`) and still allows it. A part
+  payment leaves the rest outstanding and it carries to the next run by itself.
+- **A partial take shows BOTH numbers on the cheque** (per Keaton):
+  `recoveryLine(recovery, debt)` renders "partial — $310.00 of $640.00,
+  $330.00 still owed" on the payee row, the pay statement (plain text AND the
+  HTML email copy) and the rep's Commissions page. Statement items are tagged
+  `grp: 'deal' | 'adj'` at push time — never inferred from the deal name, which
+  would misfile a recovery whose job the rep is also being paid for that run.
+- **Write-off** (`written_off_at`) closes a debt that will never be collected —
+  a rep who left never has another run, so it would nag on every run forever.
+  Stamped, never deleted. A debt with recoveries can't be deleted at all (it
+  would erase money already paid); the UI says to write it off instead.
+- Surfaces: the Payroll run's amber **outstanding tray** above the summary
+  tiles; the **Deductions tab**'s "Logged after payout" list (Outstanding/All,
+  with per-instalment history) — which sits ABOVE the older read-only report of
+  deductions already priced into deals, a different thing; and the rep's own
+  **Commissions page** card ("$X in deductions still to come out"), because a
+  rep seeing it beats being surprised by a short cheque (per Keaton). Admins
+  write; a rep only ever sees their own.
 
 **Spreadsheet sync (`scripts/ScheduleSync.gs`, entry `schSync`).** One Apps
 Script trigger (every minute) drives everything: the **Jobs** tab (ArcSite
