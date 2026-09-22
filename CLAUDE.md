@@ -998,11 +998,15 @@ page had drifted into FOURTEEN stacked blocks with the actual work at 13 and
 14: three separate amber banners of identical construction (unassigned
 commission / missing office / not gold-checked), plus the deductions tray, all
 sat between the money and the payee list. Now:
-1. **Run status card** — total payout + a real **progress bar** (`runStage`:
-   total/verified/finalized/paid, %, a stage label `In review` → `Approved —
-   ready to pay` → `Paid — ready to lock` → `Locked`). It replaced four flat
-   tiles, one of which ("Deals 2/19") was a progress bar pretending to be a
-   statistic. The not-yet-finalized line lives inside it.
+1. **Run status card** — total payout + a **three-segment progress bar**
+   (`runStage.segments`: verified ÷ total, approved ÷ total, paid ÷ finalized)
+   plus a stage label `In review` → `Approved — ready to pay` → `Paid — ready
+   to lock` → `Locked`. It replaced four flat tiles, one of which
+   ("Deals 2/19") was a progress bar pretending to be a statistic. **One bar
+   tied to paid ÷ finalized was wrong** — it read 0% on a run that was fully
+   verified AND fully approved, which is where most of the work is; it only
+   moved at the last step. One segment per stage, aligned with the three
+   counts printed beneath it. The not-yet-finalized line lives inside it.
 2. **"Before you pay"** — ONE amber card, one row per problem, each expanding
    to the same deal chips as before (`checks` = the three deal-level lists,
    filtered to non-empty; the deduction ledger is a fourth row). A CLEAN run

@@ -447,7 +447,16 @@ export default function Payroll() {
     const verified  = shownDeals.filter(d => d.commission_verified === true).length
     const finalized = shownDeals.filter(isFinalized).length
     const paid      = shownDeals.filter(d => d.status === PAID).length
-    const pct = runLock ? 100 : finalized > 0 ? Math.round((paid / finalized) * 100) : 0
+    // THREE SEGMENTS, one per stage, each filling against the count printed
+    // beneath it. A single bar tied to paid/finalized read 0% on a run that
+    // was fully verified and fully approved, which is where most of the work
+    // actually is — it only moved at the very last step.
+    const frac = (n, d) => (d > 0 ? Math.min(1, n / d) : 0)
+    const segments = [
+      { key: 'verified',  fill: runLock ? 1 : frac(verified, total) },
+      { key: 'approved',  fill: runLock ? 1 : frac(finalized, total) },
+      { key: 'paid',      fill: runLock ? 1 : frac(paid, finalized) },
+    ]
     const label =
       runLock                          ? 'Locked'
       : total === 0                    ? 'Nothing on this run'
@@ -457,7 +466,7 @@ export default function Payroll() {
                                        : 'In review'
     const color = runLock ? '#00b894' : (finalized > 0 && paid >= finalized) ? '#00b894'
                 : finalized >= total && total > 0 ? '#fbbf24' : '#fdcb6e'
-    return { total, verified, finalized, paid, pct, label, color }
+    return { total, verified, finalized, paid, segments, label, color }
   }, [shownDeals, runLock])
 
   // The three deal-level problems, as one list. They used to be three amber
@@ -874,8 +883,19 @@ export default function Payroll() {
                   <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/35">Run progress</p>
                   <span className="text-[11.5px] font-bold" style={{ color: runStage.color }}>{runStage.label}</span>
                 </div>
-                <div className="h-[7px] rounded-full overflow-hidden flex" style={{ background: '#262626' }}>
-                  <div style={{ width: `${runStage.pct}%`, background: runStage.color, transition: 'width .3s' }} />
+                {/* One segment per stage, aligned with the three counts
+                    below it, so a fully-verified fully-approved run doesn't
+                    read as zero progress. */}
+                <div className="flex gap-1">
+                  {runStage.segments.map(seg => (
+                    <div key={seg.key} className="flex-1 h-[7px] rounded-full overflow-hidden" style={{ background: '#262626' }}>
+                      <div style={{
+                        width: `${Math.round(seg.fill * 100)}%`, height: '100%',
+                        background: seg.fill >= 1 ? '#00b894' : runStage.color,
+                        transition: 'width .3s',
+                      }} />
+                    </div>
+                  ))}
                 </div>
                 <div className="flex items-center justify-between gap-3 flex-wrap mt-2 text-[11px]">
                   <span className={runStage.verified >= runStage.total && runStage.total > 0 ? 'text-emerald-400/90' : 'text-white/40'}>
