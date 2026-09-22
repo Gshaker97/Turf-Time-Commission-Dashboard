@@ -107,6 +107,27 @@ function dealPayouts(d, userById = null) {
 }
 
 // Ratio (e.g. 0.2 or 0.0375) → "20%" / "3.75%".
+// ── Run-list column widths ─────────────────────────────────────────────
+// Shared by the heading row and every deal row so they can't drift apart.
+// Deal/Setter/Closer GROW to share whatever width is spare — the deal name
+// used to be the only flexible column, so on a wide screen every bit of slack
+// piled into it and the rest of the table looked starved. Status is sized to
+// the LONGEST configured status label (they're admin-editable, so "Pay
+// Finalized" is not the worst case) instead of a fixed width that truncated.
+const COL = {
+  deal:   { flex: '2 1 0%', minWidth: 168 },
+  person: { flex: '1 1 0%', minWidth: 96 },
+  status: { flex: '0 0 auto' },   // width is measured per run — see statusColW
+}
+
+// Enough room for the longest status label plus the gold verified check.
+// ~6.4px per character at 11px in the app's system stack; clamped so one
+// absurd label can't eat the table.
+function statusWidth(labels = []) {
+  const longest = labels.reduce((m, l) => Math.max(m, String(l || '').length), 4)
+  return Math.min(190, Math.max(92, Math.round(longest * 6.4) + 24))
+}
+
 const asPct = (ratio) => { const v = (Number(ratio) || 0) * 100; return (Number.isInteger(v) ? v : +v.toFixed(2)) + '%' }
 // How much of a deal's deduction a setter/closer absorbed (mirrors the engine).
 function roleDeduction(d, role, a) {
@@ -246,6 +267,9 @@ export default function Payroll() {
 
   const userById = useMemo(() => Object.fromEntries(users.map(u => [u.id, u])), [users])
   const dealById = useMemo(() => Object.fromEntries(deals.map(d => [d.id, d])), [deals])
+  // "Pay Finalized" was clipped at a fixed 84px, and statuses are
+  // admin-editable so the worst case isn't knowable in advance.
+  const colStatus = useMemo(() => ({ ...COL.status, width: statusWidth(statusLabels) }), [statusLabels])
 
   // Deals on this run with commission owed to NOBODY (missing setter/closer) —
   // that money would fall out of every payee's statement. Flag before payout.
@@ -1279,15 +1303,15 @@ export default function Payroll() {
                 style={{ background: '#1a1a1a' }}>
                 <span className="w-[13px] flex-shrink-0" />
                 <span className="w-2 flex-shrink-0" />
-                <span className="flex-1 min-w-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Deal</span>
+                <span style={COL.deal} className="min-w-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Deal</span>
                 <span className="w-[56px] flex-shrink-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Install</span>
                 <span className="hidden xl:block w-[62px] flex-shrink-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Office</span>
-                <span className="hidden lg:block w-[104px] flex-shrink-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Setter</span>
-                <span className="hidden lg:block w-[104px] flex-shrink-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Closer</span>
+                <span style={COL.person} className="hidden lg:block min-w-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Setter</span>
+                <span style={COL.person} className="hidden lg:block min-w-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Closer</span>
                 <span className="hidden xl:block w-[86px] flex-shrink-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Overrides</span>
                 <span className="hidden xl:block w-[76px] flex-shrink-0 text-right text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Baseline</span>
                 <span className="w-[86px] flex-shrink-0 text-right text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Commission</span>
-                <span className="hidden sm:block w-[84px] flex-shrink-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Status</span>
+                <span style={colStatus} className="hidden sm:block text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Status</span>
                 <span className="w-[52px] flex-shrink-0" />
               </div>
             )}
@@ -1310,7 +1334,7 @@ export default function Payroll() {
                     <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} title={d.status} />
                     {/* The wrapper takes the free space (clicking it expands the
                         row); the button hugs the text so only the NAME edits. */}
-                    <div className="min-w-0 flex-1">
+                    <div style={COL.deal} className="min-w-0">
                       <button onClick={e => { e.stopPropagation(); openEdit(d) }}
                         className="block w-fit max-w-full text-[13px] font-semibold text-white truncate text-left hover:text-teal transition-colors"
                         title={`${d.deal_name} — click the name to edit this deal`}>
@@ -1329,11 +1353,11 @@ export default function Payroll() {
                       title={d.office || 'No office set — the override rate may be wrong'}>
                       {d.office || '—'}
                     </span>
-                    <span className={`hidden lg:block w-[104px] flex-shrink-0 text-[11.5px] truncate ${f.setterUnassigned ? 'text-amber-400' : 'text-white/60'}`}
+                    <span style={COL.person} className={`hidden lg:block min-w-0 text-[11.5px] truncate ${f.setterUnassigned ? 'text-amber-400' : 'text-white/60'}`}
                       title={f.setter || ''}>
                       {f.setter || (f.setterUnassigned ? 'Unassigned' : '—')}
                     </span>
-                    <span className={`hidden lg:block w-[104px] flex-shrink-0 text-[11.5px] truncate ${f.closerUnassigned ? 'text-amber-400' : f.closerSolo ? 'text-white/30' : 'text-white/60'}`}
+                    <span style={COL.person} className={`hidden lg:block min-w-0 text-[11.5px] truncate ${f.closerUnassigned ? 'text-amber-400' : f.closerSolo ? 'text-white/30' : 'text-white/60'}`}
                       title={f.closer || (f.closerSolo ? 'The setter closed it themselves' : '')}>
                       {f.closer || (f.closerUnassigned ? 'Unassigned' : 'self-gen')}
                     </span>
@@ -1349,9 +1373,9 @@ export default function Payroll() {
                         <span className="block text-[9.5px] font-semibold text-red-400/90">−{fmt(a.deduction)}</span>
                       )}
                     </span>
-                    <span className="hidden sm:flex items-center gap-1 w-[84px] flex-shrink-0">
+                    <span style={colStatus} className="hidden sm:flex items-center gap-1">
                       {d.commission_verified === true && <BadgeCheck size={12} className="flex-shrink-0" style={{ color: '#fbbf24' }} title="Commission verified" />}
-                      <span className="text-[11px] truncate" style={{ color }}>{d.status}</span>
+                      <span className="text-[11px] whitespace-nowrap" style={{ color }}>{d.status}</span>
                     </span>
                     <div className="flex items-center justify-end gap-1 flex-shrink-0 w-[52px]" onClick={e => e.stopPropagation()}>
                       {dealLocked && <Lock size={13} className="text-white/30" title={`The ${fmtDay(d.pay_date)} pay run is locked`} />}

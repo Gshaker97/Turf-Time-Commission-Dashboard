@@ -1033,6 +1033,14 @@ sat between the money and the payee list. Now:
    narrows: below `xl` office/overrides/baseline, below `lg` the people,
    below `md` everything but name/commission/actions (phones get install +
    setter as a second line under the name).
+   **Widths live in one `COL` object** shared by the heading row and every
+   deal row so the two can't drift apart. Deal/Setter/Closer GROW (`flex`)
+   and share the spare width — the deal name was briefly the only flexible
+   column, so on a wide screen every bit of slack piled into it while the
+   rest of the table looked starved. **The Status column is MEASURED from
+   the longest configured label** (`statusWidth(statusLabels)`, clamped
+   92–190px): statuses are admin-editable, so a fixed width can't be right —
+   84px clipped "Pay Finalized" at every window size.
    **Clicking anywhere on the row still expands it** (per Keaton) — only the
    NAME (opens the editor) and the action buttons stop propagation. The
    expanded card carries what the row can't: sale date, job price, rep pool,
