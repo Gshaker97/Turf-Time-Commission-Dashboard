@@ -1016,7 +1016,25 @@ sat between the money and the payee list. Now:
 3. **"Who gets paid"** — the payee panel, which is the workspace (statement
    copy, adjustments, deduction takes). The rep filter and the bulk actions
    (Approve all / Mark all paid / Lock run) moved INTO its header rather than
-   occupying two more strips above it.
+   occupying two more strips above it. It is a **single aligned table**
+   (widths in `PCOL`, shared by heading/rows/total — same shape as the deals
+   table below, so the page reads as one thing): Person · Deals · **Deal pay**
+   · **Adjustments** · **Net pay** · actions. It replaced a TWO-COLUMN grid
+   that went ragged because each person carries a different number of
+   adjustment lines, so nothing aligned across the gutter and the order
+   snaked (biggest top-left, second top-RIGHT). Keaton accepted the extra
+   height for the alignment.
+   **`p.total` has always folded adjustments in**, so the headline per person
+   silently mixed the two and *what someone earned from deals appeared nowhere* —
+   `payees` now also computes `adjTotal` and `dealPay = total − adjTotal`.
+   `adjSummary(adjustments)` writes the reason ONTO the row (one item shows its
+   note; several show "3 items · 2 deductions, 1 addition"), replacing the word
+   "adjustment" repeated eleven times down the panel.
+   **The RUN TOTAL row sums its own column** (`payTotals.net = dealPay + adj`),
+   never `summary.total`. The two differ when a deal carries a share with
+   nobody assigned: that money is in the run headline but reaches no payee, so
+   pinning the footer to the headline would make the column visibly fail to
+   add up. Any gap renders as an amber line under the total explaining it.
 4. **Deals in this run** — below, the audit trail, now a real COLUMN table
    (per Keaton, from a mockup drawn at 1100px = a 1280 laptop minus the
    sidebar, because he always runs payroll from a laptop): Deal · Install ·
