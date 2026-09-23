@@ -479,6 +479,19 @@ export default function Commissions() {
     return { rep, override, total, paid, unpaid, count: earnedRows.length }
   }, [earnedRows])
 
+  // Does the person being viewed actually EARN an override in this range?
+  // A plain rep never does (myParts only emits roles they personally hold),
+  // so the Override column and card were a permanent $0.00 for most of the
+  // roster (per Keaton). Tested per ROW, not on the sum: a positive and a
+  // negative override could cancel to zero and the column would still be
+  // carrying real numbers.
+  const showOverride = useMemo(
+    () => earnedRows.some(r => Math.abs(r.override) > 0.005),
+    [earnedRows])
+  // With no override, `total` is `rep` by construction — every override role
+  // contributed 0 — so Rep $ / Total $ and the Rep / Total cards are the same
+  // figure printed twice. They collapse to one.
+
   // Permission tripwire: a plain rep must never see override $ (overrides are
   // siloed to the role-holder in myParts). If one ever does, it's a gating
   // regression — log it to client_errors so the Watchdog surfaces it.
@@ -735,13 +748,20 @@ export default function Commissions() {
 
                 {/* Summary cards — every one names the active basis, so a
                     number can never be read against the wrong date. */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3">
-                  <Card label="Rep Commission" value={fmt(earnedTotals.rep)} color="#00b894"
-                    sub={`setter + closer · by ${basisLabel(earnedBasis)}`} />
-                  <Card label="Override" value={fmt(earnedTotals.override)} color="#a78bfa"
-                    sub={`mgr · dir · VP · by ${basisLabel(earnedBasis)}`} />
-                  <Card label={`Total Earned — by ${basisLabel(earnedBasis)}`} value={fmt(earnedTotals.total)} color="#fdcb6e"
-                    sub={presetLabel(earnedPreset)} />
+                <div className={`grid grid-cols-2 ${showOverride ? 'md:grid-cols-4' : 'md:grid-cols-2'} gap-2 md:gap-3`}>
+                  {showOverride ? (
+                    <>
+                      <Card label="Rep Commission" value={fmt(earnedTotals.rep)} color="#00b894"
+                        sub={`setter + closer · by ${basisLabel(earnedBasis)}`} />
+                      <Card label="Override" value={fmt(earnedTotals.override)} color="#a78bfa"
+                        sub={`mgr · dir · VP · by ${basisLabel(earnedBasis)}`} />
+                      <Card label={`Total Earned — by ${basisLabel(earnedBasis)}`} value={fmt(earnedTotals.total)} color="#fdcb6e"
+                        sub={presetLabel(earnedPreset)} />
+                    </>
+                  ) : (
+                    <Card label={`Commission Earned — by ${basisLabel(earnedBasis)}`} value={fmt(earnedTotals.total)} color="#fdcb6e"
+                      sub={`setter + closer · ${presetLabel(earnedPreset)}`} />
+                  )}
                   <Card label="Deal Count" value={String(earnedTotals.count)} color="#74b9ff"
                     sub={`by ${basisLabel(earnedBasis)}`} />
                 </div>
@@ -787,7 +807,7 @@ export default function Commissions() {
                           {['Setter', 'Closer'].map(h => (
                             <th key={h} className="px-3 py-3 text-[11px] font-bold text-dark uppercase tracking-wider text-left whitespace-nowrap">{h}</th>
                           ))}
-                          {['Rep $', 'Override $', 'Total $'].map(h => (
+                          {(showOverride ? ['Rep $', 'Override $', 'Total $'] : ['Commission $']).map(h => (
                             <th key={h} className="px-3 py-3 text-[11px] font-bold text-dark uppercase tracking-wider text-right whitespace-nowrap">{h}</th>
                           ))}
                           <th className="px-3 py-3 text-[11px] font-bold text-dark uppercase tracking-wider text-left whitespace-nowrap">Status</th>
@@ -816,8 +836,12 @@ export default function Commissions() {
                               <td className={dateCls('pay')}>{fmtDay(d.pay_date) || '—'}</td>
                               <td className="px-3 py-3 text-[12px] text-white/55 whitespace-nowrap">{setterUser?.name || '—'}</td>
                               <td className="px-3 py-3 text-[12px] text-white/55 whitespace-nowrap">{closerUser?.name || '—'}</td>
-                              <td className="px-3 py-3 text-[13px] text-right font-semibold text-white/85 whitespace-nowrap">{fmt(r.rep)}</td>
-                              <td className="px-3 py-3 text-[13px] text-right font-semibold text-white/85 whitespace-nowrap">{fmt(r.override)}</td>
+                              {showOverride && (
+                                <>
+                                  <td className="px-3 py-3 text-[13px] text-right font-semibold text-white/85 whitespace-nowrap">{fmt(r.rep)}</td>
+                                  <td className="px-3 py-3 text-[13px] text-right font-semibold text-white/85 whitespace-nowrap">{fmt(r.override)}</td>
+                                </>
+                              )}
                               <td className="px-3 py-3 text-[13px] text-right font-bold whitespace-nowrap"
                                 style={{ color: r.total < 0 ? '#f87171' : d.status === PAID ? '#74b9ff' : '#fff' }}>
                                 {fmt(r.total)}
@@ -835,8 +859,12 @@ export default function Commissions() {
                           <td className="px-3 py-3 text-[12px] font-semibold text-white/50 whitespace-nowrap" colSpan={6}>
                             {earnedTotals.count} deal{earnedTotals.count === 1 ? '' : 's'} · by {basisLabel(earnedBasis)}
                           </td>
-                          <td className="px-3 py-3 text-[13px] text-right font-bold text-white/85 whitespace-nowrap">{fmt(earnedTotals.rep)}</td>
-                          <td className="px-3 py-3 text-[13px] text-right font-bold text-white/85 whitespace-nowrap">{fmt(earnedTotals.override)}</td>
+                          {showOverride && (
+                            <>
+                              <td className="px-3 py-3 text-[13px] text-right font-bold text-white/85 whitespace-nowrap">{fmt(earnedTotals.rep)}</td>
+                              <td className="px-3 py-3 text-[13px] text-right font-bold text-white/85 whitespace-nowrap">{fmt(earnedTotals.override)}</td>
+                            </>
+                          )}
                           <td className="px-3 py-3 text-[13px] text-right font-bold text-teal whitespace-nowrap">{fmt(earnedTotals.total)}</td>
                           <td className="px-3 py-3" />
                         </tr>

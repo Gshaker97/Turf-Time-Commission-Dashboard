@@ -856,7 +856,17 @@ table, admin-only).
 - **Manager/Director/VP:** their OWN override on the Commissions page. The
   Commissions page is siloed by identity (`myParts(deal, id)` only emits roles
   the viewer personally holds), so nobody sees anyone else's
-  commission/override there.
+  commission/override there. **The Earned tab's Override column + card only
+  render when the viewed person actually earns one** (`showOverride` =
+  any row with a non-zero override — tested PER ROW, never on the sum, since a
+  positive and a negative could cancel while the column still carries real
+  numbers). A plain rep never holds an override role, so it used to be a
+  permanent $0.00 for most of the roster (per Keaton). When it's hidden,
+  `total === rep` by construction, so **Rep $ / Total $ collapse to one
+  "Commission $" column** and the Rep/Total cards to one "Commission Earned"
+  card — otherwise the same figure printed twice replaces the noise that was
+  removed. The owed/paid tabs needed no change: `DealRow` sums `myParts`, so
+  a rep's roles are all it can ever show.
 - **Admin:** sees and adjusts everything.
 - **Dashboard + Competitions are company-wide for everyone** (full leaderboards
   / standings), by design — ghost names still hidden from non-admins.
