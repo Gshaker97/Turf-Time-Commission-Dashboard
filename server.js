@@ -326,7 +326,10 @@ async function exportDeals(since) {
 // Body: a single appointment object, or { leads: [ … ] } for a batch.
 //   external_id*   the CRM's own appointment id — the dedup key
 //   customer_name, address, phone, email, office, notes
-//   appointment_at ISO timestamp of the appointment
+//   appointment_at ISO timestamp of the appointment (when it will HAPPEN)
+//   set_at         ISO timestamp of when it was BOOKED — "Set" counts on this
+//                  day, "ran"/"sold" on the appointment day (per Keaton).
+//                  RepCard sends it as `createdAt` on every contact.
 //   status         scheduled | completed | sold | no_show | canceled
 //                  (or send `disposition` and let the map below normalize it)
 //   setter_email / closer_email   matched to profiles by email
@@ -334,6 +337,15 @@ async function exportDeals(since) {
 //
 // Upserts on (source, external_id) so a webhook firing twice is harmless.
 const LEAD_STATUSES = ['scheduled', 'completed', 'sold', 'no_show', 'canceled']
+
+// Fallback field names, tried in order when the admin hasn't mapped one.
+// Only `set_at` needs them: RepCard has no field called that — it sends the
+// booking time as `createdAt` on every contact — and Set now counts on the
+// day the appointment was BOOKED, so it has to resolve without anyone
+// configuring it first. The admin's mapping still wins.
+const LEAD_DEFAULTS = {
+  set_at: ['createdAt', 'created_at', 'dateCreated', 'created', 'date_set', 'setDate'],
+}
 // Common CRM dispositions → our lifecycle. Anything unrecognized stays
 // 'scheduled' and keeps its raw text in `disposition` for review.
 const DISPOSITION_MAP = {
@@ -485,7 +497,7 @@ async function ingestLeads(rawBody) {
   if (items.length > 500) return err('Too many leads in one call (max 500).')
 
   const { fieldMap, statusMap } = await loadLeadConfig()
-  const pick = makePicker(fieldMap)
+  const pick = makePicker(fieldMap, LEAD_DEFAULTS)
 
   const resolvePerson = await loadRosterResolver()
 
@@ -523,6 +535,10 @@ async function ingestLeads(rawBody) {
     put('phone', pick(i, 'phone'))
     put('email', pick(i, 'email'))
     put('appointment_at', pick(i, 'appointment_at'))
+    // When it was BOOKED, which is the date the Set stat counts on. Distinct
+    // from appointment_at (when it happens) and from our own created_at (when
+    // we first saw the row, which for a status-update event is long after).
+    put('set_at', pick(i, 'set_at'))
     put('office', pick(i, 'office'))
     put('notes', pick(i, 'notes'))
     // People: THE FEED CAN SET SOMEONE, NEVER UNSET SOMEONE.

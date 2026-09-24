@@ -243,8 +243,8 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                 <tr style={{ borderBottom: '1px solid #333' }}>
                   <TH right={false}>Rep</TH>
                   <TH>Doors</TH><TH>Doors<br />/ day</TH>
-                  <TH title="Appointments this rep BOOKED, whoever ended up sitting them">Set</TH>
-                  <TH title="Appointments this rep BOOKED that ran — the setter gets the credit whoever sat it. The % is how many of their sets ran.">Self-gen<br />ran</TH>
+                  <TH title="Appointments this rep BOOKED in this range — dated by the day they set it, not the day it happens. The sub-line is how many of THOSE have run.">Set</TH>
+                  <TH title="Appointments this rep booked that RAN in this range — the setter gets the credit whoever sat it. Dated by the day it happened, so these are not necessarily the same appointments as the Set column.">Self-gen<br />ran</TH>
                   <TH title="Appointments this rep SAT for another setter">Leads<br />ran</TH>
                   <TH className="border-l border-[#333]" title="Deals this rep owns. Underneath: self-gen deals ÷ self-gen ran — blank when there are more deals than logged appointments, since a sale can be closed without an appointment ever being logged.">Self-gen<br />deals</TH>
                   <TH title="Deals this rep closed for another setter. Underneath: lead closes ÷ leads ran — blank when there are more closes than logged appointments.">Lead<br />closes</TH>
@@ -272,8 +272,8 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                       </td>
                       <TD flag={fl.doors}>{dash ? '—' : int0(r.doors)}</TD>
                       <TD flag={fl.doorsPerDay}>{dash ? '—' : dec1(r.doorsPerDay)}</TD>
-                      <TD flag={fl.set}>{r.set}</TD>
-                      <TD sub={r.showRate == null ? null : pct0(r.showRate)}>{r.sgRan}</TD>
+                      <TD flag={fl.set} sub={r.showRate == null ? null : `${pct0(r.showRate)} ran`}>{r.set}</TD>
+                      <TD>{r.sgRan}</TD>
                       <TD>{r.leadRan}</TD>
                       <TD strong className="border-l border-[#333]" sub={r.sgCloseRate == null ? null : `${pct0(r.sgCloseRate)} close`}>{r.deals}</TD>
                       <TD sub={r.leadCloseRate == null ? null : `${pct0(r.leadCloseRate)} close`}>{r.leadCloses}</TD>
@@ -291,8 +291,8 @@ function TeamSection({ team, collapsed, onToggle, isAdmin, floors, showCommissio
                     <td className="py-2 px-2 text-[9.5px] font-bold uppercase tracking-[0.1em] text-white/40">Team</td>
                     <TD strong>{hasAct ? int0(t.doors) : '—'}</TD>
                     <TD strong>{hasAct ? dec1(t.doorsPerDay) : '—'}</TD>
-                    <TD strong>{t.set}</TD>
-                    <TD strong sub={t.showRate == null ? null : pct0(t.showRate)}>{t.sgRan}</TD>
+                    <TD strong sub={t.showRate == null ? null : `${pct0(t.showRate)} ran`}>{t.set}</TD>
+                    <TD strong>{t.sgRan}</TD>
                     <TD strong>{t.leadRan}</TD>
                     <TD strong className="border-l border-[#333]" sub={t.sgCloseRate == null ? null : `${pct0(t.sgCloseRate)} close`}>{t.deals}</TD>
                     <TD strong sub={t.leadCloseRate == null ? null : `${pct0(t.leadCloseRate)} close`}>{t.leadCloses}</TD>
@@ -521,8 +521,8 @@ export default function Performance() {
         <div className="grid grid-cols-2 md:grid-cols-4 rounded-xl overflow-hidden" style={CARD}>
           {[
             { l: 'Doors knocked', v: org.hasActivity ? int0(org.doors) : '—', s: org.hasActivity ? <Delta cur={org.doors} prev={po?.doors} prevText={cmp(po?.doors, int0)} /> : <span className="text-[11px] text-white/25">feed not connected</span> },
-            { l: 'Appointments set', v: int0(org.set), s: <span className="text-[11px] text-white/35">{org.showRate != null ? `${int0(org.sgRan)} ran (${Math.round(org.showRate)}%)` : ''} {po && <Delta cur={org.set} prev={po.set} />}</span> },
-            { l: 'Ran', v: int0(org.ran), s: <span className="text-[11px] text-white/35">{org.showRate != null ? `${Math.round(org.showRate)}% of set` : ''} {po && <Delta cur={org.ran} prev={po.ran} />}</span> },
+            { l: 'Appointments set', v: int0(org.set), s: <span className="text-[11px] text-white/35">{org.showRate != null ? `${int0(org.setRan)} of them ran (${Math.round(org.showRate)}%)` : ''} {po && <Delta cur={org.set} prev={po.set} />}</span> },
+            { l: 'Ran', v: int0(org.ran), s: <span className="text-[11px] text-white/35">appointments held in this range {po && <Delta cur={org.ran} prev={po.ran} />}</span> },
             { l: 'Sold (RepCard)', v: int0(org.sold), s: <span className="text-[11px] text-white/35">{org.closeRate != null ? `${Math.round(org.closeRate)}% of ran` : ''} {po && <Delta cur={org.sold} prev={po.sold} />}</span> },
           ].map((x, i) => (
             <div key={x.l} className="px-3.5 py-3 min-w-0" style={{ borderLeft: i ? '1px solid #2a2a2a' : 'none' }}>
@@ -548,7 +548,7 @@ export default function Performance() {
       </section>
 
       <p className="text-[10.5px] text-white/25 flex items-center gap-1.5 flex-wrap"><Settings2 size={11} />
-        Revenue is baseline revenue; canceled deals never count. Set / Ran / Sold are appointments from the RepCard feed. Commission is each rep's own share only.
+        Revenue is baseline revenue; canceled deals never count. Appointments come from the RepCard feed: <strong className="text-white/50">Set is dated by the day it was booked</strong>, Ran and Sold by the day the appointment happened — so one range answers both what was booked in it and what ran in it. Commission is each rep's own share only.
         {perf.excluded.length > 0 && <span> · Hidden from this page: {perf.excluded.map(u => u.name).join(', ')}.</span>}
         {perf.defaultTeamId && <span> · Unassigned reps and deals are filed under {perf.teams.find(t => t.key === perf.defaultTeamId)?.label ?? 'the default team'}.</span>}
       </p>

@@ -46,7 +46,7 @@ const localToday = () => {
 }
 
 function newStats() {
-  return { revenue: 0, job: 0, deals: 0, leadCloses: 0, leadRevenue: 0, commission: 0, set: 0, ran: 0, sgRan: 0, leadRan: 0, sold: 0, activityRows: [] }
+  return { revenue: 0, job: 0, deals: 0, leadCloses: 0, leadRevenue: 0, commission: 0, set: 0, setRan: 0, ran: 0, sgRan: 0, leadRan: 0, sold: 0, activityRows: [] }
 }
 
 // A deal-over-appointment rate, or null when it can't be read as a rate:
@@ -80,7 +80,10 @@ function finish(s) {
     // a rep can close a sale without ever logging an appointment — so there
     // will always be deals with no appointment behind them. A rate over 100%
     // is that gap, not performance, and showing "250% close" reads as a bug.
-    showRate:      s.set ? (s.sgRan / s.set) * 100 : null,
+    // Of the appointments BOOKED in this range, how many have run. A cohort
+    // rate: both sides are the same appointments, so it stays honest now that
+    // set and ran are dated differently.
+    showRate:      s.set ? (s.setRan / s.set) * 100 : null,
     sgCloseRate:   rateOrNull(s.deals, s.sgRan),
     leadCloseRate: rateOrNull(s.leadCloses, s.leadRan),
     closeRate:     s.ran ? (s.sold / s.ran) * 100 : null,
@@ -176,23 +179,37 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
 
   for (const l of leads) {
     if (l.ignored) continue          // an admin marked it a duplicate (049)
-    const day = apptDay(l.appointment_at)
-    if (!inRange(day, from, to)) continue
+    // TWO DATES, deliberately (per Keaton). A SET counts on the day the rep
+    // BOOKED it; a RAN/SOLD counts on the day the appointment happened. One
+    // range therefore answers both "what did they book this week" and "what
+    // ran this week", which are different sets of appointments.
+    // `set_at` is null on anything the feed sent before migration 051, so it
+    // falls back to the appointment day rather than dropping the row.
+    const day    = apptDay(l.appointment_at)          // when it HAPPENS
+    const setDay = apptDay(l.set_at) || day           // when it was BOOKED
+    const setIn  = inRange(setDay, from, to)
+    const ranIn  = inRange(day, from, to)
+    if (!setIn && !ranIn) continue
     // A name on the admin's "not a field rep" list (inside sales, someone who
     // has left) is a KNOWN blank, not a fixable gap — it would otherwise sit
     // in this banner forever. The appointment itself is untouched: it still
     // counts as a Leads ran for whoever sat it.
-    if (!l.setter_id && !isNonRep(l.setter_name, nonReps)) {
+    if (ranIn && !l.setter_id && !isNonRep(l.setter_name, nonReps)) {
       gaps.noSetter += 1
       if (RAN_STATUSES.has(l.status)) gaps.noSetterRan += 1
       if (String(l.setter_name || '').trim()) gaps.unmatchedSetter += 1
     }
     const setter = out(l.setter_id) ? null : l.setter_id
-    if (setter) {
-      const k = teamOf(setter, day)
+    const ran = RAN_STATUSES.has(l.status)
+    if (setIn && setter) {
+      const k = teamOf(setter, setDay)
       org.set += 1; team(k).totals.set += 1; rep(k, setter).set += 1
+      // Of what they booked in this window, how much has run — a COHORT rate,
+      // counted whenever it ran. `sgRan / set` would mix two date bases now
+      // that the two columns key off different days.
+      if (ran) { org.setRan += 1; team(k).totals.setRan += 1; rep(k, setter).setRan += 1 }
     }
-    if (!RAN_STATUSES.has(l.status)) continue
+    if (!ran || !ranIn) continue
     // SELF-GEN RAN = "an appointment I generated ran", credited to the
     // SETTER whoever ended up sitting it (per Keaton). A separate "sets ran"
     // column was the same number by another name.
@@ -201,7 +218,14 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
       org.sgRan += 1; team(k).totals.sgRan += 1; rep(k, setter).sgRan += 1
     }
     const ranBy = l.closer_id || l.setter_id
-    if (!ranBy || out(ranBy)) continue
+    // An appointment that RAN with nobody we can credit still happened, so it
+    // counts in the ORG funnel — skipping the whole row here used to drop it
+    // from org `ran`/`sold` as well as from the person's, quietly
+    // undercounting the company's own numbers.
+    if (!ranBy || out(ranBy)) {
+      if (!out(ranBy)) { org.ran += 1; org.leadRan += 1; if (l.status === 'sold') org.sold += 1 }
+      continue
+    }
     const k = teamOf(ranBy, day)
     const sold = l.status === 'sold'
     for (const s of [org, team(k).totals, rep(k, ranBy)]) {

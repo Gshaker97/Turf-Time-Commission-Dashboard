@@ -272,7 +272,11 @@ setup + deploy steps.
   appointment out of every count without deleting it — see the Leads
   section); `050` makes `payroll_adjustments.pay_date` NULLABLE and adds
   `deal_id` / `parent_id` / `written_off_*` — the DEDUCTION LEDGER (see
-  "Deductions owed" below); `047` adds `competitions.excluded_ids` (jsonb
+  "Deductions owed" below); `051` adds `leads.set_at` — WHEN THE APPOINTMENT
+  WAS BOOKED, so the Set stat dates by the day the rep set it (see
+  "Appointments: two dates" under the Performance page); backfilled from the
+  stored `raw` payload (`createdAt`), falling back to the row's `created_at`;
+  `047` adds `competitions.excluded_ids` (jsonb
   array of profile ids) for the **Team Average (per rep)** competition type
   `team_avg` — entrants are TEAM HEADS (any `headIdSet` head, picked in the
   modal as "Teams competing"), score = the team's metric (deals or baseline
@@ -598,14 +602,39 @@ estimates come from the leads feed; set `estimates_from_leads_date`.)
   appears under EACH team with only that team's work ("Moved teams" note),
   so a team's total always equals the sum of its rows. Current members with
   nothing in range still get a zero row. Ghost rows hidden from non-admins.
+- **Appointments: TWO DATES (per Keaton, migration 051).** A **SET counts on
+  the day it was BOOKED** (`leads.set_at`, RepCard's `createdAt`); a **RAN /
+  SOLD counts on the day the appointment HAPPENED** (`appointment_at`). Before
+  051 everything keyed off the appointment day, so a rep who booked ten
+  appointments on Tuesday for the following week showed zero Set on Tuesday.
+  One range therefore answers two questions about two different sets of
+  appointments — what was booked in it, and what ran in it. A row is kept when
+  EITHER date lands in range (`setIn` / `ranIn` in `accumulate`) and each
+  counter fires only for its own date. **`set_at` is null on everything the
+  feed sent before 051, so it falls back to the appointment day** — no
+  appointment ever drops out of a count. `LEAD_DEFAULTS` in server.js resolves
+  it from `createdAt`/`created_at`/`dateCreated`/… with no admin mapping
+  needed; a mapping still wins.
+  **`showRate` is a COHORT rate** — of the appointments BOOKED in the range,
+  how many have run, counted whenever they ran (`setRan / set`). The old
+  `sgRan / set` compares two different date bases now and would be
+  meaningless. It renders as the sub-line under **Set**, not under Self-gen
+  ran, because it describes the Set cohort.
+  **An appointment that RAN with nobody creditable still counts in the ORG
+  funnel.** `ranBy = closer_id || setter_id`; when neither resolved the row
+  used to `continue` before `org.ran`/`org.sold` were touched, so a real
+  appointment that ran and sold was counted nowhere and the company funnel
+  undercounted. It now increments the org (and `leadRan`) and is still
+  reported in `gaps` for fixing.
 - **Attribution rules** (engine header comment is canonical): deal count +
   revenue → owner (`saleOwnerId`) on the owner's team as of the sale date;
   **commission per rep = that rep's OWN share only** (`dealAmounts.setter` /
   `.closer`, never overrides), landing on each rep's own team — so team
   commission can differ from "commission on the team's deals". SET credits
-  the setter on the appointment day (any status); RAN = `RAN_STATUSES`
-  credited to whoever ran it (set-and-ran = self-gen, else lead); SOLD =
-  status `sold`. Field activity credits `profile_id` on `activity_date`.
+  the setter on the day it was BOOKED (any status — a canceled appointment
+  was still set); RAN = `RAN_STATUSES` on the APPOINTMENT day, credited to
+  whoever ran it (the setter gets self-gen ran, a different sitter gets leads
+  ran); SOLD = status `sold`, appointment day. Field activity credits `profile_id` on `activity_date`.
   Canceled deals never count. `apptDay` for appointment days (never a UTC
   slice).
 - **Red flags** (`repFlags`): a figure below the admin floor turns red.
