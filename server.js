@@ -355,7 +355,18 @@ const DISPOSITION_MAP = {
   sold: 'sold', closed: 'sold', won: 'sold', 'closed won': 'sold',
   'no show': 'no_show', no_show: 'no_show', noshow: 'no_show', missed: 'no_show',
   'no showed': 'no_show', 'no-showed': 'no_show',
-  canceled: 'canceled', cancelled: 'canceled', rescheduled: 'canceled',
+  canceled: 'canceled', cancelled: 'canceled',
+  // A RESCHEDULE IS NOT A CANCELLATION. Keaton confirmed with RepCard that a
+  // rescheduled appointment KEEPS ITS external_id, so the feed updates the
+  // same row and moves `appointment_at` to the new time — the appointment is
+  // still going to happen. Mapping it to `canceled` (which it was, back when
+  // we assumed a reschedule spawned a second record) left a live appointment
+  // marked dead: it stopped counting as Ran even after it ran, until some
+  // later event happened to carry a real outcome. It goes back to
+  // `scheduled`. This is checked BEFORE the category fallback, so the
+  // "(Not Held)" that rides along with it doesn't drag it back to canceled.
+  rescheduled: 'scheduled', 're-scheduled': 'scheduled', reschedule: 'scheduled',
+  'reschedule requested': 'scheduled', moved: 'scheduled',
   'canceled appointment': 'canceled', 'cancelled appointment': 'canceled',
   // RepCard's "Held" dispositions — the appointment RAN, sale or no sale.
   'signed up': 'sold',

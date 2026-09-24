@@ -374,6 +374,18 @@ appointments they set or run; admins edit).
   pinning an unrecognized outcome on the customer as a no-show is the worse
   guess. Anything with no category and no known wording lands `scheduled` for
   manual fixing (per Keaton: some reps use dispositions, some don't).
+  **A RESCHEDULE IS NOT A CANCELLATION** — `rescheduled` → `scheduled`.
+  Keaton confirmed with RepCard that a rescheduled appointment **keeps its
+  `external_id`**, so the feed updates the SAME row and moves
+  `appointment_at` to the new time; the appointment is still going to happen.
+  It used to map to `canceled`, which was right only under the earlier
+  assumption that a reschedule spawned a second record — as it stood it left a
+  live appointment marked dead, so it stopped counting as Ran even after it
+  ran. Because DISPOSITION_MAP is checked before CATEGORY_MAP, the
+  "(Not Held)" riding along with it can't drag it back to canceled. Note the
+  contrast with a REASSIGNMENT to a different closer, which DOES create a
+  second record with a new id — that is the duplicate case migration 049
+  handles. Same feed, two different behaviours.
 - **A human's correction beats the feed.** Closers get reassigned and
   dispositions are inconsistent, so admins fix status/setter/closer on the
   page — which sets `leads.pinned`. The `leads_keep_manual_fields()` trigger
