@@ -132,6 +132,11 @@ const COL = {
   deal:   { flex: '2 1 0%', minWidth: 168 },
   person: { flex: '1 1 0%', minWidth: 96 },
   status: { flex: '0 0 auto' },   // width is measured per run — see statusColW
+  // Wide enough for the WORST CASE — "Approve" (~57px) + "Paid" (~39px) + the
+  // gap between them. It was 52px, which fits one button; with both showing,
+  // the pair overflowed LEFT out of a right-aligned box and printed on top of
+  // the status text ("Pending Install" with Approve across it).
+  act:    { flex: '0 0 auto', width: 108 },
 }
 
 // Enough room for the longest status label plus the gold verified check.
@@ -1443,7 +1448,7 @@ export default function Payroll() {
                 <span className="hidden xl:block w-[76px] flex-shrink-0 text-right text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Baseline</span>
                 <span className="w-[86px] flex-shrink-0 text-right text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Commission</span>
                 <span style={colStatus} className="hidden sm:block text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Status</span>
-                <span className="w-[52px] flex-shrink-0" />
+                <span style={COL.act} />
               </div>
             )}
             {shownDeals.map(d => {
@@ -1508,7 +1513,7 @@ export default function Payroll() {
                       {d.commission_verified === true && <BadgeCheck size={12} className="flex-shrink-0" style={{ color: '#fbbf24' }} title="Commission verified" />}
                       <span className="text-[11px] whitespace-nowrap" style={{ color }}>{d.status}</span>
                     </span>
-                    <div className="flex items-center justify-end gap-1 flex-shrink-0 w-[52px]" onClick={e => e.stopPropagation()}>
+                    <div style={COL.act} className="flex items-center justify-end gap-1" onClick={e => e.stopPropagation()}>
                       {dealLocked && <Lock size={13} className="text-white/30" title={`The ${fmtDay(d.pay_date)} pay run is locked`} />}
                       {canApprove && !dealLocked && !isPaid && d.status !== APPROVED && (
                         <button onClick={() => approveAndCollapse(d.id)} title={`Move to ${APPROVED}`}
