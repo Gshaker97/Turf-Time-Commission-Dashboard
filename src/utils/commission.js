@@ -262,7 +262,23 @@ export const isCanceled = (deal) => {
   const s = (deal?.status || '').trim().toLowerCase()
   return s === 'canceled' || s === 'cancelled'
 }
-export const activeDeals = (deals = []) => deals.filter(d => !isCanceled(d))
+
+// HIDDEN (migration 052) — a real job that is not ours to count. The case it
+// exists for: Keaton and Tanner Arnett (inside sales) share an ArcSite login,
+// so Tanner's jobs arrive stamped with Keaton's name and NO name-based rule can
+// catch them. Deleting doesn't work either — the sheet row is still there and
+// the sync re-creates it within the minute — so the row has to SURVIVE while
+// counting nowhere. Distinct from Canceled, which says the job fell through.
+export const isHidden = (deal) => deal?.hidden === true
+
+// **The one rule for "does this deal count".** Canceled OR hidden = no.
+// Use this in every aggregate (revenue, KPIs, leaderboards, teams,
+// competitions, records, goals, Performance, commissions, payroll, export).
+// `isCanceled` on its own is for DISPLAY only — the strikethrough and the
+// badge, which must still tell the two states apart.
+export const countsInTotals = (deal) => !isCanceled(deal) && !isHidden(deal)
+
+export const activeDeals = (deals = []) => deals.filter(countsInTotals)
 
 // ── Requires-Audit reconciliation ────────────────────────────
 // Compare the dollar amounts STORED on a deal (synced from the Google Sheet)

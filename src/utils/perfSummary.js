@@ -30,7 +30,7 @@
 //     its rep rows. Current members with nothing in the range still get a
 //     row (zeros) so an idle rep is visible, not hidden.
 // ============================================================
-import { dealAmounts, isCanceled } from './commission'
+import { dealAmounts, countsInTotals } from './commission'
 import { saleOwnerId, teamOfSale, teamLabel } from './team'
 import { RAN_STATUSES, apptDay } from './estimates'
 import { summarizeActivity } from './fieldActivity'
@@ -142,7 +142,7 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
   }
 
   for (const d of deals) {
-    if (isCanceled(d) || !inRange(d.sale_date, from, to)) continue
+    if (!countsInTotals(d) || !inRange(d.sale_date, from, to)) continue
     const owner = saleOwnerId(d)
     if (out(owner)) continue                       // an excluded person's deal leaves this page entirely
     const a = dealAmounts(d)

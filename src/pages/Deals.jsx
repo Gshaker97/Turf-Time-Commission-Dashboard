@@ -9,7 +9,7 @@ import FilterBar from '../components/FilterBar'
 import KpiCard from '../components/KpiCard'
 import DealTable, { dealNeedsReview } from '../components/DealTable'
 import DealModal from '../components/DealModal'
-import { calcDealCommissions, dealAmounts, fmt, isCanceled } from '../utils/commission'
+import { calcDealCommissions, dealAmounts, fmt, isHidden, countsInTotals } from '../utils/commission'
 import { getPresetRange } from '../utils/dateRanges'
 import { toast } from '../lib/toast'
 
@@ -277,7 +277,7 @@ export default function Deals() {
     let baseline = 0, totalComm = 0, totalJobPrice = 0, totalMarkupPct = 0
     // KPI totals exclude canceled jobs (they still appear in the table below so
     // they can be moved out of Canceled).
-    const counted = shownDeals.filter(d => !isCanceled(d))
+    const counted = shownDeals.filter(countsInTotals)
     for (const d of counted) {
       // Engine-derived so deductions and stored amounts are respected.
       const a = dealAmounts(d)
@@ -335,6 +335,44 @@ export default function Deals() {
     if (res?.error || deletedCount === 0) {
       toast.error('Could not delete this deal — only an admin can delete deals. Sign in with the admin account to delete it, or have VP deletes enabled in the database.')
       load(true)                                   // bring the row back so the UI matches reality
+    }
+  }
+
+  // HIDE (migration 052) — the honest alternative to deleting a job that isn't
+  // ours to count. Delete does NOT work here: the sheet row survives, so the
+  // sync re-creates the deal within the minute. Hiding keeps the row, which is
+  // exactly what stops the re-import.
+  async function handleToggleHidden(deal) {
+    const hide = !isHidden(deal)
+    if (hide) {
+      const why = prompt(
+        `Hide "${deal.deal_name}"?\n\n` +
+        'It stops counting toward revenue, KPIs, leaderboards, teams, competitions, ' +
+        'records, goals, Performance, commissions and payroll, and drops out of the ' +
+        'backup spreadsheet. The record stays on this page so you can un-hide it.\n\n' +
+        'Reason (optional):', '')
+      if (why === null) return   // cancelled the prompt
+      const patch = { hidden: true, hidden_at: new Date().toISOString(), hidden_by: profile?.id ?? null, hidden_note: why.trim() || null }
+      setDeals(ds => ds.map(d => (d.id === deal.id ? { ...d, ...patch } : d)))
+      const res = await updateDeal(deal.id, patch)
+      if (res?.error) {
+        // The commonest failure is the pay-run lock: a finalized/paid deal on a
+        // locked run can't be edited at all. Say so instead of "write failed".
+        toast.error(`Could not hide this deal — ${res.error.message || 'the write was rejected'}. If it's on a locked pay run, unlock the run first.`)
+        load(true)
+      } else {
+        toast.success(`"${deal.deal_name}" is hidden — it counts toward nothing now.`)
+      }
+      return
+    }
+    const patch = { hidden: false, hidden_at: null, hidden_by: null, hidden_note: null }
+    setDeals(ds => ds.map(d => (d.id === deal.id ? { ...d, ...patch } : d)))
+    const res = await updateDeal(deal.id, patch)
+    if (res?.error) {
+      toast.error(`Could not un-hide this deal — ${res.error.message || 'the write was rejected'}.`)
+      load(true)
+    } else {
+      toast.success(`"${deal.deal_name}" counts again everywhere.`)
     }
   }
 
@@ -453,6 +491,7 @@ export default function Deals() {
         datePreset={datePreset}       setDateRange={setDateRange}
         onEdit={d => { setEditDeal(d); setModal(true) }}
         onDelete={handleDelete}
+        onToggleHidden={isAdmin ? handleToggleHidden : undefined}
         onUpdate={persistInline}
         loading={loading}
       />

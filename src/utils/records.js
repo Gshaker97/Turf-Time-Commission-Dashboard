@@ -8,7 +8,7 @@
 // data-start cutoff are excluded (pre-June-2026 data isn't atomized).
 // ============================================================
 import { format } from 'date-fns'
-import { isCanceled } from './commission'
+import { countsInTotals } from './commission'
 import { saleOwnerId, teamOfSale, teamLabel } from './team'
 import { weekStartOf } from './dateRanges'
 
@@ -91,7 +91,7 @@ export function buildRecordBook(deals = [], { users = [], isAdmin = false, dataS
   const tm = {}, tw = {}, td = {}
   let biggestDeal = null
   for (const d of deals) {
-    if (!d.sale_date || isCanceled(d)) continue
+    if (!d.sale_date || !countsInTotals(d)) continue
     if (dataStartDate && d.sale_date < dataStartDate) continue
     const v = Number(d.baseline_revenue) || 0
     const mk = d.sale_date.slice(0, 7), wk = weekStartOf(d.sale_date), dk = d.sale_date
@@ -151,7 +151,7 @@ export function personalBests(deals = [], repId, { dataStartDate = '', todayISO 
   const months = {}, weeks = {}
   let biggestDeal = null
   for (const d of deals) {
-    if (!d.sale_date || isCanceled(d) || saleOwnerId(d) !== repId) continue
+    if (!d.sale_date || !countsInTotals(d) || saleOwnerId(d) !== repId) continue
     if (dataStartDate && d.sale_date < dataStartDate) continue
     const v = Number(d.baseline_revenue) || 0
     bump(months, d.sale_date.slice(0, 7), v)
