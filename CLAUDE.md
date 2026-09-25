@@ -1103,7 +1103,9 @@ sat between the money and the payee list. Now:
    below `md` everything but name/commission/actions (phones get install +
    setter as a second line under the name).
    **Widths live in one `COL` object** shared by the heading row and every
-   deal row so the two can't drift apart. Deal/Setter/Closer GROW (`flex`)
+   deal row so the two can't drift apart. `COL.act` is 108px — wide enough for
+   "Approve" + "Paid" TOGETHER; at 52px the pair overflowed LEFT out of its
+   right-aligned box and printed on top of the status text. Deal/Setter/Closer GROW (`flex`)
    and share the spare width — the deal name was briefly the only flexible
    column, so on a wide screen every bit of slack piled into it while the
    rest of the table looked starved. **The Status column is MEASURED from
