@@ -976,9 +976,31 @@ range; null/absent = auto: monthly goal ÷ weeks in the month; admin edits it
 inline on the card via `save('weekly_goal', v)` from `useSettings()`).
 `sync_excluded_reps` +
 `sync_skip_names` (string arrays) — the sync's never-import rep list and
-junk-customer-name substrings (defaults rhett/ronnie + test/cute; read per run,
-lowercased substring match; a SAVED empty list means "no exclusions" while a
-missing key means "use defaults").
+junk-customer-name substrings (defaults rhett/ronnie + test/cute; read per run;
+a SAVED empty list means "no exclusions" while a missing key means "use
+defaults"). `sync_skip_names` is still a lowercased SUBSTRING match on the
+customer name. **`sync_excluded_reps` is matched on NAME TOKENS**
+(`schRepExcluded_` / `schNameTokens_`, the ONE rule — all four call sites go
+through it): the shorter side must sit inside the longer one, so a list entry
+of "Tanner Arnett" catches a sheet cell of "Tanner", "Arnett" or "Arnett,
+Tanner", and an entry of "rhett" still catches "Rhett Smith". It used to be
+`sheetName.indexOf(listEntry)`, which only worked ONE WAY — short entries like
+rhett/ronnie caught full names, but a FULL-name entry silently missed an
+abbreviated sheet cell and the deal imported with nothing logged (the "Maria"
+deal, Sep 7 2026: Tanner Arnett, inside sales, setter AND closer both stamped
+from the one Sales Rep cell at `:392`). Tokens also close the substring trap
+`isNonRep` already avoids — "jack" can never swallow "Jackson" — at the cost of
+"rhett" no longer matching "Rhettford", which is the safer direction.
+**The list only ever blocks at IMPORT; it never removes a deal already in the
+database, and nothing re-scans.** So adding someone is always two jobs: the
+list entry, and cleaning up what already landed.
+**It is NOT the same list as `perf_excluded_ids`** (Performance page → Settings
+→ "Hidden from this page"), which hides a profile on that ONE page and seeds
+itself by name with "Tanner Arnett" until saved over — the two get confused
+because only the Performance one renders as a visible list of people.
+KNOWN HOLE: the SCHEDULE pass resolves a setter from Lead Source (`:495`)
+WITHOUT consulting this list, so an excluded name can still be attached as the
+setter of somebody else's deal. Not fixed — it would change setter splits.
 
 **Legacy data cutoff (`data_start_date`).** Admin → Settings has a "Data Start
 Date" (an `app_settings` value, default `2026-06-01`, read as
