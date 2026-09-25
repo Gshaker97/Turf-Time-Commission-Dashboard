@@ -57,7 +57,7 @@ const SCH_PAID_STATUS      = 'Paid';
 const SCH_BASELINE_PROP   = 'SCHED_BASELINE_IDS';
 // Version stamp — reported in the heartbeat and shown on Admin → System
 // Health, so a stale/botched paste is visible at a glance. Bump when editing.
-const SCH_VERSION         = '2026-09-01';
+const SCH_VERSION         = '2026-09-25';
 // SAFETY: preview mode (logs what it WOULD do, writes nothing) now lives in
 // SCRIPT PROPERTIES, not code — so re-pasting this file can never silently
 // disable the sync again. To preview: Project Settings → Script Properties →
@@ -267,8 +267,7 @@ function schSyncLocked_() {
         // Rows the sync would never import can't OWN a customer either — an
         // excluded rep's newer row must not shadow an older legit row (real
         // case: Ronnie's row blocked Juan Martinez's actual sale from importing).
-        const rep0 = schCleanRep_(rows[r][ix.rep]).toLowerCase();
-        if (SCH_EXCLUDE_REPS.some(function (x) { return rep0.indexOf(x) !== -1; })) continue;
+        if (schRepExcluded_(schCleanRep_(rows[r][ix.rep]))) continue;
         const when = schDate_(rows[r][ix.approved]) || '';
         const prev = newestRow[targetOf[r]];
         if (!prev || when >= prev.when) newestRow[targetOf[r]] = { r: r, when: when };
@@ -299,8 +298,7 @@ function schSyncLocked_() {
         if (!projectId) { out.skipped++; continue; }
 
         const repName = schCleanRep_(row[ix.rep]);
-        const repLc = repName.toLowerCase();
-        if (SCH_EXCLUDE_REPS.some(x => repLc.indexOf(x) !== -1)) { out.skipped++; continue; }
+        if (schRepExcluded_(repName)) { out.skipped++; continue; }
 
         const baselineVal = schMoney_(row[ix.baseline]);
         const saleVal     = schMoney_(row[ix.sale]);
@@ -674,6 +672,34 @@ function schParseSetter_(v) {
   return m ? m[1].trim() : null;
 }
 function schCleanRep_(v) { return String(v || '').replace(/\s*\(.*$/, '').trim(); }
+// A name split into comparable word tokens ("Arnett, Tanner" → [arnett, tanner]).
+function schNameTokens_(v) {
+  return String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean);
+}
+// Is this sheet's Sales Rep on the never-import list (Admin → Settings →
+// "Sync: Excluded Reps")?
+//
+// Compared as NAME TOKENS, with the SHORTER side required to sit inside the
+// longer one. The old test was `sheetName.indexOf(listEntry)`, which only ever
+// worked in ONE direction: "rhett" caught "Rhett Smith", but a list entry of
+// the full name "Tanner Arnett" silently missed a sheet cell reading just
+// "Tanner" — the row imported and nothing said why (the "Maria" deal, Sep 7).
+// Now either form catches the other, and word order doesn't matter.
+//
+// Tokens also close the substring trap the feed's `isNonRep` already avoids:
+// an entry of "jack" can never swallow "Jackson". That IS a behaviour change —
+// "rhett" no longer matches "Rhettford" — and it is the safer direction.
+function schRepExcluded_(repName) {
+  const rep = schNameTokens_(repName);
+  if (!rep.length) return false;
+  return SCH_EXCLUDE_REPS.some(function (x) {
+    const ex = schNameTokens_(x);
+    if (!ex.length) return false;
+    const small = ex.length <= rep.length ? ex : rep;
+    const big   = ex.length <= rep.length ? rep : ex;
+    return small.every(function (t) { return big.indexOf(t) !== -1; });
+  });
+}
 // Resolve a sheet name to a roster profile. Exact full-name match first, then a
 // UNIQUE first-name / "starts with" match so "JC" → "JC Correa" and
 // "Jean Carlo" → "Jean Carlo Correa". Returns null if nothing matches or the
@@ -824,8 +850,7 @@ function schDiagnose(name) {
     if (!cust) continue;
     const st = String(ix.status >= 0 ? rows[r][ix.status] : '').trim().toUpperCase();
     if (SCH_ONLY_STATUS && ix.status >= 0 && st !== SCH_ONLY_STATUS) continue;
-    const rep0 = schCleanRep_(rows[r][ix.rep]).toLowerCase();
-    if (SCH_EXCLUDE_REPS.some(function (x) { return rep0.indexOf(x) !== -1; })) continue;
+    if (schRepExcluded_(schCleanRep_(rows[r][ix.rep]))) continue;
     const when = schDate_(rows[r][ix.approved]) || '';
     const prev = newestRow[cust];
     if (!prev || when >= prev.when) newestRow[cust] = { r: r, when: when };
@@ -846,7 +871,7 @@ function schDiagnose(name) {
     const projectId = String(row[ix.project] || '').trim() || String(ix.proposal >= 0 ? row[ix.proposal] : '').trim();
     if (!projectId) { log(pfx + 'SKIPPED — no Project ID or Proposal ID on the row'); continue; }
     const repName = schCleanRep_(row[ix.rep]);
-    if (SCH_EXCLUDE_REPS.some(function (x) { return repName.toLowerCase().indexOf(x) !== -1; })) { log(pfx + 'SKIPPED — Sales Rep "' + repName + '" is on the excluded-reps list'); continue; }
+    if (schRepExcluded_(repName)) { log(pfx + 'SKIPPED — Sales Rep "' + repName + '" is on the excluded-reps list'); continue; }
     const existing = byProject[projectId] || dealByName[customer.toLowerCase()];
     if (existing) {
       const how = byProject[projectId] ? 'Project ID' : 'CUSTOMER NAME';
