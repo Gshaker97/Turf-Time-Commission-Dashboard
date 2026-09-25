@@ -7,7 +7,7 @@ import { headIdSet, teamKeyFor, buildChangesByProfile } from "../utils/team";
 import { estimatesFor } from "../utils/estimates";
 import { currentPeriods, resolveGoal, goalIsSet, repProduction, periodElapsed, metricProgress, estimateStreak } from "../utils/goals";
 import { onClickUnlessSelecting } from "../utils/selection";
-import { getUserCommission, isCanceled, fmt } from "../utils/commission";
+import { getUserCommission, countsInTotals, fmt } from "../utils/commission";
 import { personalBests } from "../utils/records";
 import { useSettings } from "../contexts/SettingsContext";
 import { useAuth } from "../contexts/AuthContext";
@@ -86,7 +86,7 @@ export default function Home() {
   useEffect(() => {
     Promise.all([fetchDeals(), fetchCompetitions(), fetchUsers(), fetchWeeklyStats(), fetchPersonalGoals(), fetchLeads(), fetchTeamChanges()])
       .then(([{ data: d }, { data: c }, { data: u }, { data: w }, { data: pg }, { data: ld }, { data: tc }]) => {
-        setAllDeals((d ?? []).filter(x => !isCanceled(x)));
+        setAllDeals((d ?? []).filter(countsInTotals));
         setComps(c || []); setUsers(u || []); setWeekly(w || []);
         setPersonalGoals(pg || []);
         setLeads(ld || []);

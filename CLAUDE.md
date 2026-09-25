@@ -126,12 +126,36 @@ setup + deploy steps.
    `src/lib/demoData.js` instead of hitting Supabase. Calling Supabase directly
    white-screens demo mode.
 
-4. **Canceled deals never count in aggregates.** A deal whose `status` is
-   `Canceled` (or `Cancelled`) is excluded from every roll-up — revenue, KPIs,
-   the rep leaderboard, team breakdown, competitions, commissions, and payroll —
-   via `isCanceled` / `activeDeals` in `src/utils/commission.js`. It still
-   appears on the Deals page (and struck-through in the competition drill-down)
-   so it can be moved back to another status, which makes it count again.
+4. **Canceled OR HIDDEN deals never count in aggregates — `countsInTotals(deal)`
+   in `src/utils/commission.js` is the ONE rule.** Use it in every roll-up
+   (revenue, KPIs, leaderboards, team breakdown, competitions, records, goals,
+   Performance, commissions, payroll, the backup export); `activeDeals` is just
+   `deals.filter(countsInTotals)`. **`isCanceled` on its own is for DISPLAY
+   only** — the dimmed row and the badge, which must keep the two states
+   apart. Never write a new aggregate against `isCanceled`.
+   - **Canceled** (`status`) = the job fell through. Still shipped to the backup
+     spreadsheet (tinted red, excluded from its summary), struck through in the
+     competition drill-down, and counts again the moment the status changes.
+   - **Hidden** (`deals.hidden`, migration 052) = the job is REAL but is not
+     ours to count. Born from a case no name-based rule can reach: Keaton and
+     Tanner Arnett (inside sales) share an ArcSite login, so Tanner's jobs land
+     on the Jobs tab stamped with KEATON's name — `sync_excluded_reps` can never
+     match, and DELETING is worse than useless because the sheet row survives
+     and the sync re-creates the deal within the minute. **Hiding works
+     precisely BECAUSE the row survives**: the sync matches it by `project_id`
+     and never re-creates it, so no `SCHED_BASELINE_IDS` entry and no Apps
+     Script edit are needed. Same flag-not-delete logic as `leads.ignored`
+     (049), for the same reason. Kept out of the backup export entirely
+     (`server.js`), unlike Canceled. Columns: `hidden` / `hidden_at` /
+     `hidden_by` / `hidden_note`.
+   Both still LIST on the Deals page (dimmed, badged — red ✕ for canceled, grey
+   EyeOff for hidden) so either can be undone; a hidden deal is also dropped
+   from `dealNeedsReview`, since something that counts nowhere must not nag in
+   the worklist. The **Hide** button is the EyeOff in the Deals row actions,
+   admin-only (`onToggleHidden` is passed only when `isAdmin`). Hiding a
+   finalized/paid deal on a LOCKED pay run is rejected by
+   `guard_locked_payroll()` — that is intended, and the toast says to unlock the
+   run first rather than reporting a generic write failure.
 
 ## Database migrations — read before touching the DB
 
@@ -276,6 +300,10 @@ setup + deploy steps.
   WAS BOOKED, so the Set stat dates by the day the rep set it (see
   "Appointments: two dates" under the Performance page); backfilled from the
   stored `raw` payload (`createdAt`), falling back to the row's `created_at`;
+  `052` adds `deals.hidden` (+ `hidden_at`/`hidden_by`/`hidden_note`) — a REAL
+  job that counts toward NOTHING while its row survives so the sheet sync
+  cannot re-create it; see convention #4 above for why it exists and why
+  deleting does not work;
   `047` adds `competitions.excluded_ids` (jsonb
   array of profile ids) for the **Team Average (per rep)** competition type
   `team_avg` — entrants are TEAM HEADS (any `headIdSet` head, picked in the

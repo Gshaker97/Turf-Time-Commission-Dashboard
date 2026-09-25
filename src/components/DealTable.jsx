@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import { RepPickList } from './RepMultiSelect'
-import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, X, MessageSquare, BadgeCheck, AlertCircle } from 'lucide-react'
-import { calcDealCommissions, fmt, fmtPct, isCanceled, officeOverrideRate, deductionBreakdown } from '../utils/commission'
+import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, X, MessageSquare, BadgeCheck, AlertCircle, EyeOff } from 'lucide-react'
+import { calcDealCommissions, fmt, fmtPct, isCanceled, isHidden, countsInTotals, officeOverrideRate, deductionBreakdown } from '../utils/commission'
 import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
 import { fetchDealNotes, fetchDealNoteCounts, addDealNote, updateDealNote, deleteDealNote } from '../lib/db'
@@ -41,7 +41,7 @@ export const dealMissingInfo = (deal) => {
   return missing
 }
 export const dealNeedsReview = (deal, dataStartDate) =>
-  !isCanceled(deal) &&
+  countsInTotals(deal) &&
   (deal.commission_verified !== true || deal.change_alert != null || dealMissingInfo(deal).length > 0) &&
   !(dataStartDate && deal.sale_date && deal.sale_date < dataStartDate)
 
@@ -62,6 +62,16 @@ export const officeChangePatch = (deal, office) => {
 }
 
 // Red ✕ next to the name of a canceled deal (pairs with the dimmed row).
+function HiddenMark() {
+  return (
+    <span className="w-[22px] h-[22px] rounded-full flex items-center justify-center flex-shrink-0"
+      style={{ background: '#ffffff12', border: '1px solid #ffffff2b' }}
+      title="Hidden — counts toward nothing (revenue, payroll, leaderboards, competitions)">
+      <EyeOff size={12} strokeWidth={2.5} className="text-white/55" />
+    </span>
+  )
+}
+
 function CanceledMark() {
   return (
     <span className="w-[22px] h-[22px] rounded-full flex items-center justify-center flex-shrink-0"
@@ -548,13 +558,27 @@ function StatusCell({ status, color, options, canEdit, dealId, onUpdate }) {
   )
 }
 
-function ActionButtons({ deal, onEdit, onDelete }) {
+function ActionButtons({ deal, onEdit, onDelete, onToggleHidden }) {
+  const hidden = isHidden(deal)
   return (
     <div className="flex gap-1.5 justify-end">
       <button onClick={() => onEdit(deal)}
         className="p-1.5 rounded text-white/30 hover:text-teal hover:bg-teal/10 transition-colors">
         <Pencil size={13} />
       </button>
+      {/* Hide, NOT delete — the row has to survive or the sheet sync
+          re-creates it within the minute (see migration 052). */}
+      {onToggleHidden && (
+        <button onClick={() => onToggleHidden(deal)}
+          title={hidden
+            ? 'Un-hide — this job counts again everywhere'
+            : 'Hide — keep the record but count it toward nothing'}
+          className={`p-1.5 rounded transition-colors ${hidden
+            ? 'text-amber-300/80 hover:text-amber-300 hover:bg-amber-400/10'
+            : 'text-white/30 hover:text-amber-300 hover:bg-amber-400/10'}`}>
+          <EyeOff size={13} />
+        </button>
+      )}
       <button onClick={() => onDelete(deal.id)}
         className="p-1.5 rounded text-white/30 hover:text-red-400 hover:bg-red-500/10 transition-colors">
         <Trash2 size={13} />
@@ -729,12 +753,12 @@ function NotesThread({ deal, profile, users, onCountChange }) {
 const subline = (deal) => [deal.office, deal.payment_method].filter(Boolean).join(' · ') || '—'
 
 // ── Mobile card (below lg) ────────────────────────────────────
-function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onUpdate, statusColor, statusLabels, profile, users, noteCount, onCountChange }) {
+function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onToggleHidden, onUpdate, statusColor, statusLabels, profile, users, noteCount, onCountChange }) {
   const baseline = parseFloat(deal.baseline_revenue) || 0
   const jobPrice = parseFloat(deal.job_price)        || 0
   const [showNotes, setShowNotes] = useState(false)
   return (
-    <div className={`p-4 ${isCanceled(deal) ? 'opacity-50' : ''}`}>
+    <div className={`p-4 ${countsInTotals(deal) ? '' : 'opacity-50'}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -747,6 +771,7 @@ function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onUpdate, status
               </span>
             )}
             {isCanceled(deal) && <CanceledMark />}
+            {isHidden(deal) && <HiddenMark />}
           </div>
           <p className="text-[11px] text-white/40 truncate">{subline(deal)}</p>
         </div>
@@ -779,7 +804,7 @@ function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onUpdate, status
 
       {canEdit && (
         <div className="mt-3 pt-3 border-t border-white/5">
-          <ActionButtons deal={deal} onEdit={onEdit} onDelete={onDelete} />
+          <ActionButtons deal={deal} onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} />
         </div>
       )}
     </div>
@@ -795,7 +820,7 @@ export default function DealTable({
   paymentFilter, setPaymentFilter,
   dateField, setDateField,
   dateFrom, dateTo, datePreset, setDateRange,
-  onEdit, onDelete, onUpdate, loading, openNotesId,
+  onEdit, onDelete, onToggleHidden, onUpdate, loading, openNotesId,
 }) {
   const { statusColor, statusLabels, offices, paymentMethods } = useSettings()
   // Editing deal data anywhere is an admin-only action. Everyone else gets a
@@ -882,12 +907,12 @@ export default function DealTable({
             const baseline = parseFloat(deal.baseline_revenue) || 0
             const jobPrice = parseFloat(deal.job_price)        || 0
             const isEven   = i % 2 === 0
-            const canceled = isCanceled(deal)
+            const dimmed = !countsInTotals(deal)
             return (
               <Fragment key={deal.id}>
               <tr
                 style={{ background: isEven ? '#242424' : '#262626' }}
-                className={`hover:bg-white/[0.03] transition-colors align-top ${canceled ? 'opacity-50' : ''}`}>
+                className={`hover:bg-white/[0.03] transition-colors align-top ${dimmed ? 'opacity-50' : ''}`}>
                 <td className="px-3 py-3">
                   <div className="flex items-center gap-2">
                     <button onClick={() => toggleNotes(deal.id)} title="Notes"
@@ -901,7 +926,8 @@ export default function DealTable({
                         {noteCounts[deal.id] > 0 && <span className="text-[10px] font-semibold">{noteCounts[deal.id]}</span>}
                       </span>
                     )}
-                    {canceled && <CanceledMark />}
+                    {isCanceled(deal) && <CanceledMark />}
+                    {isHidden(deal) && <HiddenMark />}
                   </div>
                   {deal.project_id && <p className="text-[11px] text-white/40 truncate max-w-[260px]">{deal.project_id}</p>}
                 </td>
@@ -930,7 +956,7 @@ export default function DealTable({
                 <td className="px-3 py-3"><RevenueCell baseline={baseline} jobPrice={jobPrice} /></td>
                 <td className="px-3 py-3"><CommissionCell deal={deal} canVerify={canVerify} onUpdate={onUpdate} /></td>
                 {canEdit && (
-                  <td className="px-3 py-3"><ActionButtons deal={deal} onEdit={onEdit} onDelete={onDelete} /></td>
+                  <td className="px-3 py-3"><ActionButtons deal={deal} onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} /></td>
                 )}
               </tr>
               {notesOpen.has(deal.id) && (
@@ -953,7 +979,7 @@ export default function DealTable({
       <div className="lg:hidden divide-y divide-white/5">
         {deals.map(deal => (
           <DealCard key={deal.id} deal={deal} canEdit={canEdit} canVerify={canVerify}
-            onEdit={onEdit} onDelete={onDelete} onUpdate={onUpdate}
+            onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} onUpdate={onUpdate}
             statusColor={statusColor} statusLabels={statusLabels}/>
         ))}
       </div>

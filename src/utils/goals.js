@@ -12,7 +12,7 @@
 //     the same period type ("carried") — a new week never starts blank
 // ============================================================
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, subMonths } from 'date-fns'
-import { isCanceled } from './commission'
+import { countsInTotals } from './commission'
 import { saleOwnerId } from './team'
 import { weekStartOf } from './dateRanges'
 import { estimatesFor } from './estimates'
@@ -60,7 +60,7 @@ export const goalIsSet = hasTargets
 export function repProduction(deals, weeklyStats, repId, { start, end }, opts = {}) {
   let revenue = 0, dealsN = 0, leadsClosed = 0, leadRevenue = 0
   for (const d of deals) {
-    if (!d.sale_date || d.sale_date < start || d.sale_date > end || isCanceled(d)) continue
+    if (!d.sale_date || d.sale_date < start || d.sale_date > end || !countsInTotals(d)) continue
     const v = Number(d.baseline_revenue) || 0
     if (saleOwnerId(d) === repId) { revenue += v; dealsN += 1 }
     if (d.closer_id === repId && d.setter_id && d.setter_id !== d.closer_id) { leadsClosed += 1; leadRevenue += v }

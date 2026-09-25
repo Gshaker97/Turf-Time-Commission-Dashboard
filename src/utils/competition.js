@@ -12,7 +12,7 @@
 //                  (only solo deals), 'setter', 'closer', or 'split' (setter and
 //                  closer share it by credit_split_pct = the closer's share).
 // ============================================================
-import { fmt, isCanceled } from './commission'
+import { fmt, isCanceled, countsInTotals } from './commission'
 import { teamOfSale, teamLabel, headIdSet } from './team'
 
 export const COMP_TYPES = [
@@ -95,7 +95,7 @@ function personCredit(deal, userId, comp) {
 function personScore(userId, deals, comp) {
   let total = 0, revenue = 0
   for (const d of deals) {
-    if (!inWindow(d, comp) || isCanceled(d)) continue   // canceled jobs don't count
+    if (!inWindow(d, comp) || !countsInTotals(d)) continue   // canceled/hidden jobs don't count
     const credit = personCredit(d, userId, comp)
     if (credit) {
       total   += dealValue(d, comp.metric) * credit
@@ -111,7 +111,7 @@ function teamScore(managerId, deals, users, comp) {
   const ids = new Set([managerId, ...users.filter(u => u.manager_id === managerId).map(u => u.id)])
   let total = 0, revenue = 0
   for (const d of deals) {
-    if (!inWindow(d, comp) || isCanceled(d)) continue   // canceled jobs don't count
+    if (!inWindow(d, comp) || !countsInTotals(d)) continue   // canceled/hidden jobs don't count
     if (teamCounts(d, ids, comp)) {
       total   += dealValue(d, comp.metric)
       revenue += Number(d.baseline_revenue) || 0
@@ -168,7 +168,7 @@ function sideCounts(deal, side, comp, teamCtx) {
 function sideScore(side, deals, comp, teamCtx) {
   let total = 0, revenue = 0
   for (const d of deals) {
-    if (!inWindow(d, comp) || isCanceled(d)) continue
+    if (!inWindow(d, comp) || !countsInTotals(d)) continue
     if (sideCounts(d, side, comp, teamCtx)) {
       total   += dealValue(d, comp.metric)
       revenue += Number(d.baseline_revenue) || 0
@@ -251,7 +251,7 @@ export function teamAvgRoster(headId, deals = [], users = [], comp = {}, teamCtx
   const none = new Set()
   const ids = new Set()
   for (const d of deals) {
-    if (!inWindow(d, comp) || isCanceled(d)) continue
+    if (!inWindow(d, comp) || !countsInTotals(d)) continue
     teamAvgCredited(d, comp, onTeam, none).forEach(p => ids.add(p))
   }
   const today = localToday()
@@ -268,7 +268,7 @@ function teamAvgScore(headId, deals, users, comp, teamCtx) {
   const onTeam = teamAvgMembership(headId, users, teamCtx)
   let total = 0, revenue = 0
   for (const d of deals) {
-    if (!inWindow(d, comp) || isCanceled(d)) continue
+    if (!inWindow(d, comp) || !countsInTotals(d)) continue
     if (!teamAvgCredited(d, comp, onTeam, excluded).length) continue
     total   += dealValue(d, comp.metric)
     revenue += Number(d.baseline_revenue) || 0

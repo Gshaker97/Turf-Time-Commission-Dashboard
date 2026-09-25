@@ -273,6 +273,11 @@ async function exportDeals(since) {
   const months = {}
   for (const d of deals) {
     if (!d.sale_date) continue
+    // Hidden deals (migration 052) count toward nothing, so they stay out of
+    // the backup spreadsheet entirely — including its per-month rep summary.
+    // Canceled ones still ship: the script tints them red and the summary
+    // excludes them, which is the right treatment for a job that fell through.
+    if (d.hidden === true) continue
     const a = dealAmounts(d)
     const solo = !d.closer_id || d.setter_id === d.closer_id
     const row = {
