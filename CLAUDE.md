@@ -986,14 +986,31 @@ of "Tanner Arnett" catches a sheet cell of "Tanner", "Arnett" or "Arnett,
 Tanner", and an entry of "rhett" still catches "Rhett Smith". It used to be
 `sheetName.indexOf(listEntry)`, which only worked ONE WAY — short entries like
 rhett/ronnie caught full names, but a FULL-name entry silently missed an
-abbreviated sheet cell and the deal imported with nothing logged (the "Maria"
-deal, Sep 7 2026: Tanner Arnett, inside sales, setter AND closer both stamped
-from the one Sales Rep cell at `:392`). Tokens also close the substring trap
-`isNonRep` already avoids — "jack" can never swallow "Jackson" — at the cost of
-"rhett" no longer matching "Rhettford", which is the safer direction.
+abbreviated sheet cell. Tokens also close the substring trap `isNonRep` already
+avoids — "jack" can never swallow "Jackson" — at the cost of "rhett" no longer
+matching "Rhettford", which is the safer direction. This was a LATENT bug found
+by READING the code: no deal is known to have entered through it. It was
+briefly blamed for the "Maria" deal and that was WRONG — see below.
+**A NAME LIST CANNOT FIX A SHARED LOGIN — the sheet's Sales Rep is not
+necessarily who sold it.** Keaton and Tanner Arnett (inside sales) share an
+ArcSite login, so Tanner's jobs arrive stamped with KEATON's name. That is how
+the "Maria" deal (project `282300034356964`, Sep 7 2026) reached the site, and
+no excluded-reps entry could ever have stopped it. `schDiagnose('Maria')`
+proved it: the exclusion gate sits ONE LINE ABOVE the existing-deal check
+(`:873`/`:875`), so a row that logs "MATCHED AN EXISTING DEAL" demonstrably got
+past the gate. **When a deal carries the wrong rep, read the SHEET CELL before
+touching the exclusion list** — if the cell doesn't name that person, no entry
+can ever match, and the diagnostic's MATCHED branch does NOT print the rep name
+so the log alone won't tell you.
 **The list only ever blocks at IMPORT; it never removes a deal already in the
 database, and nothing re-scans.** So adding someone is always two jobs: the
 list entry, and cleaning up what already landed.
+**To keep ONE job out for good: add its Project ID to the `SCHED_BASELINE_IDS`
+script property** (comma-separated; read at `:158`, enforced at `:377` on the
+create path only), and only THEN delete the deal — deleting alone re-imports it
+within the minute, under whatever name the sheet carries. **Never run
+`schBaselineNow()` for this**: it OVERWRITES that property with every Project
+ID on the Jobs tab, which stops every current job from ever importing.
 **It is NOT the same list as `perf_excluded_ids`** (Performance page → Settings
 → "Hidden from this page"), which hides a profile on that ONE page and seeds
 itself by name with "Tanner Arnett" until saved over — the two get confused
