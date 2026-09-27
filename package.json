@@ -8,8 +8,8 @@
   },
   "scripts": {
     "dev": "vite",
-    "lint": "eslint src/",
-    "prebuild": "eslint src/",
+    "lint": "eslint src/ scripts/",
+    "prebuild": "eslint src/ scripts/",
     "build": "vite build",
     "preview": "vite preview",
     "start": "node server.js"

@@ -381,7 +381,7 @@ function schSyncLocked_() {
         // deal is the money, the name is fixable: it lands with NO
         // setter/closer (held in Needs review, amber-flagged in Payroll) and
         // the issue below names exactly who to assign.
-        const rep = byName[repLc] || schResolvePerson_(repName, profiles);
+        const rep = byName[repName.toLowerCase()] || schResolvePerson_(repName, profiles);
         if (!rep) out.details.push('Unknown rep "' + repName + '" for ' + customer + ' — imported with no setter/closer; assign them on the deal');
 
         const newSaleDate = schDate_(row[ix.approved]);

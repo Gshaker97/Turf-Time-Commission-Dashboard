@@ -24,4 +24,44 @@ export default [
       'no-unused-vars': ['warn', { varsIgnorePattern: '^_', argsIgnorePattern: '^_' }],
     },
   },
+
+  // The Apps Scripts were UNLINTED, and it cost a two-day sync outage.
+  // Refactoring the excluded-reps check deleted `const repLc`, which was still
+  // read 80 lines below in the create branch. Nothing caught it: `.gs` files
+  // are not bundled by Vite, so the build is silent on them, and the runtime
+  // error only fires when there is a NEW deal to import — so the script looks
+  // healthy until the moment it matters. `no-undef` finds this instantly.
+  //
+  // These scripts run on Apps Script's V8 runtime: script-scoped, no modules,
+  // with Google's service objects as globals. They also share top-level names
+  // across files (each .gs is one scope), so `no-redeclare` would be noise —
+  // it is off, and the rules stay narrow on purpose.
+  {
+    files: ['scripts/**/*.gs'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'script',
+      globals: {
+        ...globals.es2021,
+        SpreadsheetApp: 'readonly', PropertiesService: 'readonly', UrlFetchApp: 'readonly',
+        Logger: 'readonly', LockService: 'readonly', Utilities: 'readonly',
+        MailApp: 'readonly', GmailApp: 'readonly', DriveApp: 'readonly',
+        Session: 'readonly', ScriptApp: 'readonly', CacheService: 'readonly',
+        HtmlService: 'readonly', ContentService: 'readonly', console: 'readonly',
+      },
+    },
+    rules: {
+      'no-undef': 'error',
+      // OFF here, unlike src/. There the rule guards a real TDZ throw: a
+      // module-scope `const` read above its declaration. An Apps Script file
+      // is ONE script scope where top-level `var`s hoist, and the config
+      // block deliberately assigns SCH_RATES / SCH_PAY_RULE / SCH_KNOWN_OFFICES
+      // from functions defined above their declarations — safe, and flagging
+      // it would only train us to ignore the output. `no-undef` is the rule
+      // doing the work here; it is the one that catches a deleted variable.
+      'no-use-before-define': 'off',
+      'no-redeclare': 'off',
+      'no-unused-vars': 'off',
+    },
+  },
 ]
