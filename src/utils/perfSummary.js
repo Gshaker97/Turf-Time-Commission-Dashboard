@@ -34,7 +34,7 @@ import { dealAmounts, countsInTotals } from './commission'
 import { saleOwnerId, teamOfSale, teamLabel } from './team'
 import { RAN_STATUSES, apptDay } from './estimates'
 import { summarizeActivity } from './fieldActivity'
-import { nonRepSet, isNonRep } from './leadGaps'
+import { nonRepSet, isNonRep, ranPast } from './leadGaps'
 
 const UNASSIGNED = 'unassigned'
 
@@ -46,7 +46,7 @@ const localToday = () => {
 }
 
 function newStats() {
-  return { revenue: 0, job: 0, deals: 0, leadCloses: 0, leadRevenue: 0, commission: 0, set: 0, setRan: 0, ran: 0, sgRan: 0, leadRan: 0, activityRows: [] }
+  return { revenue: 0, job: 0, deals: 0, leadCloses: 0, leadRevenue: 0, commission: 0, set: 0, setRan: 0, ran: 0, sgRan: 0, leadRan: 0, pastDue: 0, activityRows: [] }
 }
 
 // A deal-over-appointment rate, or null when it can't be read as a rate:
@@ -68,7 +68,7 @@ function finish(s) {
     leadRevenue: s.leadRevenue, totalRevenue: s.revenue + s.leadRevenue,
     avgDeal:   s.deals ? s.revenue / s.deals : null,
     markupPct: s.revenue > 0 ? ((s.job - s.revenue) / s.revenue) * 100 : null,
-    set: s.set, ran: s.ran, sgRan: s.sgRan, leadRan: s.leadRan,
+    set: s.set, ran: s.ran, sgRan: s.sgRan, leadRan: s.leadRan, pastDue: s.pastDue,
     // Conversion rates (per Keaton): set → ran is a SETTER stat — of the
     // appointments this rep set, how many ran (whoever ran them), so a
     // closer's lead volume never inflates it; self-gen ran → self-gen deals
@@ -95,9 +95,11 @@ function finish(s) {
     showRate:      s.set ? (s.setRan / s.set) * 100 : null,
     sgCloseRate:   rateOrNull(s.deals, s.sgRan),
     leadCloseRate: rateOrNull(s.leadCloses, s.leadRan),
-    // Deals ÷ appointments ran. Cross-source, so it takes the same >100% blank
-    // rule as the other two: a rep can close without ever logging one.
+    // Deals ÷ appointments ran, and deals ÷ appointments set — the two steps
+    // of the funnel. Cross-source, so both take the same >100% blank rule as
+    // the others: a rep can close without ever logging an appointment.
     dealCloseRate: rateOrNull(s.deals, s.ran),
+    setCloseRate:  rateOrNull(s.deals, s.set),
     doors: act.doors, knockDays: act.knockDays, doorsPerDay: act.doorsPerDay,
     firstKnock: act.firstKnock, lastKnock: act.lastKnock, fieldMinutes: act.fieldMinutes,
     hasActivity: act.rows > 0,
@@ -122,7 +124,7 @@ function makeTeamOf(teamCtx, defaultTeamId) {
 }
 
 // One window's raw accumulation: org, offices, and team → rep buckets.
-function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId = null, excluded = new Set(), nonReps = new Set() }) {
+function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId = null, excluded = new Set(), nonReps = new Set(), nowISO = new Date().toISOString() }) {
   const teamOf = makeTeamOf(teamCtx, defaultTeamId)
   const out = (pid) => !!pid && excluded.has(pid)
 
@@ -228,6 +230,13 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
     }
     const setter = out(l.setter_id) ? null : l.setter_id
     const ran = RAN_STATUSES.has(l.status)
+    // Its time passed and the CRM never sent an outcome, so it is neither ran
+    // nor cancelled and it silently drags Ran down. Counted on the day it was
+    // MEANT to run, credited to whoever set it so it follows the scope.
+    if (ranIn && ranPast(l, nowISO)) {
+      org.pastDue += 1
+      if (setter) { const k = teamOf(setter, day); team(k).totals.pastDue += 1; rep(k, setter).pastDue += 1 }
+    }
     if (setIn && setter) {
       const k = teamOf(setter, setDay)
       org.set += 1; team(k).totals.set += 1; rep(k, setter).set += 1
@@ -293,11 +302,14 @@ export function buildPerformance({
 }) {
   const { usersById, heads } = teamCtx
   const today = localToday()
+  // Full timestamp, not a day — `ranPast` compares the appointment's exact
+  // timestamptz, so slicing here would mis-flag anything later today.
+  const nowISO = new Date().toISOString()
   const asOf = range.to && range.to < today ? range.to : today
   const excluded = new Set((excludedIds || []).filter(Boolean))
   const nonReps = nonRepSet(nonRepNames)
   const defTeam = defaultTeamId && usersById[defaultTeamId] ? defaultTeamId : null
-  const acc = (from, to) => accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId: defTeam, excluded, nonReps })
+  const acc = (from, to) => accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId: defTeam, excluded, nonReps, nowISO })
 
   const cur = acc(range.from, range.to)
   const prv = prev ? acc(prev.from, prev.to) : null

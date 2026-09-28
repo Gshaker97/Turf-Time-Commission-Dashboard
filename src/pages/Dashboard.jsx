@@ -4,7 +4,7 @@ import {
   format, subMonths, startOfWeek, endOfWeek, addDays, getDaysInMonth,
 } from 'date-fns'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { Check, X, TrendingUp, TrendingDown, Minus, ChevronRight, ChevronDown, Copy } from 'lucide-react'
+import { Check, X, TrendingUp, TrendingDown, Minus, ChevronRight, ChevronDown, Copy, AlertCircle } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import {
@@ -765,13 +765,13 @@ export default function Dashboard() {
           {node.showFunnel ? (
             <div className="grid grid-cols-3 gap-2">
               {[
-                ['Set',   node.stats.set,  node.stats.showRate != null ? `${node.stats.showRate.toFixed(0)}% ran` : null],
-                ['Ran',   node.stats.ran,  null],
+                ['Set',   node.stats.set,  node.stats.showRate != null ? `${node.stats.showRate.toFixed(0)}% have run` : null],
+                ['Ran',   node.stats.ran,  node.stats.dealCloseRate != null ? `${node.stats.dealCloseRate.toFixed(0)}% closed` : null],
                 // SOLD IS THE DEAL COUNT, not RepCard's "sold" disposition —
                 // reps don't reliably update their leads, so the CRM's own
                 // outcome always undercounts. Same figure as the Deals tile
                 // above, on purpose: one number per thing.
-                ['Sold',  node.stats.deals, node.stats.dealCloseRate != null ? `${node.stats.dealCloseRate.toFixed(0)}% closed` : null],
+                ['Sold',  node.stats.deals, node.stats.setCloseRate != null ? `${node.stats.setCloseRate.toFixed(0)}% of set` : null],
               ].map(([k, v, sub]) => (
                 <div key={k} className="rounded-lg px-3 py-2.5" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
                   <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mb-1">{k}</p>
@@ -782,6 +782,13 @@ export default function Dashboard() {
             </div>
           ) : (
             <p className="text-[12px] text-white/35 leading-relaxed">{node.funnelNote}</p>
+          )}
+          {node.showFunnel && node.stats.pastDue > 0 && (
+            <a href="/leads?missing=info"
+              className="mt-2.5 inline-flex items-center gap-1.5 text-[11.5px] text-amber-300/80 hover:text-amber-300 transition-colors">
+              <AlertCircle size={12} />
+              {node.stats.pastDue} appointment{node.stats.pastDue === 1 ? '' : 's'} past their date with no outcome logged — they count as neither ran nor cancelled. Fix in Leads →
+            </a>
           )}
           {node.level === 'rep' && node.showFunnel && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2">

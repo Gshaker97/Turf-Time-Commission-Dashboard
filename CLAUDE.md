@@ -564,9 +564,23 @@ in range, a rep who left) falls back to company rather than rendering empty.
   caps at "999+". This needed `prev` on REP rows, which `buildPerformance` was
   computing (`prv.teams.get(k).reps`) but not surfacing; office rep rows get
   it the same way.
-- **Conversion rates ride UNDER the count they describe** in the table (per
-  Keaton, "a little nod"): `showRate` under **Set** ("68% ran"), and
-  `dealCloseRate` under **Ran** ("42% closed"). Not their own columns.
+- **Conversion rates ride UNDER the count they describe** (per Keaton, "a
+  little nod"), never as their own columns. In the TABLE: `showRate` under
+  **Set**, `dealCloseRate` under **Ran**. On the FUNNEL CARD every tile shows
+  the step INTO the next one, so none is left blank — **Set** "N% have run"
+  (`showRate`, the cohort), **Ran** "N% closed" (`dealCloseRate` = deals ÷
+  ran), **Sold** "N% of set" (`setCloseRate` = deals ÷ set, the whole funnel).
+  Ran was briefly blank because only two conversions existed for three tiles;
+  adding `setCloseRate` fixed it. All three take the >100% blank rule.
+- **PAST DUE, NO OUTCOME** (`stats.pastDue`): an appointment whose time has
+  passed while the CRM never sent a disposition. It counts as neither ran nor
+  cancelled, so it silently drags Ran down — the Appointments card names the
+  number and links to `/leads?missing=info`, which is where it can be cleared.
+  It reuses `ranPast` from `leadGaps.js` (now exported) so the Dashboard and
+  the Leads "Needs attention" filter can never drift apart. Counted on the day
+  it was MEANT to run and credited to whoever SET it, so it follows the scope.
+  `nowISO` is a full timestamp threaded into `accumulate` — never a sliced
+  day, or anything later today reads as overdue.
 - **Six columns by default** (Revenue, Deals, Avg deal, Markup, Commission,
   Goal); `+ Appointments` adds Set/Ran — NOT Sold, which would
   print the Deals column twice. The old table was

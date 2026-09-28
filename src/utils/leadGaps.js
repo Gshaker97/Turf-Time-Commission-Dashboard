@@ -17,7 +17,10 @@
 // ============================================================
 import { RAN_STATUSES } from './estimates'
 
-const ranPast = (l, nowISO) =>
+// Its time has passed and the CRM never sent an outcome, so it counts as
+// neither ran nor cancelled anywhere. Exported because perfSummary tallies the
+// same thing for the Dashboard's Appointments card — ONE rule, not two.
+export const ranPast = (l, nowISO) =>
   l.status === 'scheduled' && !!l.appointment_at && String(l.appointment_at) < nowISO
 
 // ── People the feed names who are not field reps ────────────────────────────
