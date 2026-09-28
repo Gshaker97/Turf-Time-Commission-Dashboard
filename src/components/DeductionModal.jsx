@@ -19,8 +19,9 @@ const lbl = 'block text-[10px] font-bold uppercase tracking-[0.11em] text-white/
 
 const money = (v) => '$' + Math.abs(Number(v) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const fmtDay = (iso) => (iso ? new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', d: undefined, day: 'numeric', year: 'numeric' }) : '')
+const shortDay = (iso) => (iso ? new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '')
 
-export default function DeductionModal({ deal: fixedDeal, deals = [], users = [], payDates = [], currentRun, edit, onClose, onSave }) {
+export default function DeductionModal({ deal: fixedDeal, deals = [], users = [], payDates = [], currentRun, nextRun, payByRun, edit, onClose, onSave }) {
   const [q, setQ]           = useState('')
   const [dealId, setDealId] = useState(edit?.deal_id || fixedDeal?.id || '')
   const [amount, setAmount] = useState(edit ? String(Math.abs(Number(edit.amount) || 0)) : '')
@@ -105,6 +106,38 @@ export default function DeductionModal({ deal: fixedDeal, deals = [], users = []
     ]
   }, [mode, amt, splitPct, setterPerson, closerPerson])
 
+  // ── What their next cheque actually is ────────────────────────────────
+  // Knowing a rep earned $1,400 on THIS job says nothing about whether $640
+  // can come off their pay — that depends on the whole run. So every person
+  // shows their pay on the run the money would leave from, which follows the
+  // "when" choice: the run picked, or — for a held debt, which has no run of
+  // its own — the NEXT cheque, the first one it can reach.
+  const runDate = when === 'now'  ? (currentRun && currentRun !== 'overdue' ? currentRun : nextRun)
+                : when === 'pick' ? (pickDate || null)
+                : nextRun
+  const payOn = (id) => (id && runDate ? payByRun?.[runDate]?.[id] : null) || null
+
+  // This person's slice of the deduction, so the pay line can flag a take
+  // that does not fit. Zero for someone who is not absorbing any of it.
+  const shareFor = (id) => {
+    if (mode === 'split') return splitRows?.find(r => r.payeeId === id)?.amount ?? 0
+    return effectivePayee === id ? amt : 0
+  }
+
+  // Who is actually absorbing money, and by how much the run comes up short.
+  // This is the answer to "can I take it out" stated in words — the amber
+  // figure alone makes you do the subtraction.
+  const absorbers = people.length
+    ? people.map(p => ({ id: p.id, name: p.name.split(' ')[0], share: shareFor(p.id) }))
+    : effectivePayee
+      ? [{ id: effectivePayee, name: (users.find(u => u.id === effectivePayee)?.name || '').split(' ')[0], share: amt }]
+      : []
+  const overshoot = runDate
+    ? absorbers
+        .map(a => ({ ...a, by: a.share - (payOn(a.id)?.net || 0) }))
+        .filter(a => a.share > 0 && a.by > 0.005)
+    : []
+
   const canSave = amt > 0 && !saving &&
     (mode === 'split' ? !!splitRows && splitRows.every(r => r.amount > 0) : !!effectivePayee)
 
@@ -127,6 +160,23 @@ export default function DeductionModal({ deal: fixedDeal, deals = [], users = []
     })
     setSaving(false)
     if (ok) onClose()
+  }
+
+  // Their whole cheque on that run — `pending` is money on the run that is
+  // not finalized yet, kept separate so a future run does not read as $0 and
+  // does not pretend to be money you can take today.
+  const PayLine = ({ id, share = 0 }) => {
+    const pay = payOn(id)
+    if (!runDate || !id) return null
+    const net = pay?.net || 0
+    const pending = pay?.pending || 0
+    const short = share > 0 && share > net
+    return (
+      <span className={`block text-[10.5px] tabular-nums ${short ? 'text-amber-400' : 'text-white/40'}`}>
+        {shortDay(runDate)} pay {money(net)}
+        {pending > 0 && <span className="text-white/30"> · {money(pending)} pending</span>}
+      </span>
+    )
   }
 
   const Radio = ({ id, value, title, sub }) => (
@@ -224,6 +274,9 @@ export default function DeductionModal({ deal: fixedDeal, deals = [], users = []
                         <span className={`block text-[10.5px] tabular-nums ${amt > p.earned && amt > 0 ? 'text-amber-400/90' : 'text-white/40'}`}>
                           earned {money(p.earned)}
                         </span>
+                        {/* …and what their WHOLE cheque is on the run this
+                            would come off, which is what decides it. */}
+                        <PayLine id={p.id} share={shareFor(p.id)} />
                       </button>
                     )
                   })}
@@ -235,11 +288,14 @@ export default function DeductionModal({ deal: fixedDeal, deals = [], users = []
                   )}
                 </div>
               ) : (
-                <select id="ded-payee" value={effectivePayee} onChange={e => setPayeeId(e.target.value)}
-                  style={field} className={`${fieldCls} appearance-none`}>
-                  <option value="">Pick a person…</option>
-                  {users.filter(u => u.active !== false).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-                </select>
+                <>
+                  <select id="ded-payee" value={effectivePayee} onChange={e => setPayeeId(e.target.value)}
+                    style={field} className={`${fieldCls} appearance-none`}>
+                    <option value="">Pick a person…</option>
+                    {users.filter(u => u.active !== false).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                  </select>
+                  <div className="mt-1.5"><PayLine id={effectivePayee} share={amt} /></div>
+                </>
               )}
 
               {mode === 'split' && splitRows ? (
@@ -262,6 +318,17 @@ export default function DeductionModal({ deal: fixedDeal, deals = [], users = []
               ) : deal && people.length > 1 ? (
                 <p className="text-[11px] text-white/40 mt-1.5">Pre-picked from how this deal already splits deductions.</p>
               ) : null}
+
+              {overshoot.length > 0 && (
+                <p className="text-[11px] text-amber-400 mt-1.5">
+                  {overshoot.map(o => `${o.name} is ${money(o.by)} short`).join(' · ')} on {shortDay(runDate)}
+                  <span className="text-amber-400/60">
+                    {when === 'hold'
+                      ? ' — it waits, then comes out across however many runs it takes.'
+                      : ' — “Hold until they have pay” takes what fits and carries the rest.'}
+                  </span>
+                </p>
+              )}
             </div>
           </div>
 

@@ -376,6 +376,45 @@ export default function Payroll() {
     return Object.values(m).sort((a, b) => b.total - a.total)
   }, [runDeals, runAdjustments, users])
 
+  // ── Pay per person per RUN, for the deduction modal ───────────────────
+  // "Can this actually come out?" is a question about a cheque that may not
+  // be the run on screen — and about BOTH reps when the deduction is split
+  // (per Keaton). `payeeTotals` below only covers the viewed run, so this
+  // builds the same figure for every run. It walks every deal, so it is
+  // built ONLY while the modal is open; the rest of the page is one run.
+  //
+  // It counts exactly what the payee panel counts: finalized deals plus
+  // dated adjustments. A future run whose deals are not finalized yet would
+  // otherwise read $0, so that money rides along as `pending` instead of
+  // being folded in — one number per thing, same as the panel's
+  // "not yet finalized" line.
+  const payByRun = useMemo(() => {
+    if (!dedModal) return null
+    const m = {}
+    const bump = (date, id, amount, key) => {
+      if (!date || !id || !amount) return
+      const day = (m[date] ||= {})
+      const row = (day[id] ||= { net: 0, pending: 0 })
+      row[key] += amount
+    }
+    for (const d of deals) {
+      if (!d.pay_date || d.status === ISSUE) continue
+      const key = isFinalized(d) ? 'net' : 'pending'
+      for (const p of dealPayouts(d, userById)) if (!p.unassigned) bump(d.pay_date, p.id, p.amount, key)
+    }
+    for (const a of adjustments) if (a.pay_date) bump(a.pay_date, a.payee_id, Number(a.amount), 'net')
+    return m
+  }, [dedModal, deals, adjustments, userById])
+
+  // The next cheque anyone will actually receive — what "hold until they have
+  // pay" lands on, and the fallback when the page is parked on the overdue
+  // view. Falls back to the most recent run when nothing is scheduled ahead,
+  // the same rule the page picks its opening view by; the pay line names the
+  // date, so a past run can't be read as a future one.
+  const nextRun = useMemo(
+    () => payDates.find(p => p >= today) || payDates[payDates.length - 1] || null,
+    [payDates, today])
+
   // What each person is currently owed on THIS run — the number the tray
   // prefills a recovery with, so a take never quietly exceeds the cheque.
   const payeeTotals = useMemo(
@@ -1782,7 +1821,7 @@ export default function Payroll() {
       {dedModal && (
         <DeductionModal
           deals={deals} users={users} payDates={payDates}
-          currentRun={view} edit={dedModal.edit}
+          currentRun={view} nextRun={nextRun} payByRun={payByRun} edit={dedModal.edit}
           onClose={() => setDedModal(null)} onSave={saveDeduction} />
       )}
 
