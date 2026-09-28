@@ -46,7 +46,7 @@ const localToday = () => {
 }
 
 function newStats() {
-  return { revenue: 0, job: 0, deals: 0, leadCloses: 0, leadRevenue: 0, commission: 0, set: 0, setRan: 0, ran: 0, sgRan: 0, leadRan: 0, pastDue: 0, activityRows: [] }
+  return { revenue: 0, job: 0, deals: 0, selfGen: 0, leadCloses: 0, leadRevenue: 0, commission: 0, set: 0, setRan: 0, ran: 0, sgRan: 0, leadRan: 0, pastDue: 0, activityRows: [] }
 }
 
 // A deal-over-appointment rate, or null when it can't be read as a rate:
@@ -62,6 +62,8 @@ function finish(s) {
   const act = summarizeActivity(s.activityRows)
   return {
     revenue: s.revenue, job: s.job, deals: s.deals, leadCloses: s.leadCloses, commission: s.commission,
+    // Mutually exclusive with leadCloses; selfGen + setForOthers = deals OWNED.
+    selfGen: s.selfGen, setForOthers: Math.max(0, s.deals - s.selfGen),
     // Self-gen revenue (owner-credited) + baseline of the deals this rep
     // closed for another setter. At team/org level this double-counts a deal
     // whose setter and closer are both in the group — it is a per-rep view.
@@ -184,6 +186,12 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
     if (owner) {
       const r = rep(key, owner); r.revenue += a.baseline; r.job += a.job; r.deals += 1
       const orr = officeRep(off, owner); orr.revenue += a.baseline; orr.job += a.job; orr.deals += 1
+      // Self-gen = no distinct closer, so the owner closed their own deal. A
+      // setter-less deal is a self-gen too: saleOwnerId fell back to the
+      // closer, who therefore both owns and closed it.
+      if (!d.closer_id || d.closer_id === owner) {
+        r.selfGen += 1; orr.selfGen += 1; team(key).totals.selfGen += 1; org.selfGen += 1
+      }
     }
     // Commission follows each rep's own share to each rep's own team.
     if (d.setter_id) {

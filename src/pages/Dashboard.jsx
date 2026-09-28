@@ -17,7 +17,7 @@ import { buildRecordBook, periodEnd } from '../utils/records'
 import { buildPerformance, repFlags } from '../utils/perfSummary'
 import {
   COMPANY, isCompany, pickScope, scopeFilter, resolveScopeGoal,
-  scopeToParam, scopeFromParam, repDeals as repDealsFor,
+  scopeToParam, scopeFromParam, repDeals as repDealsFor, leaderboard,
 } from '../utils/scorecard'
 import { onClickUnlessSelecting } from '../utils/selection'
 import { getPresetRange, getPreviousRange } from '../utils/dateRanges'
@@ -272,6 +272,47 @@ export default function Dashboard() {
   const repDealRows = useMemo(
     () => (node?.level === 'rep' ? repDealsFor(deals, node.key, { from: dateFrom, to: dateTo }) : []),
     [node, deals, dateFrom, dateTo])
+
+  // Every individual in the current scope, ranked. The drill table shows
+  // TEAMS at company level, so this is the only at-a-glance view of people.
+  const repBoard = useMemo(() => leaderboard(perf, scope, { isAdmin }), [perf, scope, isAdmin])
+
+  // Copy the leaderboard as a REAL TABLE (text/html) with a tab-separated
+  // fallback, so it pastes formatted into Canva / Sheets / Docs — Keaton
+  // pastes this straight into a meeting he runs, which is the whole point of
+  // the button. Ghost reps are always dropped from the EXPORT even for an
+  // admin who can see them on screen: it leaves the building.
+  const [copiedBoard, setCopiedBoard] = useState(false)
+  async function copyLeaderboard() {
+    const cols = ['#', 'Rep', 'Revenue', 'Deals', 'Self-Gen', 'Set (passed)', 'Lead Closes', 'Commission']
+    const rows = repBoard.filter(r => !r.ghost).map((r, i) =>
+      [i + 1, r.name, fmt(r.revenue), r.deals, r.selfGen, r.setForOthers, r.leadCloses, fmt(r.commission)])
+    const esc = (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const tsv = [cols, ...rows].map(r => r.join('\t')).join('\n')
+    const html =
+      `<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">` +
+      `<thead><tr style="background:#00b894;color:#0b0b0b">` +
+      cols.map((c, i) => `<th style="padding:6px 12px;text-align:${i >= 2 ? 'right' : 'left'};border:1px solid #d1d5db">${esc(c)}</th>`).join('') +
+      `</tr></thead><tbody>` +
+      rows.map((r, ri) => `<tr style="background:${ri % 2 ? '#f3f4f6' : '#ffffff'};color:#111">` +
+        r.map((c, ci) => `<td style="padding:6px 12px;text-align:${ci >= 2 ? 'right' : 'left'};border:1px solid #d1d5db">${esc(c)}</td>`).join('') +
+        `</tr>`).join('') +
+      `</tbody></table>`
+    const done = () => { setCopiedBoard(true); setTimeout(() => setCopiedBoard(false), 1800) }
+    try {
+      if (navigator.clipboard && window.ClipboardItem) {
+        await navigator.clipboard.write([new window.ClipboardItem({
+          'text/html':  new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([tsv],  { type: 'text/plain' }),
+        })])
+      } else {
+        await navigator.clipboard.writeText(tsv)
+      }
+      done()
+    } catch {
+      try { await navigator.clipboard.writeText(tsv); done() } catch { /* clipboard refused */ }
+    }
+  }
 
   // Copy the visible table for pasting into a text or a slide — the reason
   // this page exists, per Keaton: pulling numbers for team leaders.
@@ -976,6 +1017,80 @@ export default function Dashboard() {
         </div>
       )}
 
+
+      {/* ── Rep leaderboard — FULL WIDTH, under the teams table ──────────
+          Brought back after the merge removed it (per Keaton, who uses it
+          constantly and pastes it into a meeting). The drill table shows
+          TEAMS at company level, so this is the only place individuals are
+          visible at a glance. It follows the scope like everything else.
+
+          NOTE the column is "Set (passed)", never bare "Set": on this same
+          page "Set" already means APPOINTMENTS in the funnel above, and two
+          meanings for one word is the exact problem the merge existed to
+          kill. Here it is a DEAL they set that another rep closed. */}
+      {repBoard.length > 0 && (
+        <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
+          <div className="flex items-start justify-between gap-2 flex-wrap mb-3">
+            <div>
+              <h3 className="text-[13px] md:text-[14px] font-semibold text-white">
+                Rep Leaderboard{node && node.level !== 'company' ? ` — ${node.title}` : ''}
+              </h3>
+              <p className="text-[11px] text-white/30 mt-0.5">
+                {repBoard.length} {repBoard.length === 1 ? 'rep' : 'reps'} with activity · ranked by revenue ·
+                Self-Gen + Set = the deals they own
+              </p>
+            </div>
+            <button onClick={copyLeaderboard}
+              title="Copy as a table — pastes formatted into Canva, Sheets or Docs"
+              className={`px-2.5 py-1.5 rounded-lg text-[11.5px] font-semibold inline-flex items-center gap-1.5 transition-colors ${
+                copiedBoard ? 'text-emerald-400' : 'text-white/45 hover:text-teal'}`}
+              style={{ background: '#1a1a1a', border: '1px solid #333' }}>
+              {copiedBoard ? <Check size={12} /> : <Copy size={12} />}{copiedBoard ? 'Copied' : 'Copy table'}
+            </button>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12.5px]">
+              <thead>
+                <tr className="text-[9px] uppercase tracking-widest text-white/30">
+                  <th className="text-left font-semibold py-1.5 pr-1 w-8">#</th>
+                  <th className="text-left font-semibold py-1.5 pr-2">Rep</th>
+                  <th className="text-right font-semibold py-1.5 px-2">Revenue</th>
+                  <th className="text-right font-semibold py-1.5 px-2">Deals</th>
+                  <th className="text-right font-semibold py-1.5 px-2" title="Deals they set AND closed themselves">Self-Gen</th>
+                  <th className="text-right font-semibold py-1.5 px-2" title="DEALS they set that another rep closed — not appointments">Set (passed)</th>
+                  <th className="text-right font-semibold py-1.5 px-2" title="Deals another rep set that they closed">Lead Closes</th>
+                  <th className="text-right font-semibold py-1.5 px-2">Commission</th>
+                </tr>
+              </thead>
+              <tbody>
+                {repBoard.map((r, i) => (
+                  <tr key={r.id}
+                    onClick={onClickUnlessSelecting(() => setScope({ level: 'rep', key: r.id }))}
+                    className="border-t border-white/5 cursor-pointer hover:bg-white/[0.03]">
+                    <td className="py-2 pr-1 text-white/25 tabular-nums">{i + 1}</td>
+                    <td className="py-2 pr-2">
+                      <span className="font-semibold text-teal">{r.name} ›</span>
+                      {isCompany(scope) && r.team && (
+                        <span className="block text-[10px] text-white/30 font-normal">{r.team}</span>
+                      )}
+                    </td>
+                    <td className="text-right py-2 px-2 tabular-nums text-white font-semibold">
+                      {fmt(r.revenue)}
+                      <Delta cur={r.revenue} prev={r.prev?.revenue} />
+                    </td>
+                    <td className="text-right py-2 px-2 tabular-nums text-white/70">{r.deals}</td>
+                    <td className="text-right py-2 px-2 tabular-nums text-white/50">{r.selfGen}</td>
+                    <td className="text-right py-2 px-2 tabular-nums text-white/50">{r.setForOthers}</td>
+                    <td className="text-right py-2 px-2 tabular-nums text-white/50">{r.leadCloses}</td>
+                    <td className="text-right py-2 px-2 tabular-nums text-white/70">{fmt(r.commission)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* ── Weekly + Annual — stack on mobile ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-5">
