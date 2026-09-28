@@ -4,6 +4,7 @@ import { format } from 'date-fns'
 import { toPng, toBlob } from 'html-to-image'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchCompetitions, fetchDeals, fetchUsers, fetchTeamChanges, insertCompetition, updateCompetition, deleteCompetition } from '../lib/db'
+import { copyTable } from '../lib/clipboard'
 import {
   competitionStandings, competitionStatus, competitionEntryDeals,
   compRounds, roundStatus, roundStandings, roundWinner,
@@ -404,14 +405,75 @@ function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
     () => buildRecordBook(deals, { users, isAdmin, dataStartDate, todayISO: todayISO(), teamCtx }),
     [deals, users, isAdmin, dataStartDate, teamCtx]
   )
+  // A SECOND book built as a non-admin, used ONLY for the export. It reuses
+  // the engine's own ghost rule (records.js drops a ghost's deals from the rep
+  // buckets entirely when isAdmin is false, so the next-best non-ghost holds
+  // the record) rather than stripping names here. The export leaves the
+  // building, so a ghost never rides along even for an admin who sees them on
+  // screen — same rule as the Dashboard leaderboard's copy.
+  const shareBook = useMemo(
+    () => (isAdmin
+      ? buildRecordBook(deals, { users, isAdmin: false, dataStartDate, todayISO: todayISO(), teamCtx })
+      : book),
+    [deals, users, isAdmin, dataStartDate, teamCtx, book]
+  )
+  const [copied, setCopied] = useState(false)
   const c = book.company, r = book.reps, t = book.teams
   const hasAny = Object.values(c).some(x => x.best || x.current) || Object.values(r).some(Boolean)
+
+  // Copy the whole book as ONE table for a Canva slide (per Keaton). Section
+  // bands keep company / rep / team apart without spending a column on it.
+  async function copyBook() {
+    const sc = shareBook.company, sr = shareBook.reps, st = shareBook.teams
+    const val = (v, metric) => v == null ? '—' : metric === 'deals' ? `${v} deal${v === 1 ? '' : 's'}` : fmt(v)
+    const line = (label, rec, metric) =>
+      [label, val(rec?.best?.value, metric), rec?.best?.holderName || '', rec?.best?.label || '']
+    const rows = [
+      { section: 'Company records' },
+      line('Biggest month — revenue', sc.revMonth),
+      line('Biggest week — revenue',  sc.revWeek),
+      line('Biggest day — revenue',   sc.revDay),
+      line('Most deals — month', sc.dealsMonth, 'deals'),
+      line('Most deals — week',  sc.dealsWeek,  'deals'),
+      line('Most deals — day',   sc.dealsDay,   'deals'),
+      { section: 'Rep records' },
+      line('Biggest rep month', sr.revMonth),
+      line('Biggest rep week',  sr.revWeek),
+      line('Biggest rep day',   sr.revDay),
+      ['Biggest single deal', val(sr.biggestDeal?.value), sr.biggestDeal?.holderName || '', sr.biggestDeal?.when || ''],
+      line('Most deals — rep month', sr.dealsMonth, 'deals'),
+      line('Most deals — rep week',  sr.dealsWeek,  'deals'),
+    ]
+    if (st && Object.values(st).some(x => x.best)) {
+      rows.push({ section: 'Team records' },
+        line('Biggest team month', st.revMonth),
+        line('Biggest team week',  st.revWeek),
+        line('Biggest team day',   st.revDay),
+        line('Most deals — team month', st.dealsMonth, 'deals'),
+        line('Most deals — team week',  st.dealsWeek,  'deals'),
+        line('Most deals — team day',   st.dealsDay,   'deals'))
+    }
+    // Only the VALUE column is numeric; Who and When read better left-aligned.
+    if (await copyTable(['Record', 'Value', 'Who', 'When'], rows, { rightFrom: 1 })) {
+      setCopied(true); setTimeout(() => setCopied(false), 1800)
+    }
+  }
+
   if (!hasAny) return null
   return (
     <div className="mt-6 rounded-xl p-4 md:p-5" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-      <div className="flex items-baseline gap-2.5 flex-wrap">
-        <h2 className="text-[15px] font-extrabold text-white">📖 Record Book</h2>
-        <p className="text-[11px] text-white/35">All-time bests · completed periods only · since {dataStartDate ? format(new Date(dataStartDate + 'T12:00:00'), 'MMMM yyyy') : 'the beginning'}</p>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex items-baseline gap-2.5 flex-wrap">
+          <h2 className="text-[15px] font-extrabold text-white">📖 Record Book</h2>
+          <p className="text-[11px] text-white/35">All-time bests · completed periods only · since {dataStartDate ? format(new Date(dataStartDate + 'T12:00:00'), 'MMMM yyyy') : 'the beginning'}</p>
+        </div>
+        <button onClick={copyBook}
+          title="Copy the whole book as a table — pastes formatted into Canva, Sheets or Docs"
+          className={`px-2.5 py-1.5 rounded-lg text-[11.5px] font-semibold inline-flex items-center gap-1.5 transition-colors flex-shrink-0 ${
+            copied ? 'text-emerald-400' : 'text-white/45 hover:text-teal'}`}
+          style={{ background: '#242424', border: '1px solid #333' }}>
+          {copied ? <Check size={12} /> : <Copy size={12} />}{copied ? 'Copied' : 'Copy table'}
+        </button>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-3">
         <div>

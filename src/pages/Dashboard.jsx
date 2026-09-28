@@ -20,6 +20,7 @@ import {
   scopeToParam, scopeFromParam, repDeals as repDealsFor, leaderboard,
 } from '../utils/scorecard'
 import { onClickUnlessSelecting } from '../utils/selection'
+import { copyTable as copyRichTable } from '../lib/clipboard'
 import { getPresetRange, getPreviousRange } from '../utils/dateRanges'
 import DateRangeFilter from '../components/DateRangeFilter'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
@@ -287,30 +288,8 @@ export default function Dashboard() {
     const cols = ['#', 'Rep', 'Revenue', 'Deals', 'Self-Gen', 'Set (passed)', 'Lead Closes', 'Commission']
     const rows = repBoard.filter(r => !r.ghost).map((r, i) =>
       [i + 1, r.name, fmt(r.revenue), r.deals, r.selfGen, r.setForOthers, r.leadCloses, fmt(r.commission)])
-    const esc = (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    const tsv = [cols, ...rows].map(r => r.join('\t')).join('\n')
-    const html =
-      `<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">` +
-      `<thead><tr style="background:#00b894;color:#0b0b0b">` +
-      cols.map((c, i) => `<th style="padding:6px 12px;text-align:${i >= 2 ? 'right' : 'left'};border:1px solid #d1d5db">${esc(c)}</th>`).join('') +
-      `</tr></thead><tbody>` +
-      rows.map((r, ri) => `<tr style="background:${ri % 2 ? '#f3f4f6' : '#ffffff'};color:#111">` +
-        r.map((c, ci) => `<td style="padding:6px 12px;text-align:${ci >= 2 ? 'right' : 'left'};border:1px solid #d1d5db">${esc(c)}</td>`).join('') +
-        `</tr>`).join('') +
-      `</tbody></table>`
-    const done = () => { setCopiedBoard(true); setTimeout(() => setCopiedBoard(false), 1800) }
-    try {
-      if (navigator.clipboard && window.ClipboardItem) {
-        await navigator.clipboard.write([new window.ClipboardItem({
-          'text/html':  new Blob([html], { type: 'text/html' }),
-          'text/plain': new Blob([tsv],  { type: 'text/plain' }),
-        })])
-      } else {
-        await navigator.clipboard.writeText(tsv)
-      }
-      done()
-    } catch {
-      try { await navigator.clipboard.writeText(tsv); done() } catch { /* clipboard refused */ }
+    if (await copyRichTable(cols, rows, { rightFrom: 2 })) {
+      setCopiedBoard(true); setTimeout(() => setCopiedBoard(false), 1800)
     }
   }
 
@@ -322,18 +301,18 @@ export default function Dashboard() {
                   'Revenue','Deals','Avg deal','Markup','Commission']
     const line = (label, st) => [label,
       ...(showActivity ? [st.set ?? 0, st.ran ?? 0] : []),
-      Math.round(st.revenue), st.deals,
-      st.avgDeal != null ? Math.round(st.avgDeal) : '',
+      fmt(st.revenue), st.deals,
+      st.avgDeal != null ? fmt(st.avgDeal) : '',
       st.markupPct != null ? st.markupPct.toFixed(1) + '%' : '',
-      Math.round(st.commission)]
-    const rows = node.children.length
-      ? node.children.map(c => line(c.label, c.stats))
-      : [line(node.title, node.stats)]
-    const tsv = [`${node.title} · ${dateFrom} to ${dateTo}`, cols.join('\t'),
-                 ...rows.map(r => r.join('\t')),
-                 line('TOTAL', node.stats).join('\t')].join('\n')
-    try { await navigator.clipboard.writeText(tsv); setCopied(true); setTimeout(() => setCopied(false), 1800) }
-    catch { /* clipboard refused — nothing useful to do */ }
+      fmt(st.commission)]
+    const rows = [
+      { section: `${node.title} · ${dateFrom} to ${dateTo}` },
+      ...(node.children.length ? node.children.map(c => line(c.label, c.stats)) : []),
+      line('TOTAL', node.stats),
+    ]
+    if (await copyRichTable(cols, rows, { rightFrom: 1 })) {
+      setCopied(true); setTimeout(() => setCopied(false), 1800)
+    }
   }
 
   // ── Record moments: every record currently falling, in one card ──

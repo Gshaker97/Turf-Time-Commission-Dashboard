@@ -476,7 +476,22 @@ passed — TEAM records (same six, date-effective via `teamOfSale`, Unassigned
 excluded). Rep/team records use `pickEntityRecord` (maps keyed
 `entityId|periodKey`) so they carry best/prev/current + watch/new status like
 company ones;
-`personalBests(deals, repId, …)` → one rep's own bests. Records come from
+`personalBests(deals, repId, …)` → one rep's own bests.
+**The Record Book card has a "Copy table" button** (per Keaton, for a Canva
+slideshow): the whole book as ONE table — `Record · Value · Who · When` with
+section bands for Company / Rep / Team. It builds a SECOND book with
+`isAdmin: false` purely for the export, so the engine's own ghost rule applies
+(records.js drops a ghost's deals from the rep buckets entirely, and the
+next-best non-ghost holds the record) — a ghost never rides along even for an
+admin who sees them on screen, same as the Dashboard leaderboard's copy.
+**Rich copy goes through `src/lib/clipboard.js`** (`copyTable` /
+`buildTableHtml` / `buildTableText`) — the ONE rule, shared by the Record Book,
+the Dashboard's rep leaderboard and its drill table. It writes `text/html` AND
+`text/plain` via `ClipboardItem` so the paste lands as a real table in Canva /
+Sheets / Docs instead of one run-on line; plain text alone was the old bug.
+A row of `{ section: 'Label' }` renders as a full-width band, which is how one
+table carries several groups without spending a column naming them. Values are
+escaped, so a name containing `<` or `&` can never inject markup. Records come from
 COMPLETED periods only; the current period rides along as `status: 'watch'`
 (≥85% of best) or `'new'` (beating it). Canceled excluded; sale dates before
 `dataStartDate` excluded. Surfaces: **Competitions page** bottom = the
