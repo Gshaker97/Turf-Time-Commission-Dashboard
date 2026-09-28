@@ -581,6 +581,37 @@ in range, a rep who left) falls back to company rather than rendering empty.
   it was MEANT to run and credited to whoever SET it, so it follows the scope.
   `nowISO` is a full timestamp threaded into `accumulate` — never a sliced
   day, or anything later today reads as overdue.
+- **THE REP LEADERBOARD IS BACK**, full width, directly under the drill
+  table (per Keaton: "there is no standing leaderboard any more, so at a
+  glance I don't have a way to see individuals' performance… I copy and paste
+  that leaderboard specifically into another meeting I run"). The merge
+  dropped it because the drill table lists reps — but only AFTER you pick a
+  team, and at company level it lists TEAMS, so individuals were invisible
+  until you clicked. `leaderboard(perf, scope, { isAdmin })` in scorecard.js
+  ranks every rep INSIDE the current scope by revenue.
+  - Columns: `# · Rep · Revenue (+▲▼) · Deals · Self-Gen · Set (passed) ·
+    Lead Closes · Commission`. The three counts are MUTUALLY EXCLUSIVE, the
+    same rule the old leaderboard used, and `selfGen + setForOthers = deals
+    OWNED` while a lead close is never an extra deal.
+  - **The column is "Set (passed)", NEVER bare "Set".** On this same page
+    "Set" already means APPOINTMENTS in the funnel above; two meanings for one
+    word on one screen is the exact failure the merge existed to end. Here it
+    is a DEAL they set that another rep closed.
+  - `selfGen` is new on the engine (a deal with no distinct closer counts,
+    since the owner closed it — and a setter-less deal is a self-gen because
+    `saleOwnerId` fell back to the closer); `setForOthers` is derived as
+    `deals − selfGen` so the two can never disagree.
+  - At COMPANY scope a rep who MOVED TEAMS mid-range has a row under each
+    team (deliberate — it makes team totals sum). A leaderboard is about the
+    PERSON, so `leaderboard` merges those rows and labels the team "Moved
+    teams". Every other scope already isolates one team or office.
+  - **Copy table** writes `text/html` AND `text/plain` via `ClipboardItem`, so
+    it pastes as a FORMATTED table into Canva / Sheets / Docs — that is the
+    point of the button, not a convenience. Ghost reps are dropped from the
+    EXPORT even for an admin who sees them on screen: it leaves the building.
+  - Rows are clickable and drill to that rep. Anyone with no activity in the
+    window is filtered out; a setter who handed everything off still appears,
+    because they own those deals.
 - **Six columns by default** (Revenue, Deals, Avg deal, Markup, Commission,
   Goal); `+ Appointments` adds Set/Ran — NOT Sold, which would
   print the Deals column twice. The old table was

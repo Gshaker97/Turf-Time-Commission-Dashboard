@@ -225,3 +225,56 @@ export function repDeals(deals, repId, { from, to } = {}) {
                  (!from || d.sale_date >= from) && (!to || d.sale_date <= to))
     .sort((a, b) => String(b.sale_date).localeCompare(String(a.sale_date)))
 }
+
+// ── Rep leaderboard ──────────────────────────────────────────────────────
+// Every INDIVIDUAL inside the current scope, ranked. The Dashboard's drill
+// table shows teams at company level, so without this there is no at-a-glance
+// view of people — which is what it is for (per Keaton, who pastes it into a
+// meeting he runs).
+//
+// At company scope a rep who MOVED TEAMS mid-range has a row under each team
+// carrying only that team's work (deliberate — it makes every team total sum).
+// A leaderboard is about the PERSON, so those rows are merged back together
+// here; anywhere else the scope already isolates one team or office.
+export function leaderboard(perf, scope, { isAdmin = false } = {}) {
+  if (!perf) return []
+  let rows = []
+  if (isCompany(scope)) {
+    const byId = new Map()
+    for (const t of perf.teams) {
+      for (const r of t.rows) {
+        const prevRow = byId.get(r.id)
+        if (!prevRow) { byId.set(r.id, { ...r, team: t.label }); continue }
+        // Same person, two teams this range — add their work together and
+        // say so rather than showing them twice or picking one arbitrarily.
+        byId.set(r.id, {
+          ...prevRow, team: 'Moved teams',
+          revenue: prevRow.revenue + r.revenue,
+          deals: prevRow.deals + r.deals,
+          selfGen: prevRow.selfGen + r.selfGen,
+          setForOthers: prevRow.setForOthers + r.setForOthers,
+          leadCloses: prevRow.leadCloses + r.leadCloses,
+          leadRevenue: prevRow.leadRevenue + r.leadRevenue,
+          totalRevenue: prevRow.totalRevenue + r.totalRevenue,
+          commission: prevRow.commission + r.commission,
+        })
+      }
+    }
+    rows = [...byId.values()]
+  } else if (scope.level === 'team') {
+    const t = perf.teams.find(x => x.key === scope.key)
+    rows = (t?.rows || []).map(r => ({ ...r, team: t.label }))
+  } else if (scope.level === 'office') {
+    const o = perf.offices.find(x => x.key === scope.key)
+    rows = (o?.rows || []).map(r => ({ ...r, team: o.name }))
+  } else {
+    return []       // a single rep is not a leaderboard
+  }
+
+  return rows
+    // Someone with nothing in the window is noise on a ranking. A setter who
+    // handed everything off still shows: they own those deals.
+    .filter(r => r.deals || r.leadCloses || r.revenue || r.commission)
+    .filter(r => isAdmin || !r.ghost)      // ghost names stay hidden from non-admins
+    .sort((a, b) => b.revenue - a.revenue || b.deals - a.deals || a.name.localeCompare(b.name))
+}
