@@ -278,3 +278,14 @@ export function leaderboard(perf, scope, { isAdmin = false } = {}) {
     .filter(r => isAdmin || !r.ghost)      // ghost names stay hidden from non-admins
     .sort((a, b) => b.revenue - a.revenue || b.deals - a.deals || a.name.localeCompare(b.name))
 }
+
+// Rank the board by any column. Everything sortable is numeric except the
+// name, and revenue always breaks a tie so equal counts still order sensibly.
+export function sortLeaderboard(rows, key = 'revenue', dir = 'desc') {
+  const mul = dir === 'asc' ? 1 : -1
+  return [...rows].sort((a, b) => {
+    if (key === 'name') return a.name.localeCompare(b.name) * mul
+    const d = ((a[key] ?? 0) - (b[key] ?? 0)) * mul
+    return d || (b.revenue - a.revenue) || a.name.localeCompare(b.name)
+  })
+}

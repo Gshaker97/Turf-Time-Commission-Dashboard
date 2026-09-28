@@ -604,18 +604,33 @@ in range, a rep who left) falls back to company rather than rendering empty.
   team, and at company level it lists TEAMS, so individuals were invisible
   until you clicked. `leaderboard(perf, scope, { isAdmin })` in scorecard.js
   ranks every rep INSIDE the current scope by revenue.
-  - Columns: `# · Rep · Revenue (+▲▼) · Deals · Self-Gen · Set (passed) ·
-    Lead Closes · Commission`. The three counts are MUTUALLY EXCLUSIVE, the
-    same rule the old leaderboard used, and `selfGen + setForOthers = deals
-    OWNED` while a lead close is never an extra deal.
-  - **The column is "Set (passed)", NEVER bare "Set".** On this same page
-    "Set" already means APPOINTMENTS in the funnel above; two meanings for one
-    word on one screen is the exact failure the merge existed to end. Here it
-    is a DEAL they set that another rep closed.
-  - `selfGen` is new on the engine (a deal with no distinct closer counts,
-    since the owner closed it — and a setter-less deal is a self-gen because
-    `saleOwnerId` fell back to the closer); `setForOthers` is derived as
-    `deals − selfGen` so the two can never disagree.
+  - Columns: `# · Rep · Revenue (+▲▼) · Total Revenue · Deals · Self-Gen ·
+    Lead Closes · Commission`. **Every header is SORTABLE** (`sortLeaderboard`
+    in scorecard.js, `SortTh` in the page) — tap to rank by it, tap again to
+    flip; revenue breaks every tie. Default is revenue desc.
+  - **TWO revenue columns, deliberately.** `Revenue` is owner-credited (the
+    deals they OWN — the site's one definition everywhere else). `Total
+    Revenue` adds the baseline of deals they CLOSED for another setter
+    (`totalRevenue = revenue + leadRevenue`), with a "+$X closed" sub-line
+    when the two differ. Without it a pure closer reads $0 revenue while
+    having closed six deals — per Keaton, "closers who are closing leads can
+    see the total revenue they're involved in". A self-gen counts ONCE.
+    **Total Revenue is a PER-PERSON figure: never sum it across a team**, as a
+    deal whose setter AND closer are both on that team would count twice.
+    That is why the leaderboard has no total row and the drill table does not
+    carry this column.
+  - **"Set (passed)" was REMOVED as redundant** (per Keaton, agreed): `Deals =
+    Self-Gen + Set (passed)`, so any two give the third and one column was
+    pure arithmetic. `Deals · Self-Gen · Lead Closes` survives — deals owned,
+    how many they took start to finish, and what they closed for someone
+    else; "passed" is the least interesting of the three and is Deals −
+    Self-Gen at a glance. Dropping it also retired the awkward "Set (passed)"
+    label, which only existed to avoid colliding with the funnel's
+    appointment "Set". **Do not re-add a DEALS column called "Set".**
+  - `selfGen` is on the engine (a deal with no distinct closer counts, since
+    the owner closed it — and a setter-less deal is a self-gen because
+    `saleOwnerId` fell back to the closer); `setForOthers` is still computed
+    as `deals − selfGen` and available, just not displayed.
   - At COMPANY scope a rep who MOVED TEAMS mid-range has a row under each
     team (deliberate — it makes team totals sum). A leaderboard is about the
     PERSON, so `leaderboard` merges those rows and labels the team "Moved

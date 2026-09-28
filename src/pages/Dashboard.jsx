@@ -4,7 +4,7 @@ import {
   format, subMonths, startOfWeek, endOfWeek, addDays, getDaysInMonth,
 } from 'date-fns'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { Check, X, TrendingUp, TrendingDown, Minus, ChevronRight, ChevronDown, Copy, AlertCircle } from 'lucide-react'
+import { Check, X, TrendingUp, TrendingDown, Minus, ChevronRight, ChevronDown, ChevronUp, ChevronsUpDown, Copy, AlertCircle } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import {
@@ -17,7 +17,7 @@ import { buildRecordBook, periodEnd } from '../utils/records'
 import { buildPerformance, repFlags } from '../utils/perfSummary'
 import {
   COMPANY, isCompany, pickScope, scopeFilter, resolveScopeGoal,
-  scopeToParam, scopeFromParam, repDeals as repDealsFor, leaderboard,
+  scopeToParam, scopeFromParam, repDeals as repDealsFor, leaderboard, sortLeaderboard,
 } from '../utils/scorecard'
 import { onClickUnlessSelecting } from '../utils/selection'
 import { copyTable as copyRichTable } from '../lib/clipboard'
@@ -38,6 +38,23 @@ function Trend({ cur, prev, suffix = 'vs prev' }) {
       <Icon size={10} /><span>{Math.abs(pct).toFixed(1)}%</span>
       <span className="text-white/25 font-normal">{suffix}</span>
     </div>
+  )
+}
+
+// A leaderboard column header you can rank by. Shows the live arrow, or a
+// faint hint when it isn't the active sort.
+function SortTh({ label, col, sort, onSort, title, first }) {
+  const on = sort.key === col
+  return (
+    <th className={`py-1.5 ${first ? 'pr-2' : 'px-2'}`} title={title}>
+      <button onClick={() => onSort(col)}
+        className={`w-full flex items-center gap-0.5 uppercase tracking-widest text-[9px] font-semibold transition-colors ${
+          first ? 'justify-start' : 'justify-end'} ${on ? 'text-teal' : 'text-white/30 hover:text-white/60'}`}>
+        <span>{label}</span>
+        {on ? (sort.dir === 'asc' ? <ChevronUp size={9} /> : <ChevronDown size={9} />)
+            : <ChevronsUpDown size={9} className="opacity-40" />}
+      </button>
+    </th>
   )
 }
 
@@ -276,7 +293,12 @@ export default function Dashboard() {
 
   // Every individual in the current scope, ranked. The drill table shows
   // TEAMS at company level, so this is the only at-a-glance view of people.
-  const repBoard = useMemo(() => leaderboard(perf, scope, { isAdmin }), [perf, scope, isAdmin])
+  const repBoardRaw = useMemo(() => leaderboard(perf, scope, { isAdmin }), [perf, scope, isAdmin])
+  const [boardSort, setBoardSort] = useState({ key: 'revenue', dir: 'desc' })
+  const toggleBoardSort = (key) =>
+    setBoardSort(v => (v.key === key ? { key, dir: v.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }))
+  const repBoard = useMemo(() => sortLeaderboard(repBoardRaw, boardSort.key, boardSort.dir),
+    [repBoardRaw, boardSort])
 
   // Copy the leaderboard as a REAL TABLE (text/html) with a tab-separated
   // fallback, so it pastes formatted into Canva / Sheets / Docs — Keaton
@@ -285,9 +307,9 @@ export default function Dashboard() {
   // admin who can see them on screen: it leaves the building.
   const [copiedBoard, setCopiedBoard] = useState(false)
   async function copyLeaderboard() {
-    const cols = ['#', 'Rep', 'Revenue', 'Deals', 'Self-Gen', 'Set (passed)', 'Lead Closes', 'Commission']
+    const cols = ['#', 'Rep', 'Revenue', 'Total Revenue', 'Deals', 'Self-Gen', 'Lead Closes', 'Commission']
     const rows = repBoard.filter(r => !r.ghost).map((r, i) =>
-      [i + 1, r.name, fmt(r.revenue), r.deals, r.selfGen, r.setForOthers, r.leadCloses, fmt(r.commission)])
+      [i + 1, r.name, fmt(r.revenue), fmt(r.totalRevenue), r.deals, r.selfGen, r.leadCloses, fmt(r.commission)])
     if (await copyRichTable(cols, rows, { rightFrom: 2 })) {
       setCopiedBoard(true); setTimeout(() => setCopiedBoard(false), 1800)
     }
@@ -1015,8 +1037,8 @@ export default function Dashboard() {
                 Rep Leaderboard{node && node.level !== 'company' ? ` — ${node.title}` : ''}
               </h3>
               <p className="text-[11px] text-white/30 mt-0.5">
-                {repBoard.length} {repBoard.length === 1 ? 'rep' : 'reps'} with activity · ranked by revenue ·
-                Self-Gen + Set = the deals they own
+                {repBoard.length} {repBoard.length === 1 ? 'rep' : 'reps'} with activity · tap a column to rank by it ·
+                Total Revenue includes deals they closed for another setter
               </p>
             </div>
             <button onClick={copyLeaderboard}
@@ -1031,15 +1053,20 @@ export default function Dashboard() {
           <div className="overflow-x-auto">
             <table className="w-full text-[12.5px]">
               <thead>
-                <tr className="text-[9px] uppercase tracking-widest text-white/30">
-                  <th className="text-left font-semibold py-1.5 pr-1 w-8">#</th>
-                  <th className="text-left font-semibold py-1.5 pr-2">Rep</th>
-                  <th className="text-right font-semibold py-1.5 px-2">Revenue</th>
-                  <th className="text-right font-semibold py-1.5 px-2">Deals</th>
-                  <th className="text-right font-semibold py-1.5 px-2" title="Deals they set AND closed themselves">Self-Gen</th>
-                  <th className="text-right font-semibold py-1.5 px-2" title="DEALS they set that another rep closed — not appointments">Set (passed)</th>
-                  <th className="text-right font-semibold py-1.5 px-2" title="Deals another rep set that they closed">Lead Closes</th>
-                  <th className="text-right font-semibold py-1.5 px-2">Commission</th>
+                <tr>
+                  <th className="text-left font-semibold py-1.5 pr-1 w-8 text-[9px] uppercase tracking-widest text-white/30">#</th>
+                  <SortTh first label="Rep" col="name" sort={boardSort} onSort={toggleBoardSort} />
+                  <SortTh label="Revenue" col="revenue" sort={boardSort} onSort={toggleBoardSort}
+                    title="Revenue on the deals they OWN — what they set, or closed with no setter recorded" />
+                  <SortTh label="Total Revenue" col="totalRevenue" sort={boardSort} onSort={toggleBoardSort}
+                    title="Every deal they were involved in: their own, plus the ones they closed for another setter. A self-gen counts once. Per-person — do not add these up across a team, since a deal whose setter AND closer are both on it would count twice." />
+                  <SortTh label="Deals" col="deals" sort={boardSort} onSort={toggleBoardSort}
+                    title="Deals they own = Self-Gen + the ones they set and passed to a closer" />
+                  <SortTh label="Self-Gen" col="selfGen" sort={boardSort} onSort={toggleBoardSort}
+                    title="Deals they set AND closed themselves" />
+                  <SortTh label="Lead Closes" col="leadCloses" sort={boardSort} onSort={toggleBoardSort}
+                    title="Deals another rep set that they closed — the setter still owns the deal" />
+                  <SortTh label="Commission" col="commission" sort={boardSort} onSort={toggleBoardSort} />
                 </tr>
               </thead>
               <tbody>
@@ -1058,9 +1085,14 @@ export default function Dashboard() {
                       {fmt(r.revenue)}
                       <Delta cur={r.revenue} prev={r.prev?.revenue} />
                     </td>
+                    <td className="text-right py-2 px-2 tabular-nums text-white/75">
+                      {fmt(r.totalRevenue)}
+                      {r.leadRevenue > 0 && (
+                        <span className="block text-[10px] text-white/30 font-normal">+{fmt(r.leadRevenue)} closed</span>
+                      )}
+                    </td>
                     <td className="text-right py-2 px-2 tabular-nums text-white/70">{r.deals}</td>
                     <td className="text-right py-2 px-2 tabular-nums text-white/50">{r.selfGen}</td>
-                    <td className="text-right py-2 px-2 tabular-nums text-white/50">{r.setForOthers}</td>
                     <td className="text-right py-2 px-2 tabular-nums text-white/50">{r.leadCloses}</td>
                     <td className="text-right py-2 px-2 tabular-nums text-white/70">{fmt(r.commission)}</td>
                   </tr>
