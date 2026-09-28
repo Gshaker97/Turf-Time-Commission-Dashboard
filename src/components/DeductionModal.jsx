@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { X, Search } from 'lucide-react'
+import { dealAmounts } from '../utils/commission'
 
 // ── Log (or edit) a deduction ────────────────────────────────────────────
 // Records what is OWED. It never touches deals.deduction_amount — that column
@@ -25,6 +26,14 @@ export default function DeductionModal({ deal: fixedDeal, deals = [], users = []
   const [amount, setAmount] = useState(edit ? String(Math.abs(Number(edit.amount) || 0)) : '')
   const [note, setNote]     = useState(edit?.note || '')
   const [payeeId, setPayeeId] = useState(edit?.payee_id || '')
+  // 'one' = one person absorbs it; 'split' = BOTH do, and we write TWO debt
+  // rows. Two rows rather than one flagged row because each share then
+  // recovers on its OWN pay run — the ledger, the tray, the pay statement and
+  // the rep's Commissions card all keep working with no change at all.
+  // Create only: re-splitting a debt that already has recoveries against it
+  // would mean unpicking money already paid.
+  const [mode, setMode]     = useState('one')
+  const [splitPct, setSplitPct] = useState(50)      // the SETTER's share
   const [when, setWhen]     = useState(edit ? 'hold' : 'hold')   // hold | now | pick
   const [pickDate, setPickDate] = useState(currentRun && currentRun !== 'overdue' ? currentRun : (payDates[0] || ''))
   const [saving, setSaving] = useState(false)
@@ -45,15 +54,23 @@ export default function DeductionModal({ deal: fixedDeal, deals = [], users = []
 
   // Who the deal already says absorbs a deduction — the same rule the
   // commission engine pays by, so the default matches how the job was priced.
+  // What each person actually EARNED on this job, so you can see at a glance
+  // whether the deduction fits inside their pay for it.
+  const amounts = useMemo(() => (deal ? dealAmounts(deal) : null), [deal])
+
   const people = useMemo(() => {
     if (!deal) return []
     const setter = users.find(u => u.id === deal.setter_id)
     const closer = users.find(u => u.id === deal.closer_id)
     const out = []
-    if (setter) out.push({ id: setter.id, name: setter.name, role: 'Setter' })
-    if (closer && closer.id !== setter?.id) out.push({ id: closer.id, name: closer.name, role: 'Closer' })
+    if (setter) out.push({ id: setter.id, name: setter.name, role: 'Setter', earned: amounts?.setter ?? 0 })
+    if (closer && closer.id !== setter?.id) out.push({ id: closer.id, name: closer.name, role: 'Closer', earned: amounts?.closer ?? 0 })
     return out
-  }, [deal, users])
+  }, [deal, users, amounts])
+
+  const canSplit = !edit && people.length === 2
+  const setterPerson = people.find(p => p.role === 'Setter')
+  const closerPerson = people.find(p => p.role === 'Closer')
 
   const defaultPayee = useMemo(() => {
     if (!deal) return ''
@@ -65,26 +82,48 @@ export default function DeductionModal({ deal: fixedDeal, deals = [], users = []
 
   const effectivePayee = payeeId || defaultPayee
   const amt = Math.abs(parseFloat(amount) || 0)
-  const canSave = amt > 0 && !!effectivePayee && !saving
 
   function pickDeal(d) {
     setDealId(d.id); setQ('')
     setPayeeId('')                                   // re-derive from the new deal
+    setMode('one')
+    // Start from how this deal already splits deductions, same as the editor.
+    const pct = d.deduction_split_pct != null ? Math.round(Number(d.deduction_split_pct) * 100) : 50
+    setSplitPct(Math.min(100, Math.max(0, pct)))
     if (!note.trim()) setNote('')
   }
+
+  // Round to cents and give any rounding remainder to the LARGER share, so the
+  // two rows always add back to exactly what was typed.
+  const splitRows = useMemo(() => {
+    if (mode !== 'split' || !setterPerson || !closerPerson) return null
+    const setterCut = Math.round(amt * (splitPct / 100) * 100) / 100
+    const closerCut = Math.round((amt - setterCut) * 100) / 100
+    return [
+      { payeeId: setterPerson.id, amount: setterCut, who: setterPerson },
+      { payeeId: closerPerson.id, amount: closerCut, who: closerPerson },
+    ]
+  }, [mode, amt, splitPct, setterPerson, closerPerson])
+
+  const canSave = amt > 0 && !saving &&
+    (mode === 'split' ? !!splitRows && splitRows.every(r => r.amount > 0) : !!effectivePayee)
 
   async function save() {
     if (!canSave) return
     setSaving(true)
+    const payDate = when === 'now' ? (currentRun !== 'overdue' ? currentRun : null)
+                  : when === 'pick' ? (pickDate || null)
+                  : null                             // hold = the debt, no run
+    // ONE call carrying one row or two — Payroll writes them together so a
+    // split can never half-save and leave one person owing the whole thing.
     const ok = await onSave({
       id: edit?.id || null,
-      payeeId: effectivePayee,
       dealId: dealId || null,
-      amount: -amt,                                  // stored signed, like every adjustment
       note: note.trim() || null,
-      payDate: when === 'now' ? (currentRun !== 'overdue' ? currentRun : null)
-             : when === 'pick' ? (pickDate || null)
-             : null,                                 // hold = the debt, no run
+      payDate,
+      rows: mode === 'split'
+        ? splitRows.map(r => ({ payeeId: r.payeeId, amount: -r.amount }))
+        : [{ payeeId: effectivePayee, amount: -amt }],
     })
     setSaving(false)
     if (ok) onClose()
@@ -127,6 +166,7 @@ export default function DeductionModal({ deal: fixedDeal, deals = [], users = []
                   <p className="text-[13px] font-semibold text-white truncate">{deal.deal_name}</p>
                   <p className="text-[11px] text-white/55 truncate">
                     {money(deal.baseline_revenue)} baseline · sold {deal.sale_date || '—'}
+                    {' · installed '}{deal.install_date || 'not set'}
                     {deal.status ? ` · ${deal.status}` : ''}
                   </p>
                 </div>
@@ -149,7 +189,7 @@ export default function DeductionModal({ deal: fixedDeal, deals = [], users = []
                         className="w-full text-left px-3 py-2 border-b border-white/5 last:border-0 hover:bg-white/5 transition-colors">
                         <p className="text-[12.5px] text-white/85 truncate">{d.deal_name}</p>
                         <p className="text-[10.5px] text-white/40 truncate">
-                          {money(d.baseline_revenue)} baseline · sold {d.sale_date || '—'} · {d.status || '—'}
+                          {money(d.baseline_revenue)} baseline · sold {d.sale_date || '—'} · installed {d.install_date || 'not set'} · {d.status || '—'}
                         </p>
                       </button>
                     ))}
@@ -171,12 +211,28 @@ export default function DeductionModal({ deal: fixedDeal, deals = [], users = []
               <span className={lbl}>Who absorbs it</span>
               {people.length > 0 ? (
                 <div className="flex gap-1.5">
-                  {people.map(p => (
-                    <button key={p.id} onClick={() => setPayeeId(p.id)}
-                      className={`flex-1 h-10 rounded-lg text-[12.5px] font-semibold transition-colors truncate px-2 ${effectivePayee === p.id ? 'bg-teal/15 border border-teal/50 text-teal' : 'border border-white/10 text-white/60 hover:text-white'}`}>
-                      {p.role} · {p.name.split(' ')[0]}
+                  {people.map(p => {
+                    const on = mode === 'one' && effectivePayee === p.id
+                    return (
+                      <button key={p.id} onClick={() => { setMode('one'); setPayeeId(p.id) }}
+                        className={`flex-1 rounded-lg py-1.5 px-2 text-left transition-colors min-w-0 ${on ? 'bg-teal/15 border border-teal/50' : 'border border-white/10 hover:border-white/25'}`}>
+                        <span className={`block text-[12.5px] font-semibold truncate ${on ? 'text-teal' : 'text-white/70'}`}>
+                          {p.role} · {p.name.split(' ')[0]}
+                        </span>
+                        {/* What they EARNED on this job — so you can see whether
+                            the deduction fits inside their pay for it. */}
+                        <span className={`block text-[10.5px] tabular-nums ${amt > p.earned && amt > 0 ? 'text-amber-400/90' : 'text-white/40'}`}>
+                          earned {money(p.earned)}
+                        </span>
+                      </button>
+                    )
+                  })}
+                  {canSplit && (
+                    <button onClick={() => setMode('split')}
+                      className={`rounded-lg py-1.5 px-3 text-[12.5px] font-semibold transition-colors flex-shrink-0 ${mode === 'split' ? 'bg-teal/15 border border-teal/50 text-teal' : 'border border-white/10 text-white/60 hover:text-white'}`}>
+                      Split
                     </button>
-                  ))}
+                  )}
                 </div>
               ) : (
                 <select id="ded-payee" value={effectivePayee} onChange={e => setPayeeId(e.target.value)}
@@ -185,9 +241,27 @@ export default function DeductionModal({ deal: fixedDeal, deals = [], users = []
                   {users.filter(u => u.active !== false).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
                 </select>
               )}
-              {deal && people.length > 1 && (
+
+              {mode === 'split' && splitRows ? (
+                <div className="mt-2.5">
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-[11px] text-white/50 w-24 text-right shrink-0 truncate">
+                      {setterPerson.name.split(' ')[0]} {splitPct}%
+                    </span>
+                    <input type="range" min="0" max="100" step="1" value={splitPct}
+                      onChange={e => setSplitPct(Number(e.target.value))} className="flex-1 accent-teal" />
+                    <span className="text-[11px] text-white/50 w-24 shrink-0 truncate">
+                      {closerPerson.name.split(' ')[0]} {100 - splitPct}%
+                    </span>
+                  </div>
+                  <p className="text-[11px] mt-1.5 text-white/55">
+                    {splitRows.map(r => `${r.who.name.split(' ')[0]} owes ${money(r.amount)}`).join(' · ')}
+                    <span className="text-white/35"> — two separate balances, each coming off that rep&rsquo;s own next cheque.</span>
+                  </p>
+                </div>
+              ) : deal && people.length > 1 ? (
                 <p className="text-[11px] text-white/40 mt-1.5">Pre-picked from how this deal already splits deductions.</p>
-              )}
+              ) : null}
             </div>
           </div>
 
