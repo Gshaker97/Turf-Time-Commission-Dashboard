@@ -477,9 +477,21 @@ excluded). Rep/team records use `pickEntityRecord` (maps keyed
 `entityId|periodKey`) so they carry best/prev/current + watch/new status like
 company ones;
 `personalBests(deals, repId, …)` → one rep's own bests.
-**The Record Book card has a "Copy table" button** (per Keaton, for a Canva
-slideshow): the whole book as ONE table — `Record · Value · Who · When` with
-section bands for Company / Rep / Team. It builds a SECOND book with
+**The Record Book card has TWO copy buttons** (per Keaton, for a Canva
+slideshow). **Copy image** is the one to reach for: `toBlob` from
+`html-to-image` snapshots the card itself at `pixelRatio: 2` and puts a PNG on
+the clipboard, so the slide gets the colours and the 🔥 record-watch chips
+exactly as rendered — the same approach the competition cards on this page
+already use, falling back to a download where clipboard images are refused.
+The button row carries `data-no-export` and the snapshot `filter` drops it,
+or the card would photograph its own buttons. **Copy table** is the editable
+alternative: the whole book as ONE table — `Record · Value · Who · When` with
+section bands for Company / Rep / Team, plus a **`Right now`** column carrying
+the live chip text, added ONLY when something is actually in progress so a
+quiet month does not paste a column of blanks. That column was missing from
+the first version and Keaton caught it — a record being beaten right now is
+the most slide-worthy thing on the card, and a table that drops it is lying by
+omission. It builds a SECOND book with
 `isAdmin: false` purely for the export, so the engine's own ghost rule applies
 (records.js drops a ghost's deals from the rep buckets entirely, and the
 next-best non-ghost holds the record) — a ghost never rides along even for an

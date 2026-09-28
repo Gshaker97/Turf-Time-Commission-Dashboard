@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Trophy, Plus, Pencil, Trash2, ChevronDown, Download, Copy, Check } from 'lucide-react'
+import { Trophy, Plus, Pencil, Trash2, ChevronDown, Download, Copy, Check, Image as ImageIcon } from 'lucide-react'
 import { format } from 'date-fns'
 import { toPng, toBlob } from 'html-to-image'
 import { useAuth } from '../contexts/AuthContext'
@@ -418,6 +418,8 @@ function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
     [deals, users, isAdmin, dataStartDate, teamCtx, book]
   )
   const [copied, setCopied] = useState(false)
+  const [copiedImg, setCopiedImg] = useState(false)
+  const cardRef = useRef(null)
   const c = book.company, r = book.reps, t = book.teams
   const hasAny = Object.values(c).some(x => x.best || x.current) || Object.values(r).some(Boolean)
 
@@ -426,8 +428,16 @@ function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
   async function copyBook() {
     const sc = shareBook.company, sr = shareBook.reps, st = shareBook.teams
     const val = (v, metric) => v == null ? '—' : metric === 'deals' ? `${v} deal${v === 1 ? '' : 's'}` : fmt(v)
+    // The card's 🔥 chips are REAL DATA the first version of this export
+    // dropped — a record being beaten right now is the most slide-worthy
+    // thing on there. The column only appears when something is live, so a
+    // quiet month doesn't paste an empty column.
+    const now = (rec, metric) =>
+      rec?.status === 'new'   ? `🔥 NEW RECORD — ${val(rec.current.value, metric)} in progress`
+    : rec?.status === 'watch' ? `🔥 Record watch — now ${val(rec.current.value, metric)}`
+    : ''
     const line = (label, rec, metric) =>
-      [label, val(rec?.best?.value, metric), rec?.best?.holderName || '', rec?.best?.label || '']
+      [label, val(rec?.best?.value, metric), rec?.best?.holderName || '', rec?.best?.label || '', now(rec, metric)]
     const rows = [
       { section: 'Company records' },
       line('Biggest month — revenue', sc.revMonth),
@@ -440,7 +450,7 @@ function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
       line('Biggest rep month', sr.revMonth),
       line('Biggest rep week',  sr.revWeek),
       line('Biggest rep day',   sr.revDay),
-      ['Biggest single deal', val(sr.biggestDeal?.value), sr.biggestDeal?.holderName || '', sr.biggestDeal?.when || ''],
+      ['Biggest single deal', val(sr.biggestDeal?.value), sr.biggestDeal?.holderName || '', sr.biggestDeal?.when || '', ''],
       line('Most deals — rep month', sr.dealsMonth, 'deals'),
       line('Most deals — rep week',  sr.dealsWeek,  'deals'),
     ]
@@ -453,27 +463,70 @@ function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
         line('Most deals — team week',  st.dealsWeek,  'deals'),
         line('Most deals — team day',   st.dealsDay,   'deals'))
     }
-    // Only the VALUE column is numeric; Who and When read better left-aligned.
-    if (await copyTable(['Record', 'Value', 'Who', 'When'], rows, { rightFrom: 1 })) {
+    // Drop the live column entirely when nothing is in progress, rather than
+    // pasting a column of blanks into a slide.
+    const anyLive = rows.some(r => !r.section && r[4])
+    const cols = ['Record', 'Value', 'Who', 'When']
+    const out = anyLive
+      ? rows
+      : rows.map(r => (r.section ? r : r.slice(0, 4)))
+    if (anyLive) cols.push('Right now')
+    // Only the VALUE column is numeric; Who / When / Right now read better left.
+    if (await copyTable(cols, out, { rightFrom: 1 })) {
       setCopied(true); setTimeout(() => setCopied(false), 1800)
     }
   }
 
+  // Copy the card EXACTLY as it looks — colours, the 🔥 record-watch chips,
+  // the lot. For a slide that beats a table, which can only ever carry the
+  // words. Same approach the competition cards on this page already use.
+  // `filter` drops the button row so the snapshot isn't of itself.
+  async function copyImage() {
+    const node = cardRef.current
+    if (!node) return
+    const opts = { pixelRatio: 2, cacheBust: true, backgroundColor: '#1e1e1e',
+                   filter: (n) => !(n.dataset && n.dataset.noExport) }
+    try {
+      const blob = await toBlob(node, opts)
+      if (!blob) return
+      if (navigator.clipboard && window.ClipboardItem) {
+        await navigator.clipboard.write([new window.ClipboardItem({ 'image/png': blob })])
+        setCopiedImg(true); setTimeout(() => setCopiedImg(false), 1800)
+        return
+      }
+      // Clipboard images unsupported — hand over a file instead of failing.
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = 'record-book.png'; a.click()
+      URL.revokeObjectURL(url)
+      setCopiedImg(true); setTimeout(() => setCopiedImg(false), 1800)
+    } catch { /* snapshot failed — the table button still works */ }
+  }
+
   if (!hasAny) return null
   return (
-    <div className="mt-6 rounded-xl p-4 md:p-5" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+    <div ref={cardRef} className="mt-6 rounded-xl p-4 md:p-5" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="flex items-baseline gap-2.5 flex-wrap">
           <h2 className="text-[15px] font-extrabold text-white">📖 Record Book</h2>
           <p className="text-[11px] text-white/35">All-time bests · completed periods only · since {dataStartDate ? format(new Date(dataStartDate + 'T12:00:00'), 'MMMM yyyy') : 'the beginning'}</p>
         </div>
-        <button onClick={copyBook}
-          title="Copy the whole book as a table — pastes formatted into Canva, Sheets or Docs"
-          className={`px-2.5 py-1.5 rounded-lg text-[11.5px] font-semibold inline-flex items-center gap-1.5 transition-colors flex-shrink-0 ${
-            copied ? 'text-emerald-400' : 'text-white/45 hover:text-teal'}`}
-          style={{ background: '#242424', border: '1px solid #333' }}>
-          {copied ? <Check size={12} /> : <Copy size={12} />}{copied ? 'Copied' : 'Copy table'}
-        </button>
+        <div className="flex items-center gap-1.5 flex-shrink-0" data-no-export="1">
+          <button onClick={copyImage}
+            title="Copy the card as a picture — exactly what you see, chips and all. Best for a slide."
+            className={`px-2.5 py-1.5 rounded-lg text-[11.5px] font-semibold inline-flex items-center gap-1.5 transition-colors ${
+              copiedImg ? 'text-emerald-400' : 'text-white/45 hover:text-teal'}`}
+            style={{ background: '#242424', border: '1px solid #333' }}>
+            {copiedImg ? <Check size={12} /> : <ImageIcon size={12} />}{copiedImg ? 'Copied' : 'Copy image'}
+          </button>
+          <button onClick={copyBook}
+            title="Copy as a table you can restyle — pastes into Canva, Sheets or Docs as editable text"
+            className={`px-2.5 py-1.5 rounded-lg text-[11.5px] font-semibold inline-flex items-center gap-1.5 transition-colors ${
+              copied ? 'text-emerald-400' : 'text-white/45 hover:text-teal'}`}
+            style={{ background: '#242424', border: '1px solid #333' }}>
+            {copied ? <Check size={12} /> : <Copy size={12} />}{copied ? 'Copied' : 'Copy table'}
+          </button>
+        </div>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-3">
         <div>
