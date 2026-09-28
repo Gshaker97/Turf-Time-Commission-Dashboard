@@ -38,7 +38,6 @@ const Payroll     = lazyWithReload(() => import('./pages/Payroll'))
 const Competitions = lazyWithReload(() => import('./pages/Competitions'))
 const ImportDeals = lazyWithReload(() => import('./pages/ImportDeals'))
 const RequiresAudit = lazyWithReload(() => import('./pages/RequiresAudit'))
-const Performance = lazyWithReload(() => import('./pages/Performance'))
 const SetPassword = lazyWithReload(() => import('./pages/SetPassword'))
 const Leads       = lazyWithReload(() => import('./pages/Leads'))
 const MyTeam      = lazyWithReload(() => import('./pages/MyTeam'))
@@ -90,14 +89,16 @@ function AppRoutes() {
         {/* Requires Audit: Keaton or admin only — the page self-guards by identity
             (Keaton is a VP, not an admin), so no role-based Guard here. */}
         <Route path="audit"       element={<RequiresAudit />} />
-        {/* The Team page retired into Goals (workspace) + Performance (analysis). */}
+        {/* The Team page retired into Goals (the commitment workspace); the
+            analysis half now lives on the Dashboard. */}
         <Route path="team"  element={<Navigate to="/goals" replace />} />
         <Route path="goals" element={
           <Guard roles={['rep','manager','director','vp','admin']}><Goals /></Guard>
         } />
-        <Route path="performance" element={
-          <Guard roles={['manager','director','vp','admin']}><Performance /></Guard>
-        } />
+        {/* Performance MERGED into the Dashboard — same numbers, one scope
+            bar, no second vocabulary. Kept as a redirect so old links and
+            bookmarks still land somewhere useful. */}
+        <Route path="performance" element={<Navigate to="/dashboard" replace />} />
         <Route path="admin" element={
           <Guard roles={['admin']}><Admin /></Guard>
         } />

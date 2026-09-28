@@ -164,10 +164,16 @@ export const DEMO_PAYMENTS = paidDeals.slice(0, 8).map((d, i) => ({
   user: { name: byId[d.setter_id]?.name ?? '—' },
 }))
 
-// Monthly goals keyed "YYYY-M" (baseline target). Mirrors 003_seed.sql.
+// Monthly goals keyed "YYYY|M|office" (baseline target). Mirrors 003_seed.sql.
+// An empty office segment is the COMPANY goal; the two offices carry their own
+// (migration 053), which is what the Dashboard's Offices grouping reads.
 export const DEMO_GOALS = (() => {
   const g = {}
-  for (let m = 1; m <= 12; m++) g[`2026-${m}`] = 600000
+  for (let m = 1; m <= 12; m++) {
+    g[`2026|${m}|`] = 600000
+    g[`2026|${m}|Phoenix`] = 400000
+    g[`2026|${m}|Tucson`] = 200000
+  }
   return g
 })()
 

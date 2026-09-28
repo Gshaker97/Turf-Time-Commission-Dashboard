@@ -8,6 +8,8 @@ const localDateISO = () => {
 }
 import { useSettings } from '../contexts/SettingsContext'
 import { DEMO_MODE } from '../lib/supabase'
+import { fetchUsers } from '../lib/db'
+import { headIdSet, teamLabel } from '../utils/team'
 
 const card = { background: '#242424', border: '1px solid #2e2e2e' }
 const inputStyle = { background: '#1a1a1a', border: '1px solid #3a3a3a' }
@@ -289,6 +291,91 @@ function TextSetting({ title, hint, settingKey, placeholder }) {
       </div>
       <input value={value} onChange={e => setValue(e.target.value)} placeholder={placeholder}
         style={inputStyle} className={`${inputCls} w-full max-w-sm`} />
+      <SaveBar dirty={dirty} saving={saving} saved={saved} error={error} onSave={onSave} />
+    </div>
+  )
+}
+
+// Red-flag floors + the default team for unassigned work. These used to live
+// in a panel on the Performance page; when that page merged into the Dashboard
+// they moved here, where the rest of the admin settings already are.
+function DashboardFlagsEditor() {
+  const { settings, save } = useSettings()
+  const curFloors = settings.perf_floors || {}
+  const curTeam   = settings.perf_default_team ?? ''
+  const [doorsPerDay, setDoorsPerDay] = useState(curFloors.doors_per_day ?? 5)
+  const [setFloor,    setSetFloor]    = useState(curFloors.set ?? 1)
+  const [team,        setTeam]        = useState(curTeam)
+  const [heads,       setHeads]       = useState([])
+  const [saving, setSaving] = useState(false)
+  const [saved,  setSaved]  = useState(false)
+  const [error,  setError]  = useState('')
+
+  useEffect(() => {
+    setDoorsPerDay(curFloors.doors_per_day ?? 5); setSetFloor(curFloors.set ?? 1); setTeam(curTeam)
+  }, [settings.perf_floors, settings.perf_default_team])
+  useEffect(() => {
+    let alive = true
+    fetchUsers().then(({ data }) => {
+      if (!alive) return
+      const us = data || []
+      const hs = headIdSet(us)
+      setHeads(us.filter(u => hs.has(u.id)))
+    })
+    return () => { alive = false }
+  }, [])
+
+  const dirty = Number(doorsPerDay) !== (curFloors.doors_per_day ?? 5)
+             || Number(setFloor) !== (curFloors.set ?? 1)
+             || team !== curTeam
+  async function onSave() {
+    setError(''); setSaving(true)
+    const a = (await save('perf_floors', {
+      doors_per_day: Math.max(0, Number(doorsPerDay) || 0),
+      set: Math.max(0, Number(setFloor) || 0),
+    })) || {}
+    const b = (await save('perf_default_team', team || '')) || {}
+    setSaving(false)
+    const err = a.error || b.error
+    if (err) { setError(err.message || 'Could not save.'); return }
+    setSaved(true); setTimeout(() => setSaved(false), 1800)
+  }
+
+  return (
+    <div className="rounded-xl p-4 md:p-5 space-y-3" style={card}>
+      <div>
+        <h3 className="text-[13px] font-bold text-white">Dashboard: Red-Flag Floors</h3>
+        <p className="text-[11px] text-white/40 mt-0.5">
+          A rep's figure below these turns red on the Dashboard's rep rows, with the
+          appointments columns showing. Door floors only apply once the team has field
+          activity in the range — before the RepCard feed is wired every doors figure is
+          zero and flagging all of them would be noise.
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-4">
+        <label className="text-[12px] text-white/60">
+          <span className="block mb-1">Doors per knock day</span>
+          <input type="number" min="0" value={doorsPerDay} onChange={e => setDoorsPerDay(e.target.value)}
+            style={inputStyle} className={`${inputCls} w-28`} />
+        </label>
+        <label className="text-[12px] text-white/60">
+          <span className="block mb-1">Appointments set</span>
+          <input type="number" min="0" value={setFloor} onChange={e => setSetFloor(e.target.value)}
+            style={inputStyle} className={`${inputCls} w-28`} />
+        </label>
+      </div>
+      <div>
+        <p className="text-[12px] text-white/60 mb-1">Default team for unassigned</p>
+        <p className="text-[11px] text-white/35 mb-1.5">
+          Deals with no team owner, and reps on no team, are filed under this lead instead
+          of a separate "Unassigned" row.
+        </p>
+        <select value={team} onChange={e => setTeam(e.target.value)}
+          style={inputStyle} className={`${inputCls} w-full max-w-sm appearance-none`}>
+          <option value="">Keep a separate "Unassigned" row</option>
+          {heads.map(h => <option key={h.id} value={h.id}>{teamLabel(h)}</option>)}
+        </select>
+      </div>
       <SaveBar dirty={dirty} saving={saving} saved={saved} error={error} onSave={onSave} />
     </div>
   )
@@ -843,13 +930,14 @@ export default function SettingsPanel() {
         hint="Subcontracted products that earn no manager/director/VP override. On a deal, pick the item and enter its price — overrides then compute off baseline minus those amounts (baseline and job price don't change)."
         placeholder="e.g. Electrical" fallback={['Electrical', 'Gas', 'Pergolas']} />
       <ListEditor title="Sync: Excluded Reps" settingKey="sync_excluded_reps"
-        hint="The sheet sync never imports deals for these sales reps (matched anywhere in the rep's name, case-insensitive)."
+        hint="The sheet sync never imports deals for these sales reps. Matched on whole name WORDS in either direction, so 'Tanner Arnett' also catches a sheet cell reading just 'Tanner' — and 'Jack' never catches 'Jackson'. Only blocks NEW imports; a deal already in the site stays until you hide or delete it."
         placeholder="e.g. Rhett" fallback={['rhett', 'ronnie']} />
       <ListEditor title="Sync: Skip Deal Names" settingKey="sync_skip_names"
         hint="Jobs whose customer name contains any of these are skipped as junk/test rows (case-insensitive substring)."
         placeholder="e.g. test" fallback={['test', 'cute']} />
       <DateSetting title="Estimates From Leads — Start Date" settingKey="estimates_from_leads_date" fallback=""
         hint="On and after this date, a rep's estimate count comes from the Leads feed — every appointment that RAN — instead of the hand-entered weekly numbers. Earlier weeks keep their manual entries, so history stays intact. Leave blank to keep using manual entry everywhere." />
+      <DashboardFlagsEditor />
       <DateSetting title="Data Start Date" settingKey="data_start_date" fallback="2026-06-01"
         hint="Deals closed before this date are treated as legacy: they still count in historical totals, but they're left out of the Needs-review staging list, the payroll overdue nag, and the Watchdog's background alerts. You'll still be prompted as they reach their pay-date run." />
     </div>

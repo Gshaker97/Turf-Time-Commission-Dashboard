@@ -19,13 +19,13 @@ import {
 let _deals       = DEMO_DEALS_JOINED.map(d => ({ ...d }))
 let _users       = DEMO_USERS.map(u => ({ ...u }))
 let _payments    = DEMO_PAYMENTS.map(p => ({ ...p }))
-let _goals       = { ...DEMO_GOALS } // keyed "YYYY-M" -> baseline_target
+let _goals       = { ...DEMO_GOALS } // keyed "YYYY|M|office" -> baseline_target
 let _weeklyStats = DEMO_WEEKLY_STATS.map(s => ({ ...s }))
 let _settings    = JSON.parse(JSON.stringify(DEMO_SETTINGS))
 let _competitions = (DEMO_COMPETITIONS || []).map(c => ({ ...c }))
 let _auditOverrides = (DEMO_AUDIT_OVERRIDES || []).map(o => ({ ...o }))
 
-const goalKey = (y, m) => `${y}-${m}`
+const goalKey = (y, m, office = '') => `${y}|${m}|${office}`   // office '' = company (migration 053)
 
 const DEAL_SELECT = `
   *,
@@ -443,34 +443,64 @@ export async function deletePayment(id) {
 }
 
 // ── Monthly goals ─────────────────────────────────────────────
-export async function fetchGoal(year, month) {
+// `office` is '' for the COMPANY goal and an office name for that office's
+// (migration 053). Never null — see the migration for why.
+const OFFICE_ALL = ''
+const officeKey = (office) => String(office || '').trim()
+
+export async function fetchGoal(year, month, office = OFFICE_ALL) {
   if (DEMO_MODE) {
-    const t = _goals[goalKey(year, month)]
+    const t = _goals[goalKey(year, month, officeKey(office))]
     return { data: t != null ? t : null, error: null }
   }
   const { data, error } = await supabase
     .from('monthly_goals').select('baseline_target')
-    .eq('year', year).eq('month', month).maybeSingle()
+    .eq('year', year).eq('month', month).eq('office', officeKey(office)).maybeSingle()
   return { data: data?.baseline_target != null ? parseFloat(data.baseline_target) : null, error }
 }
 
-export async function saveGoal(year, month, target) {
+// Every goal for a month in ONE round trip — the Dashboard needs the company
+// figure and each office's at once, and asking per office would be N requests
+// that all have to land before the table can render a Goal column.
+// Returns { '': 1050000, Phoenix: 800000, … }.
+export async function fetchGoalsForMonth(year, month) {
   if (DEMO_MODE) {
-    _goals = { ..._goals, [goalKey(year, month)]: target }
+    const out = {}
+    for (const [k, v] of Object.entries(_goals)) {
+      const [y, m, off = ''] = k.split('|')
+      if (Number(y) === year && Number(m) === month) out[off] = v
+    }
+    return { data: out, error: null }
+  }
+  const { data, error } = await supabase
+    .from('monthly_goals').select('office,baseline_target')
+    .eq('year', year).eq('month', month)
+  const out = {}
+  for (const r of data || []) {
+    if (r.baseline_target != null) out[officeKey(r.office)] = parseFloat(r.baseline_target)
+  }
+  return { data: out, error }
+}
+
+export async function saveGoal(year, month, target, office = OFFICE_ALL) {
+  if (DEMO_MODE) {
+    _goals = { ..._goals, [goalKey(year, month, officeKey(office))]: target }
     return { error: null }
   }
   return supabase.from('monthly_goals')
-    .upsert({ year, month, baseline_target: target }, { onConflict: 'year,month' })
+    .upsert({ year, month, office: officeKey(office), baseline_target: target },
+            { onConflict: 'year,month,office' })
 }
 
-export async function deleteGoal(year, month) {
+export async function deleteGoal(year, month, office = OFFICE_ALL) {
   if (DEMO_MODE) {
     const next = { ..._goals }
-    delete next[goalKey(year, month)]
+    delete next[goalKey(year, month, officeKey(office))]
     _goals = next
     return { error: null }
   }
-  return supabase.from('monthly_goals').delete().eq('year', year).eq('month', month)
+  return supabase.from('monthly_goals').delete()
+    .eq('year', year).eq('month', month).eq('office', officeKey(office))
 }
 
 // ── Per-rep + per-team goals (shared, see migration 024) ──────
