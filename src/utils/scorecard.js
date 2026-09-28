@@ -98,7 +98,7 @@ export function pickScope(perf, scope, groupBy = 'team') {
       level: 'office', key: o.key, title: o.name,
       stats: o, prev: o.prev,
       children: (o.rows || []).map(r => ({
-        kind: 'rep', key: r.id, label: r.name, stats: r, prev: null,
+        kind: 'rep', key: r.id, label: r.name, stats: r, prev: r.prev,
         ghost: r.ghost, drillable: true,
       })),
       childKind: 'Reps',
@@ -115,7 +115,7 @@ export function pickScope(perf, scope, groupBy = 'team') {
       level: 'team', key: t.key, title: t.label,
       stats: t.totals, prev: t.prev,
       children: t.rows.map(r => ({
-        kind: 'rep', key: r.id, label: r.name, stats: r, prev: null,
+        kind: 'rep', key: r.id, label: r.name, stats: r, prev: r.prev,
         ghost: r.ghost, sub: r.isHead ? 'lead' : (r.member ? null : 'moved teams'),
         drillable: true,
       })),
@@ -129,7 +129,7 @@ export function pickScope(perf, scope, groupBy = 'team') {
     if (r) {
       return {
         level: 'rep', key: r.id, title: r.name,
-        stats: r, prev: null, children: [], childKind: null,
+        stats: r, prev: r.prev, children: [], childKind: null,
         showFunnel: true, parentTeam: { key: t.key, label: t.label },
       }
     }

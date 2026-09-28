@@ -544,8 +544,31 @@ in range, a rep who left) falls back to company rather than rendering empty.
   applies at every scope, since it is one engine. **The Leads page keeps the
   CRM's own outcome** ("Sold at Appt", labelled "outcome, not a deal record"),
   which is right there: that page IS the appointment records.
+- **DOOR KNOCKS ARE NOT SHOWN ANYWHERE** (per Keaton — RepCard's own door
+  count never reconciled with ours and the number was not worth chasing).
+  Removed: the Doors funnel tile, the Doors table column, the doors-per-day
+  floor, and the Dashboard's `fetchFieldActivity` call (it passes
+  `activity: []`). **The FEED STILL RECORDS THEM** — `/api/field/ingest`,
+  `routeCrmEvents`'s knock branch, `field_knocks`, `field_activity` and the
+  rollup trigger are all untouched, so nothing is lost and switching it back
+  on is re-adding the fetch and the tiles. **DO NOT "finish the job" by making
+  the router stop recognising knocks**: a knock it does not classify falls
+  through to the endpoint it arrived at and becomes a junk "Not Home"
+  APPOINTMENT — the exact bug `routeCrmEvents` was built to fix. The Settings
+  panel is retitled "recorded, not shown" and says so.
+- **Trend arrows on the drill table** (per Keaton): a small ▲/▼ percentage
+  under Revenue and Deals on every child row AND the total row, against the
+  same window of the previous period — `getPreviousRange`, so a part-month
+  range compares to the SAME DAY COUNT of the month before, not to all of it.
+  `Delta` renders "new" when there is no prior figure, "flat" under 0.5%, and
+  caps at "999+". This needed `prev` on REP rows, which `buildPerformance` was
+  computing (`prv.teams.get(k).reps`) but not surfacing; office rep rows get
+  it the same way.
+- **Conversion rates ride UNDER the count they describe** in the table (per
+  Keaton, "a little nod"): `showRate` under **Set** ("68% ran"), and
+  `dealCloseRate` under **Ran** ("42% closed"). Not their own columns.
 - **Six columns by default** (Revenue, Deals, Avg deal, Markup, Commission,
-  Goal); `+ Appointments & doors` adds Doors/Set/Ran — NOT Sold, which would
+  Goal); `+ Appointments` adds Set/Ran — NOT Sold, which would
   print the Deals column twice. The old table was
   thirteen, always, at 11px with two-line headers and the rates hidden as
   sub-lines — the layout admitting in a comment that it carried too much.

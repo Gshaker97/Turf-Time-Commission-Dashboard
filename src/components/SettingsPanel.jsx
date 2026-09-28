@@ -303,7 +303,6 @@ function DashboardFlagsEditor() {
   const { settings, save } = useSettings()
   const curFloors = settings.perf_floors || {}
   const curTeam   = settings.perf_default_team ?? ''
-  const [doorsPerDay, setDoorsPerDay] = useState(curFloors.doors_per_day ?? 5)
   const [setFloor,    setSetFloor]    = useState(curFloors.set ?? 1)
   const [team,        setTeam]        = useState(curTeam)
   const [heads,       setHeads]       = useState([])
@@ -312,7 +311,7 @@ function DashboardFlagsEditor() {
   const [error,  setError]  = useState('')
 
   useEffect(() => {
-    setDoorsPerDay(curFloors.doors_per_day ?? 5); setSetFloor(curFloors.set ?? 1); setTeam(curTeam)
+    setSetFloor(curFloors.set ?? 1); setTeam(curTeam)
   }, [settings.perf_floors, settings.perf_default_team])
   useEffect(() => {
     let alive = true
@@ -325,15 +324,10 @@ function DashboardFlagsEditor() {
     return () => { alive = false }
   }, [])
 
-  const dirty = Number(doorsPerDay) !== (curFloors.doors_per_day ?? 5)
-             || Number(setFloor) !== (curFloors.set ?? 1)
-             || team !== curTeam
+  const dirty = Number(setFloor) !== (curFloors.set ?? 1) || team !== curTeam
   async function onSave() {
     setError(''); setSaving(true)
-    const a = (await save('perf_floors', {
-      doors_per_day: Math.max(0, Number(doorsPerDay) || 0),
-      set: Math.max(0, Number(setFloor) || 0),
-    })) || {}
+    const a = (await save('perf_floors', { set: Math.max(0, Number(setFloor) || 0) })) || {}
     const b = (await save('perf_default_team', team || '')) || {}
     setSaving(false)
     const err = a.error || b.error
@@ -346,18 +340,11 @@ function DashboardFlagsEditor() {
       <div>
         <h3 className="text-[13px] font-bold text-white">Dashboard: Red-Flag Floors</h3>
         <p className="text-[11px] text-white/40 mt-0.5">
-          A rep's figure below these turns red on the Dashboard's rep rows, with the
-          appointments columns showing. Door floors only apply once the team has field
-          activity in the range — before the RepCard feed is wired every doors figure is
-          zero and flagging all of them would be noise.
+          A rep below this turns red on the Dashboard's rep rows, with the
+          appointments columns showing.
         </p>
       </div>
       <div className="flex flex-wrap gap-4">
-        <label className="text-[12px] text-white/60">
-          <span className="block mb-1">Doors per knock day</span>
-          <input type="number" min="0" value={doorsPerDay} onChange={e => setDoorsPerDay(e.target.value)}
-            style={inputStyle} className={`${inputCls} w-28`} />
-        </label>
         <label className="text-[12px] text-white/60">
           <span className="block mb-1">Appointments set</span>
           <input type="number" min="0" value={setFloor} onChange={e => setSetFloor(e.target.value)}
@@ -880,8 +867,8 @@ const LeadFeedEditor = () => (
 
 const FieldFeedEditor = () => (
   <FeedEditor
-    title="Field Activity Feed (Door Knocks)"
-    blurb="Door-knocking data for the Performance page. Point the CRM's activity webhook (or a daily report push) here; the same secret as the lead feed opens it."
+    title="Field Activity Feed (Door Knocks — recorded, not shown)"
+    blurb="Door knocks are RECORDED BUT NOT SHOWN anywhere on the site — RepCard's own count never reconciled with ours, so the figure was removed. This feed stays wired so nothing is lost and it can be switched back on. Keep the webhook pointed here: if the site stops recognising these events they get filed as junk appointments instead."
     path="/api/field/ingest" fields={FIELD_ACTIVITY_FIELDS} mapKey="field_activity_field_map" lastKey="field_last_payload" resultKey="field_last_result"
     footnote="RepCard's door-knock events work with nothing mapped: the site already reads id, createdAt, user.name / user.email and hasDoorKnock. Map a field here only to override that. Two shapes work: a payload with a Doors Knocked count is a daily summary for that rep and date; a payload with a Knock Time is one door — the site adds it to that rep's day (doors +1, first/last knock). Admins can also import a CSV report from the Performance page." />
 )
