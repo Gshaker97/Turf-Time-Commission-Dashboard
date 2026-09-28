@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, BarChart2, DollarSign,
   ShieldCheck, Eye, X,
-  Home, Wallet, Trophy, Upload, ScanSearch, Gauge, Target, CalendarCheck, Users,
+  Home, Wallet, Trophy, Upload, ScanSearch, Target, CalendarCheck, Users,
 } from 'lucide-react'
 import NavBar from './NavBar'
 import Notices from './Notices'
@@ -19,7 +19,6 @@ const NAV = [
   { to: '/commissions', icon: DollarSign,      label: 'Commissions', short: 'Pay',     roles: ['rep','manager','director','vp','admin'] },
   { to: '/competitions',icon: Trophy,          label: 'Competitions',short: 'Comps',   roles: ['rep','manager','director','vp','admin'] },
   { to: '/goals',       icon: Target,          label: 'Goals',       short: 'Goals',   roles: ['rep','manager','director','vp','admin'] },
-  { to: '/performance', icon: Gauge,           label: 'Performance', short: 'Perf',    roles: ['manager','director','vp','admin'] },
   { to: '/payroll',     icon: Wallet,          label: 'Payroll',     short: 'Payroll', roles: ['vp','admin'] },
   { to: '/import',      icon: Upload,          label: 'Import',      short: 'Import',  roles: ['vp','admin'] },
   { to: '/admin',       icon: ShieldCheck,     label: 'Admin',       short: 'Admin',   roles: ['admin'] },

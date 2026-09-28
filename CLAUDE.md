@@ -304,6 +304,13 @@ setup + deploy steps.
   job that counts toward NOTHING while its row survives so the sheet sync
   cannot re-create it; see convention #4 above for why it exists and why
   deleting does not work;
+  `053` adds `monthly_goals.office` (TEXT NOT NULL DEFAULT `''`) — a revenue
+  goal per OFFICE, with `''` meaning the company-wide row, and swaps the
+  UNIQUE to (year, month, office). NOT nullable on purpose: Postgres treats
+  NULLs as distinct in a UNIQUE index so the company could grow two conflicting
+  goals, and PostgREST cannot upsert against the partial index that would fix
+  that. Office could not borrow `rep_goals` because its `subject_id` is a UUID
+  keyed to profiles and an office is a string;
   `047` adds `competitions.excluded_ids` (jsonb
   array of profile ids) for the **Team Average (per rep)** competition type
   `team_avg` — entrants are TEAM HEADS (any `headIdSet` head, picked in the
@@ -481,50 +488,83 @@ records + records set in the last 7 days, `prev` required so a first-ever
 period never banners; company → team → rep priority, max 3 shown; dismissals
 stick per record+period in `tt_rec_dismissed` localStorage).
 
-## Performance page (`src/pages/Performance.jsx`, manager+)
+## Dashboard — the ONE reporting page (`src/pages/Dashboard.jsx`)
 
-REBUILT (per Keaton, from an approved mockup) as ONE simplified page — the
-single source for the numbers we collect: part from the RepCard webhooks
-(appointments + door knocks), part from the site (deals/revenue). Route
-`/performance`, guarded manager/director/vp/admin. **All math lives in
-`src/utils/perfSummary.js` (`buildPerformance`) — the page only renders.**
-The old engine (`utils/performance.js` — grains, zoom, bucketize,
-targets, donuts, change-over-time table, weekly-estimates entry) is GONE;
-the `targets` table + `rep_goals`/`weekly_stats` stores remain for Goals/
-Home. (There is no longer any UI for hand-entering weekly estimates —
-estimates come from the leads feed; set `estimates_from_leads_date`.)
-- **Controls (sticky on desktop):** Dashboard-style date pills (This week
-  … YTD, no All-time) + custom from/to, a "Compare to previous period"
-  toggle (`getPreviousRange` — the equal-length prior window; MTD compares
-  to the same day-count of last month), team jump chips, Collapse/Expand
-  all. Prefs in `tt_perf2_prefs` localStorage. Admin buttons: **Import
-  field CSV** (`csvToFieldActivity` → `upsertFieldActivity`) and **Floors**
-  (red-flag thresholds → `app_settings.perf_floors`, exposed as `perfFloors`).
-- **Org Scoreboard:** Revenue (baseline), Monthly goal (`monthly_goals`,
-  only when the range sits inside one month), Deals, Avg deal size, Avg
-  markup (DOLLAR-weighted: (Σjob − Σbaseline) ÷ Σbaseline), Rep commissions
-  (admin/VP only). **By office** cards (deals/revenue/markup/avg deal/
-  **commission** + share bar; "No office" last). Office commission is the
-  deal's WHOLE rep commission (setter + closer shares, NEVER overrides), so
-  the offices always sum to the org Rep-commissions tile — unlike the
-  team/rep numbers, which split that same money by who earned which share.
-  Admin/VP only, like every other commission figure here. **Appointments & field** strip from the
-  RepCard feed: doors → set → ran (show rate) → sold (close rate), self-gen
-  vs lead ran.
-- **Teams:** one collapsible section per org-chart team (`headIdSet`,
-  DATE-EFFECTIVE via `teamOfSale`, same as the Dashboard), sorted by
-  revenue; former-lead teams marked "Former team"; **Unassigned last**
-  (dashed amber — ownerless deals + reps with no team). Team tiles (revenue,
-  deals, avg deal, avg markup, active reps = active members as of the range
-  end) then a rep table split into **Field activity · RepCard** (Doors,
-  Doors/day, then THREE appointment columns: **Set** = appointments this rep
-  booked; **Self-gen ran** = how many of THOSE ran — **credited to the SETTER
-  whoever sat it** (per Keaton), with the % of their sets that ran as its
-  sub-line; **Leads ran** = appointments they SAT for another setter.
-  This went four rounds (the math, the labelling, the count, then the
-  definition): there is no "Ran" column (it was self-gen + leads ran) and no
-  separate "Sets ran" (it IS self-gen ran under this rule).
-  **`sgRan` and `leadRan` are per-person CREDIT columns, NOT a partition of
+**The Performance page was MERGED INTO the Dashboard** (per Keaton, from an
+approved clickable prototype) and DELETED; `/performance` is a redirect to
+`/dashboard` and its nav slot is gone. Do not re-create it.
+
+WHY, because it is the whole point: the two pages answered the same question
+with **two vocabularies that disagreed**. "Set" meant DEALS on the Dashboard
+and APPOINTMENTS on Performance. "Revenue" meant everything-a-rep-touched on
+the Dashboard and owner-credited-only on Performance — so the same rep, same
+month, showed two different revenue figures and BOTH were right. A note in
+this file warned about the unit mismatch, which fixed nothing. One page cannot
+hold two definitions of "Revenue"; they would sit next to each other. **Never
+split company reporting across two pages again.**
+
+Thirteen blocks over two pages became EIGHT on one, because the overlap was the
+biggest part of both: the Dashboard's Rep Leaderboard, its Team Breakdown and
+Performance's per-team rep tables were all the same table drawn three times.
+
+**The scope model (`src/utils/scorecard.js`, pure — the ONE rule for "who am I
+looking at").** One page, four levels: **company → team → rep**, or **company →
+office → rep**. The scope bar is a breadcrumb trail; clicking a table row
+scopes the WHOLE page (records, tiles, goal, funnel, drill table, weekly,
+annual trend), not just the table. It rides in the URL as `?scope=team:<id>`
+via `scopeToParam`/`scopeFromParam`, so a team lead can be sent a link that
+opens on their own team. A scope that no longer resolves (a team with no sales
+in range, a rep who left) falls back to company rather than rendering empty.
+- `buildPerformance` (perfSummary.js) still computes EVERYTHING — org, offices
+  and teams with rep rows. `pickScope` only SELECTS the node; nothing here
+  recomputes a metric. `applyScopeFilters` in the page is the chokepoint that
+  makes the non-table blocks follow the scope.
+- `resolveScopeGoal` resolves the target per level: company + office from
+  `monthly_goals` (migration 053, office `''` = company), team + rep from
+  `rep_goals`. **A team with no goal of its own falls back to the SUM of its
+  members' goals.** Only company and office goals are EDITABLE on this page
+  (`canEditThisGoal`); team/rep goals are set on the Goals page.
+- **Offices are a GROUPING, not a separate block** — the old two tall by-office
+  cards are gone; `Break down by: Teams | Offices` re-groups the same table
+  with the same columns, and the total row proves the offices sum to the
+  company, which the side-by-side cards never showed.
+- **`showFunnel` is FALSE at office scope**, and says why on the page. Office is
+  a property of the DEAL; doors and appointments are keyed by RepCard to a rep
+  and a DAY with no office on them. A rep who sells in two offices has one pile
+  of knocks belonging to neither. Do not invent an attribution for this.
+- **A rep can appear under SEVERAL offices** with the deals they sold in each —
+  the deliberate asymmetry with teams, where a rep belongs to exactly one
+  (date-effective). Office rep rows therefore carry DEAL figures only.
+- **Six columns by default** (Revenue, Deals, Avg deal, Markup, Commission,
+  Goal); `+ Appointments & doors` adds Doors/Set/Ran/Sold. The old table was
+  thirteen, always, at 11px with two-line headers and the rates hidden as
+  sub-lines — the layout admitting in a comment that it carried too much.
+- The **weekly goal block renders at COMPANY SCOPE ONLY**: `weekly_goal` is one
+  company-wide setting, so at team scope the bar would be that team's revenue
+  against the company's target — precise-looking and meaningless.
+- The **record-moments card defaults to COLLAPSED** (`tt_records_open`, 'on' to
+  open). Six record types × company/team/rep means a dozen-plus can be live at
+  once; expanded they filled the entire first screen before a single figure.
+- **`perf_excluded_ids` WAS RETIRED with the page.** On Performance it removed
+  a person's production from that page's totals, which was tolerable there and
+  is not here — this page is the company's revenue number. `buildPerformance`
+  still accepts `excludedIds`, but the Dashboard does NOT pass it. Hiding a job
+  that should not count is `deals.hidden` (migration 052). `perf_default_team`
+  and `perf_floors` survive and moved to **Admin → Settings** ("Dashboard:
+  Red-Flag Floors").
+- At **rep scope** the page shows that person's funnel plus the self-gen / lead
+  split, and their deals in range (`repDeals`) with a link out to the Deals
+  page for filtering and edits.
+- `monthlySeries` / `weeklySeries` build the two charts from raw deals through
+  `scopeFilter`, so the trend follows the scope rather than the date range.
+  **The Annual Trend stays a Recharts line/area chart** (per Keaton).
+
+Everything below is the ENGINE's behaviour (`src/utils/perfSummary.js`), which
+the merge did not change — the attribution rules, the appointment definitions
+and the gap tallies are all still exactly as written:
+
+- **Appointment + attribution rules (unchanged by the merge).**
+    **`sgRan` and `leadRan` are per-person CREDIT columns, NOT a partition of
   `ran`** — one appointment set by A and sat by B gives A a self-gen ran AND
   B a leads ran, so at org/team level the two can sum past `ran`. That is
   why the org funnel strip shows only Doors → Set → Ran → Sold: `ran`
@@ -941,6 +981,8 @@ table, admin-only).
   / standings), by design — ghost names still hidden from non-admins.
 - Payroll/Import are route-guarded to `vp`/admin; Admin page to `admin`;
   Requires-Audit self-guards to `isAdmin || isKeaton`.
+- **There is no Performance page** — it merged into the Dashboard, which every
+  role can reach. Commission figures on it stay admin/VP-gated as before.
 
 ## Security notes (already fixed — keep them fixed)
 
@@ -1351,6 +1393,15 @@ used by `managerAsOf`). Derive the local day from `new Date(ts)` with
   refreshing an expired session (`tt-session-expired` → the red banner in
   `Notices.jsx`). Use `toast.error/info/success` from `src/lib/toast.js` for
   user-facing notices — never `alert()`.
+- **A page rewrite gets a BROWSER smoke test, not just a build.** `npm run
+  build` passing proves nothing renders-wise — a `const` read above its own
+  declaration white-screened Leads in production while every node test passed.
+  With no Supabase env vars the build runs in DEMO_MODE, so
+  `npx vite preview` + playwright-core against
+  `/opt/pw-browsers/chromium-1194/chrome-linux/chrome` can log in
+  (any seeded account, `TurfTime2026!`), click through, and fail on `pageerror`.
+  That is how the merged Dashboard was verified: render, drill, breadcrumb,
+  `?scope=` round-trip.
 - `server.js` exposes `GET /api/health` (`{ ok, userAdmin, build }`) — the
   Watchdog pings it hourly and warns if the user-admin key is missing.
 - Deals are created via the Deals page "+" modal only — the old New Deal page

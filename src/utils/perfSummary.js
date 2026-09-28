@@ -135,10 +135,21 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
     if (!t.reps.has(pid)) t.reps.set(pid, newStats())
     return t.reps.get(pid)
   }
+  // Offices carry rep sub-buckets so the Dashboard can drill Company → Office
+  // → rep, the same way it drills into a team. NOTE the asymmetry with teams:
+  // office is a property of the DEAL, not of the person, so one rep can appear
+  // under several offices with the deals they sold in each. Doors and
+  // appointments carry no office at all (RepCard keys them to a rep and a day),
+  // so an office's rep rows hold deal figures only — see `officeFunnel` in
+  // scorecard.js, which is why the funnel is hidden at office scope.
   const office = (name) => {
     const k = String(name || '').trim().toLowerCase()
-    if (!offices.has(k)) offices.set(k, { name: String(name || '').trim(), ...newStats() })
+    if (!offices.has(k)) offices.set(k, { name: String(name || '').trim(), reps: new Map(), ...newStats() })
     return offices.get(k)
+  }
+  const officeRep = (off, pid) => {
+    if (!off.reps.has(pid)) off.reps.set(pid, newStats())
+    return off.reps.get(pid)
   }
 
   for (const d of deals) {
@@ -157,15 +168,20 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
     // it by who earned which share.
     org.commission += a.repCommission
     off.commission += a.repCommission
-    if (owner) { const r = rep(key, owner); r.revenue += a.baseline; r.job += a.job; r.deals += 1 }
+    if (owner) {
+      const r = rep(key, owner); r.revenue += a.baseline; r.job += a.job; r.deals += 1
+      const orr = officeRep(off, owner); orr.revenue += a.baseline; orr.job += a.job; orr.deals += 1
+    }
     // Commission follows each rep's own share to each rep's own team.
     if (d.setter_id) {
       const k = teamOf(d.setter_id, d.sale_date)
       rep(k, d.setter_id).commission += a.setter; team(k).totals.commission += a.setter
+      officeRep(off, d.setter_id).commission += a.setter
     }
     if (d.closer_id && d.closer_id !== d.setter_id && !out(d.closer_id)) {
       const k = teamOf(d.closer_id, d.sale_date)
       rep(k, d.closer_id).commission += a.closer; team(k).totals.commission += a.closer
+      officeRep(off, d.closer_id).commission += a.closer
       // A LEAD CLOSE: the setter keeps the deal (owner credit above); the
       // closer is credited with having closed a lead — same split the Home
       // card and Dashboard use, never an extra deal. Its baseline feeds the
@@ -334,7 +350,13 @@ export function buildPerformance({
   const offices = [...cur.offices.entries()].map(([k, s]) => {
     const st = finish(s)
     const p = prv?.offices.get(k)
-    return { key: k, name: s.name || 'No office', ...st, prev: p ? finish(p) : null,
+    // Rep rows for the drill-down. Deal figures only — an office has no doors
+    // or appointments to hand out (see the `office` bucket comment above).
+    const rows = [...s.reps.entries()].map(([pid, rs]) => {
+      const u = usersById[pid]
+      return u ? { id: pid, name: u.name, role: u.role, ghost: !!u.ghost, active: u.active !== false, ...finish(rs) } : null
+    }).filter(Boolean).sort((a, b) => b.revenue - a.revenue || a.name.localeCompare(b.name))
+    return { key: k, name: s.name || 'No office', ...st, rows, prev: p ? finish(p) : null,
              share: org.revenue > 0 ? st.revenue / org.revenue : 0 }
   }).sort((a, b) => (a.key === '') - (b.key === '') || b.revenue - a.revenue)
 

@@ -1,32 +1,28 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   format, subMonths, startOfWeek, endOfWeek, addDays, getDaysInMonth,
 } from 'date-fns'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { Check, X, TrendingUp, TrendingDown, Minus, ChevronUp, ChevronDown, ChevronsUpDown, Copy } from 'lucide-react'
+import { Check, X, TrendingUp, TrendingDown, Minus, ChevronRight, ChevronDown, Copy } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
-import { fetchDeals, fetchUsers, fetchGoal, saveGoal as saveGoalDb, deleteGoal as deleteGoalDb, fetchTeamChanges } from '../lib/db'
+import {
+  fetchDeals, fetchUsers, fetchTeamChanges, fetchLeads, fetchFieldActivity,
+  fetchGoalsForMonth, fetchRepGoals, saveGoal as saveGoalDb, deleteGoal as deleteGoalDb,
+} from '../lib/db'
 import { fmt, dealAmounts, activeDeals } from '../utils/commission'
-import { headIdSet, saleOwnerId, buildChangesByProfile, teamOfSale, teamLabel } from '../utils/team'
+import { headIdSet, buildChangesByProfile } from '../utils/team'
 import { buildRecordBook, periodEnd } from '../utils/records'
+import { buildPerformance, repFlags } from '../utils/perfSummary'
+import {
+  COMPANY, isCompany, pickScope, scopeFilter, resolveScopeGoal,
+  scopeToParam, scopeFromParam, repDeals as repDealsFor,
+} from '../utils/scorecard'
 import { onClickUnlessSelecting } from '../utils/selection'
 import { getPresetRange, getPreviousRange } from '../utils/dateRanges'
 import DateRangeFilter from '../components/DateRangeFilter'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
-
-const MEDAL = {
-  1: { bg: '#fbbf2420', color: '#fbbf24' },
-  2: { bg: '#94a3b820', color: '#94a3b8' },
-  3: { bg: '#fb923c20', color: '#fb923c' },
-}
-function RankBadge({ n }) {
-  const s = MEDAL[n] ?? { bg: 'transparent', color: '#ffffff30' }
-  return (
-    <span className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0"
-      style={{ background: s.bg, color: s.color }}>{n}</span>
-  )
-}
 
 function Trend({ cur, prev, suffix = 'vs prev' }) {
   if (prev === null || prev === undefined) return null
@@ -44,25 +40,6 @@ function Trend({ cur, prev, suffix = 'vs prev' }) {
   )
 }
 
-// Clickable, sortable leaderboard column header. Shows the active sort arrow,
-// or a faint up/down hint when inactive.
-function SortTh({ label, active, dir, onClick, align = 'center', className = '', title }) {
-  const justify = align === 'right' ? 'justify-end' : align === 'left' ? 'justify-start' : 'justify-center'
-  return (
-    <th className={`pb-2 ${className}`} title={title}>
-      <button onClick={onClick}
-        className={`w-full flex items-center gap-0.5 uppercase tracking-wider transition-colors ${justify} ${active ? 'text-teal' : 'text-white/30 hover:text-white/60'}`}>
-        <span>{label}</span>
-        {active
-          ? (dir === 'asc' ? <ChevronUp size={10} /> : <ChevronDown size={10} />)
-          : <ChevronsUpDown size={10} className="opacity-40" />}
-      </button>
-    </th>
-  )
-}
-
-// Pass value2 (+ valueLabel/value2Label) to show two figures side by side in
-// one card — e.g. Avg Deal Size's baseline + job price.
 function StatCard({ label, value, sub, trend, value2, valueLabel, value2Label }) {
   return (
     <div className="rounded-xl p-3 md:p-4 min-w-0 flex-1" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
@@ -88,8 +65,9 @@ function StatCard({ label, value, sub, trend, value2, valueLabel, value2Label })
 }
 
 export default function Dashboard() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const { isAdmin } = useAuth()
-  const { settings, save: saveSettingCtx, dataStartDate } = useSettings()
+  const { settings, save: saveSettingCtx, dataStartDate, perfFloors, perfDefaultTeam, feedNonReps } = useSettings()
   // Setting the monthly revenue goal is a data change — admin-only.
   const canEditGoal = isAdmin
 
@@ -99,15 +77,24 @@ export default function Dashboard() {
   const [dateFrom,     setDateFrom]     = useState(getPresetRange('mtd').from)
   const [dateTo,       setDateTo]       = useState(getPresetRange('mtd').to)
   const [activePreset, setActivePreset] = useState('mtd')
-  const [teamFilter,   setTeamFilter]   = useState('')
   const [teamChanges,  setTeamChanges]  = useState([])
-  const [repSort,      setRepSort]      = useState({ key: 'totalRevenue', dir: 'desc' })  // leaderboard ranking
   const [copied,       setCopied]       = useState(false)
-  const [openTeams,    setOpenTeams]    = useState(() => new Set())
-  const toggleTeam = (id) => setOpenTeams(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  // WHO am I looking at: company | team | office | rep. One control replaces
+  // the old team dropdown AND the Performance page's team sections, and it
+  // drives every block below — tiles, goal, funnel, table, both charts.
+  const [scope,        setScope]        = useState(() => scopeFromParam(searchParams.get('scope')))
+  const [groupBy,      setGroupBy]      = useState('team')     // company level only
+  const [showActivity, setShowActivity] = useState(false)      // extra door/appointment columns
+  const [leads,        setLeads]        = useState([])
+  const [activity,     setActivity]     = useState([])
+  const [officeGoals,  setOfficeGoals]  = useState({})   // { '': company, Phoenix: n, … }
+  const [repGoalMap,   setRepGoalMap]   = useState({})
+  const [teamGoalMap,  setTeamGoalMap]  = useState({})
   const [editingGoal,  setEditingGoal]  = useState(false)
   const [goalInput,    setGoalInput]    = useState('')
-  const [savedGoal,    setSavedGoal]    = useState(null)
+  // The stored target for the CURRENT scope — company/office rows come from
+  // monthly_goals, team/rep from rep_goals (read-only here; they are set on
+  // the Goals page). null = fall back to the auto 3-month-average goal.
   const [saveStatus,   setSaveStatus]   = useState('idle')
   const [saveError,    setSaveError]    = useState(null)
   const skipBlurSaveRef = useRef(false)
@@ -121,19 +108,42 @@ export default function Dashboard() {
   const goalMonth = goalDate.getMonth() + 1
 
   const loadData = () =>
-    Promise.all([fetchDeals(), fetchUsers(), fetchTeamChanges()]).then(([{ data: d }, { data: u }, { data: tc }]) => {
-      setDeals(activeDeals(d ?? []))   // canceled jobs never count toward stats
-      setUsers(u ?? [])
-      setTeamChanges(tc ?? [])
-    })
+    Promise.all([fetchDeals(), fetchUsers(), fetchTeamChanges(), fetchLeads(), fetchFieldActivity()])
+      .then(([{ data: d }, { data: u }, { data: tc }, { data: l }, { data: fa }]) => {
+        setDeals(activeDeals(d ?? []))   // canceled AND hidden jobs never count
+        setUsers(u ?? [])
+        setTeamChanges(tc ?? [])
+        setLeads(l ?? [])                // appointments, for the funnel
+        setActivity(fa ?? [])            // door knocks, for the funnel
+      })
 
   useEffect(() => { loadData().finally(() => setLoading(false)) }, [])
   useRefreshOnFocus(loadData)   // repull when returning to the tab so stats stay current
 
+  // Company + per-office goals (monthly_goals, migration 053) and the
+  // rep/team goals (rep_goals) — all four levels the scope bar can reach.
   useEffect(() => {
-    setSavedGoal(null)
-    fetchGoal(goalYear, goalMonth).then(({ data }) => setSavedGoal(data))
+    let alive = true
+    setOfficeGoals({}); setRepGoalMap({}); setTeamGoalMap({})
+    fetchGoalsForMonth(goalYear, goalMonth).then(({ data }) => { if (alive) setOfficeGoals(data || {}) })
+    fetchRepGoals(goalYear, goalMonth).then(({ data }) => {
+      if (!alive) return
+      const r = {}, t = {}
+      for (const g of data || []) (g.scope === 'team' ? t : r)[g.subject_id] = g.target
+      setRepGoalMap(r); setTeamGoalMap(t)
+    })
+    return () => { alive = false }
   }, [goalYear, goalMonth])
+
+  // Keep the scope in the URL so a team lead can be sent straight to their team.
+  useEffect(() => {
+    const cur = searchParams.get('scope') || ''
+    const next = scopeToParam(scope)
+    if (cur === next) return
+    const sp = new URLSearchParams(searchParams)
+    if (next) sp.set('scope', next); else sp.delete('scope')
+    setSearchParams(sp, { replace: true })
+  }, [scope, searchParams, setSearchParams])
 
   function handleRangeChange({ from, to, preset }) {
     setDateFrom(from); setDateTo(to); setActivePreset(preset)
@@ -150,11 +160,15 @@ export default function Dashboard() {
   const usersById = useMemo(() => Object.fromEntries(users.map(u => [u.id, u])), [users])
   const headsSet  = useMemo(() => headIdSet(users), [users])
   const changesByProfile = useMemo(() => buildChangesByProfile(teamChanges), [teamChanges])
-  const saleTeam = (d) => teamOfSale(saleOwnerId(d), d.sale_date, usersById, headsSet, changesByProfile)
 
+  // THE chokepoint. `filtered`, `prevFiltered`, the KPI tiles, the goal card
+  // and both charts all run through this, so pointing it at the scope is what
+  // makes the whole page re-scope on a drill rather than just the table.
+  const teamCtx = useMemo(() => ({ usersById, heads: headsSet, changesByProfile }),
+    [usersById, headsSet, changesByProfile])
   function applyScopeFilters(rows) {
-    if (!teamFilter) return rows
-    return rows.filter(d => saleTeam(d) === teamFilter)
+    if (isCompany(scope)) return rows
+    return rows.filter(scopeFilter(scope, teamCtx))
   }
 
   // Every deal in the date range with the team filter NOT applied. The Rep
@@ -168,12 +182,12 @@ export default function Dashboard() {
     return r
   }, [deals, dateFrom, dateTo])
 
-  const filtered = useMemo(() => applyScopeFilters(dateFiltered), [dateFiltered, teamFilter, users])
+  const filtered = useMemo(() => applyScopeFilters(dateFiltered), [dateFiltered, scope, teamCtx])
 
   const prevFiltered = useMemo(() => {
     if (!prevPeriod) return []
     return applyScopeFilters(deals).filter(d => d.sale_date >= prevPeriod.from && d.sale_date <= prevPeriod.to)
-  }, [deals, teamFilter, users, prevPeriod])
+  }, [deals, scope, teamCtx, prevPeriod])
 
   function computeTotals(rows) {
     let baseline = 0, commission = 0
@@ -189,12 +203,82 @@ export default function Dashboard() {
   const totals     = useMemo(() => computeTotals(filtered),     [filtered])
   const prevTotals = useMemo(() => computeTotals(prevFiltered), [prevFiltered])
 
-  const companyTotalRev = useMemo(() => {
-    let r = deals
-    if (dateFrom) r = r.filter(d => d.sale_date >= dateFrom)
-    if (dateTo)   r = r.filter(d => d.sale_date <= dateTo)
-    return r.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0) || 1
-  }, [deals, dateFrom, dateTo])
+  // ── The scope tree ───────────────────────────────────────────────────
+  // buildPerformance already computes org + offices[] + teams[] with rep rows
+  // for the window, so nothing is recomputed here: `pickScope` just selects
+  // the node the scope bar points at, and its children become the table.
+  const perf = useMemo(() => buildPerformance({
+    deals, leads, activity, users, teamCtx,
+    range: { from: dateFrom, to: dateTo },
+    prev: prevPeriod,
+    defaultTeamId: perfDefaultTeam || null,
+    nonRepNames: feedNonReps,
+    // NOT passing excludedIds. On the old Performance page that list removed a
+    // person's production from the page's totals, which was tolerable there
+    // and is not here: this page is the company's revenue number. Hiding a job
+    // that should not count is now `deals.hidden` (migration 052).
+  }), [deals, leads, activity, users, teamCtx, dateFrom, dateTo, prevPeriod, perfDefaultTeam, feedNonReps])
+
+  // A scope can go stale — a team with no sales this range, a rep who left.
+  // Fall back to company rather than render an empty page.
+  const node = useMemo(() => pickScope(perf, scope, groupBy) || pickScope(perf, COMPANY, groupBy),
+    [perf, scope, groupBy])
+  useEffect(() => {
+    if (!isCompany(scope) && perf && !pickScope(perf, scope, groupBy)) setScope(COMPANY)
+  }, [perf, scope, groupBy])
+
+  const goalInfo = useMemo(() => resolveScopeGoal(node, {
+    companyGoal: officeGoals[''] ?? null, officeGoals,
+    repGoals: repGoalMap, teamGoals: teamGoalMap,
+  }), [node, officeGoals, repGoalMap, teamGoalMap])
+  // What monthlyGoal treats as "a target was set for this scope" — null makes
+  // it fall back to the auto 3-month-average.
+  const savedGoal = goalInfo.target
+
+  // Which office key this scope saves a goal against ('' = company).
+  const goalOfficeKey = node?.level === 'office' ? node.title : ''
+  const canEditThisGoal = canEditGoal && (node?.level === 'company' || node?.level === 'office')
+
+  // Breadcrumb trail — Company › Team › Rep, each step clickable.
+  const trail = useMemo(() => {
+    const t = [{ label: 'Company', scope: COMPANY }]
+    if (!node || node.level === 'company') return t
+    if (node.level === 'rep' && node.parentTeam) {
+      t.push({ label: node.parentTeam.label, scope: { level: 'team', key: node.parentTeam.key } })
+    }
+    t.push({ label: node.title, scope: null })
+    return t
+  }, [node])
+
+  const flagFloors = perfFloors || undefined
+  const teamHasActivity = !!node?.stats?.doors
+
+  // The deals behind a rep — the rep scope has no children to list.
+  const repDealRows = useMemo(
+    () => (node?.level === 'rep' ? repDealsFor(deals, node.key, { from: dateFrom, to: dateTo }) : []),
+    [node, deals, dateFrom, dateTo])
+
+  // Copy the visible table for pasting into a text or a slide — the reason
+  // this page exists, per Keaton: pulling numbers for team leaders.
+  async function copyTable() {
+    if (!node) return
+    const cols = ['Name', ...(showActivity ? ['Doors','Set','Ran','Sold'] : []),
+                  'Revenue','Deals','Avg deal','Markup','Commission']
+    const line = (label, st) => [label,
+      ...(showActivity ? [st.doors ?? 0, st.set ?? 0, st.ran ?? 0, st.sold ?? 0] : []),
+      Math.round(st.revenue), st.deals,
+      st.avgDeal != null ? Math.round(st.avgDeal) : '',
+      st.markupPct != null ? st.markupPct.toFixed(1) + '%' : '',
+      Math.round(st.commission)]
+    const rows = node.children.length
+      ? node.children.map(c => line(c.label, c.stats))
+      : [line(node.title, node.stats)]
+    const tsv = [`${node.title} · ${dateFrom} to ${dateTo}`, cols.join('\t'),
+                 ...rows.map(r => r.join('\t')),
+                 line('TOTAL', node.stats).join('\t')].join('\n')
+    try { await navigator.clipboard.writeText(tsv); setCopied(true); setTimeout(() => setCopied(false), 1800) }
+    catch { /* clipboard refused — nothing useful to do */ }
+  }
 
   // ── Record moments: every record currently falling, in one card ──
   // Fires while a record is being beaten in progress, and for up to 7 days
@@ -207,8 +291,13 @@ export default function Dashboard() {
   // cap is gone: the card shows all of them, grouped by scope so company still
   // reads first, and the whole section collapses instead of being dismissed
   // record-by-record (same pattern as the Leads rep board).
+  // COLLAPSED by default. Six record types across company/team/rep means a
+  // dozen-plus can be live at once, and expanded they filled the whole first
+  // screen before a single figure — the opposite of what this page is for.
+  // The header still reads "N records falling right now", so nothing is lost;
+  // opening it is one click and the choice sticks.
   const [recsOpen, setRecsOpen] = useState(() => {
-    try { return localStorage.getItem('tt_records_open') !== 'off' } catch { return true }
+    try { return localStorage.getItem('tt_records_open') === 'on' } catch { return false }
   })
   const toggleRecs = () => setRecsOpen(v => {
     const next = !v
@@ -271,9 +360,8 @@ export default function Dashboard() {
   const monthlyGoal = useMemo(() => {
     const curKey = `${String(goalYear).padStart(4,'0')}-${String(goalMonth).padStart(2,'0')}`
     function monthTotal(mk) {
-      let rows = deals.filter(d => d.sale_date?.startsWith(mk))
-      if (teamFilter) rows = rows.filter(d => saleTeam(d) === teamFilter)
-      return rows.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
+      return applyScopeFilters(deals.filter(d => d.sale_date?.startsWith(mk)))
+        .reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
     }
     const curRevenue = monthTotal(curKey)
     const trailing   = [1,2,3].map(i => monthTotal(format(subMonths(goalDate, i), 'yyyy-MM')))
@@ -281,7 +369,7 @@ export default function Dashboard() {
     const goal       = savedGoal != null ? savedGoal : autoGoal
     const pct        = Math.min((curRevenue/goal)*100, 100)
     return { curRevenue, goal, pct, isCustom: savedGoal != null, month: format(goalDate, 'MMMM yyyy') }
-  }, [deals, users, teamFilter, savedGoal, goalYear, goalMonth, goalDate])
+  }, [deals, scope, teamCtx, savedGoal, goalYear, goalMonth, goalDate])
 
   // Weekly goal: always tracks the CURRENT week (Sun–Sat, same week rule as the
   // rest of reporting), regardless of the selected date range. A custom $ lives
@@ -292,8 +380,7 @@ export default function Dashboard() {
     const wkStart = startOfWeek(now, { weekStartsOn: 0 })
     const wkEnd   = endOfWeek(now,   { weekStartsOn: 0 })
     const ws = format(wkStart, 'yyyy-MM-dd'), we = format(wkEnd, 'yyyy-MM-dd')
-    let rows = deals.filter(d => d.sale_date >= ws && d.sale_date <= we)
-    if (teamFilter) rows = rows.filter(d => saleTeam(d) === teamFilter)
+    const rows = applyScopeFilters(deals.filter(d => d.sale_date >= ws && d.sale_date <= we))
     const curRevenue = rows.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
     const saved    = parseFloat(settings.weekly_goal)
     const isCustom = Number.isFinite(saved) && saved > 0
@@ -301,7 +388,7 @@ export default function Dashboard() {
     const goal     = isCustom ? saved : autoGoal
     const pct      = Math.min((curRevenue / goal) * 100, 100)
     return { curRevenue, goal, pct, isCustom, label: `${format(wkStart, 'MMM d')} – ${format(wkEnd, 'MMM d')}` }
-  }, [deals, users, teamFilter, settings.weekly_goal, monthlyGoal.goal, goalDate])
+  }, [deals, scope, teamCtx, settings.weekly_goal, monthlyGoal.goal, goalDate])
 
   function startEditWeekGoal() { setWeekGoalInput(weeklyGoal.goal.toFixed(0)); setWeekSaveStatus('idle'); setEditingWeekGoal(true) }
   function cancelWeekGoalEdit() { skipWeekBlurRef.current = true; setEditingWeekGoal(false) }
@@ -328,186 +415,17 @@ export default function Dashboard() {
     const v = parseFloat(goalInput)
     if (!(v > 0)) { setEditingGoal(false); return }
     setEditingGoal(false)
-    const { error } = await saveGoalDb(goalYear, goalMonth, v)
+    const { error } = await saveGoalDb(goalYear, goalMonth, v, goalOfficeKey)
     if (error) { setSaveError(error.message); setSaveStatus('error'); return }
-    setSavedGoal(v); setSaveStatus('saved'); setTimeout(() => setSaveStatus('idle'), 2000)
+    setOfficeGoals(g => ({ ...g, [goalOfficeKey]: v }))
+    setSaveStatus('saved'); setTimeout(() => setSaveStatus('idle'), 2000)
   }
   async function resetGoal() {
     skipBlurSaveRef.current = true; setEditingGoal(false)
-    const { error } = await deleteGoalDb(goalYear, goalMonth)
+    const { error } = await deleteGoalDb(goalYear, goalMonth, goalOfficeKey)
     if (error) { setSaveError(error.message); setSaveStatus('error'); return }
-    setSavedGoal(null); setSaveStatus('saved'); setTimeout(() => setSaveStatus('idle'), 2000)
-  }
-
-  const teamData = useMemo(() => {
-    // Team heads via the shared rule (utils/team.js) — an absorbed manager
-    // (reports to another lead, no directs) is a member, not their own team.
-    const heads = headIdSet(users)
-    const mgrs = teamFilter ? users.filter(u => u.id === teamFilter) : users.filter(u => heads.has(u.id))
-    // Group every deal by its DATE-EFFECTIVE team once (owner's team as of the
-    // sale date — team_changes log), then build each team row from its deals.
-    const byTeam = {}, prevByTeam = {}
-    for (const d of filtered)     (byTeam[saleTeam(d)] ||= []).push(d)
-    for (const d of prevFiltered) (prevByTeam[saleTeam(d)] ||= []).push(d)
-    const teamRow = (key, name, ghost, repCount) => {
-      const mDeals  = byTeam[key] || []
-      const revenue = mDeals.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
-      const prevRev = (prevByTeam[key] || []).reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0)
-      // Drill-down rows come from the DEALS, so a moved rep's old sales still
-      // show inside the team they were on when they sold them.
-      const byOwner = {}
-      for (const d of mDeals) {
-        const oid = saleOwnerId(d) || 'none'
-        if (!byOwner[oid]) {
-          const u = users.find(x => x.id === oid)
-          byOwner[oid] = { id: oid, name: u?.name ?? 'No rep assigned', ghost: u?.ghost === true, isManager: oid === key, deals: 0, revenue: 0 }
-        }
-        byOwner[oid].deals += 1
-        byOwner[oid].revenue += parseFloat(d.baseline_revenue) || 0
-      }
-      return { id: key, name, ghost, repCount, deals: mDeals.length, revenue, prevRev,
-        reps: Object.values(byOwner).sort((a, b) => b.revenue - a.revenue), pct: (revenue / companyTotalRev) * 100 }
-    }
-    const rows = mgrs.map(mgr => teamRow(mgr.id, teamLabel(mgr), mgr.ghost === true,
-      users.filter(u => u.manager_id === mgr.id && u.id !== mgr.id && u.active !== false).length
-    ))
-    // HISTORICAL teams: sale keys that aren't a current head (a lead whose
-    // team has since dissolved without being absorbed) still get their own
-    // row, so old deals never dump into Unassigned just because the team
-    // disbanded later.
-    if (!teamFilter) {
-      const known = new Set(mgrs.map(m => m.id))
-      for (const key of Object.keys(byTeam)) {
-        if (key === 'unassigned' || known.has(key)) continue
-        const u = users.find(x => x.id === key)
-        rows.push(teamRow(key, u ? teamLabel(u) : 'Former team', u?.ghost === true, 0))
-      }
-    }
-    rows.sort((a, b) => b.revenue - a.revenue)
-    if (!teamFilter && (byTeam.unassigned?.length || prevByTeam.unassigned?.length)) {
-      rows.push(teamRow('unassigned', 'Unassigned', false, 0))
-    }
-    return rows
-  }, [users, filtered, prevFiltered, companyTotalRev, teamFilter, usersById, headsSet, changesByProfile])
-
-  const repData = useMemo(() => {
-    const map = {}
-    const ensure = (id) => {
-      if (!map[id]) {
-        const u   = users.find(u => u.id === id)
-        const mgr = u ? users.find(m => m.id === u.manager_id) : null
-        map[id]   = { id, name: u?.name ?? '—', team: mgr?.name ?? '—',
-          deals: 0, revenue: 0, leads: 0, leadRevenue: 0, commission: 0,
-          selfGens: 0, setForOthers: 0 }
-      }
-      return map[id]
-    }
-    // Walk the DATE-filtered deals, not the team-filtered ones. A deal belongs
-    // to its setter's team, but its closer can be on another team — filtering
-    // deals by team first listed that closer under a team they're not on
-    // (real case: Stephen, on Conner's team, showing under Jared's team
-    // because he closed a deal Jared set). Credit everyone from every deal,
-    // then keep only the filtered team's members (below).
-    for (const deal of dateFiltered) {
-      // Deals + revenue credit the sale owner — the SETTER, falling back to
-      // the closer when no setter was recorded (so no deal vanishes from the
-      // leaderboard while still counting in the totals).
-      const sid = saleOwnerId(deal)
-      const cid = deal.closer_id
-      const bl  = parseFloat(deal.baseline_revenue) || 0
-      const a   = dealAmounts(deal)
-      // Who actually closed it. A deal with a setter but no closer_id was
-      // closed by the setter themselves — the same rule dealAmounts() uses to
-      // pay them the whole rep pool.
-      const closerOwn = deal.closer_id || deal.setter_id || null
-      if (sid) {
-        const s = ensure(sid)
-        s.deals      += 1                       // every deal they own (drives Personal Rev)
-        s.revenue    += bl
-        s.commission += deal.setter_id ? a.setter : a.closer
-        // A SELF-GEN IS NOT A SET (per Keaton). The three count columns are
-        // mutually exclusive, so each deal a rep touched lands in exactly one:
-        // they set AND closed it → Self Gen; they set it and someone else
-        // closed it → Set for Others; someone else set it and they closed it
-        // → Lead Closes (the `leads` bucket below).
-        if (closerOwn === sid) s.selfGens += 1
-        else                   s.setForOthers += 1
-      }
-      // Leads + lead revenue credit the CLOSER when they aren't the setter —
-      // they closed someone else's lead, and earn their closer share.
-      if (cid && cid !== sid) {
-        const c = ensure(cid)
-        c.leads       += 1
-        c.leadRevenue += bl
-        c.commission  += a.closer
-      }
-    }
-    // Total revenue = every deal they set OR closed. `leadRevenue` only counts
-    // deals closed for a DIFFERENT setter, so a self-gen is counted once, not
-    // twice. (pct stays tied to set revenue — totals across reps would exceed
-    // company revenue otherwise, since a closed deal also counts for its setter.)
-    // Under a team filter, a rep appears only if they're ON that team — their
-    // team as of the end of the range, via the same date-effective rule that
-    // places deals, so a head is their own team and a moved rep follows the
-    // move. A closer from another team keeps their close credit, but on THEIR
-    // team's leaderboard, not this one.
-    const asOf = dateTo || format(new Date(), 'yyyy-MM-dd')
-    const onTeam = (id) => !teamFilter || teamOfSale(id, asOf, usersById, headsSet, changesByProfile) === teamFilter
-    return Object.values(map).filter(r => onTeam(r.id)).map(r => ({
-      ...r,
-      totalRevenue: r.revenue + r.leadRevenue,
-      pct: (r.revenue / companyTotalRev) * 100,
-    }))
-  }, [dateFiltered, users, companyTotalRev, teamFilter, dateTo, usersById, headsSet, changesByProfile])
-
-  // Rank by the chosen column (defaults to set-revenue). All sortable columns
-  // are numeric. Revenue breaks ties.
-  const toggleRepSort = (key) =>
-    setRepSort(s => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }))
-  const ghostIds = useMemo(() => new Set(users.filter(u => u.ghost).map(u => u.id)), [users])
-  const rankedReps = useMemo(() => {
-    const { key, dir } = repSort
-    // Show every rep with any activity — ranked, scrollable. (No top-N cut, so
-    // setter-only reps who hand deals off to a closer still appear.) Ghost reps
-    // are hidden from non-admins, but their deals still feed every total above.
-    return [...repData]
-      .filter(r => (r.deals || r.leads || r.revenue || r.leadRevenue || r.commission) && (isAdmin || !ghostIds.has(r.id)))
-      .sort((a, b) => (dir === 'asc' ? (a[key] - b[key]) : (b[key] - a[key])) || (b.totalRevenue - a.totalRevenue))
-  }, [repData, repSort, ghostIds, isAdmin])
-
-  // Copy the current leaderboard to the clipboard as a real table (HTML) with a
-  // tab-separated fallback — pastes cleanly into Canva, Sheets, Docs, etc.
-  async function copyLeaderboard() {
-    const cols = ['#', 'Rep', 'Total Rev', 'Personal Rev', 'Comm', 'Self Gen', 'Set', 'Lead Closes']
-    // The export is a shareable artifact, so ghost reps are always dropped —
-    // even for an admin, who sees them on-screen. (Re-rank after filtering.)
-    const rows = rankedReps
-      .filter(r => !ghostIds.has(r.id))
-      .map((r, i) => [i + 1, r.name, fmt(r.totalRevenue), fmt(r.revenue), fmt(r.commission), r.selfGens, r.setForOthers, r.leads])
-    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    const tsv = [cols, ...rows].map(r => r.join('\t')).join('\n')
-    const html =
-      `<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">` +
-      `<thead><tr style="background:#00b894;color:#0b0b0b">` +
-      cols.map((c, i) => `<th style="padding:6px 12px;text-align:${i >= 2 ? 'right' : 'left'};border:1px solid #d1d5db">${esc(c)}</th>`).join('') +
-      `</tr></thead><tbody>` +
-      rows.map((r, ri) => `<tr style="background:${ri % 2 ? '#f3f4f6' : '#ffffff'};color:#111">` +
-        r.map((c, ci) => `<td style="padding:6px 12px;text-align:${ci >= 2 ? 'right' : 'left'};border:1px solid #d1d5db">${esc(c)}</td>`).join('') +
-        `</tr>`).join('') +
-      `</tbody></table>`
-    try {
-      if (navigator.clipboard && window.ClipboardItem) {
-        await navigator.clipboard.write([new window.ClipboardItem({
-          'text/html':  new Blob([html], { type: 'text/html' }),
-          'text/plain': new Blob([tsv],  { type: 'text/plain' }),
-        })])
-      } else {
-        await navigator.clipboard.writeText(tsv)
-      }
-      setCopied(true); setTimeout(() => setCopied(false), 1800)
-    } catch {
-      try { await navigator.clipboard.writeText(tsv); setCopied(true); setTimeout(() => setCopied(false), 1800) } catch {}
-    }
+    setOfficeGoals(g => { const n = { ...g }; delete n[goalOfficeKey]; return n })
+    setSaveStatus('saved'); setTimeout(() => setSaveStatus('idle'), 2000)
   }
 
   // Rolling last 8 FULL weeks + the current (partial) week, newest first —
@@ -531,7 +449,7 @@ export default function Dashboard() {
       })
     }
     return weeks   // newest first
-  }, [deals, teamFilter, users])
+  }, [deals, scope, teamCtx])
 
   const weeklyAvg = useMemo(() => {
     const full = weeklyData.filter(w => !w.current)
@@ -557,13 +475,13 @@ export default function Dashboard() {
       if (slot) { slot.revenue += parseFloat(deal.baseline_revenue) || 0; slot.deals += 1 }
     }
     return months
-  }, [deals, teamFilter, users])
+  }, [deals, scope, teamCtx])
 
   if (loading) return <div className="flex items-center justify-center py-24 text-white/30 text-[13px]">Loading…</div>
 
-  const managers         = users.filter(u => headIdSet(users).has(u.id))   // team heads for the filter dropdown
+
   const maxWeekRevLocal  = maxWeekRev
-  const selectedTeamName = teamFilter ? (m => m ? teamLabel(m) : null)(managers.find(m => m.id === teamFilter)) : null
+  const scopeName = node && node.level !== 'company' ? node.title : null
 
   return (
     <div className="space-y-4 pb-6">
@@ -578,12 +496,27 @@ export default function Dashboard() {
           count={filtered.length}
           countLabel="deals"
         />
-        <select value={teamFilter} onChange={e => setTeamFilter(e.target.value)}
-          style={{ background: '#242424', border: '1px solid #333' }}
-          className="h-8 px-2 rounded-lg text-[11px] md:text-[12px] text-white focus:outline-none self-start">
-          <option value="">All Teams</option>
-          {managers.map(m => <option key={m.id} value={m.id}>{teamLabel(m)}</option>)}
-        </select>
+        {/* Scope trail — replaces the old "All Teams" dropdown. Each step is a
+            button back up the drill; the last one is where you are. */}
+        <div className="flex items-center gap-2 flex-wrap self-start">
+          <div className="flex items-center gap-1 flex-wrap text-[12px] md:text-[13px]">
+            {trail.map((t, i) => (
+              <span key={i} className="flex items-center gap-1">
+                {i > 0 && <ChevronRight size={12} className="text-white/25" />}
+                {t.scope
+                  ? <button onClick={() => setScope(t.scope)}
+                      className="text-teal hover:underline font-medium">{t.label}</button>
+                  : <span className="text-white font-bold">{t.label}</span>}
+              </span>
+            ))}
+          </div>
+          <button onClick={copyTable} title="Copy this table for a text or a slide"
+            className={`h-8 px-2.5 rounded-lg text-[11px] font-semibold inline-flex items-center gap-1.5 transition-colors ${
+              copied ? 'text-emerald-400' : 'text-white/45 hover:text-teal'}`}
+            style={{ background: '#242424', border: '1px solid #333' }}>
+            {copied ? <Check size={12} /> : <Copy size={12} />}{copied ? 'Copied' : 'Copy'}
+          </button>
+        </div>
       </div>
 
       {/* ── Records falling right now — every one of them, collapsible ── */}
@@ -660,7 +593,7 @@ export default function Dashboard() {
           <div>
             <h3 className="text-[13px] md:text-[14px] font-semibold text-white">
               {monthlyGoal.month} Revenue Goal
-              {selectedTeamName && ` — ${selectedTeamName}`}
+              {scopeName && ` — ${scopeName}`}
             </h3>
             <p className="text-[10px] text-white/30 mt-0.5">
               {monthlyGoal.isCustom ? 'Custom goal' : 'Auto: 3-month avg ×1.1'}
@@ -699,7 +632,7 @@ export default function Dashboard() {
               </div>
             ) : (
               <div className="flex items-center gap-2">
-                {canEditGoal ? (
+                {canEditThisGoal ? (
                   <button onClick={startEditGoal}
                     className="text-[18px] md:text-[20px] font-bold text-teal hover:bg-teal/5 rounded px-2 -mx-2 py-0.5 transition-colors">
                     {fmt(monthlyGoal.goal)}
@@ -725,13 +658,18 @@ export default function Dashboard() {
             style={{ width: `${monthlyGoal.pct}%` }} />
         </div>
 
-        {/* ── Weekly Goal (always the current week, Sun–Sat) ── */}
+        {/* ── Weekly Goal (always the current week, Sun–Sat) ──
+            COMPANY SCOPE ONLY. `app_settings.weekly_goal` is a single
+            company-wide number, so once the page scopes to a team the revenue
+            bar would be that team's while the target stayed the company's —
+            a comparison that looks precise and means nothing. */}
+        {isCompany(scope) && (
         <div className="mt-4 pt-4" style={{ borderTop: '1px solid #2e2e2e' }}>
           <div className="flex items-start justify-between mb-2">
             <div>
               <h4 className="text-[12px] md:text-[13px] font-semibold text-white">
                 This Week ({weeklyGoal.label})
-                {selectedTeamName && ` — ${selectedTeamName}`}
+                {scopeName && ` — ${scopeName}`}
               </h4>
               <p className="text-[10px] text-white/30 mt-0.5">
                 {weeklyGoal.isCustom ? 'Custom weekly goal' : 'Auto: monthly goal ÷ weeks'}
@@ -796,147 +734,200 @@ export default function Dashboard() {
               style={{ width: `${weeklyGoal.pct}%` }} />
           </div>
         </div>
+        )}
       </div>
 
-      {/* ── Rep Leaderboard + Team Breakdown — stack on mobile ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-5">
-
-        {/* Rep Leaderboard */}
+      {/* ── Appointments & field ────────────────────────────────────────
+          Appointment COUNTS, never deals — the label says so because "Set"
+          meaning two different things across two pages is what made the old
+          Dashboard and Performance page impossible to read together. */}
+      {node && (
         <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
-          <div className="flex items-center justify-between gap-3 mb-4">
-            <div className="flex items-baseline gap-3 min-w-0">
-              <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Rep Leaderboard</h3>
-              <p className="text-[11px] text-white/30 hidden sm:block">Tap a column to rank by it</p>
+          <h3 className="text-[13px] md:text-[14px] font-semibold text-white mb-0.5">
+            {node.level === 'rep' ? `${node.title}'s field activity` : 'Appointments & field'}
+          </h3>
+          <p className="text-[11px] text-white/30 mb-3">Appointment counts, never deals</p>
+          {node.showFunnel ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              {[
+                ['Doors', node.stats.doors ?? 0, node.level === 'rep' && node.stats.doorsPerDay ? `${node.stats.doorsPerDay.toFixed(1)} / day` : null],
+                ['Set',   node.stats.set,  node.stats.doors ? `${((node.stats.set / node.stats.doors) * 100).toFixed(1)}% of doors` : null],
+                ['Ran',   node.stats.ran,  node.stats.showRate != null ? `${node.stats.showRate.toFixed(0)}% showed` : null],
+                ['Sold',  node.stats.sold, node.stats.ran ? `${((node.stats.sold / node.stats.ran) * 100).toFixed(0)}% closed` : null],
+              ].map(([k, v, sub]) => (
+                <div key={k} className="rounded-lg px-3 py-2.5" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+                  <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mb-1">{k}</p>
+                  <p className="text-[18px] font-bold text-white tabular-nums">{(v ?? 0).toLocaleString()}</p>
+                  {sub && <p className="text-[10px] text-teal mt-0.5">{sub}</p>}
+                </div>
+              ))}
             </div>
-            {isAdmin && (
-              <button onClick={copyLeaderboard}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold flex-shrink-0 transition-colors"
-                style={{ background: copied ? '#00b89420' : '#1a1a1a', border: `1px solid ${copied ? '#00b89455' : '#2e2e2e'}`, color: copied ? '#00b894' : 'rgba(255,255,255,0.6)' }}
-                title="Copy the leaderboard as a table (paste into Canva, Sheets, etc.)">
-                {copied ? <Check size={12} /> : <Copy size={12} />}
-                {copied ? 'Copied' : 'Export'}
-              </button>
-            )}
+          ) : (
+            <p className="text-[12px] text-white/35 leading-relaxed">{node.funnelNote}</p>
+          )}
+          {node.level === 'rep' && node.showFunnel && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2">
+              {[
+                ['Self-gen ran', node.stats.sgRan, null],
+                ['Leads ran',    node.stats.leadRan, null],
+                ['Self-gen deals', node.stats.deals, node.stats.sgCloseRate != null ? `${node.stats.sgCloseRate.toFixed(0)}% close` : null],
+                ['Lead closes',  node.stats.leadCloses, node.stats.leadCloseRate != null ? `${node.stats.leadCloseRate.toFixed(0)}% close` : null],
+              ].map(([k, v, sub]) => (
+                <div key={k} className="rounded-lg px-3 py-2" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+                  <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mb-0.5">{k}</p>
+                  <p className="text-[15px] font-bold text-white tabular-nums">{v ?? 0}</p>
+                  {sub && <p className="text-[10px] text-white/35">{sub}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── The drill table ─────────────────────────────────────────────
+          Company → Teams or Offices → reps, then a rep's own deals. Six
+          columns by default; the activity toggle adds four. Today's
+          Performance table is thirteen, always. */}
+      {node && (
+        <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
+          <div className="flex items-center justify-between gap-2 flex-wrap mb-3">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {node.level === 'company' ? (
+                <>
+                  <span className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mr-1">Break down by</span>
+                  {['team', 'office'].map(g => (
+                    <button key={g} onClick={() => setGroupBy(g)}
+                      className={`px-2.5 py-1 rounded-full text-[11px] transition-colors ${groupBy === g
+                        ? 'bg-teal text-dark font-semibold' : 'text-white/45 hover:text-white'}`}
+                      style={groupBy === g ? undefined : { border: '1px solid #3a3a3a' }}>
+                      {g === 'team' ? 'Teams' : 'Offices'}
+                    </button>
+                  ))}
+                </>
+              ) : (
+                <h3 className="text-[13px] md:text-[14px] font-semibold text-white">
+                  {node.childKind || `${node.title} · deals`}
+                </h3>
+              )}
+            </div>
+            <button onClick={() => setShowActivity(v => !v)}
+              className={`px-2.5 py-1 rounded-full text-[11px] transition-colors ${showActivity
+                ? 'bg-teal text-dark font-semibold' : 'text-white/45 hover:text-white'}`}
+              style={showActivity ? undefined : { border: '1px solid #3a3a3a' }}>
+              {showActivity ? '✓' : '+'} Appointments &amp; doors
+            </button>
           </div>
-          {/* Scrolls both ways: vertically through the rankings, and
-              horizontally on a phone to reach the count columns. */}
-          <div className="max-h-[460px] overflow-y-auto overflow-x-auto">
-          <table className="w-full min-w-[520px]">
-            <thead className="sticky top-0 z-10" style={{ background: '#242424' }}>
-              <tr className="text-[9px] md:text-[10px] font-bold text-white/30 uppercase tracking-wider">
-                <th className="text-left pb-2 w-6">#</th>
-                <th className="text-left pb-2">Rep</th>
-                <SortTh label="Total Rev" align="right" title="Revenue on every deal they set OR closed (a self-gen counts once)"
-                  active={repSort.key === 'totalRevenue'} dir={repSort.dir} onClick={() => toggleRepSort('totalRevenue')} />
-                <SortTh label="Personal Rev" align="right" title="Revenue on the deals they set themselves"
-                  active={repSort.key === 'revenue'} dir={repSort.dir} onClick={() => toggleRepSort('revenue')} />
-                <SortTh label="Comm" align="right"
-                  active={repSort.key === 'commission'} dir={repSort.dir} onClick={() => toggleRepSort('commission')} />
-                <SortTh label="Self Gen" align="center" title="Deals they set AND closed themselves"
-                  active={repSort.key === 'selfGens'} dir={repSort.dir} onClick={() => toggleRepSort('selfGens')} />
-                <SortTh label="Set" align="center" title="Deals they set that another rep closed — a self-gen is never counted here"
-                  active={repSort.key === 'setForOthers'} dir={repSort.dir} onClick={() => toggleRepSort('setForOthers')} />
-                <SortTh label="Lead Closes" align="center" title="Deals they closed that another rep set"
-                  active={repSort.key === 'leads'} dir={repSort.dir} onClick={() => toggleRepSort('leads')} />
-              </tr>
-            </thead>
-            <tbody>
-              {rankedReps.map((rep, i) => {
-                return (
-                  <tr key={rep.id} className="border-t border-white/[0.04]">
-                    <td className="py-2"><RankBadge n={i + 1} /></td>
-                    <td className="py-2 text-[12px] font-medium text-white/80 truncate max-w-[100px]">{rep.name}</td>
-                    <td className="py-2 text-right whitespace-nowrap">
-                      <p className="text-[12px] font-bold text-teal">{fmt(rep.totalRevenue)}</p>
-                    </td>
-                    <td className="py-2 text-right whitespace-nowrap">
-                      <p className="text-[12px] font-semibold text-white/70">{fmt(rep.revenue)}</p>
-                      <p className="text-[10px] text-white/30 hidden sm:block">{rep.pct.toFixed(1)}%</p>
-                    </td>
-                    <td className="py-2 text-[12px] font-semibold text-emerald-400 text-right whitespace-nowrap">{fmt(rep.commission)}</td>
-                    <td className="py-2 text-[12px] text-center">
-                      {rep.selfGens > 0 ? <span className="text-white/80 font-semibold">{rep.selfGens}</span> : <span className="text-white/20">—</span>}
-                    </td>
-                    <td className="py-2 text-[12px] text-center">
-                      {rep.setForOthers > 0 ? <span className="text-white/60">{rep.setForOthers}</span> : <span className="text-white/20">—</span>}
-                    </td>
-                    <td className="py-2 text-[12px] text-center">
-                      {rep.leads > 0 ? <span className="text-white/60">{rep.leads}</span> : <span className="text-white/20">—</span>}
+
+          {node.children.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-[12.5px]">
+                <thead>
+                  <tr className="text-[9px] uppercase tracking-widest text-white/30">
+                    <th className="text-left font-semibold py-1.5 pr-2">{node.childKind}</th>
+                    {showActivity && ['Doors','Set','Ran','Sold'].map(h =>
+                      <th key={h} className="text-right font-semibold py-1.5 px-2 text-teal/60">{h}</th>)}
+                    {['Revenue','Deals','Avg deal','Markup','Commission','Goal'].map(h =>
+                      <th key={h} className="text-right font-semibold py-1.5 px-2">{h}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {node.children.map(c => {
+                    const st = c.stats
+                    const g = c.kind === 'rep' ? repGoalMap[c.key]
+                            : c.kind === 'office' ? officeGoals[c.label]
+                            : (teamGoalMap[c.key] ?? null)
+                    const gp = g ? (st.revenue / g) * 100 : null
+                    const fl = c.kind === 'rep' ? repFlags(st, flagFloors, teamHasActivity) : {}
+                    return (
+                      <tr key={`${c.kind}-${c.key}`}
+                        onClick={c.drillable ? onClickUnlessSelecting(() => setScope({ level: c.kind, key: c.key })) : undefined}
+                        className={`border-t border-white/5 ${c.drillable ? 'cursor-pointer hover:bg-white/[0.03]' : ''}`}>
+                        <td className="py-2 pr-2">
+                          <span className={`font-semibold ${c.drillable ? 'text-teal' : 'text-white/70'}`}>
+                            {c.ghost && !isAdmin ? 'Hidden' : c.label}{c.drillable ? ' ›' : ''}
+                          </span>
+                          {c.sub && <span className="block text-[10px] text-white/30 font-normal">{c.sub}</span>}
+                        </td>
+                        {showActivity && (
+                          <>
+                            <td className={`text-right py-2 px-2 tabular-nums ${fl.doors ? 'text-red-400 font-bold' : 'text-white/60'}`}>{(st.doors ?? 0).toLocaleString()}</td>
+                            <td className={`text-right py-2 px-2 tabular-nums ${fl.set ? 'text-red-400 font-bold' : 'text-white/60'}`}>{st.set ?? 0}</td>
+                            <td className="text-right py-2 px-2 tabular-nums text-white/60">{st.ran ?? 0}</td>
+                            <td className="text-right py-2 px-2 tabular-nums text-white/60">{st.sold ?? 0}</td>
+                          </>
+                        )}
+                        <td className="text-right py-2 px-2 tabular-nums text-white font-semibold">{fmt(st.revenue)}</td>
+                        <td className="text-right py-2 px-2 tabular-nums text-white/60">{st.deals}</td>
+                        <td className="text-right py-2 px-2 tabular-nums text-white/60">{st.avgDeal != null ? fmt(st.avgDeal) : '—'}</td>
+                        <td className="text-right py-2 px-2 tabular-nums text-white/60">{st.markupPct != null ? `${st.markupPct.toFixed(1)}%` : '—'}</td>
+                        <td className="text-right py-2 px-2 tabular-nums text-white/60">{fmt(st.commission)}</td>
+                        <td className="text-right py-2 px-2 tabular-nums">
+                          {gp == null ? <span className="text-white/20">—</span> : (
+                            <span className={gp >= 100 ? 'text-emerald-400 font-semibold' : gp >= 80 ? 'text-white/60' : 'text-amber-400'}>
+                              {Math.round(gp)}%
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                  <tr className="border-t border-white/10" style={{ background: '#1f1f1f' }}>
+                    <td className="py-2 pr-2 font-bold text-white">{node.title}</td>
+                    {showActivity && (
+                      <>
+                        <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{(node.stats.doors ?? 0).toLocaleString()}</td>
+                        <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{node.stats.set ?? 0}</td>
+                        <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{node.stats.ran ?? 0}</td>
+                        <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{node.stats.sold ?? 0}</td>
+                      </>
+                    )}
+                    <td className="text-right py-2 px-2 tabular-nums font-bold text-white">{fmt(node.stats.revenue)}</td>
+                    <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{node.stats.deals}</td>
+                    <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{node.stats.avgDeal != null ? fmt(node.stats.avgDeal) : '—'}</td>
+                    <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{node.stats.markupPct != null ? `${node.stats.markupPct.toFixed(1)}%` : '—'}</td>
+                    <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{fmt(node.stats.commission)}</td>
+                    <td className="text-right py-2 px-2 tabular-nums font-bold text-white/60">
+                      {goalInfo.target ? `${Math.round((node.stats.revenue / goalInfo.target) * 100)}%` : '—'}
                     </td>
                   </tr>
-                )
-              })}
-              {rankedReps.length === 0 && (
-                <tr><td colSpan={8} className="py-8 text-center text-white/30 text-[13px]">No data for this period</td></tr>
-              )}
-            </tbody>
-          </table>
-          </div>
-        </div>
-
-        {/* Team Breakdown */}
-        <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
-          <div className="flex items-baseline gap-3 mb-4">
-            <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Team Breakdown</h3>
-            <p className="text-[11px] text-white/30 hidden sm:block">Tap a team to see reps</p>
-          </div>
-          <div className="space-y-4">
-            {teamData.map((team, i) => {
-              const hasPrev  = prevPeriod && team.prevRev > 0
-              const trendPct = hasPrev ? ((team.revenue - team.prevRev) / team.prevRev) * 100 : null
-              const isOpen   = openTeams.has(team.id)
-              const reps     = team.reps.filter(r => isAdmin || !r.ghost)
-              return (
-                <div key={team.id}>
-                  <button onClick={onClickUnlessSelecting(() => toggleTeam(team.id))} className="w-full text-left">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <RankBadge n={i + 1} />
-                      <ChevronDown size={13} className={`text-white/30 flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-                      <div className="min-w-0">
-                        <span className="text-[12px] md:text-[13px] font-semibold text-white">{(isAdmin || !team.ghost) ? team.name : 'Team'}</span>
-                        <span className="text-[10px] text-white/30 ml-2 hidden sm:inline">{team.repCount} reps · {team.deals} deals</span>
-                      </div>
-                    </div>
-                    <div className="text-right flex-shrink-0 ml-3">
-                      <div>
-                        <span className="text-[12px] md:text-[13px] font-bold text-teal">{fmt(team.revenue)}</span>
-                        <span className="text-[10px] text-white/30 ml-1">{team.pct.toFixed(1)}%</span>
-                      </div>
-                      {trendPct !== null && (
-                        <div className={`flex items-center justify-end gap-0.5 text-[10px] font-semibold ${trendPct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                          {trendPct >= 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
-                          {Math.abs(trendPct).toFixed(1)}%
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="h-2 rounded-full overflow-hidden ml-8" style={{ background: '#1a1a1a' }}>
-                    <div className="h-full rounded-full bg-teal" style={{ width: `${team.pct}%` }} />
-                  </div>
-                  </button>
-                  {isOpen && (
-                    <div className="ml-8 mt-2 rounded-lg overflow-hidden" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
-                      {reps.length === 0 ? (
-                        <p className="px-3 py-2 text-[11px] text-white/30">No reps on this team.</p>
-                      ) : reps.map(r => (
-                        <div key={r.id} className="flex items-center gap-2 px-3 py-1.5 text-[12px] border-b border-white/5 last:border-0">
-                          <span className="flex-1 min-w-0 truncate text-white/75">
-                            {r.name}{r.isManager && <span className="text-[9px] uppercase tracking-wide text-amber-400/80 ml-1.5">mgr</span>}
-                          </span>
-                          <span className="text-white/40 whitespace-nowrap w-12 text-right">{r.deals} {r.deals === 1 ? 'deal' : 'deals'}</span>
-                          <span className="font-semibold text-teal whitespace-nowrap w-24 text-right">{fmt(r.revenue)}</span>
-                        </div>
-                      ))}
-                    </div>
+                </tbody>
+              </table>
+              <p className="text-[10.5px] text-white/25 mt-2">Click a row to scope the whole page to it.</p>
+            </div>
+          ) : node.level === 'rep' ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-[12.5px]">
+                <thead>
+                  <tr className="text-[9px] uppercase tracking-widest text-white/30">
+                    <th className="text-left font-semibold py-1.5 pr-2">Deal</th>
+                    <th className="text-left font-semibold py-1.5 px-2">Sold</th>
+                    <th className="text-right font-semibold py-1.5 px-2">Revenue</th>
+                    <th className="text-left font-semibold py-1.5 px-2">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {repDealRows.map(d => (
+                    <tr key={d.id} className="border-t border-white/5">
+                      <td className="py-2 pr-2 text-white font-medium truncate max-w-[220px]">{d.deal_name}</td>
+                      <td className="py-2 px-2 text-white/50 whitespace-nowrap">{d.sale_date}</td>
+                      <td className="text-right py-2 px-2 tabular-nums text-white/70">{fmt(parseFloat(d.baseline_revenue) || 0)}</td>
+                      <td className="py-2 px-2 text-white/50">{d.status}</td>
+                    </tr>
+                  ))}
+                  {repDealRows.length === 0 && (
+                    <tr><td colSpan={4} className="py-4 text-center text-white/30 text-[12px]">No deals in this range.</td></tr>
                   )}
-                </div>
-              )
-            })}
-            {teamData.length === 0 && <p className="text-[13px] text-white/30 text-center py-8">No data</p>}
-          </div>
+                </tbody>
+              </table>
+              <a href={`/deals?scope=all&rep=${node.key}`}
+                className="inline-block mt-2 text-[11px] text-teal hover:underline">Open in Deals for filtering and edits →</a>
+            </div>
+          ) : (
+            <p className="text-[12px] text-white/30 py-3">Nothing to break down here.</p>
+          )}
         </div>
-      </div>
+      )}
+
 
       {/* ── Weekly + Annual — stack on mobile ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-5">
