@@ -8,7 +8,7 @@ import { Check, X, TrendingUp, TrendingDown, Minus, ChevronRight, ChevronDown, C
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import {
-  fetchDeals, fetchUsers, fetchTeamChanges, fetchLeads, fetchFieldActivity,
+  fetchDeals, fetchUsers, fetchTeamChanges, fetchLeads,
   fetchGoalsForMonth, fetchRepGoals, saveGoal as saveGoalDb, deleteGoal as deleteGoalDb,
 } from '../lib/db'
 import { fmt, dealAmounts, activeDeals } from '../utils/commission'
@@ -37,6 +37,20 @@ function Trend({ cur, prev, suffix = 'vs prev' }) {
       <Icon size={10} /><span>{Math.abs(pct).toFixed(1)}%</span>
       <span className="text-white/25 font-normal">{suffix}</span>
     </div>
+  )
+}
+
+function Delta({ cur, prev }) {
+  if (prev == null) return null
+  if (!prev && !cur) return null
+  if (!prev) return <span className="block text-[10px] text-emerald-400/70 font-normal">new</span>
+  const pct = ((cur - prev) / Math.abs(prev)) * 100
+  if (Math.abs(pct) < 0.5) return <span className="block text-[10px] text-white/25 font-normal">flat</span>
+  const up = pct > 0
+  return (
+    <span className={`block text-[10px] font-semibold ${up ? 'text-emerald-400/80' : 'text-red-400/80'}`}>
+      {up ? '▲' : '▼'} {Math.abs(pct) >= 999 ? '999+' : Math.abs(pct).toFixed(0)}%
+    </span>
   )
 }
 
@@ -86,7 +100,6 @@ export default function Dashboard() {
   const [groupBy,      setGroupBy]      = useState('team')     // company level only
   const [showActivity, setShowActivity] = useState(false)      // extra door/appointment columns
   const [leads,        setLeads]        = useState([])
-  const [activity,     setActivity]     = useState([])
   const [officeGoals,  setOfficeGoals]  = useState({})   // { '': company, Phoenix: n, … }
   const [repGoalMap,   setRepGoalMap]   = useState({})
   const [teamGoalMap,  setTeamGoalMap]  = useState({})
@@ -108,13 +121,16 @@ export default function Dashboard() {
   const goalMonth = goalDate.getMonth() + 1
 
   const loadData = () =>
-    Promise.all([fetchDeals(), fetchUsers(), fetchTeamChanges(), fetchLeads(), fetchFieldActivity()])
-      .then(([{ data: d }, { data: u }, { data: tc }, { data: l }, { data: fa }]) => {
+    // NOTE no fetchFieldActivity: DOOR KNOCKS ARE NOT SHOWN ANYWHERE (per
+    // Keaton — RepCard's own door count never reconciled with ours and the
+    // number was not worth chasing). The feed still records them, so turning
+    // it back on is re-adding the fetch and the tiles; see CLAUDE.md.
+    Promise.all([fetchDeals(), fetchUsers(), fetchTeamChanges(), fetchLeads()])
+      .then(([{ data: d }, { data: u }, { data: tc }, { data: l }]) => {
         setDeals(activeDeals(d ?? []))   // canceled AND hidden jobs never count
         setUsers(u ?? [])
         setTeamChanges(tc ?? [])
         setLeads(l ?? [])                // appointments, for the funnel
-        setActivity(fa ?? [])            // door knocks, for the funnel
       })
 
   useEffect(() => { loadData().finally(() => setLoading(false)) }, [])
@@ -208,7 +224,7 @@ export default function Dashboard() {
   // for the window, so nothing is recomputed here: `pickScope` just selects
   // the node the scope bar points at, and its children become the table.
   const perf = useMemo(() => buildPerformance({
-    deals, leads, activity, users, teamCtx,
+    deals, leads, activity: [], users, teamCtx,
     range: { from: dateFrom, to: dateTo },
     prev: prevPeriod,
     defaultTeamId: perfDefaultTeam || null,
@@ -217,7 +233,7 @@ export default function Dashboard() {
     // person's production from the page's totals, which was tolerable there
     // and is not here: this page is the company's revenue number. Hiding a job
     // that should not count is now `deals.hidden` (migration 052).
-  }), [deals, leads, activity, users, teamCtx, dateFrom, dateTo, prevPeriod, perfDefaultTeam, feedNonReps])
+  }), [deals, leads, users, teamCtx, dateFrom, dateTo, prevPeriod, perfDefaultTeam, feedNonReps])
 
   // A scope can go stale — a team with no sales this range, a rep who left.
   // Fall back to company rather than render an empty page.
@@ -251,7 +267,6 @@ export default function Dashboard() {
   }, [node])
 
   const flagFloors = perfFloors || undefined
-  const teamHasActivity = !!node?.stats?.doors
 
   // The deals behind a rep — the rep scope has no children to list.
   const repDealRows = useMemo(
@@ -262,10 +277,10 @@ export default function Dashboard() {
   // this page exists, per Keaton: pulling numbers for team leaders.
   async function copyTable() {
     if (!node) return
-    const cols = ['Name', ...(showActivity ? ['Doors','Set','Ran'] : []),
+    const cols = ['Name', ...(showActivity ? ['Set','Ran'] : []),
                   'Revenue','Deals','Avg deal','Markup','Commission']
     const line = (label, st) => [label,
-      ...(showActivity ? [st.doors ?? 0, st.set ?? 0, st.ran ?? 0] : []),
+      ...(showActivity ? [st.set ?? 0, st.ran ?? 0] : []),
       Math.round(st.revenue), st.deals,
       st.avgDeal != null ? Math.round(st.avgDeal) : '',
       st.markupPct != null ? st.markupPct.toFixed(1) + '%' : '',
@@ -744,15 +759,14 @@ export default function Dashboard() {
       {node && (
         <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
           <h3 className="text-[13px] md:text-[14px] font-semibold text-white mb-0.5">
-            {node.level === 'rep' ? `${node.title}'s field activity` : 'Appointments & field'}
+            {node.level === 'rep' ? `${node.title}'s appointments` : 'Appointments'}
           </h3>
           <p className="text-[11px] text-white/30 mb-3">Appointment counts, never deals</p>
           {node.showFunnel ? (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               {[
-                ['Doors', node.stats.doors ?? 0, node.level === 'rep' && node.stats.doorsPerDay ? `${node.stats.doorsPerDay.toFixed(1)} / day` : null],
-                ['Set',   node.stats.set,  node.stats.doors ? `${((node.stats.set / node.stats.doors) * 100).toFixed(1)}% of doors` : null],
-                ['Ran',   node.stats.ran,  node.stats.showRate != null ? `${node.stats.showRate.toFixed(0)}% showed` : null],
+                ['Set',   node.stats.set,  node.stats.showRate != null ? `${node.stats.showRate.toFixed(0)}% ran` : null],
+                ['Ran',   node.stats.ran,  null],
                 // SOLD IS THE DEAL COUNT, not RepCard's "sold" disposition —
                 // reps don't reliably update their leads, so the CRM's own
                 // outcome always undercounts. Same figure as the Deals tile
@@ -818,7 +832,7 @@ export default function Dashboard() {
               className={`px-2.5 py-1 rounded-full text-[11px] transition-colors ${showActivity
                 ? 'bg-teal text-dark font-semibold' : 'text-white/45 hover:text-white'}`}
               style={showActivity ? undefined : { border: '1px solid #3a3a3a' }}>
-              {showActivity ? '✓' : '+'} Appointments &amp; doors
+              {showActivity ? '✓' : '+'} Appointments
             </button>
           </div>
 
@@ -828,7 +842,7 @@ export default function Dashboard() {
                 <thead>
                   <tr className="text-[9px] uppercase tracking-widest text-white/30">
                     <th className="text-left font-semibold py-1.5 pr-2">{node.childKind}</th>
-                    {showActivity && ['Doors','Set','Ran'].map(h =>
+                    {showActivity && ['Set','Ran'].map(h =>
                       <th key={h} className="text-right font-semibold py-1.5 px-2 text-teal/60">{h}</th>)}
                     {['Revenue','Deals','Avg deal','Markup','Commission','Goal'].map(h =>
                       <th key={h} className="text-right font-semibold py-1.5 px-2">{h}</th>)}
@@ -841,7 +855,7 @@ export default function Dashboard() {
                             : c.kind === 'office' ? officeGoals[c.label]
                             : (teamGoalMap[c.key] ?? null)
                     const gp = g ? (st.revenue / g) * 100 : null
-                    const fl = c.kind === 'rep' ? repFlags(st, flagFloors, teamHasActivity) : {}
+                    const fl = c.kind === 'rep' ? repFlags(st, flagFloors) : {}
                     return (
                       <tr key={`${c.kind}-${c.key}`}
                         onClick={c.drillable ? onClickUnlessSelecting(() => setScope({ level: c.kind, key: c.key })) : undefined}
@@ -854,13 +868,27 @@ export default function Dashboard() {
                         </td>
                         {showActivity && (
                           <>
-                            <td className={`text-right py-2 px-2 tabular-nums ${fl.doors ? 'text-red-400 font-bold' : 'text-white/60'}`}>{(st.doors ?? 0).toLocaleString()}</td>
-                            <td className={`text-right py-2 px-2 tabular-nums ${fl.set ? 'text-red-400 font-bold' : 'text-white/60'}`}>{st.set ?? 0}</td>
-                            <td className="text-right py-2 px-2 tabular-nums text-white/60">{st.ran ?? 0}</td>
+                            {/* The conversion rate rides UNDER the count it
+                                describes (per Keaton, "a little nod") rather
+                                than taking a column of its own. */}
+                            <td className={`text-right py-2 px-2 tabular-nums ${fl.set ? 'text-red-400 font-bold' : 'text-white/60'}`}>
+                              {st.set ?? 0}
+                              {st.showRate != null && <span className="block text-[10px] text-white/30 font-normal">{st.showRate.toFixed(0)}% ran</span>}
+                            </td>
+                            <td className="text-right py-2 px-2 tabular-nums text-white/60">
+                              {st.ran ?? 0}
+                              {st.dealCloseRate != null && <span className="block text-[10px] text-teal/60 font-normal">{st.dealCloseRate.toFixed(0)}% closed</span>}
+                            </td>
                           </>
                         )}
-                        <td className="text-right py-2 px-2 tabular-nums text-white font-semibold">{fmt(st.revenue)}</td>
-                        <td className="text-right py-2 px-2 tabular-nums text-white/60">{st.deals}</td>
+                        <td className="text-right py-2 px-2 tabular-nums text-white font-semibold">
+                          {fmt(st.revenue)}
+                          <Delta cur={st.revenue} prev={c.prev?.revenue} />
+                        </td>
+                        <td className="text-right py-2 px-2 tabular-nums text-white/60">
+                          {st.deals}
+                          <Delta cur={st.deals} prev={c.prev?.deals} />
+                        </td>
                         <td className="text-right py-2 px-2 tabular-nums text-white/60">{st.avgDeal != null ? fmt(st.avgDeal) : '—'}</td>
                         <td className="text-right py-2 px-2 tabular-nums text-white/60">{st.markupPct != null ? `${st.markupPct.toFixed(1)}%` : '—'}</td>
                         <td className="text-right py-2 px-2 tabular-nums text-white/60">{fmt(st.commission)}</td>
@@ -878,13 +906,24 @@ export default function Dashboard() {
                     <td className="py-2 pr-2 font-bold text-white">{node.title}</td>
                     {showActivity && (
                       <>
-                        <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{(node.stats.doors ?? 0).toLocaleString()}</td>
-                        <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{node.stats.set ?? 0}</td>
-                        <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{node.stats.ran ?? 0}</td>
+                        <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">
+                          {node.stats.set ?? 0}
+                          {node.stats.showRate != null && <span className="block text-[10px] text-white/30 font-normal">{node.stats.showRate.toFixed(0)}% ran</span>}
+                        </td>
+                        <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">
+                          {node.stats.ran ?? 0}
+                          {node.stats.dealCloseRate != null && <span className="block text-[10px] text-teal/60 font-normal">{node.stats.dealCloseRate.toFixed(0)}% closed</span>}
+                        </td>
                       </>
                     )}
-                    <td className="text-right py-2 px-2 tabular-nums font-bold text-white">{fmt(node.stats.revenue)}</td>
-                    <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{node.stats.deals}</td>
+                    <td className="text-right py-2 px-2 tabular-nums font-bold text-white">
+                      {fmt(node.stats.revenue)}
+                      <Delta cur={node.stats.revenue} prev={node.prev?.revenue} />
+                    </td>
+                    <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">
+                      {node.stats.deals}
+                      <Delta cur={node.stats.deals} prev={node.prev?.deals} />
+                    </td>
                     <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{node.stats.avgDeal != null ? fmt(node.stats.avgDeal) : '—'}</td>
                     <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{node.stats.markupPct != null ? `${node.stats.markupPct.toFixed(1)}%` : '—'}</td>
                     <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{fmt(node.stats.commission)}</td>

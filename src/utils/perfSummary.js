@@ -320,6 +320,7 @@ export function buildPerformance({
   const teams = []
   for (const key of teamKeys) {
     const bucket = cur.teams.get(key) || { totals: newStats(), reps: new Map() }
+    const prevBucket = prv?.teams.get(key) || null
     const members = roster.get(key) || new Set()
     const repIds = new Set([...members, ...bucket.reps.keys()])
     const head = key !== UNASSIGNED ? usersById[key] : null
@@ -328,10 +329,12 @@ export function buildPerformance({
       const u = usersById[pid]
       if (!u) continue
       const stats = finish(bucket.reps.get(pid) || newStats())
+      const prevRep = prevBucket ? finish(prevBucket.reps.get(pid) || newStats()) : null
       rows.push({
         id: pid, name: u.name, role: u.role, ghost: !!u.ghost, active: u.active !== false,
         isHead: pid === key,
         member: members.has(pid),                 // on this team as of the range end
+        prev: prevRep,
         ...stats,
       })
     }
@@ -361,9 +364,13 @@ export function buildPerformance({
     const p = prv?.offices.get(k)
     // Rep rows for the drill-down. Deal figures only — an office has no doors
     // or appointments to hand out (see the `office` bucket comment above).
+    const prevReps = p?.reps || null
     const rows = [...s.reps.entries()].map(([pid, rs]) => {
       const u = usersById[pid]
-      return u ? { id: pid, name: u.name, role: u.role, ghost: !!u.ghost, active: u.active !== false, ...finish(rs) } : null
+      if (!u) return null
+      const prevRep = prevReps ? finish(prevReps.get(pid) || newStats()) : null
+      return { id: pid, name: u.name, role: u.role, ghost: !!u.ghost, active: u.active !== false,
+               prev: prevRep, ...finish(rs) }
     }).filter(Boolean).sort((a, b) => b.revenue - a.revenue || a.name.localeCompare(b.name))
     return { key: k, name: s.name || 'No office', ...st, rows, prev: p ? finish(p) : null,
              share: org.revenue > 0 ? st.revenue / org.revenue : 0 }
@@ -387,14 +394,14 @@ export function buildPerformance({
 // every doors figure is 0 and flagging all of them would be noise).
 // (First/last knock, field time and knock days are computed but NOT shown —
 // RepCard's knock webhook carries only the knock itself, per Keaton.)
-export const DEFAULT_FLOORS = { doors_per_day: 5, set: 1 }
-export function repFlags(row, floors = DEFAULT_FLOORS, teamHasActivity = false) {
+// DOOR FLOORS ARE GONE with the doors display (per Keaton — RepCard's own
+// door count never reconciled with ours, so the figure left the site). The
+// feed still records knocks; nothing reads them. Appointments-set is the one
+// floor left.
+export const DEFAULT_FLOORS = { set: 1 }
+export function repFlags(row, floors = DEFAULT_FLOORS) {
   const f = { ...DEFAULT_FLOORS, ...(floors || {}) }
   const flags = {}
-  if (teamHasActivity) {
-    if (row.doors <= 0) flags.doors = true
-    if ((row.doorsPerDay ?? 0) < Number(f.doors_per_day)) flags.doorsPerDay = true
-  }
   if (row.set < Number(f.set)) flags.set = true
   return flags
 }
