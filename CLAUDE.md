@@ -535,8 +535,18 @@ in range, a rep who left) falls back to company rather than rendering empty.
 - **A rep can appear under SEVERAL offices** with the deals they sold in each —
   the deliberate asymmetry with teams, where a rep belongs to exactly one
   (date-effective). Office rep rows therefore carry DEAL figures only.
+- **THE FUNNEL'S LAST STEP IS THE DEAL COUNT, never the CRM's "sold"
+  disposition** (per Keaton: "guys don't always update their leads, so there
+  will always be a discrepancy — just go off our actual sales numbers"). The
+  engine's `sold` field and `closeRate` are GONE; `dealCloseRate` is deals ÷
+  appointments ran, blanked above 100% like the other cross-source rates.
+  Sold therefore equals the Deals tile on purpose — one number per thing. This
+  applies at every scope, since it is one engine. **The Leads page keeps the
+  CRM's own outcome** ("Sold at Appt", labelled "outcome, not a deal record"),
+  which is right there: that page IS the appointment records.
 - **Six columns by default** (Revenue, Deals, Avg deal, Markup, Commission,
-  Goal); `+ Appointments & doors` adds Doors/Set/Ran/Sold. The old table was
+  Goal); `+ Appointments & doors` adds Doors/Set/Ran — NOT Sold, which would
+  print the Deals column twice. The old table was
   thirteen, always, at 11px with two-line headers and the rates hidden as
   sub-lines — the layout admitting in a comment that it carried too much.
 - The **weekly goal block renders at COMPANY SCOPE ONLY**: `weekly_goal` is one

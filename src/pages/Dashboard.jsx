@@ -262,10 +262,10 @@ export default function Dashboard() {
   // this page exists, per Keaton: pulling numbers for team leaders.
   async function copyTable() {
     if (!node) return
-    const cols = ['Name', ...(showActivity ? ['Doors','Set','Ran','Sold'] : []),
+    const cols = ['Name', ...(showActivity ? ['Doors','Set','Ran'] : []),
                   'Revenue','Deals','Avg deal','Markup','Commission']
     const line = (label, st) => [label,
-      ...(showActivity ? [st.doors ?? 0, st.set ?? 0, st.ran ?? 0, st.sold ?? 0] : []),
+      ...(showActivity ? [st.doors ?? 0, st.set ?? 0, st.ran ?? 0] : []),
       Math.round(st.revenue), st.deals,
       st.avgDeal != null ? Math.round(st.avgDeal) : '',
       st.markupPct != null ? st.markupPct.toFixed(1) + '%' : '',
@@ -753,7 +753,11 @@ export default function Dashboard() {
                 ['Doors', node.stats.doors ?? 0, node.level === 'rep' && node.stats.doorsPerDay ? `${node.stats.doorsPerDay.toFixed(1)} / day` : null],
                 ['Set',   node.stats.set,  node.stats.doors ? `${((node.stats.set / node.stats.doors) * 100).toFixed(1)}% of doors` : null],
                 ['Ran',   node.stats.ran,  node.stats.showRate != null ? `${node.stats.showRate.toFixed(0)}% showed` : null],
-                ['Sold',  node.stats.sold, node.stats.ran ? `${((node.stats.sold / node.stats.ran) * 100).toFixed(0)}% closed` : null],
+                // SOLD IS THE DEAL COUNT, not RepCard's "sold" disposition —
+                // reps don't reliably update their leads, so the CRM's own
+                // outcome always undercounts. Same figure as the Deals tile
+                // above, on purpose: one number per thing.
+                ['Sold',  node.stats.deals, node.stats.dealCloseRate != null ? `${node.stats.dealCloseRate.toFixed(0)}% closed` : null],
               ].map(([k, v, sub]) => (
                 <div key={k} className="rounded-lg px-3 py-2.5" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
                   <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mb-1">{k}</p>
@@ -824,7 +828,7 @@ export default function Dashboard() {
                 <thead>
                   <tr className="text-[9px] uppercase tracking-widest text-white/30">
                     <th className="text-left font-semibold py-1.5 pr-2">{node.childKind}</th>
-                    {showActivity && ['Doors','Set','Ran','Sold'].map(h =>
+                    {showActivity && ['Doors','Set','Ran'].map(h =>
                       <th key={h} className="text-right font-semibold py-1.5 px-2 text-teal/60">{h}</th>)}
                     {['Revenue','Deals','Avg deal','Markup','Commission','Goal'].map(h =>
                       <th key={h} className="text-right font-semibold py-1.5 px-2">{h}</th>)}
@@ -853,7 +857,6 @@ export default function Dashboard() {
                             <td className={`text-right py-2 px-2 tabular-nums ${fl.doors ? 'text-red-400 font-bold' : 'text-white/60'}`}>{(st.doors ?? 0).toLocaleString()}</td>
                             <td className={`text-right py-2 px-2 tabular-nums ${fl.set ? 'text-red-400 font-bold' : 'text-white/60'}`}>{st.set ?? 0}</td>
                             <td className="text-right py-2 px-2 tabular-nums text-white/60">{st.ran ?? 0}</td>
-                            <td className="text-right py-2 px-2 tabular-nums text-white/60">{st.sold ?? 0}</td>
                           </>
                         )}
                         <td className="text-right py-2 px-2 tabular-nums text-white font-semibold">{fmt(st.revenue)}</td>
@@ -878,7 +881,6 @@ export default function Dashboard() {
                         <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{(node.stats.doors ?? 0).toLocaleString()}</td>
                         <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{node.stats.set ?? 0}</td>
                         <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{node.stats.ran ?? 0}</td>
-                        <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{node.stats.sold ?? 0}</td>
                       </>
                     )}
                     <td className="text-right py-2 px-2 tabular-nums font-bold text-white">{fmt(node.stats.revenue)}</td>

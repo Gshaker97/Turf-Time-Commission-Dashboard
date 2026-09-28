@@ -46,7 +46,7 @@ const localToday = () => {
 }
 
 function newStats() {
-  return { revenue: 0, job: 0, deals: 0, leadCloses: 0, leadRevenue: 0, commission: 0, set: 0, setRan: 0, ran: 0, sgRan: 0, leadRan: 0, sold: 0, activityRows: [] }
+  return { revenue: 0, job: 0, deals: 0, leadCloses: 0, leadRevenue: 0, commission: 0, set: 0, setRan: 0, ran: 0, sgRan: 0, leadRan: 0, activityRows: [] }
 }
 
 // A deal-over-appointment rate, or null when it can't be read as a rate:
@@ -68,12 +68,21 @@ function finish(s) {
     leadRevenue: s.leadRevenue, totalRevenue: s.revenue + s.leadRevenue,
     avgDeal:   s.deals ? s.revenue / s.deals : null,
     markupPct: s.revenue > 0 ? ((s.job - s.revenue) / s.revenue) * 100 : null,
-    set: s.set, ran: s.ran, sgRan: s.sgRan, leadRan: s.leadRan, sold: s.sold,
+    set: s.set, ran: s.ran, sgRan: s.sgRan, leadRan: s.leadRan,
     // Conversion rates (per Keaton): set → ran is a SETTER stat — of the
     // appointments this rep set, how many ran (whoever ran them), so a
     // closer's lead volume never inflates it; self-gen ran → self-gen deals
     // (owner-credited deals ÷ self-gen appointments ran); leads ran → lead
-    // closes. `closeRate` is RepCard's own sold outcome ÷ ran.
+    // closes. `dealCloseRate` is the DEAL count ÷ appointments ran.
+    //
+    // THE FUNNEL'S LAST STEP IS `deals`, NOT THE CRM's "sold" DISPOSITION
+    // (per Keaton: "guys don't always update their leads, so there will always
+    // be a discrepancy — just go off our actual sales numbers"). RepCard's own
+    // sold outcome was tracked here as `sold` and is GONE: it disagreed with
+    // the deal count on the same screen, which is the exact two-numbers-for-
+    // one-thing problem the Dashboard merge existed to kill. The Leads page
+    // still shows the CRM outcome, correctly — that page IS the appointment
+    // records, and it labels the figure "outcome, not a deal record".
     //
     // The two DEAL-over-APPOINTMENT rates are BLANK when they'd exceed 100%
     // (per Keaton). Deals come from the site, appointments from the CRM, and
@@ -86,7 +95,9 @@ function finish(s) {
     showRate:      s.set ? (s.setRan / s.set) * 100 : null,
     sgCloseRate:   rateOrNull(s.deals, s.sgRan),
     leadCloseRate: rateOrNull(s.leadCloses, s.leadRan),
-    closeRate:     s.ran ? (s.sold / s.ran) * 100 : null,
+    // Deals ÷ appointments ran. Cross-source, so it takes the same >100% blank
+    // rule as the other two: a rep can close without ever logging one.
+    dealCloseRate: rateOrNull(s.deals, s.ran),
     doors: act.doors, knockDays: act.knockDays, doorsPerDay: act.doorsPerDay,
     firstKnock: act.firstKnock, lastKnock: act.lastKnock, fieldMinutes: act.fieldMinutes,
     hasActivity: act.rows > 0,
@@ -239,17 +250,15 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
     // from org `ran`/`sold` as well as from the person's, quietly
     // undercounting the company's own numbers.
     if (!ranBy || out(ranBy)) {
-      if (!out(ranBy)) { org.ran += 1; org.leadRan += 1; if (l.status === 'sold') org.sold += 1 }
+      if (!out(ranBy)) { org.ran += 1; org.leadRan += 1 }
       continue
     }
     const k = teamOf(ranBy, day)
-    const sold = l.status === 'sold'
     for (const s of [org, team(k).totals, rep(k, ranBy)]) {
       s.ran += 1
       // LEADS RAN = "I sat someone else's appointment". A rep who set AND
       // sat it already has it under self-gen ran, so it is never both.
       if (!l.setter_id || l.setter_id !== ranBy) s.leadRan += 1
-      if (sold) s.sold += 1
     }
   }
 
