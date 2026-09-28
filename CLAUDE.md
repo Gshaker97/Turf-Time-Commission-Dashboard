@@ -1403,6 +1403,31 @@ missing concept is a **balance owed**, not another adjustment. It all lives in
   the job's **install date** alongside the sale date — both per Keaton, so you
   can see whether the deduction fits inside their pay before choosing who
   absorbs it.
+- **…and what their WHOLE CHEQUE is on the run it would come off** (per
+  Keaton: "show what their paycheck is for the upcoming paycheck so I know if
+  I can take it out or not. If it's a split deal, I'd need to see both reps'
+  pay for the week"). What they earned on ONE job does not answer that — the
+  run is what the money leaves. `payByRun` in `Payroll.jsx` is a
+  `{ payDate: { payeeId: { net, pending } } }` map passed to the modal; a
+  `PayLine` under each person's button reads it. Because both people's buttons
+  are always on screen, a split shows both reps' pay with no extra layout.
+  - It is built **only while the modal is open** (`if (!dedModal) return null`)
+    — it walks every deal, and the rest of the page is one run.
+  - It counts **exactly what the payee panel counts** — finalized deals plus
+    dated adjustments — so the figure equals the panel's Net pay for that
+    person to the cent (verified against it in the browser). Money on the run
+    that is NOT finalized yet rides as `pending` and prints as a separate
+    muted "· $X pending", never folded in: a future run would otherwise read
+    $0, and folding it in would put two definitions of pay on one line.
+  - **The line follows the "when" choice** — the picked run, this run, or (for
+    a held debt, which has no run of its own) `nextRun`, the first cheque it
+    can reach. `nextRun` falls back to the most recent run when nothing is
+    scheduled ahead, the same rule the page opens on; the line always names
+    the date, so a past run can't be misread as a future one.
+  - When a share exceeds that pay, the line turns amber and an
+    **`overshoot`** sentence spells it out ("Bryan is $180.00 short on Oct 2")
+    and points at Hold, which is the feature built for exactly that case. It
+    never blocks the save — Keaton types the amount, always.
 - **Nothing is ever taken automatically and KEATON TYPES THE AMOUNT** (both
   per Keaton). The Payroll tray's Apply opens a number box prefilled with
   `suggestedTake` = min(remaining, their pay this run) — a starting point, not
