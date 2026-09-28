@@ -1385,6 +1385,24 @@ missing concept is a **balance owed**, not another adjustment. It all lives in
   Over-collection clamps to settled, never to "we owe them" (that needs a
   human, not arithmetic). Sorted as a worklist: anything owed above anything
   closed.
+- **A deduction can be SPLIT between the setter and the closer** (per Keaton,
+  matching the deal editor's slider). A split writes **TWO DEBT ROWS, one per
+  person** — never one row with a split flag — because each share then
+  recovers on that rep's OWN pay run, and the ledger, the Payroll tray, the
+  pay statement and the rep's Commissions card all work unchanged with no
+  schema change. The slider defaults to the deal's own `deduction_split_pct`.
+  Rounding gives the remainder to the first share so the two always add back
+  to the cent (11 cases asserted, including a 1¢ deduction and 33/67).
+  **SPLIT IS CREATE-ONLY**: re-splitting a debt that already has recoveries
+  against it would mean unpicking money already paid. `saveDeduction` takes
+  `rows` (one entry, or two) and writes them in sequence; if the second write
+  fails it says "saved 1 of 2 shares" rather than reporting success, because a
+  half-saved split leaves one rep owing money nobody logged.
+- **The modal shows what each person EARNED on that job** (`dealAmounts`
+  setter/closer, under their button, amber when the deduction exceeds it) and
+  the job's **install date** alongside the sale date — both per Keaton, so you
+  can see whether the deduction fits inside their pay before choosing who
+  absorbs it.
 - **Nothing is ever taken automatically and KEATON TYPES THE AMOUNT** (both
   per Keaton). The Payroll tray's Apply opens a number box prefilled with
   `suggestedTake` = min(remaining, their pay this run) — a starting point, not

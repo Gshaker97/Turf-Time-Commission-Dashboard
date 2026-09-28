@@ -436,14 +436,41 @@ export default function Payroll() {
   const openLedger = useMemo(() => openDebts(ledger), [ledger])
   const owedTotals = useMemo(() => ledgerTotals(ledger), [ledger])
 
+  // `rows` is one entry normally and TWO when the deduction is split between
+  // the setter and the closer — a split writes a separate DEBT PER PERSON so
+  // each share recovers on that rep's own run. Editing is always single-row.
   async function saveDeduction(input) {
-    const res = input.id
-      ? await updatePayrollAdjustment(input.id, {
-          payee_id: input.payeeId, deal_id: input.dealId, amount: input.amount, note: input.note, pay_date: input.payDate,
-        })
-      : await addPayrollAdjustment(input, profile?.id)
-    if (res?.error) { toast.error('Could not save the deduction: ' + (res.error.message || 'unknown error') + '\n(Has migration 050 been run?)'); return false }
-    toast.success(input.payDate ? 'Deduction added to that run' : 'Deduction logged — it will show on every run until it is recovered')
+    const rows = input.rows || [{ payeeId: input.payeeId, amount: input.amount }]
+    if (input.id) {
+      const r = rows[0]
+      const res = await updatePayrollAdjustment(input.id, {
+        payee_id: r.payeeId, deal_id: input.dealId, amount: r.amount, note: input.note, pay_date: input.payDate,
+      })
+      if (res?.error) { toast.error('Could not save the deduction: ' + (res.error.message || 'unknown error')); return false }
+      toast.success(input.payDate ? 'Deduction added to that run' : 'Deduction logged — it will show on every run until it is recovered')
+      reloadAdjustments()
+      return true
+    }
+    // Write every share before reporting success. If the second one fails the
+    // first is already in — say so plainly rather than claiming it all saved,
+    // because a half-saved split leaves one rep owing money nobody logged.
+    const done = []
+    for (const r of rows) {
+      const res = await addPayrollAdjustment(
+        { payeeId: r.payeeId, amount: r.amount, dealId: input.dealId, note: input.note, payDate: input.payDate },
+        profile?.id)
+      if (res?.error) {
+        toast.error(done.length
+          ? `Saved ${done.length} of ${rows.length} shares, then failed: ${res.error.message || 'unknown error'}. Check the Deductions tab before retrying.`
+          : 'Could not save the deduction: ' + (res.error.message || 'unknown error') + '\n(Has migration 050 been run?)')
+        reloadAdjustments()
+        return false
+      }
+      done.push(r)
+    }
+    toast.success(rows.length > 1
+      ? `Split logged — ${rows.length} balances, one per rep`
+      : input.payDate ? 'Deduction added to that run' : 'Deduction logged — it will show on every run until it is recovered')
     reloadAdjustments()
     return true
   }
