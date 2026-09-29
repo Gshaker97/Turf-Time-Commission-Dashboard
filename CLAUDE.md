@@ -505,7 +505,17 @@ A row of `{ section: 'Label' }` renders as a full-width band, which is how one
 table carries several groups without spending a column naming them. Values are
 escaped, so a name containing `<` or `&` can never inject markup. Records come from
 COMPLETED periods only; the current period rides along as `status: 'watch'`
-(≥85% of best) or `'new'` (beating it). Canceled excluded; sale dates before
+(≥85% of best) or `'new'` (beating it).
+**A live chip NAMES WHO IS CHASING IT** (per Keaton: "this shows there's a new
+record but doesn't say by who"). The name above the chip is the CURRENT
+HOLDER, who is frequently NOT the one beating it — a real demo case reads
+"Jared Aguilar's Team, August 2026 · 🔥 NEW RECORD — Conner Ipsen's Team,
+$22,900.00 in progress", and without the second name that chip looks like
+Jared. `pickEntityRecord` already resolved the running period's leader as
+`current.holderName`; the tile and the Copy-table "Right now" column just
+weren't printing it. COMPANY records stay unnamed on purpose — the holder is
+the company. The Dashboard's record-moment banners already named the chaser
+(`m.who`), which is why the two surfaces disagreed. Canceled excluded; sale dates before
 `dataStartDate` excluded. Surfaces: **Competitions page** bottom = the
 "📖 Record Book" card (company tiles gold, rep tiles teal, live watch/new
 chips); **Home card** = "Personal bests" tile row + a flame nudge when the

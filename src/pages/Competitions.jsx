@@ -375,10 +375,16 @@ const slugName = (s) => String(s || 'competition').replace(/[^\w-]+/g, '_').repl
 // live chip when the current period is chasing (watch) or beating (new) it.
 function RecordTile({ label, value, holder, when, teal, rec, metric }) {
   const fmtVal = (v) => metric === 'deals' ? `${v} deal${v === 1 ? '' : 's'}` : fmt(v)
+  // WHO is chasing it. The chip used to say only that a record was falling,
+  // which left you guessing whose (per Keaton) — and the name above it is the
+  // CURRENT HOLDER, who is often not the one beating it. `pickEntityRecord`
+  // already resolves the running period's leader; company records carry no
+  // name because the holder is the company.
+  const chaser = rec?.current?.holderName ? `${rec.current.holderName}, ` : ''
   const chip = rec?.status === 'new'
-    ? `🔥 NEW RECORD — ${fmtVal(rec.current.value)} in progress`
+    ? `🔥 NEW RECORD — ${chaser}${fmtVal(rec.current.value)} in progress`
     : rec?.status === 'watch'
-      ? `🔥 RECORD WATCH — now ${fmtVal(rec.current.value)}`
+      ? `🔥 RECORD WATCH — ${chaser}${fmtVal(rec.current.value)} so far`
       : null
   return (
     <div className="rounded-lg p-3 relative" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
@@ -432,10 +438,15 @@ function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
     // dropped — a record being beaten right now is the most slide-worthy
     // thing on there. The column only appears when something is live, so a
     // quiet month doesn't paste an empty column.
-    const now = (rec, metric) =>
-      rec?.status === 'new'   ? `🔥 NEW RECORD — ${val(rec.current.value, metric)} in progress`
-    : rec?.status === 'watch' ? `🔥 Record watch — now ${val(rec.current.value, metric)}`
-    : ''
+    // Names the chaser too — on a slide the Who column reads as the record
+    // HOLDER, so a live line with no name looks like the same person.
+    const now = (rec, metric) => {
+      if (rec?.status !== 'new' && rec?.status !== 'watch') return ''
+      const who = rec.current?.holderName ? `${rec.current.holderName}, ` : ''
+      return rec.status === 'new'
+        ? `🔥 NEW RECORD — ${who}${val(rec.current.value, metric)} in progress`
+        : `🔥 Record watch — ${who}${val(rec.current.value, metric)} so far`
+    }
     const line = (label, rec, metric) =>
       [label, val(rec?.best?.value, metric), rec?.best?.holderName || '', rec?.best?.label || '', now(rec, metric)]
     const rows = [
