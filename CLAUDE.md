@@ -517,7 +517,41 @@ Jared. `pickEntityRecord` already resolved the running period's leader as
 weren't printing it. COMPANY records stay unnamed on purpose — the holder is
 the company. The Dashboard's record-moment banners already named the chaser
 (`m.who`), which is why the two surfaces disagreed. Canceled excluded; sale dates before
-`dataStartDate` excluded. Surfaces: **Competitions page** bottom = the
+`dataStartDate` excluded. **PERSONAL BESTS IN PLAY** (`personalBestWatch` in records.js, rendered as the
+bottom section of the Record Book card) answers a DIFFERENT question from the
+`reps` block above it (per Keaton: "highlight who's having a break out
+performance and on cusp of setting a personal record or did"). The rep records
+are company-wide — "biggest rep month ever" — so one name holds each line and
+the same two or three people hold all of them forever. This measures every rep
+against **their own** history, so someone who will never top the company board
+still surfaces the month they beat themselves.
+- **A rep needs a PRIOR completed period to beat** (`best` must exist), or a
+  new hire's first month reads as an all-time personal record on day one —
+  the same guard the Dashboard's record banners get from requiring `prev`.
+- **ONE ROW PER REP**, the strongest live signal: a `new` always outranks a
+  `watch`, then the higher share of their own mark. Someone beating both
+  their best month and their best week is one story, not two, and printing
+  both would bury everyone else. Metrics checked, in order: best month
+  (revenue), most deals in a month, best week (revenue).
+- **A TIE IS NOT A RECORD.** `pickRecord` only returns `'new'` on a strict
+  `>`, so matching your best is a `watch` — it read "🔥 100% of 1 deal",
+  which looks like an achievement. It now says "matched 1 deal · September
+  2026", and only a real `new` gets the flame; a watch row gets a plain `↑`
+  (the 📈 emoji fell back to a box glyph in some fonts, and this card gets
+  screenshotted into slides).
+- The mark being chased is ALWAYS printed beside the figure — "a personal
+  best" means nothing without the number it beat.
+- Ghost rule as everywhere: hidden from non-admins, and the export builds a
+  second `isAdmin: false` list (`sharePb`) so a ghost never leaves the
+  building even for an admin who sees them on screen.
+- It renders **only when somebody is in play**. Early in a month nobody is
+  near their best, and a header over an empty row is dead space on a card
+  that gets photographed. It rides in the Copy-table export as its own
+  section band.
+- Known: with sparse history a "record" can be trivial (beating a one-deal
+  month). No arbitrary floor was invented — tune it if real data proves noisy.
+
+Surfaces: **Competitions page** bottom = the
 "📖 Record Book" card (company tiles gold, rep tiles teal, live watch/new
 chips); **Home card** = "Personal bests" tile row + a flame nudge when the
 current month is within 80% of (or beating) the rep's best; **Dashboard** =
