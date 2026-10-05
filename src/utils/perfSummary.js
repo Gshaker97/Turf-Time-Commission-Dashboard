@@ -157,14 +157,28 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
   // appointments carry no office at all (RepCard keys them to a rep and a day),
   // so an office's rep rows hold deal figures only — see `officeFunnel` in
   // scorecard.js, which is why the funnel is hidden at office scope.
+  //
+  // They ALSO carry TEAM sub-buckets (per Keaton: "how do I filter by team
+  // while viewing office stats?"), shaped exactly like the top-level `teams`
+  // map — totals plus reps — so Company → Tucson → Conner's Team → reps works
+  // the same way as Company → Conner's Team → reps. Same asymmetry applies: a
+  // team appears under every office it sold in, with that office's deals.
   const office = (name) => {
     const k = String(name || '').trim().toLowerCase()
-    if (!offices.has(k)) offices.set(k, { name: String(name || '').trim(), reps: new Map(), ...newStats() })
+    if (!offices.has(k)) offices.set(k, { name: String(name || '').trim(), reps: new Map(), teams: new Map(), ...newStats() })
     return offices.get(k)
   }
   const officeRep = (off, pid) => {
     if (!off.reps.has(pid)) off.reps.set(pid, newStats())
     return off.reps.get(pid)
+  }
+  const officeTeam = (off, k) => {
+    if (!off.teams.has(k)) off.teams.set(k, { totals: newStats(), reps: new Map() })
+    return off.teams.get(k)
+  }
+  const officeTeamRep = (ot, pid) => {
+    if (!ot.reps.has(pid)) ot.reps.set(pid, newStats())
+    return ot.reps.get(pid)
   }
 
   for (const d of deals) {
@@ -174,7 +188,11 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
     const a = dealAmounts(d)
     const key = teamOf(owner, d.sale_date)
     const off = office(d.office)
-    for (const s of [org, off, team(key).totals]) {
+    // The owner's team WITHIN this office. Revenue/deals land here exactly as
+    // they land on the owner's top-level team, so an office's team rows always
+    // sum back to the office total.
+    const ot = officeTeam(off, key)
+    for (const s of [org, off, team(key).totals, ot.totals]) {
       s.revenue += a.baseline; s.job += a.job; s.deals += 1
     }
     // REP commission only (setter + closer shares) — never overrides. Org and
@@ -186,23 +204,32 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
     if (owner) {
       const r = rep(key, owner); r.revenue += a.baseline; r.job += a.job; r.deals += 1
       const orr = officeRep(off, owner); orr.revenue += a.baseline; orr.job += a.job; orr.deals += 1
+      const otr = officeTeamRep(ot, owner); otr.revenue += a.baseline; otr.job += a.job; otr.deals += 1
       // Self-gen = no distinct closer, so the owner closed their own deal. A
       // setter-less deal is a self-gen too: saleOwnerId fell back to the
       // closer, who therefore both owns and closed it.
       if (!d.closer_id || d.closer_id === owner) {
-        r.selfGen += 1; orr.selfGen += 1; team(key).totals.selfGen += 1; org.selfGen += 1
+        r.selfGen += 1; orr.selfGen += 1; otr.selfGen += 1
+        team(key).totals.selfGen += 1; ot.totals.selfGen += 1; off.selfGen += 1; org.selfGen += 1
       }
     }
-    // Commission follows each rep's own share to each rep's own team.
+    // Commission follows each rep's own share to each rep's own team — inside
+    // the office as well as outside it, so the two never disagree.
     if (d.setter_id) {
       const k = teamOf(d.setter_id, d.sale_date)
       rep(k, d.setter_id).commission += a.setter; team(k).totals.commission += a.setter
       officeRep(off, d.setter_id).commission += a.setter
+      const okt = officeTeam(off, k)
+      okt.totals.commission += a.setter; officeTeamRep(okt, d.setter_id).commission += a.setter
     }
     if (d.closer_id && d.closer_id !== d.setter_id && !out(d.closer_id)) {
       const k = teamOf(d.closer_id, d.sale_date)
       rep(k, d.closer_id).commission += a.closer; team(k).totals.commission += a.closer
       officeRep(off, d.closer_id).commission += a.closer
+      // A closer on ANOTHER team keeps their share on THEIR team's row inside
+      // this office, the same rule the company-level breakdown follows.
+      const okt = officeTeam(off, k)
+      okt.totals.commission += a.closer; officeTeamRep(okt, d.closer_id).commission += a.closer
       // A LEAD CLOSE: the setter keeps the deal (owner credit above); the
       // closer is credited with having closed a lead — same split the Home
       // card and Dashboard use, never an extra deal. Its baseline feeds the
@@ -211,7 +238,10 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
         for (const s of [org, team(k).totals, rep(k, d.closer_id)]) { s.leadCloses += 1; s.leadRevenue += a.baseline }
       }
     }
-    if (!d.setter_id && !d.closer_id) team(key).totals.commission += a.repCommission
+    if (!d.setter_id && !d.closer_id) {
+      team(key).totals.commission += a.repCommission
+      ot.totals.commission += a.repCommission
+    }
   }
 
   for (const l of leads) {
@@ -392,7 +422,28 @@ export function buildPerformance({
       return { id: pid, name: u.name, role: u.role, ghost: !!u.ghost, active: u.active !== false,
                prev: prevRep, ...finish(rs) }
     }).filter(Boolean).sort((a, b) => b.revenue - a.revenue || a.name.localeCompare(b.name))
-    return { key: k, name: s.name || 'No office', ...st, rows, prev: p ? finish(p) : null,
+    // TEAM rows for the office → team → rep drill. Same shape as a top-level
+    // team so scorecard.js can render either without a second code path, and
+    // deal figures only for the same reason the rep rows are.
+    const prevTeams = p?.teams || null
+    const teamRows = [...s.teams.entries()].map(([tk, tb]) => {
+      const pb = prevTeams?.get(tk) || null
+      const trows = [...tb.reps.entries()].map(([pid, rs]) => {
+        const u = usersById[pid]
+        if (!u) return null
+        return { id: pid, name: u.name, role: u.role, ghost: !!u.ghost, active: u.active !== false,
+                 prev: pb ? finish(pb.reps.get(pid) || newStats()) : null, ...finish(rs) }
+      }).filter(Boolean).sort((a, b) => b.revenue - a.revenue || a.name.localeCompare(b.name))
+      return {
+        key: tk,
+        label: tk === UNASSIGNED ? 'Unassigned' : teamLabel(usersById[tk]),
+        unassigned: tk === UNASSIGNED,
+        totals: finish(tb.totals),
+        prev: pb ? finish(pb.totals) : null,
+        rows: trows,
+      }
+    }).sort((a, b) => (a.unassigned - b.unassigned) || (b.totals.revenue - a.totals.revenue) || a.label.localeCompare(b.label))
+    return { key: k, name: s.name || 'No office', ...st, rows, teamRows, prev: p ? finish(p) : null,
              share: org.revenue > 0 ? st.revenue / org.revenue : 0 }
   }).sort((a, b) => (a.key === '') - (b.key === '') || b.revenue - a.revenue)
 
