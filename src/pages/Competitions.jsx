@@ -12,7 +12,7 @@ import {
 } from '../utils/competition'
 import { headIdSet, teamKeyFor, buildChangesByProfile } from '../utils/team'
 import { fmt } from '../utils/commission'
-import { buildRecordBook } from '../utils/records'
+import { buildRecordBook, personalBestWatch } from '../utils/records'
 import { onClickUnlessSelecting } from '../utils/selection'
 import { useSettings } from '../contexts/SettingsContext'
 import CompetitionModal from '../components/CompetitionModal'
@@ -404,6 +404,39 @@ function RecordTile({ label, value, holder, when, teal, rec, metric }) {
   )
 }
 
+// One person's own record, live. `status: 'new'` = already past their best
+// this period, `'watch'` = closing in on it. The mark they are chasing is
+// always printed beside it — "a personal best" means nothing without the
+// number it beat.
+function PersonalBestRow({ r }) {
+  const isNew = r.status === 'new'
+  const val = (v) => (r.unit === 'deals' ? `${v} deal${v === 1 ? '' : 's'}` : fmt(v))
+  return (
+    <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg"
+      style={{
+        background: isNew ? 'rgba(251,191,36,0.07)' : '#242424',
+        border: `1px solid ${isNew ? 'rgba(251,191,36,0.4)' : '#2e2e2e'}`,
+      }}>
+      <span className="text-[13px] flex-shrink-0">{isNew ? '\u{1F525}' : '\u2191'}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[12.5px] font-semibold text-white truncate">{r.name}</span>
+        <span className="block text-[10px] text-white/35 truncate">
+          {r.title} · {r.periodLabel}
+        </span>
+      </span>
+      <span className="text-right flex-shrink-0">
+        <span className="block text-[13px] font-extrabold tabular-nums"
+          style={{ color: isNew ? '#fbbf24' : '#00b894' }}>{val(r.value)}</span>
+        <span className="block text-[10px] text-white/35 tabular-nums">
+          {isNew ? `past ${val(r.best)} · ${r.bestLabel}`
+            : r.value >= r.best ? `matched ${val(r.best)} · ${r.bestLabel}`
+            : `${Math.round(r.pct * 100)}% of ${val(r.best)} · ${r.bestLabel}`}
+        </span>
+      </span>
+    </div>
+  )
+}
+
 // The all-time Record Book — company bests (with live record-watch) + rep
 // bests. Sits at the bottom of the page; visible to everyone.
 function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
@@ -422,6 +455,21 @@ function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
       ? buildRecordBook(deals, { users, isAdmin: false, dataStartDate, todayISO: todayISO(), teamCtx })
       : book),
     [deals, users, isAdmin, dataStartDate, teamCtx, book]
+  )
+  // Who is beating or closing in on THEIR OWN best — a different question
+  // from the company-wide rep records above, which the same two or three
+  // people hold forever (per Keaton: "highlight who's having a break out
+  // performance and on cusp of setting a personal record or did").
+  const pbWatch = useMemo(
+    () => personalBestWatch(deals, { users, isAdmin, dataStartDate, todayISO: todayISO() }),
+    [deals, users, isAdmin, dataStartDate]
+  )
+  // Ghost-free copy for the export, same rule as shareBook.
+  const sharePb = useMemo(
+    () => (isAdmin
+      ? personalBestWatch(deals, { users, isAdmin: false, dataStartDate, todayISO: todayISO() })
+      : pbWatch),
+    [deals, users, isAdmin, dataStartDate, pbWatch]
   )
   const [copied, setCopied] = useState(false)
   const [copiedImg, setCopiedImg] = useState(false)
@@ -473,6 +521,21 @@ function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
         line('Most deals — team month', st.dealsMonth, 'deals'),
         line('Most deals — team week',  st.dealsWeek,  'deals'),
         line('Most deals — team day',   st.dealsDay,   'deals'))
+    }
+    // Personal bests ride along as their own band — the card shows them, so
+    // an export that dropped them would be the same lie-by-omission the
+    // missing "Right now" column was.
+    if (sharePb.length) {
+      const pv = (x, v) => (x.unit === 'deals' ? `${v} deal${v === 1 ? '' : 's'}` : fmt(v))
+      rows.push({ section: 'Personal bests in play' },
+        ...sharePb.map(x => [
+          x.title, pv(x, x.value), x.name, x.periodLabel,
+          x.status === 'new'
+            ? `\u{1F525} PERSONAL BEST \u2014 past ${pv(x, x.best)} (${x.bestLabel})`
+            : x.value >= x.best
+              ? `matched their best of ${pv(x, x.best)} (${x.bestLabel})`
+              : `${Math.round(x.pct * 100)}% of ${pv(x, x.best)} (${x.bestLabel})`,
+        ]))
     }
     // Drop the live column entirely when nothing is in progress, rather than
     // pasting a column of blanks into a slide.
@@ -574,6 +637,25 @@ function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
             <RecordTile label="Most Deals — Team Month" metric="deals" value={t.dealsMonth.best?.value} holder={t.dealsMonth.best?.holderName} when={t.dealsMonth.best?.label} rec={t.dealsMonth} />
             <RecordTile label="Most Deals — Team Week"  metric="deals" value={t.dealsWeek.best?.value}  holder={t.dealsWeek.best?.holderName}  when={t.dealsWeek.best?.label}  rec={t.dealsWeek} />
             <RecordTile label="Most Deals — Team Day"   metric="deals" value={t.dealsDay.best?.value}   holder={t.dealsDay.best?.holderName}   when={t.dealsDay.best?.label}   rec={t.dealsDay} />
+          </div>
+        </div>
+      )}
+
+      {/* ── Personal bests in play ───────────────────────────────────────
+          Each rep against THEIR OWN history. Rendered only when somebody is
+          actually in play: early in a month nobody is near their best, and a
+          header over an empty row would be dead space on a card that gets
+          photographed for slides. */}
+      {pbWatch.length > 0 && (
+        <div className="mt-4">
+          <div className="flex items-baseline gap-2 mb-2 flex-wrap">
+            <p className="text-[9px] font-bold uppercase tracking-widest text-white/30">Personal bests in play</p>
+            <p className="text-[10px] text-white/25">
+              each rep against their own history · {pbWatch.filter(x => x.status === 'new').length} set, {pbWatch.filter(x => x.status === 'watch').length} closing in
+            </p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+            {pbWatch.map(x => <PersonalBestRow key={x.id} r={x} />)}
           </div>
         </div>
       )}

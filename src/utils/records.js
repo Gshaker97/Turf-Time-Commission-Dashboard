@@ -163,3 +163,80 @@ export function personalBests(deals = [], repId, { dataStartDate = '', todayISO 
   const mostDealsMonth = pickRecord(months, 'deals', curMonth, monthLabel)
   return { bestMonth, bestWeek, mostDealsMonth, biggestDeal }
 }
+
+// ── Personal bests IN PLAY — who is having a breakout right now ──────────
+//
+// Deliberately a DIFFERENT question from the `reps` block in
+// buildRecordBook. That one is the company-wide "biggest rep month ever":
+// one name holds it, and the same two or three people hold every line of it
+// forever. This one measures each rep against THEIR OWN history (per Keaton:
+// "highlight who's having a break out performance and on cusp of setting a
+// personal record or did"), so a rep who will never top the company board
+// still surfaces the month they beat themselves — which is the thing worth
+// calling out in a meeting.
+//
+// A rep must have a PRIOR completed period to beat (`best` must exist), or a
+// new hire's first month would read as an all-time personal record on day
+// one. Same guard the Dashboard's record banners use via `prev`.
+//
+// ONE ROW PER REP — the strongest live signal they have. A rep beating both
+// their best month AND their best week is one story, not two, and printing
+// both would bury everyone else.
+const PB_METRICS = [
+  { key: 'month-revenue', bucket: 'months', field: 'revenue', unit: 'money', labelFn: monthLabel, title: 'Best month' },
+  { key: 'month-deals',   bucket: 'months', field: 'deals',   unit: 'deals', labelFn: monthLabel, title: 'Most deals in a month' },
+  { key: 'week-revenue',  bucket: 'weeks',  field: 'revenue', unit: 'money', labelFn: weekLabel,  title: 'Best week' },
+]
+
+// A live NEW record always outranks a near-miss; past that, whoever is
+// further along as a share of their own mark.
+const pbBetter = (a, b) =>
+  (a.status === 'new') !== (b.status === 'new') ? a.status === 'new' : a.pct > b.pct
+
+export function personalBestWatch(deals = [], { users = [], isAdmin = false, dataStartDate = '', todayISO } = {}) {
+  if (!todayISO) return []
+  const curMonth = todayISO.slice(0, 7)
+  const curWeek  = weekStartOf(todayISO)
+  const byId = new Map(users.map(u => [u.id, u]))
+
+  // One pass for the whole roster rather than calling personalBests() per
+  // rep, which would re-walk every deal once per person.
+  const per = new Map()
+  for (const d of deals) {
+    if (!d.sale_date || !countsInTotals(d)) continue
+    if (dataStartDate && d.sale_date < dataStartDate) continue
+    const owner = saleOwnerId(d)
+    const u = owner ? byId.get(owner) : null
+    if (!u) continue
+    if (u.ghost && !isAdmin) continue        // same ghost rule as every other board
+    if (!per.has(owner)) per.set(owner, { months: {}, weeks: {} })
+    const p = per.get(owner)
+    const v = Number(d.baseline_revenue) || 0
+    bump(p.months, d.sale_date.slice(0, 7), v)
+    bump(p.weeks,  weekStartOf(d.sale_date), v)
+  }
+
+  const out = []
+  for (const [id, p] of per) {
+    const u = byId.get(id)
+    let pick = null
+    for (const m of PB_METRICS) {
+      const curKey = m.bucket === 'months' ? curMonth : curWeek
+      const rec = pickRecord(p[m.bucket], m.field, curKey, m.labelFn)
+      if (!rec.status || !rec.best || !rec.current) continue
+      const row = {
+        id, name: u.name, ghost: !!u.ghost,
+        metric: m.key, title: m.title, unit: m.unit,
+        value: rec.current.value, periodLabel: rec.current.label,
+        best: rec.best.value, bestLabel: rec.best.label,
+        pct: rec.best.value > 0 ? rec.current.value / rec.best.value : 0,
+        status: rec.status,                  // 'new' = already past it, 'watch' = closing in
+      }
+      if (!pick || pbBetter(row, pick)) pick = row
+    }
+    if (pick) out.push(pick)
+  }
+  return out.sort((a, b) =>
+    (a.status === b.status ? 0 : a.status === 'new' ? -1 : 1) ||
+    (b.pct - a.pct) || a.name.localeCompare(b.name))
+}
