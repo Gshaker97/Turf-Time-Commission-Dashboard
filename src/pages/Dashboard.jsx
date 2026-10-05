@@ -652,9 +652,16 @@ export default function Dashboard() {
           value2={fmt(totals.totalPrice)} value2Label="Job Price"
           sub="Baseline = company's cost basis"
           trend={<Trend cur={totals.baseline} prev={prevPeriod ? prevTotals.baseline : null} suffix="baseline vs prev" />} />
-        <StatCard label="Commissions" value={fmt(totals.commission)} sub="Total price − baseline"
+        {/* The caption used to read "Total price − baseline", which is the
+            GROSS rep pool — but the figure is `repCommission`, already NET of
+            deductions (manual + financing dealer fee) and including any rep
+            bonus. The two differ on every deal that carries a deduction, so
+            the caption was describing a number the tile does not show. It
+            also excludes overrides by design (same as the Deals tab and the
+            leaderboard), which the caption now says out loud. */}
+        <StatCard label="Commissions" value={fmt(totals.commission)} sub="Setter + closer, after deductions"
           trend={<Trend cur={totals.commission} prev={prevPeriod ? prevTotals.commission : null} />} />
-        <StatCard label="Avg Comm %" value={`${totals.avgCommPct.toFixed(1)}%`}
+        <StatCard label="Avg Comm %" value={`${totals.avgCommPct.toFixed(1)}%`} sub="Of baseline, after deductions"
           trend={<Trend cur={totals.avgCommPct} prev={prevPeriod ? prevTotals.avgCommPct : null} />} />
         <StatCard label="Total Deals" value={totals.deals.toString()}
           trend={<Trend cur={totals.deals} prev={prevPeriod ? prevTotals.deals : null} />} />
