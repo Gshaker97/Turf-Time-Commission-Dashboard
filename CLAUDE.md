@@ -641,6 +641,27 @@ in range, a rep who left) falls back to company rather than rendering empty.
   through to the endpoint it arrived at and becomes a junk "Not Home"
   APPOINTMENT — the exact bug `routeCrmEvents` was built to fix. The Settings
   panel is retitled "recorded, not shown" and says so.
+- **EVERY COMMISSION FIGURE ON THIS PAGE IS NET** (per Keaton: "everything on
+  the dashboard tab should be net"). `dealAmounts` subtracts the deduction
+  (manual `deduction_amount` + financing dealer fee) from whoever absorbs it
+  BEFORE returning `setter`/`closer`, and a stored `*_amount` is already net,
+  so `repCommission` — which every Dashboard commission reads, from the KPI
+  tile to the drill table to the leaderboard — is net of deductions and
+  includes any rep bonus. Checked, not assumed. Two things that are NOT in it,
+  both deliberate:
+  - **Overrides.** The Commissions tile is `repCommission` = setter + closer
+    only, matching the Deals tab and the leaderboard. It is rep pay, not the
+    company's total commission cost (that is `repCommission + overrides`).
+  - **Deduction-ledger debts** (migration 050 — a deduction logged AFTER the
+    job paid out). Those live in `payroll_adjustments` and must never touch
+    `deals.deduction_amount`, so they cannot reach `dealAmounts`; they come
+    off the pay run, not the deal.
+  The Commissions tile's caption used to read **"Total price − baseline"**,
+  which is the GROSS rep pool — it described a number the tile does not show
+  and was wrong by the deduction on every deal carrying one ($650 across the
+  demo set alone). It now reads "Setter + closer, after deductions", and Avg
+  Comm % says "Of baseline, after deductions". **Never caption a figure with a
+  formula the engine does not use.**
 - **Trend arrows on the drill table** (per Keaton): a small ▲/▼ percentage
   under Revenue and Deals on every child row AND the total row, against the
   same window of the previous period — `getPreviousRange`, so a part-month
