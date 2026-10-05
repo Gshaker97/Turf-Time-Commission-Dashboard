@@ -164,7 +164,7 @@ export function personalBests(deals = [], repId, { dataStartDate = '', todayISO 
   return { bestMonth, bestWeek, mostDealsMonth, biggestDeal }
 }
 
-// ── Personal bests IN PLAY — who is having a breakout right now ──────────
+// ── Personal bests IN PLAY — who is having a breakout, in any timeframe ──
 //
 // Deliberately a DIFFERENT question from the `reps` block in
 // buildRecordBook. That one is the company-wide "biggest rep month ever":
@@ -172,31 +172,75 @@ export function personalBests(deals = [], repId, { dataStartDate = '', todayISO 
 // forever. This one measures each rep against THEIR OWN history (per Keaton:
 // "highlight who's having a break out performance and on cusp of setting a
 // personal record or did"), so a rep who will never top the company board
-// still surfaces the month they beat themselves — which is the thing worth
-// calling out in a meeting.
+// still surfaces the period they beat themselves.
 //
-// A rep must have a PRIOR completed period to beat (`best` must exist), or a
-// new hire's first month would read as an all-time personal record on day
-// one. Same guard the Dashboard's record banners use via `prev`.
+// PERIOD IS SELECTABLE — week | month | quarter, stepped back by `offset`
+// (per Keaton: "I want to see last months results but also would want to see
+// weekly, quarterly"). Five days into a month almost nobody is near their
+// best, so the live view is nearly empty exactly when you want to review the
+// month that just ended.
 //
-// ONE ROW PER REP — the strongest live signal they have. A rep beating both
-// their best month AND their best week is one story, not two, and printing
-// both would bury everyone else.
-const PB_METRICS = [
-  { key: 'month-revenue', bucket: 'months', field: 'revenue', unit: 'money', labelFn: monthLabel, title: 'Best month' },
-  { key: 'month-deals',   bucket: 'months', field: 'deals',   unit: 'deals', labelFn: monthLabel, title: 'Most deals in a month' },
-  { key: 'week-revenue',  bucket: 'weeks',  field: 'revenue', unit: 'money', labelFn: weekLabel,  title: 'Best week' },
-]
+// THE MARK IS ALWAYS THEIR BEST **BEFORE** THE PERIOD BEING VIEWED, never
+// their best overall. "Did they set a personal record in September" has to
+// mean "was it their best up to then" — measuring September against an
+// October that beat it would retract a record they genuinely set, and the
+// list would rewrite its own history every month. For the CURRENT period the
+// two rules are identical, since nothing later exists yet.
+//
+// ONE ROW PER REP — the stronger of revenue and deals for the chosen period.
+// A rep topping both is one story, and printing both would bury everyone else.
+
+const quarterOf = (m) => Math.floor(m / 3) + 1                   // m = 0..11
+const quarterKeyOfDay = (iso) => {
+  const y = Number(iso.slice(0, 4)), m = Number(iso.slice(5, 7)) - 1
+  return `${y}-Q${quarterOf(m)}`
+}
+const quarterLabel = (qk) => `Q${qk.slice(-1)} ${qk.slice(0, 4)}`
+
+// week/month/quarter keys all sort lexically, which is what lets "periods
+// before this one" be a plain string comparison.
+export const PB_PERIODS = {
+  week:    { label: 'Week',    keyOf: (iso) => weekStartOf(iso),        labelFn: weekLabel,    noun: 'week' },
+  month:   { label: 'Month',   keyOf: (iso) => iso.slice(0, 7),         labelFn: monthLabel,   noun: 'month' },
+  quarter: { label: 'Quarter', keyOf: (iso) => quarterKeyOfDay(iso),    labelFn: quarterLabel, noun: 'quarter' },
+}
+
+// The key of the period `offset` steps back from today.
+export function pbPeriodKey(period, todayISO, offset = 0) {
+  const spec = PB_PERIODS[period] || PB_PERIODS.month
+  if (!todayISO) return null
+  const n = Math.max(0, Math.floor(offset) || 0)
+  if (!n) return spec.keyOf(todayISO)
+  const d = new Date(todayISO + 'T12:00:00')
+  if (period === 'week') {
+    const start = new Date(weekStartOf(todayISO) + 'T12:00:00')
+    start.setDate(start.getDate() - n * 7)
+    return weekStartOf(format(start, 'yyyy-MM-dd'))
+  }
+  if (period === 'quarter') {
+    const q = quarterOf(d.getMonth()) - 1 - n            // 0-based, can go negative
+    const y = d.getFullYear() + Math.floor(q / 4)
+    return `${y}-Q${((q % 4) + 4) % 4 + 1}`
+  }
+  const m = new Date(d.getFullYear(), d.getMonth() - n, 1)
+  return `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, '0')}`
+}
+
+export const pbPeriodLabel = (period, key) =>
+  (key ? (PB_PERIODS[period] || PB_PERIODS.month).labelFn(key) : '')
 
 // A live NEW record always outranks a near-miss; past that, whoever is
 // further along as a share of their own mark.
 const pbBetter = (a, b) =>
   (a.status === 'new') !== (b.status === 'new') ? a.status === 'new' : a.pct > b.pct
 
-export function personalBestWatch(deals = [], { users = [], isAdmin = false, dataStartDate = '', todayISO } = {}) {
+export function personalBestWatch(deals = [], {
+  users = [], isAdmin = false, dataStartDate = '', todayISO, period = 'month', offset = 0,
+} = {}) {
   if (!todayISO) return []
-  const curMonth = todayISO.slice(0, 7)
-  const curWeek  = weekStartOf(todayISO)
+  const spec = PB_PERIODS[period] || PB_PERIODS.month
+  const target = pbPeriodKey(period, todayISO, offset)
+  if (!target) return []
   const byId = new Map(users.map(u => [u.id, u]))
 
   // One pass for the whole roster rather than calling personalBests() per
@@ -209,28 +253,46 @@ export function personalBestWatch(deals = [], { users = [], isAdmin = false, dat
     const u = owner ? byId.get(owner) : null
     if (!u) continue
     if (u.ghost && !isAdmin) continue        // same ghost rule as every other board
-    if (!per.has(owner)) per.set(owner, { months: {}, weeks: {} })
-    const p = per.get(owner)
-    const v = Number(d.baseline_revenue) || 0
-    bump(p.months, d.sale_date.slice(0, 7), v)
-    bump(p.weeks,  weekStartOf(d.sale_date), v)
+    if (!per.has(owner)) per.set(owner, {})
+    bump(per.get(owner), spec.keyOf(d.sale_date), Number(d.baseline_revenue) || 0)
   }
 
+  const METRICS = [
+    { field: 'revenue', unit: 'money', title: `Best ${spec.noun}` },
+    { field: 'deals',   unit: 'deals', title: `Most deals in a ${spec.noun}` },
+  ]
   const out = []
-  for (const [id, p] of per) {
+  for (const [id, buckets] of per) {
+    const cur = buckets[target]
+    if (!cur) continue                        // nothing in the period being viewed
     const u = byId.get(id)
     let pick = null
-    for (const m of PB_METRICS) {
-      const curKey = m.bucket === 'months' ? curMonth : curWeek
-      const rec = pickRecord(p[m.bucket], m.field, curKey, m.labelFn)
-      if (!rec.status || !rec.best || !rec.current) continue
+    for (const m of METRICS) {
+      const value = cur[m.field]
+      if (!(value > 0)) continue
+      // Their best among periods BEFORE this one — see the header note.
+      let best = null
+      for (const k of Object.keys(buckets)) {
+        if (k >= target) continue
+        const v = buckets[k][m.field]
+        if (!best || v > best.value) best = { key: k, value: v }
+      }
+      // A COUNT needs a mark worth beating. Percentage thresholds go
+      // degenerate on small integers: with a best of 1 deal, any month with
+      // a deal sits at 100% and reads "matched their best" — every rep,
+      // every month, forever. Revenue has no such floor (a tie is already
+      // impossible there).
+      const minBest = m.field === 'deals' ? 2 : 0
+      if (!best || !(best.value > 0) || best.value < minBest) continue
+      const pct = value / best.value
+      const status = value > best.value ? 'new' : pct >= 0.85 ? 'watch' : null
+      if (!status) continue
       const row = {
         id, name: u.name, ghost: !!u.ghost,
-        metric: m.key, title: m.title, unit: m.unit,
-        value: rec.current.value, periodLabel: rec.current.label,
-        best: rec.best.value, bestLabel: rec.best.label,
-        pct: rec.best.value > 0 ? rec.current.value / rec.best.value : 0,
-        status: rec.status,                  // 'new' = already past it, 'watch' = closing in
+        metric: m.field, title: m.title, unit: m.unit,
+        value, periodLabel: spec.labelFn(target),
+        best: best.value, bestLabel: spec.labelFn(best.key),
+        pct, status,                           // 'new' = past it, 'watch' = closing in
       }
       if (!pick || pbBetter(row, pick)) pick = row
     }
