@@ -98,19 +98,20 @@ setup + deploy steps.
      or no people at all) so they always sum exactly to the company totals.
      Closed leads are NOT extra sales for the closer — their pay shows in
      commission columns only.
-   - **Dashboard Rep Leaderboard count columns are MUTUALLY EXCLUSIVE**
-     (per Keaton: "if the same person set and closed it, that's a self-gen,
-     not a set"): **Self Gen** = set AND closed by them (a deal with a setter
-     and no `closer_id` counts here — the setter closed it, same rule
-     `dealAmounts` pays by), **Set** = they set it, another rep
-     closed it (the column is LABELLED just "Set" — per Keaton — but it
-     excludes self-gens), **Lead Closes** = another rep set it, they closed
-     it. Every deal a rep touched lands in exactly ONE of the three, and
-     Self Gen + Set = the deals they OWN (which is what Personal Rev is the
-     revenue of). There is no combined "Closed" column any more — it was
-     Self Gen + Lead Closes and double-counted a self-gen as a set. NOTE the
-     unit differs from the Performance page, where Set/Ran are APPOINTMENTS;
-     here every count is DEALS.
+   - **Dashboard Rep Leaderboard count columns are MUTUALLY EXCLUSIVE and
+     none contains another** (per Keaton: "if the same person set and closed
+     it, that's a self-gen, not a set"). The three, in column order:
+     **Set Deals** = they set it, another rep closed it; **Self-Gen** = they
+     set AND closed it (a deal with a setter and no `closer_id` counts here —
+     the setter closed it, same rule `dealAmounts` pays by); **Leads Closed**
+     = another rep set it, they closed it. Every deal a rep touched lands in
+     exactly ONE of the three. **Set Deals + Self-Gen = the deals they OWN**,
+     which is what `Revenue` is the revenue of; `Leads Closed` is what
+     `Total Revenue` adds on top. There is no combined "Closed" column — it
+     was Self Gen + Leads Closed and double-counted a self-gen as a set.
+     NOTE the unit differs from the appointment funnel on the same page,
+     where Set/Ran are APPOINTMENTS; here every count is DEALS, which is why
+     the column is "Set **Deals**" and never bare "Set".
    - **Dashboard Rep Leaderboard under a TEAM FILTER lists that team's
      MEMBERS, not everyone who touched the team's deals** (per Keaton). It
      credits each rep from every deal in the date range (`dateFiltered`),
@@ -695,10 +696,11 @@ in range, a rep who left) falls back to company rather than rendering empty.
   team, and at company level it lists TEAMS, so individuals were invisible
   until you clicked. `leaderboard(perf, scope, { isAdmin })` in scorecard.js
   ranks every rep INSIDE the current scope by revenue.
-  - Columns: `# · Rep · Revenue (+▲▼) · Total Revenue · Deals · Self-Gen ·
-    Lead Closes · Commission`. **Every header is SORTABLE** (`sortLeaderboard`
-    in scorecard.js, `SortTh` in the page) — tap to rank by it, tap again to
-    flip; revenue breaks every tie. Default is revenue desc.
+  - Columns: `# · Rep · Revenue (+▲▼) · Total Revenue · Set Deals ·
+    Self-Gen · Leads Closed · Commission`. **Every header is SORTABLE**
+    (`sortLeaderboard` in scorecard.js, `SortTh` in the page) — tap to rank
+    by it, tap again to flip; revenue breaks every tie. Default is revenue
+    desc.
   - **TWO revenue columns, deliberately.** `Revenue` is owner-credited (the
     deals they OWN — the site's one definition everywhere else). `Total
     Revenue` adds the baseline of deals they CLOSED for another setter
@@ -710,18 +712,36 @@ in range, a rep who left) falls back to company rather than rendering empty.
     deal whose setter AND closer are both on that team would count twice.
     That is why the leaderboard has no total row and the drill table does not
     carry this column.
-  - **"Set (passed)" was REMOVED as redundant** (per Keaton, agreed): `Deals =
-    Self-Gen + Set (passed)`, so any two give the third and one column was
-    pure arithmetic. `Deals · Self-Gen · Lead Closes` survives — deals owned,
-    how many they took start to finish, and what they closed for someone
-    else; "passed" is the least interesting of the three and is Deals −
-    Self-Gen at a glance. Dropping it also retired the awkward "Set (passed)"
-    label, which only existed to avoid colliding with the funnel's
-    appointment "Set". **Do not re-add a DEALS column called "Set".**
+  - **THE "DEALS" COLUMN IS GONE — the three counts are a flat partition**
+    (per Keaton: "i get confused looking at deals, self gens, leads closed.
+    the deals section specifically is what messes with me"). The layout was
+    **Deals · Self-Gen · Lead Closes**, which put three numbers at TWO
+    levels in one header row: `Deals` was a TOTAL, `Self-Gen` was a slice
+    *inside* it, and `Lead Closes` sat *outside* it — and nothing on screen
+    said which was which. So "Deals 7 · Lead Closes 19" read as though the 7
+    were wrong, and a pure setter read "6 · 0 · 0" as though he had done
+    nothing. It is now **Set Deals · Self-Gen · Leads Closed**: three
+    exclusive states, every deal in exactly one, nothing nested.
+    `Set Deals = setForOthers` (already on the engine as `deals − selfGen`,
+    previously computed but not displayed). Four alternatives were mocked —
+    two columns with the split as a sub-line, a Total/Self-Gen/Handed-off
+    band, and a Deals/Total-Deals pair mirroring the revenue columns —
+    and Keaton picked the flat partition.
+    **This REVERSES the earlier "Set (passed) was removed as redundant"
+    decision**, which argued the column was pure arithmetic (`Deals −
+    Self-Gen`). It is arithmetic, and that was the wrong trade: keeping the
+    total and dropping a part is what created the two-level header. A
+    header band over the grouped columns was tried in the mockup and failed
+    for the same reason — Keaton read "Total" as "all of it" with 19 sitting
+    beside it, which is the original bug one column over.
+    The label is **"Set Deals", never bare "Set"**: the funnel on this same
+    page uses "Set" for APPOINTMENTS. That constraint still stands.
   - `selfGen` is on the engine (a deal with no distinct closer counts, since
     the owner closed it — and a setter-less deal is a self-gen because
-    `saleOwnerId` fell back to the closer); `setForOthers` is still computed
-    as `deals − selfGen` and available, just not displayed.
+    `saleOwnerId` fell back to the closer); `setForOthers` = `deals −
+    selfGen` is the **Set Deals** column. `deals` itself is still on every
+    row and still drives the drill table, the "has activity" filter and the
+    row merge — it is just no longer a COLUMN on the leaderboard.
   - At COMPANY scope a rep who MOVED TEAMS mid-range has a row under each
     team (deliberate — it makes team totals sum). A leaderboard is about the
     PERSON, so `leaderboard` merges those rows and labels the team "Moved
