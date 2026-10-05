@@ -12,7 +12,7 @@ import {
 } from '../utils/competition'
 import { headIdSet, teamKeyFor, buildChangesByProfile } from '../utils/team'
 import { fmt } from '../utils/commission'
-import { buildRecordBook, personalBestWatch } from '../utils/records'
+import { buildRecordBook, personalBestWatch, pbPeriodKey, pbPeriodLabel, PB_PERIODS } from '../utils/records'
 import { onClickUnlessSelecting } from '../utils/selection'
 import { useSettings } from '../contexts/SettingsContext'
 import CompetitionModal from '../components/CompetitionModal'
@@ -460,17 +460,30 @@ function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
   // from the company-wide rep records above, which the same two or three
   // people hold forever (per Keaton: "highlight who's having a break out
   // performance and on cusp of setting a personal record or did").
+  // Week | Month | Quarter, stepped back by `pbBack` (0 = the live one).
+  // Five days into a month nobody is near their best, so reviewing the month
+  // that just ENDED is the common case (per Keaton).
+  const [pbPeriod, setPbPeriod] = useState('month')
+  const [pbBack, setPbBack] = useState(0)
   const pbWatch = useMemo(
-    () => personalBestWatch(deals, { users, isAdmin, dataStartDate, todayISO: todayISO() }),
-    [deals, users, isAdmin, dataStartDate]
+    () => personalBestWatch(deals, {
+      users, isAdmin, dataStartDate, todayISO: todayISO(), period: pbPeriod, offset: pbBack }),
+    [deals, users, isAdmin, dataStartDate, pbPeriod, pbBack]
   )
   // Ghost-free copy for the export, same rule as shareBook.
   const sharePb = useMemo(
     () => (isAdmin
-      ? personalBestWatch(deals, { users, isAdmin: false, dataStartDate, todayISO: todayISO() })
+      ? personalBestWatch(deals, {
+          users, isAdmin: false, dataStartDate, todayISO: todayISO(), period: pbPeriod, offset: pbBack })
       : pbWatch),
-    [deals, users, isAdmin, dataStartDate, pbWatch]
+    [deals, users, isAdmin, dataStartDate, pbPeriod, pbBack, pbWatch]
   )
+  const pbLabel = pbPeriodLabel(pbPeriod, pbPeriodKey(pbPeriod, todayISO(), pbBack))
+  // Render whenever there is ANY rep history, NOT just when the chosen
+  // period has rows. Gating on the rows unmounted the whole section the
+  // moment you picked a period with none — taking the control that got you
+  // there with it, with no way back. A feature that hides itself on an empty
+  // day is also undiscoverable; the empty state says what it means instead.
   const [copied, setCopied] = useState(false)
   const [copiedImg, setCopiedImg] = useState(false)
   const cardRef = useRef(null)
@@ -527,7 +540,7 @@ function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
     // missing "Right now" column was.
     if (sharePb.length) {
       const pv = (x, v) => (x.unit === 'deals' ? `${v} deal${v === 1 ? '' : 's'}` : fmt(v))
-      rows.push({ section: 'Personal bests in play' },
+      rows.push({ section: `Personal bests in play \u00b7 ${pbLabel}` },
         ...sharePb.map(x => [
           x.title, pv(x, x.value), x.name, x.periodLabel,
           x.status === 'new'
@@ -646,17 +659,48 @@ function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
           actually in play: early in a month nobody is near their best, and a
           header over an empty row would be dead space on a card that gets
           photographed for slides. */}
-      {pbWatch.length > 0 && (
+      {(r.revMonth?.best || pbWatch.length > 0) && (
         <div className="mt-4">
-          <div className="flex items-baseline gap-2 mb-2 flex-wrap">
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
             <p className="text-[9px] font-bold uppercase tracking-widest text-white/30">Personal bests in play</p>
+            {/* Period picker. Lives here and NOT on the record tiles above:
+                those are all-time bests by definition, and narrowing them to
+                one month turns "biggest rep month ever" into "September's
+                top rep", which the Dashboard already does properly. */}
+            <div className="flex items-center gap-1" data-no-export="1">
+              {Object.entries(PB_PERIODS).map(([k, v]) => (
+                <button key={k} onClick={() => { setPbPeriod(k); setPbBack(0) }}
+                  className={`px-2 py-0.5 rounded-full text-[10px] transition-colors ${pbPeriod === k
+                    ? 'bg-teal text-dark font-bold' : 'text-white/40 hover:text-white'}`}
+                  style={pbPeriod === k ? undefined : { border: '1px solid #3a3a3a' }}>
+                  {v.label}
+                </button>
+              ))}
+            </div>
+            {/* A stepper rather than "This / Last" — on Oct 5, "last month"
+                is September and the label should just say so. */}
+            <div className="flex items-center gap-1 ml-0.5">
+              <button onClick={() => setPbBack(n => n + 1)} aria-label="Earlier" data-no-export="1"
+                className="w-5 h-5 rounded text-white/40 hover:text-white hover:bg-white/5 leading-none">‹</button>
+              <span className="text-[10.5px] font-semibold text-white/70 min-w-[92px] text-center">{pbLabel}</span>
+              <button onClick={() => setPbBack(n => Math.max(0, n - 1))} disabled={pbBack === 0} aria-label="Later" data-no-export="1"
+                className="w-5 h-5 rounded text-white/40 hover:text-white hover:bg-white/5 disabled:opacity-20 disabled:hover:bg-transparent leading-none">›</button>
+            </div>
             <p className="text-[10px] text-white/25">
-              each rep against their own history · {pbWatch.filter(x => x.status === 'new').length} set, {pbWatch.filter(x => x.status === 'watch').length} closing in
+              {pbWatch.length
+                ? `each rep against their own history · ${pbWatch.filter(x => x.status === 'new').length} set, ${pbWatch.filter(x => x.status === 'watch').length} closing in`
+                : 'each rep against their own history'}
             </p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-            {pbWatch.map(x => <PersonalBestRow key={x.id} r={x} />)}
-          </div>
+          {pbWatch.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+              {pbWatch.map(x => <PersonalBestRow key={x.id} r={x} />)}
+            </div>
+          ) : (
+            <p className="text-[11.5px] text-white/25 py-1.5">
+              Nobody reached 85% of their own best in {pbLabel}.
+            </p>
+          )}
         </div>
       )}
     </div>

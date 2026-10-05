@@ -525,14 +525,42 @@ are company-wide — "biggest rep month ever" — so one name holds each line an
 the same two or three people hold all of them forever. This measures every rep
 against **their own** history, so someone who will never top the company board
 still surfaces the month they beat themselves.
-- **A rep needs a PRIOR completed period to beat** (`best` must exist), or a
-  new hire's first month reads as an all-time personal record on day one —
-  the same guard the Dashboard's record banners get from requiring `prev`.
-- **ONE ROW PER REP**, the strongest live signal: a `new` always outranks a
-  `watch`, then the higher share of their own mark. Someone beating both
-  their best month and their best week is one story, not two, and printing
-  both would bury everyone else. Metrics checked, in order: best month
-  (revenue), most deals in a month, best week (revenue).
+- **THE TIMEFRAME IS SELECTABLE — week | month | quarter, stepped back**
+  (per Keaton: "I want to see last months results but also would want to see
+  weekly, quarterly"). Five days into a month almost nobody is near their
+  best, so the live view is emptiest exactly when you want to review the
+  month that just ended. `PB_PERIODS` / `pbPeriodKey(period, todayISO,
+  offset)` / `pbPeriodLabel` are exported; week, month and quarter keys all
+  sort LEXICALLY (`2026-Q3`, `2026-09`, week-start dates), which is what lets
+  "periods before this one" be a plain string compare.
+  **The control sits on THIS section only** (per Keaton: "i dont want a
+  timeframe on all the records, just for the rep section"). The tiles above
+  are all-time bests by definition — narrowing "biggest rep month ever" to
+  one month just yields that month's top rep, which the Dashboard already
+  does properly, with sorting and a copy button.
+- **THE MARK IS THEIR BEST *BEFORE* THE VIEWED PERIOD, never their best
+  overall.** "Did they set a personal record in September" has to mean "was
+  it their best up to then" — measuring September against an October that
+  beat it would retract a record they genuinely set, and the list would
+  rewrite its own history every month. For the CURRENT period the two rules
+  are identical, since nothing later exists.
+- **A rep needs a PRIOR period to beat**, or a new hire's first month reads
+  as an all-time personal record on day one — the same guard the Dashboard's
+  record banners get from requiring `prev`.
+- **ONE ROW PER REP**, the stronger of revenue and deals for the chosen
+  period: a `new` always outranks a `watch`, then the higher share of their
+  own mark. Someone topping both is one story, not two, and printing both
+  would bury everyone else.
+- **A COUNT NEEDS A MARK WORTH BEATING — `deals` is skipped when the prior
+  best is under 2.** Percentage thresholds go degenerate on small integers:
+  against a best of 1 deal, any period with a deal sits at 100% and reads
+  "matched their best" — every rep, every month, forever. Revenue has no
+  floor, since a revenue tie is already impossible.
+- **The section renders whenever there is ANY rep history, not just when the
+  chosen period has rows.** Gating on the rows unmounted the whole section
+  the moment you picked an empty period — taking the control that got you
+  there with it, with no way back (hit live: switching to Quarter). The
+  empty state names the period instead.
 - **A TIE IS NOT A RECORD.** `pickRecord` only returns `'new'` on a strict
   `>`, so matching your best is a `watch` — it read "🔥 100% of 1 deal",
   which looks like an achievement. It now says "matched 1 deal · September
@@ -544,12 +572,11 @@ still surfaces the month they beat themselves.
 - Ghost rule as everywhere: hidden from non-admins, and the export builds a
   second `isAdmin: false` list (`sharePb`) so a ghost never leaves the
   building even for an admin who sees them on screen.
-- It renders **only when somebody is in play**. Early in a month nobody is
-  near their best, and a header over an empty row is dead space on a card
-  that gets photographed. It rides in the Copy-table export as its own
-  section band.
-- Known: with sparse history a "record" can be trivial (beating a one-deal
-  month). No arbitrary floor was invented — tune it if real data proves noisy.
+- It rides in the Copy-table export as its own section band, **named with
+  the period** (`Personal bests in play · September 2026`) — a snapshot of
+  one timeframe has to say which. The period pills and stepper arrows carry
+  `data-no-export`, so Copy image drops them but KEEPS the period label,
+  which is the context a slide needs.
 
 Surfaces: **Competitions page** bottom = the
 "📖 Record Book" card (company tiles gold, rep tiles teal, live watch/new
