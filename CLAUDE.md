@@ -545,13 +545,60 @@ biggest part of both: the Dashboard's Rep Leaderboard, its Team Breakdown and
 Performance's per-team rep tables were all the same table drawn three times.
 
 **The scope model (`src/utils/scorecard.js`, pure — the ONE rule for "who am I
-looking at").** One page, four levels: **company → team → rep**, or **company →
-office → rep**. The scope bar is a breadcrumb trail; clicking a table row
+looking at").** One page, five nodes: **company → team → rep**, or **company →
+office → team → rep** (an office can also drill straight to reps). The scope
+bar is a breadcrumb trail; clicking a table row
 scopes the WHOLE page (records, tiles, goal, funnel, drill table, weekly,
 annual trend), not just the table. It rides in the URL as `?scope=team:<id>`
 via `scopeToParam`/`scopeFromParam`, so a team lead can be sent a link that
 opens on their own team. A scope that no longer resolves (a team with no sales
 in range, a rep who left) falls back to company rather than rendering empty.
+- **TEAM INSIDE AN OFFICE (`office-team`)** — per Keaton: "how do I filter by
+  team while viewing office stats? I click on Tucson, but can't filter from
+  there." The two axes never crossed: an office drilled straight to a flat rep
+  list, and a team at company level mixed every office together. Inside an
+  office the `Break down by` pills now offer **Teams | Reps** (Teams is the
+  default — you already chose Offices to get here, so the question is who
+  inside it), and a team row drills to `Company › Tucson › Conner's Team`.
+  - It keys as **`<officeKey>|<teamKey>`** (`officeTeamKey` /
+    `splitOfficeTeam`, split at the LAST `|` since a team key is a uuid or
+    `unassigned`), because neither half identifies the node alone.
+  - `buildPerformance` builds it: each office carries a `teams` Map shaped
+    exactly like the top-level one (totals + reps), surfaced as
+    `office.teamRows`. Revenue/deals land on the OWNER's team; commission
+    follows each rep's own share to that rep's team, so a closer from another
+    team keeps their share on their own row — the same rules as the
+    company-level breakdown, which is why **an office's team rows always sum
+    back to the office total** (asserted: deals, revenue, commission,
+    selfGen, and rep rows to each team).
+  - **DEAL FIGURES ONLY, and `showFunnel` is false**, inherited from the
+    office for the same reason: appointments carry no office.
+  - **A team appears under every office it sold in**, with that office's
+    deals — the same asymmetry reps already had. So Tucson's "Conner's Team"
+    plus Phoenix's is NOT Conner's total; the company-level Teams view is
+    where that lives.
+  - **`node.fullTitle`** (`"<team> · <office>"`) is used anywhere the name
+    travels away from the breadcrumb — the copied table's section row, the
+    leaderboard header, the goal card — because "Jared Aguilar's Team" over
+    Phoenix-only numbers is exactly the two-numbers-for-one-name trap this
+    page exists to prevent. The breadcrumb keeps the bare `title`.
+  - **No goal, and it must not borrow one**: a rep's target is their whole
+    month across every office, so summing member goals here would measure
+    Tucson against a company-wide number. `resolveScopeGoal` returns null and
+    the card falls back to its labelled "Auto: 3-month avg" like rep scope.
+  - The sub-label reads "N reps **here**", not the bare "N reps" the
+    company-level team rows use for roster count — inside an office it can
+    only mean "worked in this office".
+  - `officeGroup` is a SEPARATE state from `groupBy`: they share the value
+    `'team'` but mean different things, and clicking into an office from the
+    Offices view would otherwise land on a grouping that level does not have.
+- **A SHARED `?scope=` LINK ONLY WORKS BECAUSE THE STALE-SCOPE RESET WAITS FOR
+  `loading`.** `buildPerformance` always returns an object, so on the first
+  render — before the deals arrive — every scope resolved to null, the reset
+  fired, and `?scope` was wiped from the URL. That silently broke EVERY shared
+  scope link, the documented "send a team lead their own team" feature
+  included; it was found while testing the office-team link and fixed by
+  guarding the effect on `loading`. Do not drop that guard.
 - `buildPerformance` (perfSummary.js) still computes EVERYTHING — org, offices
   and teams with rep rows. `pickScope` only SELECTS the node; nothing here
   recomputes a metric. `applyScopeFilters` in the page is the chokepoint that
@@ -564,7 +611,8 @@ in range, a rep who left) falls back to company rather than rendering empty.
 - **Offices are a GROUPING, not a separate block** — the old two tall by-office
   cards are gone; `Break down by: Teams | Offices` re-groups the same table
   with the same columns, and the total row proves the offices sum to the
-  company, which the side-by-side cards never showed.
+  company, which the side-by-side cards never showed. Inside an office the
+  same pills offer `Teams | Reps` — see the office-team note above.
 - **`showFunnel` is FALSE at office scope**, and says why on the page. Office is
   a property of the DEAL; doors and appointments are keyed by RepCard to a rep
   and a DAY with no office on them. A rep who sells in two offices has one pile

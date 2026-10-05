@@ -111,11 +111,17 @@ export default function Dashboard() {
   const [activePreset, setActivePreset] = useState('mtd')
   const [teamChanges,  setTeamChanges]  = useState([])
   const [copied,       setCopied]       = useState(false)
-  // WHO am I looking at: company | team | office | rep. One control replaces
-  // the old team dropdown AND the Performance page's team sections, and it
-  // drives every block below — tiles, goal, funnel, table, both charts.
+  // WHO am I looking at: company | team | office | office-team | rep. One
+  // control replaces the old team dropdown AND the Performance page's team
+  // sections, and it drives every block below — tiles, goal, funnel, table,
+  // both charts.
   const [scope,        setScope]        = useState(() => scopeFromParam(searchParams.get('scope')))
-  const [groupBy,      setGroupBy]      = useState('team')     // company level only
+  const [groupBy,      setGroupBy]      = useState('team')     // company level: team | office
+  // Inside an OFFICE: team | rep. Kept separate from `groupBy` rather than
+  // overloading it — they share the value 'team' but mean different things,
+  // and clicking into an office from the Offices view would otherwise land on
+  // a grouping that level does not have.
+  const [officeGroup,  setOfficeGroup]  = useState('team')
   const [showActivity, setShowActivity] = useState(false)      // extra door/appointment columns
   const [leads,        setLeads]        = useState([])
   const [officeGoals,  setOfficeGoals]  = useState({})   // { '': company, Phoenix: n, … }
@@ -255,11 +261,20 @@ export default function Dashboard() {
 
   // A scope can go stale — a team with no sales this range, a rep who left.
   // Fall back to company rather than render an empty page.
-  const node = useMemo(() => pickScope(perf, scope, groupBy) || pickScope(perf, COMPANY, groupBy),
-    [perf, scope, groupBy])
+  // Which grouping applies depends only on the SCOPE's level, which is known
+  // without the node — so there is no chicken-and-egg with pickScope.
+  const grouping = scope?.level === 'office' ? officeGroup : groupBy
+  const node = useMemo(() => pickScope(perf, scope, grouping) || pickScope(perf, COMPANY, groupBy),
+    [perf, scope, grouping, groupBy])
   useEffect(() => {
-    if (!isCompany(scope) && perf && !pickScope(perf, scope, groupBy)) setScope(COMPANY)
-  }, [perf, scope, groupBy])
+    // GUARD ON `loading`, not just on `perf`: buildPerformance always returns
+    // an object, so during the first render — before the deals arrive — every
+    // scope resolves to null and this reset fired instantly, wiping `?scope`
+    // from the URL. That silently broke EVERY shared scope link ("send a team
+    // lead a link that opens on their own team"), not only the new one.
+    if (loading) return
+    if (!isCompany(scope) && perf && !pickScope(perf, scope, grouping)) setScope(COMPANY)
+  }, [loading, perf, scope, grouping])
 
   const goalInfo = useMemo(() => resolveScopeGoal(node, {
     companyGoal: officeGoals[''] ?? null, officeGoals,
@@ -273,12 +288,16 @@ export default function Dashboard() {
   const goalOfficeKey = node?.level === 'office' ? node.title : ''
   const canEditThisGoal = canEditGoal && (node?.level === 'company' || node?.level === 'office')
 
-  // Breadcrumb trail — Company › Team › Rep, each step clickable.
+  // Breadcrumb trail — Company › Team › Rep, or Company › Office › Team,
+  // each step clickable.
   const trail = useMemo(() => {
     const t = [{ label: 'Company', scope: COMPANY }]
     if (!node || node.level === 'company') return t
     if (node.level === 'rep' && node.parentTeam) {
       t.push({ label: node.parentTeam.label, scope: { level: 'team', key: node.parentTeam.key } })
+    }
+    if (node.level === 'office-team' && node.parentOffice) {
+      t.push({ label: node.parentOffice.label, scope: { level: 'office', key: node.parentOffice.key } })
     }
     t.push({ label: node.title, scope: null })
     return t
@@ -328,7 +347,7 @@ export default function Dashboard() {
       st.markupPct != null ? st.markupPct.toFixed(1) + '%' : '',
       fmt(st.commission)]
     const rows = [
-      { section: `${node.title} · ${dateFrom} to ${dateTo}` },
+      { section: `${node.fullTitle || node.title} · ${dateFrom} to ${dateTo}` },
       ...(node.children.length ? node.children.map(c => line(c.label, c.stats)) : []),
       line('TOTAL', node.stats),
     ]
@@ -538,7 +557,10 @@ export default function Dashboard() {
 
 
   const maxWeekRevLocal  = maxWeekRev
-  const scopeName = node && node.level !== 'company' ? node.title : null
+  // The name used AWAY from the breadcrumb (card headers, the copied
+  // table): office-team qualifies itself with the office, since nothing
+  // else next to those is saying which one.
+  const scopeName = node && node.level !== 'company' ? (node.fullTitle || node.title) : null
 
   return (
     <div className="space-y-4 pb-6">
@@ -859,17 +881,28 @@ export default function Dashboard() {
         <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
           <div className="flex items-center justify-between gap-2 flex-wrap mb-3">
             <div className="flex items-center gap-1.5 flex-wrap">
-              {node.level === 'company' ? (
+              {node.level === 'company' || node.level === 'office' ? (
                 <>
                   <span className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mr-1">Break down by</span>
-                  {['team', 'office'].map(g => (
-                    <button key={g} onClick={() => setGroupBy(g)}
-                      className={`px-2.5 py-1 rounded-full text-[11px] transition-colors ${groupBy === g
-                        ? 'bg-teal text-dark font-semibold' : 'text-white/45 hover:text-white'}`}
-                      style={groupBy === g ? undefined : { border: '1px solid #3a3a3a' }}>
-                      {g === 'team' ? 'Teams' : 'Offices'}
-                    </button>
-                  ))}
+                  {/* Inside an OFFICE the choice is Teams or Reps — the two
+                      axes never crossed before, so picking Tucson dropped you
+                      straight into a flat rep list with no way back to teams
+                      (per Keaton). */}
+                  {(node.level === 'company' ? ['team', 'office'] : ['team', 'rep']).map(g => {
+                    const on = grouping === g
+                    const set = node.level === 'company' ? setGroupBy : setOfficeGroup
+                    return (
+                      <button key={g} onClick={() => set(g)}
+                        className={`px-2.5 py-1 rounded-full text-[11px] transition-colors ${on
+                          ? 'bg-teal text-dark font-semibold' : 'text-white/45 hover:text-white'}`}
+                        style={on ? undefined : { border: '1px solid #3a3a3a' }}>
+                        {g === 'team' ? 'Teams' : g === 'office' ? 'Offices' : 'Reps'}
+                      </button>
+                    )
+                  })}
+                  {node.level === 'office' && (
+                    <span className="text-[10px] text-white/25 ml-1">in {node.title}</span>
+                  )}
                 </>
               ) : (
                 <h3 className="text-[13px] md:text-[14px] font-semibold text-white">
@@ -1034,7 +1067,7 @@ export default function Dashboard() {
           <div className="flex items-start justify-between gap-2 flex-wrap mb-3">
             <div>
               <h3 className="text-[13px] md:text-[14px] font-semibold text-white">
-                Rep Leaderboard{node && node.level !== 'company' ? ` — ${node.title}` : ''}
+                Rep Leaderboard{scopeName ? ` — ${scopeName}` : ''}
               </h3>
               <p className="text-[11px] text-white/30 mt-0.5">
                 {repBoard.length} {repBoard.length === 1 ? 'rep' : 'reps'} with activity · tap a column to rank by it ·

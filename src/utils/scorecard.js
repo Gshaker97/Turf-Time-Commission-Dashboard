@@ -21,6 +21,13 @@
 // `showFunnel` is false at office scope for that reason; inventing an
 // attribution (say, the office where most of their deals landed) would put a
 // confident number on a guess.
+//
+// There is a FIFTH node, `office-team` — one team's work inside one office
+// (per Keaton: "how do I filter by team while viewing office stats?"). The two
+// axes used never cross: offices drilled straight to reps, and a team at
+// company level mixed every office together. It keys as `<officeKey>|<teamKey>`
+// because neither half identifies it alone, and it inherits the office's
+// funnel rule for the asymmetry above.
 
 import { saleOwnerId, teamOfSale } from './team'
 import { countsInTotals } from './commission'
@@ -28,6 +35,19 @@ import { countsInTotals } from './commission'
 export const COMPANY = { level: 'company', key: null }
 
 export const isCompany = (scope) => !scope || scope.level === 'company'
+
+const OFFICE_FUNNEL_NOTE =
+  'Doors and appointments are recorded against a rep and a day, never an office, so they cannot be split this way. Open a team or a rep to see them.'
+
+// `<officeKey>|<teamKey>`. Split at the LAST separator: a team key is a uuid
+// or 'unassigned' and can never contain one, while an office name in theory
+// could.
+export const officeTeamKey = (officeKey, teamKey) => `${officeKey}|${teamKey}`
+export function splitOfficeTeam(key) {
+  const s = String(key || '')
+  const i = s.lastIndexOf('|')
+  return i < 0 ? [s, ''] : [s.slice(0, i), s.slice(i + 1)]
+}
 
 // A stable, shareable token for the scope — this is what goes in the URL so a
 // team lead can be sent straight to their own team.
@@ -41,7 +61,7 @@ export function scopeFromParam(param) {
   const i = s.indexOf(':')
   if (i < 0) return COMPANY
   const level = s.slice(0, i), key = s.slice(i + 1)
-  if (!key || !['team', 'office', 'rep'].includes(level)) return COMPANY
+  if (!key || !['team', 'office', 'office-team', 'rep'].includes(level)) return COMPANY
   return { level, key }
 }
 
@@ -50,9 +70,16 @@ export function scopeFromParam(param) {
 export function scopeFilter(scope, teamCtx) {
   if (isCompany(scope)) return () => true
   const { usersById = {}, heads = new Set(), changesByProfile = {} } = teamCtx || {}
-  if (scope.level === 'office') {
-    const want = String(scope.key || '').trim().toLowerCase()
-    return (d) => String(d.office || '').trim().toLowerCase() === want
+  const inOffice = (want) => (d) => String(d.office || '').trim().toLowerCase() === want
+  const onTeam = (want) => (d) =>
+    teamOfSale(saleOwnerId(d), d.sale_date, usersById, heads, changesByProfile) === want
+  if (scope.level === 'office') return inOffice(String(scope.key || '').trim().toLowerCase())
+  if (scope.level === 'office-team') {
+    // BOTH, which is the whole point of the node — the deal was sold in this
+    // office AND its owner was on this team on the day it sold.
+    const [ok, tk] = splitOfficeTeam(scope.key)
+    const office = inOffice(String(ok).trim().toLowerCase()), team = onTeam(tk)
+    return (d) => office(d) && team(d)
   }
   if (scope.level === 'rep') {
     // Owner-credited, matching how revenue is counted everywhere else: the
@@ -61,15 +88,22 @@ export function scopeFilter(scope, teamCtx) {
   }
   // team — date-effective, so moving a rep never rewrites which team a past
   // sale belongs to.
-  return (d) => teamOfSale(saleOwnerId(d), d.sale_date, usersById, heads, changesByProfile) === scope.key
+  return onTeam(scope.key)
 }
 
 // The node a scope points at, plus its children for the drill table.
-//   groupBy — only consulted at company level: 'team' | 'office'.
+//   groupBy — how to split the CURRENT node's children. At company level it is
+//   'team' | 'office'; inside an office it is 'team' | 'rep'. Every other level
+//   has one natural child kind and ignores it.
 // Returns null when the scope names something the current range has no data
 // for (a team with no sales, a rep who left), so the page can fall back.
 export function pickScope(perf, scope, groupBy = 'team') {
   if (!perf) return null
+
+  const repChild = (r) => ({
+    kind: 'rep', key: r.id, label: r.name, stats: r, prev: r.prev,
+    ghost: r.ghost, drillable: true,
+  })
 
   if (isCompany(scope)) {
     const children = groupBy === 'office'
@@ -94,17 +128,51 @@ export function pickScope(perf, scope, groupBy = 'team') {
   if (scope.level === 'office') {
     const o = perf.offices.find(x => x.key === scope.key)
     if (!o) return null
+    // Teams by default: at company level you already chose Offices to get
+    // here, so the question being asked is almost always "who inside it".
+    const byTeam = groupBy !== 'rep'
+    const children = byTeam
+      ? (o.teamRows || []).map(t => ({
+          kind: 'office-team', key: officeTeamKey(o.key, t.key), label: t.label,
+          stats: t.totals, prev: t.prev,
+          // "N reps HERE", not the roster count the company-level team rows
+          // show — inside an office it can only mean "worked in this office",
+          // and reusing the bare words for a different meaning is how the
+          // Dashboard ended up with two definitions of "Set" in the first place.
+          sub: t.rows.length ? `${t.rows.length} rep${t.rows.length === 1 ? '' : 's'} here` : null,
+          drillable: true,
+        }))
+      : (o.rows || []).map(repChild)
     return {
       level: 'office', key: o.key, title: o.name,
       stats: o, prev: o.prev,
-      children: (o.rows || []).map(r => ({
-        kind: 'rep', key: r.id, label: r.name, stats: r, prev: r.prev,
-        ghost: r.ghost, drillable: true,
-      })),
-      childKind: 'Reps',
+      children, childKind: byTeam ? 'Teams' : 'Reps',
       // See the header note — an office has no appointment or door figures.
       showFunnel: false,
-      funnelNote: 'Doors and appointments are recorded against a rep and a day, never an office, so they cannot be split this way. Open a team or a rep to see them.',
+      funnelNote: OFFICE_FUNNEL_NOTE,
+    }
+  }
+
+  if (scope.level === 'office-team') {
+    const [ok, tk] = splitOfficeTeam(scope.key)
+    const o = perf.offices.find(x => x.key === ok)
+    if (!o) return null
+    const t = (o.teamRows || []).find(x => x.key === tk)
+    if (!t) return null
+    return {
+      level: 'office-team', key: scope.key, title: t.label,
+      // Anywhere the name travels away from the breadcrumb — a copied table,
+      // the leaderboard header, the goal card — it has to carry the office or
+      // it reads as the team's WHOLE number while showing one office's slice.
+      // That is the two-numbers-for-one-name trap this page exists to avoid.
+      fullTitle: `${t.label} · ${o.name}`,
+      stats: t.totals, prev: t.prev,
+      children: t.rows.map(repChild), childKind: 'Reps',
+      // Inherited from the office: the appointments behind these deals carry
+      // no office, so they cannot be shown for a slice of one.
+      showFunnel: false,
+      funnelNote: OFFICE_FUNNEL_NOTE,
+      parentOffice: { key: o.key, label: o.name },
     }
   }
 
@@ -115,9 +183,8 @@ export function pickScope(perf, scope, groupBy = 'team') {
       level: 'team', key: t.key, title: t.label,
       stats: t.totals, prev: t.prev,
       children: t.rows.map(r => ({
-        kind: 'rep', key: r.id, label: r.name, stats: r, prev: r.prev,
-        ghost: r.ghost, sub: r.isHead ? 'lead' : (r.member ? null : 'moved teams'),
-        drillable: true,
+        ...repChild(r),
+        sub: r.isHead ? 'lead' : (r.member ? null : 'moved teams'),
       })),
       childKind: 'Reps', showFunnel: true,
     }
@@ -153,6 +220,10 @@ export function resolveScopeGoal(node, { companyGoal, officeGoals = {}, repGoals
     return { target: t, source: 'office', editable: true }
   }
   if (node.level === 'rep') return { target: repGoals[node.key] ?? null, source: 'rep', editable: false }
+  // A team's slice of ONE office has no target anywhere, and must not borrow
+  // one: a rep's goal is their whole month across every office, so summing
+  // member goals here would measure Tucson against a company-wide number.
+  if (node.level === 'office-team') return { target: null, source: null, editable: false }
 
   const own = teamGoals[node.key]
   if (own != null) return { target: own, source: 'team', editable: false }
@@ -267,6 +338,11 @@ export function leaderboard(perf, scope, { isAdmin = false } = {}) {
   } else if (scope.level === 'office') {
     const o = perf.offices.find(x => x.key === scope.key)
     rows = (o?.rows || []).map(r => ({ ...r, team: o.name }))
+  } else if (scope.level === 'office-team') {
+    const [ok, tk] = splitOfficeTeam(scope.key)
+    const o = perf.offices.find(x => x.key === ok)
+    const t = (o?.teamRows || []).find(x => x.key === tk)
+    rows = (t?.rows || []).map(r => ({ ...r, team: `${t.label} · ${o.name}` }))
   } else {
     return []       // a single rep is not a leaderboard
   }
