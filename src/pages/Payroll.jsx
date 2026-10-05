@@ -59,11 +59,19 @@ function Card({ label, value, color = '#fff', sub }) {
 // The Adjustments cell: a signed total plus WHY, in as few words as the count
 // allows. One item shows its own note; several show what kind they are, since
 // listing three notes on one row would truncate all of them.
-function adjSummary(adjustments = []) {
+// `dealById` is optional so a single adjustment can NAME ITS JOB, the same
+// thing the pay statement prints — a lone "-$250.00 · Adjustment" on the
+// payee row sends you hunting for which job it was.
+function adjSummary(adjustments = [], dealById = null) {
   if (!adjustments.length) return null
   const neg = adjustments.filter(a => Number(a.amount) < 0).length
   const pos = adjustments.length - neg
-  if (adjustments.length === 1) return adjustments[0].note || 'Adjustment'
+  if (adjustments.length === 1) {
+    const a = adjustments[0]
+    const job = a.deal_id ? dealById?.[a.deal_id]?.deal_name : ''
+    const what = a.note || (a.deal_id ? 'Deduction' : 'Adjustment')
+    return job ? `${job} · ${what}` : what
+  }
   const parts = []
   if (neg) parts.push(`${neg} deduction${neg === 1 ? '' : 's'}`)
   if (pos) parts.push(`${pos} addition${pos === 1 ? '' : 's'}`)
@@ -850,12 +858,17 @@ export default function Payroll() {
       // per Keaton, the statement shows both so nobody has to ask.
       const debt = adj.parent_id ? ledgerById[adj.parent_id] : null
       const line = debt ? recoveryLine(adj, debt) : null
-      const job  = adj.deal_id ? dealById[adj.deal_id]?.deal_name : ''
+      // NAME THE JOB whenever the adjustment references one — not only on a
+      // RECOVERY (`parent_id`). A deduction logged straight onto a run has a
+      // `deal_id` and NO parent, which is the common case from the "Log a
+      // deduction" button, and it used to render as a bare "Adjustment".
+      const job = adj.deal_id ? dealById[adj.deal_id]?.deal_name : ''
       items.push({
         grp: 'adj',
-        deal: debt ? (job || 'Deduction') : 'Adjustment',
+        deal: job || '',
         baseline: '',
-        role: adj.note || (debt ? 'Deduction' : '—'),
+        // Never "—". With no note, say what it is from its shape.
+        role: adj.note || (debt || adj.deal_id ? 'Deduction' : 'Adjustment'),
         pct: '', amount: Number(adj.amount),
       })
       if (line?.detail) items.push({ grp: 'adj', deal: '', baseline: '', role: line.detail, pct: '', amount: 0, dim: true, noAmount: true })
@@ -905,9 +918,21 @@ export default function Payroll() {
       dealRows.map((l, i) => row(l, i === dealRows.length - 1 && !adjRows.length)).join('') +
       (adjRows.length
         ? `<tr><td colspan="5" style="padding:12px 12px 4px;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:#6b7280;font-weight:700;border-top:2px solid #e5e7eb">Adjustments</td></tr>` +
-          adjRows.map((l, i) => `<tr>` +
-            `<td colspan="4" style="padding:8px 12px;font-size:13px;color:#374151;${i === adjRows.length - 1 ? '' : 'border-bottom:1px solid #f3f4f6'}">${esc(l.role)}</td>` +
-            `<td style="padding:8px 12px;font-size:13px;text-align:right;${i === adjRows.length - 1 ? '' : 'border-bottom:1px solid #f3f4f6'}">${money(l.amount)}</td></tr>`).join('')
+          adjRows.map((l, i) => {
+            const bb = i === adjRows.length - 1 ? '' : 'border-bottom:1px solid #f3f4f6'
+            // The JOB NAME is the thing Keaton needs on the cheque — it was
+            // computed above and then thrown away here, so every deduction
+            // read as an unexplained figure.
+            const label = l.deal
+              ? `<span style="font-weight:600;color:#111827">${esc(l.deal)}</span>` +
+                (l.role ? `<span style="color:#6b7280"> · ${esc(l.role)}</span>` : '')
+              : esc(l.role)
+            return l.noAmount
+              ? `<tr><td colspan="5" style="padding:0 12px 8px 24px;font-size:12px;color:#b45309;font-style:italic;${bb}">${esc(l.role)}</td></tr>`
+              : `<tr>` +
+                `<td colspan="4" style="padding:8px 12px;font-size:13px;color:#374151;${bb}">${label}</td>` +
+                `<td style="padding:8px 12px;font-size:13px;text-align:right;${bb}">${money(l.amount)}</td></tr>`
+          }).join('')
         : '') +
       // Net total band
       `<tr><td colspan="4" style="padding:14px 12px;background:#f0fdf9;border-top:2px solid #00b894;font-size:14px;color:#0f2e28;font-weight:800">Net total</td>` +
@@ -1311,7 +1336,7 @@ export default function Payroll() {
                   </div>
 
                   {shownPayees.map(p => {
-                    const why = adjSummary(p.adjustments)
+                    const why = adjSummary(p.adjustments, dealById)
                     const isOpen = openPayees.has(p.id)
                     return (
                       <div key={p.id} className="border-t border-white/5 first:border-t-0">

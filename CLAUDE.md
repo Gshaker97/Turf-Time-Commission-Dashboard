@@ -1593,6 +1593,24 @@ missing concept is a **balance owed**, not another adjustment. It all lives in
   `suggestedTake` = min(remaining, their pay this run) — a starting point, not
   a cap; typing more warns (`wouldGoNegative`) and still allows it. A part
   payment leaves the rest outstanding and it carries to the next run by itself.
+- **EVERY ADJUSTMENT NAMES ITS JOB on the pay statement** (per Keaton: "it
+  doesn't include the job for the deduction on the copied email. I need it to
+  show the name of the job"). Two separate faults produced one bare "—" row:
+  - `copyPayee` RESOLVED the job name into `item.deal` and then the HTML
+    adjustment row rendered only `item.role`, dropping it. The plain-text
+    branch had always printed it, so the two flavours of the same clipboard
+    disagreed.
+  - The job was only looked up for a RECOVERY (`adj.parent_id`). A deduction
+    taken straight onto a run — the common path out of the "Log a deduction"
+    button — has a `deal_id` and NO parent, so it fell to the literal string
+    "Adjustment", and with the note left blank the label resolved to "—".
+  Now: the job is named whenever `deal_id` resolves, regardless of
+  `parent_id`, and the label is `"<job> · <note or Deduction>"`. **The
+  separator is a MIDDOT, not an em dash** — deal names themselves contain one
+  ("Whitaker — 9 Birchwood Ct"), so an em dash split the line into three
+  fragments. `adjSummary(adjustments, dealById)` does the same on the
+  on-screen payee row; it takes `dealById` optionally for exactly that.
+  **Never render a money line whose only label is "—".**
 - **A partial take shows BOTH numbers on the cheque** (per Keaton):
   `recoveryLine(recovery, debt)` renders "partial — $310.00 of $640.00,
   $330.00 still owed" on the payee row, the pay statement (plain text AND the
