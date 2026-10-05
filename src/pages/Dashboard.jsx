@@ -326,9 +326,9 @@ export default function Dashboard() {
   // admin who can see them on screen: it leaves the building.
   const [copiedBoard, setCopiedBoard] = useState(false)
   async function copyLeaderboard() {
-    const cols = ['#', 'Rep', 'Revenue', 'Total Revenue', 'Deals', 'Self-Gen', 'Lead Closes', 'Commission']
+    const cols = ['#', 'Rep', 'Revenue', 'Total Revenue', 'Set Deals', 'Self-Gen', 'Leads Closed', 'Commission']
     const rows = repBoard.filter(r => !r.ghost).map((r, i) =>
-      [i + 1, r.name, fmt(r.revenue), fmt(r.totalRevenue), r.deals, r.selfGen, r.leadCloses, fmt(r.commission)])
+      [i + 1, r.name, fmt(r.revenue), fmt(r.totalRevenue), r.setForOthers, r.selfGen, r.leadCloses, fmt(r.commission)])
     if (await copyRichTable(cols, rows, { rightFrom: 2 })) {
       setCopiedBoard(true); setTimeout(() => setCopiedBoard(false), 1800)
     }
@@ -1065,10 +1065,19 @@ export default function Dashboard() {
           TEAMS at company level, so this is the only place individuals are
           visible at a glance. It follows the scope like everything else.
 
-          NOTE the column is "Set (passed)", never bare "Set": on this same
-          page "Set" already means APPOINTMENTS in the funnel above, and two
-          meanings for one word is the exact problem the merge existed to
-          kill. Here it is a DEAL they set that another rep closed. */}
+          NOTE the three counts are MUTUALLY EXCLUSIVE and none contains
+          another (per Keaton — the old layout had "Deals" as a TOTAL with
+          Self-Gen nested inside it and Lead Closes outside it, two levels in
+          one header row, and "Deals 7 · Lead Closes 19" read like the 7 was
+          wrong). Every deal a rep touched lands in exactly one:
+            Set Deals    — they set it, someone else closed it
+            Self-Gen     — they set AND closed it
+            Leads Closed — someone else set it, they closed it
+          Deals they OWN = Set Deals + Self-Gen, and that is what Revenue is
+          the revenue of; Leads Closed is what Total Revenue adds on top.
+          "Set Deals" is never bare "Set": on this same page "Set" means
+          APPOINTMENTS in the funnel above, and two meanings for one word is
+          the exact problem the merge existed to kill. */}
       {repBoard.length > 0 && (
         <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
           <div className="flex items-start justify-between gap-2 flex-wrap mb-3">
@@ -1078,7 +1087,7 @@ export default function Dashboard() {
               </h3>
               <p className="text-[11px] text-white/30 mt-0.5">
                 {repBoard.length} {repBoard.length === 1 ? 'rep' : 'reps'} with activity · tap a column to rank by it ·
-                Total Revenue includes deals they closed for another setter
+                Set Deals + Self-Gen are the deals they own · Leads Closed is what Total Revenue adds on top
               </p>
             </div>
             <button onClick={copyLeaderboard}
@@ -1100,12 +1109,12 @@ export default function Dashboard() {
                     title="Revenue on the deals they OWN — what they set, or closed with no setter recorded" />
                   <SortTh label="Total Revenue" col="totalRevenue" sort={boardSort} onSort={toggleBoardSort}
                     title="Every deal they were involved in: their own, plus the ones they closed for another setter. A self-gen counts once. Per-person — do not add these up across a team, since a deal whose setter AND closer are both on it would count twice." />
-                  <SortTh label="Deals" col="deals" sort={boardSort} onSort={toggleBoardSort}
-                    title="Deals they own = Self-Gen + the ones they set and passed to a closer" />
+                  <SortTh label="Set Deals" col="setForOthers" sort={boardSort} onSort={toggleBoardSort}
+                    title="They set it, another rep closed it — the setter keeps the deal and its revenue" />
                   <SortTh label="Self-Gen" col="selfGen" sort={boardSort} onSort={toggleBoardSort}
-                    title="Deals they set AND closed themselves" />
-                  <SortTh label="Lead Closes" col="leadCloses" sort={boardSort} onSort={toggleBoardSort}
-                    title="Deals another rep set that they closed — the setter still owns the deal" />
+                    title="They set AND closed it themselves" />
+                  <SortTh label="Leads Closed" col="leadCloses" sort={boardSort} onSort={toggleBoardSort}
+                    title="Another rep set it, they closed it — the setter still owns the deal" />
                   <SortTh label="Commission" col="commission" sort={boardSort} onSort={toggleBoardSort} />
                 </tr>
               </thead>
@@ -1131,9 +1140,9 @@ export default function Dashboard() {
                         <span className="block text-[10px] text-white/30 font-normal">+{fmt(r.leadRevenue)} closed</span>
                       )}
                     </td>
-                    <td className="text-right py-2 px-2 tabular-nums text-white/70">{r.deals}</td>
-                    <td className="text-right py-2 px-2 tabular-nums text-white/50">{r.selfGen}</td>
-                    <td className="text-right py-2 px-2 tabular-nums text-white/50">{r.leadCloses}</td>
+                    <td className="text-right py-2 px-2 tabular-nums text-white/70">{r.setForOthers}</td>
+                    <td className="text-right py-2 px-2 tabular-nums text-white/70">{r.selfGen}</td>
+                    <td className="text-right py-2 px-2 tabular-nums text-white/70">{r.leadCloses}</td>
                     <td className="text-right py-2 px-2 tabular-nums text-white/70">{fmt(r.commission)}</td>
                   </tr>
                 ))}
