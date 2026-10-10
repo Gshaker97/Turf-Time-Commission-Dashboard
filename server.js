@@ -24,6 +24,7 @@ import {
   computeAudit, parseSetterName, cleanRep, resolvePerson, saleTypeFromLead,
   AUDIT_ITEM_KEYS, MANUAL_ITEM_KEYS,
 } from './src/utils/dealAudit7.js'
+import { dealNeedsReview } from './src/utils/needsReview.js'
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), 'dist')
 const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '')
@@ -1130,15 +1131,13 @@ async function handleAuditQueue(rawBody) {
   let sheet; try { sheet = await readInstallSheet() } catch (e) { return err(e.message) }
   const { profiles, usersById } = await loadRosterForAudit()
   const cutoff = await auditDataStart()
-  // The "Needs review" queue: not gold-checked (or carrying a change alert),
-  // not canceled/hidden, not legacy.
-  const deals = await restGet(
-    `/rest/v1/deals?select=${DEAL_COLS}&or=(commission_verified.eq.false,change_alert.not.is.null)&sale_date=gte.${cutoff}&order=sale_date.desc`)
+  // The queue is EXACTLY the frontend's Deals → Needs review set: fetch all
+  // deals and filter with the shared dealNeedsReview() (same rule, same
+  // data-start-date + dealMissingInfo conditions, canceled/hidden excluded).
+  const all = await restGet(`/rest/v1/deals?select=${DEAL_COLS}&order=sale_date.desc`)
+  const deals = all.filter(d => dealNeedsReview(d, cutoff))
   const audits = []
   for (const d of deals) {
-    const st = String(d.status || '').trim().toLowerCase()
-    if (st === 'canceled' || st === 'cancelled') continue
-    if (d.hidden === true) continue
     try { audits.push(await auditOneDeal(d, sheet, profiles, usersById, caller.id)) }
     catch (e) { audits.push({ deal_id: d.id, deal_name: d.deal_name, error: e.message }) }
   }
