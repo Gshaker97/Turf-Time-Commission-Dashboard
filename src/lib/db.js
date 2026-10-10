@@ -940,3 +940,50 @@ function demoTeamMonthSummary(teamId, year, month, profile) {
     members:     memberRows,
   }
 }
+
+// ── Deal audit (migration 054; server endpoints in server.js) ───────────────
+// All writes run server-side with the service key after verifying the caller
+// is an admin or Keaton — the browser only ever sends its session token.
+async function auditPost(pathname, payload) {
+  if (DEMO_MODE) return { ok: false, error: 'Disabled in demo mode.' }
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session?.access_token) return { ok: false, error: 'Not signed in.' }
+  try {
+    const resp = await fetch(pathname, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ token: session.access_token, ...payload }),
+    })
+    return await resp.json()
+  } catch (e) { return { ok: false, error: e.message || 'Request failed.' } }
+}
+export const auditDeal  = (dealId) => auditPost('/api/audit/deal', { deal_id: dealId })
+export const auditQueue = () => auditPost('/api/audit/queue', {})
+export const setChecklistItem = (dealId, itemKey, checked) =>
+  auditPost('/api/audit/check', { deal_id: dealId, item_key: itemKey, checked })
+
+// Stored checklist rows for a set of deals → { [deal_id]: { [item_key]: row } }.
+export async function fetchDealChecklists(dealIds) {
+  if (DEMO_MODE || !dealIds || !dealIds.length) return { data: {}, error: null }
+  const { data, error } = await supabase
+    .from('deal_checklist')
+    .select('deal_id,item_key,checked,source,checked_by,checked_at,note')
+    .in('deal_id', dealIds)
+  if (error) return { data: {}, error }
+  const by = {}
+  for (const r of data || []) { (by[r.deal_id] = by[r.deal_id] || {})[r.item_key] = r }
+  return { data: by, error: null }
+}
+
+// Deals a rep set or closed that have NO manager assigned — for the team-
+// assignment backfill modal. Writes go through updateDeal (admin RLS).
+export async function fetchNullManagerDeals(repId) {
+  if (DEMO_MODE || !repId) return { data: [], error: null }
+  const { data, error } = await supabase
+    .from('deals')
+    .select('*')
+    .is('manager_id', null)
+    .or(`setter_id.eq.${repId},closer_id.eq.${repId}`)
+    .order('sale_date', { ascending: false })
+  return { data: data || [], error }
+}

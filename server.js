@@ -17,8 +17,13 @@
  */
 import express from 'express'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { dealAmounts, setOverrideRateSchedule } from './src/utils/commission.js'
+import {
+  computeAudit, parseSetterName, cleanRep, resolvePerson, saleTypeFromLead,
+  AUDIT_ITEM_KEYS, MANUAL_ITEM_KEYS,
+} from './src/utils/dealAudit7.js'
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), 'dist')
 const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '')
@@ -32,6 +37,18 @@ async function restGet(pathname) {
   if (!resp.ok) throw new Error(`Lookup failed (${resp.status}): ${(await resp.text()).slice(0, 200)}`)
   return resp.json()
 }
+
+async function restWrite(method, pathname, body, prefer) {
+  const resp = await fetch(SUPABASE_URL + pathname, {
+    method,
+    headers: { ...jsonHeaders, ...(prefer ? { Prefer: prefer } : {}) },
+    body: JSON.stringify(body),
+  })
+  if (!resp.ok) throw new Error(`Write failed (${resp.status}): ${(await resp.text()).slice(0, 200)}`)
+  const text = await resp.text()
+  return text ? JSON.parse(text) : null
+}
+const restPatch = (pathname, body) => restWrite('PATCH', pathname, body, 'return=minimal')
 
 const ok  = (data) => ({ ok: true, ...data })
 const err = (msg)  => ({ ok: false, error: msg })
@@ -840,6 +857,316 @@ async function routeCrmEvents(rawBody, arrivedAt) {
   return result
 }
 
+// ── Deal audit — install sheet (read-only) + 7-item checklist ───────────────
+// Reads the install Google Sheet with a service account (server-side only;
+// never exposed to the browser), matches each deal to its booking, and persists
+// the auto-check results into deal_checklist. See src/utils/dealAudit7.js.
+const INSTALL_SHEET_ID = (process.env.INSTALL_SHEET_ID || '').trim()
+const AUDIT_TABS = ['Jobs', 'Schedule']
+
+let _sheetCache = { at: 0, data: null }
+let _googleToken = { token: null, exp: 0 }
+
+const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_')
+
+// Service-account access token (RS256 JWT → oauth2), cached until ~1m before
+// expiry. No google client library needed — Node's crypto signs the assertion.
+async function googleAccessToken() {
+  if (_googleToken.token && Date.now() < _googleToken.exp - 60000) return _googleToken.token
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON
+  if (!raw) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is not set on the site service')
+  let sa
+  try { sa = JSON.parse(raw) } catch { throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON') }
+  if (!sa.client_email || !sa.private_key) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON missing client_email/private_key')
+  const now = Math.floor(Date.now() / 1000)
+  const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
+  const claim = b64url(JSON.stringify({
+    iss: sa.client_email,
+    scope: 'https://www.googleapis.com/auth/spreadsheets.readonly',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: now, exp: now + 3600,
+  }))
+  const signer = crypto.createSign('RSA-SHA256')
+  signer.update(`${header}.${claim}`)
+  const assertion = `${header}.${claim}.${b64url(signer.sign(sa.private_key))}`
+  const resp = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion }),
+  })
+  if (!resp.ok) throw new Error(`Google token failed (${resp.status}): ${(await resp.text()).slice(0, 160)}`)
+  const j = await resp.json()
+  _googleToken = { token: j.access_token, exp: Date.now() + (Number(j.expires_in) || 3600) * 1000 }
+  return _googleToken.token
+}
+
+function parseTab(rows) {
+  if (!rows || rows.length < 2) return { headers: [], rows: [] }
+  const headers = rows[0].map(x => String(x || '').trim())
+  const out = []
+  for (let r = 1; r < rows.length; r++) {
+    const o = {}
+    headers.forEach((h, i) => { o[h] = rows[r][i] != null ? String(rows[r][i]) : '' })
+    out.push(o)
+  }
+  return { headers, rows: out }
+}
+
+// Both tabs in one values.batchGet, cached 60s.
+async function readInstallSheet() {
+  if (_sheetCache.data && Date.now() - _sheetCache.at < 60000) return _sheetCache.data
+  if (!INSTALL_SHEET_ID) throw new Error('INSTALL_SHEET_ID is not set on the site service')
+  const token = await googleAccessToken()
+  const qs = AUDIT_TABS.map(t => `ranges=${encodeURIComponent(t)}`).join('&')
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${INSTALL_SHEET_ID}/values:batchGet?${qs}&majorDimension=ROWS`
+  const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+  if (!resp.ok) throw new Error(`Install sheet read failed (${resp.status}): ${(await resp.text()).slice(0, 160)}`)
+  const j = await resp.json()
+  const byTab = {}
+  for (const vr of j.valueRanges || []) {
+    const tab = String(vr.range || '').split('!')[0].replace(/^'|'$/g, '')
+    byTab[tab] = vr.values || []
+  }
+  const data = { jobs: parseTab(byTab.Jobs), schedule: parseTab(byTab.Schedule) }
+  _sheetCache = { at: Date.now(), data }
+  return data
+}
+
+// A sheet date cell → 'YYYY-MM-DD' (date only). Handles ISO, M/D/YYYY, and a
+// parseable date (resolved in Phoenix). null when unparseable/empty.
+function toYMD(v) {
+  const s = String(v || '').trim()
+  if (!s) return null
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/)
+  if (m) {
+    let [, mo, d, y] = m
+    if (y.length === 2) y = '20' + y
+    return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+  }
+  const dt = new Date(s)
+  if (!isNaN(dt.getTime())) {
+    const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Phoenix', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(dt)
+    const g = (t) => p.find(x => x.type === t).value
+    return `${g('year')}-${g('month')}-${g('day')}`
+  }
+  return null
+}
+
+// Match ONE deal to its calendar booking (see the prompt's matching rules).
+function buildBooking(deal, sheet, profiles) {
+  const dealPid = String(deal.project_id || '').trim()
+  if (!dealPid) return { onCalendar: false, matched: false }
+
+  const jIx = {}
+  for (const j of sheet.jobs.rows) {
+    const pid = String(j['Proposal ID'] || '').trim()
+    if (!pid) continue
+    jIx[pid] = {
+      projectId: String(j['Project ID'] || '').trim(),
+      phone: String(j['Customer Phone'] || '').trim(),
+      address: String(j['Install Address'] || '').trim(),
+    }
+  }
+
+  const cands = []
+  sheet.schedule.rows.forEach((row, i) => {
+    const prop = String(row['Proposal ID'] || '').trim()
+    if (!prop || prop.indexOf('CAL-') === 0) return
+    const job = jIx[prop]
+    const projectId = job && job.projectId ? job.projectId : prop
+    if (projectId === dealPid || prop === dealPid) cands.push({ row, i, job })
+  })
+  if (!cands.length) return { onCalendar: false, matched: false }
+
+  const isCancelled = (c) => String(c.row['Status'] || '').trim().toUpperCase() === 'CANCELLED'
+  const live = cands.filter(c => !isCancelled(c))
+  // Most recent non-cancelled wins (later sheet row = more recent); if all are
+  // cancelled, treat as not on the calendar.
+  if (!live.length) return { onCalendar: false, matched: true, allCancelled: true }
+  const win = live.reduce((a, b) => (b.i >= a.i ? b : a))
+
+  const row = win.row
+  const lead = String(row['Lead Source'] || '').trim()
+  const closerName = cleanRep(row['Sales Rep'])
+  const setterName = parseSetterName(lead) || closerName
+  const setterP = resolvePerson(setterName, profiles)
+  const closerP = resolvePerson(closerName, profiles)
+  return {
+    onCalendar: true,
+    matched: true,
+    installDate: toYMD(row['Install Date']),
+    status: String(row['Status'] || '').trim(),
+    leadSourceRaw: lead || null,
+    saleType: saleTypeFromLead(lead),
+    setterName, closerName,
+    setterId: setterP ? setterP.id : null,
+    closerId: closerP ? closerP.id : null,
+    setterResolved: !!setterP,
+    closerResolved: !!closerP,
+    payment: String(row['Payment'] || '').trim() || null,
+    customerPhone: win.job ? win.job.phone : '',
+    customerAddress: win.job ? win.job.address : '',
+  }
+}
+
+// Authenticate + authorize the caller as an admin OR Keaton (same rule as the
+// /audit page). Returns the caller profile, or throws a message string.
+async function verifyAuditor(body) {
+  if (!body.token) throw new Error('Not signed in')
+  const meResp = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${body.token}` },
+  })
+  if (!meResp.ok) throw new Error('Session invalid — sign in again')
+  const authId = (await meResp.json()).id
+  const caller = (await restGet(`/rest/v1/profiles?select=id,name,email,role,is_admin,active&auth_id=eq.${authId}`))[0]
+  const isKeaton = caller && (String(caller.email || '').toLowerCase() === 'keaton@turftime.com' || caller.name === 'Keaton Shaker')
+  if (!caller || caller.active === false || !(caller.role === 'admin' || caller.is_admin === true || isKeaton)) {
+    throw new Error('Admins (or Keaton) only')
+  }
+  return caller
+}
+
+async function auditDataStart() {
+  try {
+    const r = await restGet(`/rest/v1/app_settings?select=value&key=eq.data_start_date`)
+    const v = r[0] && r[0].value
+    return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : '2026-06-01'
+  } catch { return '2026-06-01' }
+}
+
+// Run the audit for ONE deal (deal object already loaded), with the shared
+// sheet + roster. Persists auto items, backfills contact info, flips the deal
+// to Deal Reviewed when all 7 are checked. Returns the per-item result.
+async function auditOneDeal(deal, sheet, profiles, usersById, callerId) {
+  const booking = buildBooking(deal, sheet, profiles)
+
+  // Item 5 backfill: fill empty contact fields from the Jobs tab, never
+  // overwrite a non-empty value. Informational only.
+  if (booking.matched) {
+    const patch = {}
+    if (!String(deal.customer_phone || '').trim() && booking.customerPhone) patch.customer_phone = booking.customerPhone
+    if (!String(deal.customer_address || '').trim() && booking.customerAddress) patch.customer_address = booking.customerAddress
+    if (Object.keys(patch).length) {
+      await restPatch(`/rest/v1/deals?id=eq.${deal.id}`, patch)
+      Object.assign(deal, patch)
+    }
+  }
+
+  const { items } = computeAudit(deal, booking, usersById)
+
+  // Existing checklist rows for this deal.
+  const existing = {}
+  for (const row of await restGet(`/rest/v1/deal_checklist?select=item_key,checked,source,note&deal_id=eq.${deal.id}`)) {
+    existing[row.item_key] = row
+  }
+
+  // Persist AUTO items only — manual items are never touched by the audit.
+  for (const it of items) {
+    if (it.manual) continue
+    const want = !!it.pass
+    const prev = existing[it.key]
+    if (prev && prev.source === 'audit' && prev.checked === want && (prev.note || null) === (it.reason || null)) continue
+    await restWrite('POST', '/rest/v1/deal_checklist?on_conflict=deal_id,item_key',
+      { deal_id: deal.id, item_key: it.key, checked: want, source: 'audit', checked_by: null, checked_at: new Date().toISOString(), note: it.reason || null },
+      'resolution=merge-duplicates,return=minimal')
+    await restWrite('POST', '/rest/v1/deal_checklist_history',
+      { deal_id: deal.id, item_key: it.key, checked: want, source: 'audit', checked_by: null, note: it.reason || null }, 'return=minimal')
+    existing[it.key] = { item_key: it.key, checked: want, source: 'audit', note: it.reason || null }
+  }
+
+  // Current checked state per item: auto items follow the computed pass; manual
+  // items follow the stored row.
+  const result = items.map(it => ({
+    key: it.key, label: it.label, manual: it.manual,
+    pass: it.manual ? null : !!it.pass,
+    checked: it.manual ? !!(existing[it.key] && existing[it.key].checked) : !!it.pass,
+    reason: it.reason || null,
+    fix: it.fix || null,
+  }))
+  const doneCount = result.filter(r => r.checked).length
+  const allChecked = doneCount === AUDIT_ITEM_KEYS.length
+
+  // All 7 checked → Deal Reviewed + gold check, in one write. Never auto-revert.
+  if (allChecked && (deal.status !== 'Deal Reviewed' || deal.commission_verified !== true)) {
+    await restPatch(`/rest/v1/deals?id=eq.${deal.id}`, { status: 'Deal Reviewed', commission_verified: true })
+    deal.status = 'Deal Reviewed'; deal.commission_verified = true
+  }
+
+  return {
+    deal_id: deal.id, deal_name: deal.deal_name,
+    done: doneCount, total: AUDIT_ITEM_KEYS.length,
+    reviewed: allChecked, on_calendar: !!booking.onCalendar,
+    items: result,
+  }
+}
+
+async function loadRosterForAudit() {
+  const profiles = await restGet('/rest/v1/profiles?select=id,name')
+  const usersById = {}
+  profiles.forEach(p => { usersById[p.id] = p })
+  return { profiles, usersById }
+}
+
+const DEAL_COLS = 'id,deal_name,project_id,status,sale_date,install_date,pay_date,baseline_revenue,job_price,office,payment_method,setter_id,closer_id,manager_id,director_id,vp_id,setter_split_pct,manager_override_pct,director_override_pct,vp_override_pct,manager_to_rep_pct,director_to_rep_pct,vp_to_rep_pct,setter_amount,closer_amount,manager_amount,director_amount,vp_amount,deduction_amount,deduction_paid_by,deduction_split_pct,financed_amount,dealer_fee_pct,override_exclusions,bonus_company,bonus_manager,bonus_director,bonus_vp,bonus_recipient,bonus_split_pct,commission_verified,change_alert,customer_phone,customer_address,hidden'
+
+async function handleAuditDeal(rawBody) {
+  if (!SUPABASE_URL || !SERVICE_KEY) return err('Audit is not configured — SUPABASE_SERVICE_KEY is missing on the site service.')
+  let body; try { body = JSON.parse(rawBody || '{}') } catch { return err('Bad request body.') }
+  let caller; try { caller = await verifyAuditor(body) } catch (e) { return err(e.message) }
+  if (!body.deal_id) return err('Missing deal_id')
+  const deal = (await restGet(`/rest/v1/deals?select=${DEAL_COLS}&id=eq.${body.deal_id}`))[0]
+  if (!deal) return err('Deal not found')
+  let sheet; try { sheet = await readInstallSheet() } catch (e) { return err(e.message) }
+  const { profiles, usersById } = await loadRosterForAudit()
+  return ok({ audit: await auditOneDeal(deal, sheet, profiles, usersById, caller.id) })
+}
+
+async function handleAuditQueue(rawBody) {
+  if (!SUPABASE_URL || !SERVICE_KEY) return err('Audit is not configured — SUPABASE_SERVICE_KEY is missing on the site service.')
+  let body; try { body = JSON.parse(rawBody || '{}') } catch { return err('Bad request body.') }
+  let caller; try { caller = await verifyAuditor(body) } catch (e) { return err(e.message) }
+  let sheet; try { sheet = await readInstallSheet() } catch (e) { return err(e.message) }
+  const { profiles, usersById } = await loadRosterForAudit()
+  const cutoff = await auditDataStart()
+  // The "Needs review" queue: not gold-checked (or carrying a change alert),
+  // not canceled/hidden, not legacy.
+  const deals = await restGet(
+    `/rest/v1/deals?select=${DEAL_COLS}&or=(commission_verified.eq.false,change_alert.not.is.null)&sale_date=gte.${cutoff}&order=sale_date.desc`)
+  const audits = []
+  for (const d of deals) {
+    const st = String(d.status || '').trim().toLowerCase()
+    if (st === 'canceled' || st === 'cancelled') continue
+    if (d.hidden === true) continue
+    try { audits.push(await auditOneDeal(d, sheet, profiles, usersById, caller.id)) }
+    catch (e) { audits.push({ deal_id: d.id, deal_name: d.deal_name, error: e.message }) }
+  }
+  return ok({ count: audits.length, audits })
+}
+
+async function handleAuditCheck(rawBody) {
+  if (!SUPABASE_URL || !SERVICE_KEY) return err('Audit is not configured — SUPABASE_SERVICE_KEY is missing on the site service.')
+  let body; try { body = JSON.parse(rawBody || '{}') } catch { return err('Bad request body.') }
+  let caller; try { caller = await verifyAuditor(body) } catch (e) { return err(e.message) }
+  const { deal_id, item_key } = body
+  if (!deal_id || !item_key) return err('Missing deal_id or item_key')
+  if (!MANUAL_ITEM_KEYS.includes(item_key)) return err('Only manual items can be toggled by hand.')
+  const checked = body.checked === true
+  await restWrite('POST', '/rest/v1/deal_checklist?on_conflict=deal_id,item_key',
+    { deal_id, item_key, checked, source: 'manual', checked_by: caller.id, checked_at: new Date().toISOString(), note: body.note || null },
+    'resolution=merge-duplicates,return=minimal')
+  await restWrite('POST', '/rest/v1/deal_checklist_history',
+    { deal_id, item_key, checked, source: 'manual', checked_by: caller.id, note: body.note || null }, 'return=minimal')
+  // Re-run the full audit so auto items are fresh and the deal flips to
+  // Reviewed if this was the last box. Never auto-reverts a reviewed deal.
+  const deal = (await restGet(`/rest/v1/deals?select=${DEAL_COLS}&id=eq.${deal_id}`))[0]
+  if (!deal) return err('Deal not found')
+  let sheet; try { sheet = await readInstallSheet() } catch (e) { return err(e.message) }
+  const { profiles, usersById } = await loadRosterForAudit()
+  return ok({ audit: await auditOneDeal(deal, sheet, profiles, usersById, caller.id) })
+}
+
 const app = express()
 app.use(express.text({ type: '*/*', limit: '1mb' }))
 
@@ -896,6 +1223,20 @@ app.post('/api/field/ingest', async (req, res) => {
 app.post('/api/user-admin', async (req, res) => {
   try { res.json(await handleUserAdmin(req.body)) }
   catch (e) { res.json(err(e.message || 'Server error')) }
+})
+
+// ── Deal audit (admin/Keaton — verified inside each handler) ────────────────
+app.post('/api/audit/deal', async (req, res) => {
+  try { res.json(await handleAuditDeal(req.body)) }
+  catch (e) { res.json(err(e.message || 'Audit failed')) }
+})
+app.post('/api/audit/queue', async (req, res) => {
+  try { res.json(await handleAuditQueue(req.body)) }
+  catch (e) { res.json(err(e.message || 'Audit failed')) }
+})
+app.post('/api/audit/check', async (req, res) => {
+  try { res.json(await handleAuditCheck(req.body)) }
+  catch (e) { res.json(err(e.message || 'Audit failed')) }
 })
 
 app.use(express.static(dist))
