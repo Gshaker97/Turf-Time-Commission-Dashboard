@@ -8,7 +8,8 @@ import { headIdSet, saleOwnerId, buildChangesByProfile, teamOfSale, teamLabel } 
 import FilterBar from '../components/FilterBar'
 import KpiCard from '../components/KpiCard'
 import DealTable, { dealNeedsReview } from '../components/DealTable'
-import AuditQueue from '../components/AuditQueue'
+import { useAudit } from '../components/useAudit'
+import { AuditControls } from '../components/AuditStrip'
 import DealModal from '../components/DealModal'
 import { calcDealCommissions, dealAmounts, fmt, isHidden, countsInTotals } from '../utils/commission'
 import { getPresetRange } from '../utils/dateRanges'
@@ -264,6 +265,10 @@ export default function Deals() {
   const pageDeals = useMemo(
     () => shownDeals.slice((curPage - 1) * pageSize, curPage * pageSize),
     [shownDeals, curPage, pageSize])
+
+  // The deal-audit checklist now renders INLINE on each Needs-review row. The
+  // data is fetched once per page here; DealTable draws a strip under each row.
+  const audit = useAudit({ deals: pageDeals, canAudit, enabled: onReview && !loading, onDealChanged: () => load(true) })
   const goToPage = (p) => {
     setPage(Math.min(Math.max(1, p), pageCount))
     // The pager sits below the table; after a click you want the top of the
@@ -455,6 +460,7 @@ export default function Deals() {
               All deals
             </button>
           </div>
+          {reviewTab === 'review' && <AuditControls audit={audit} canAudit={canAudit} />}
           {reviewTab === 'review' && (
             <span className="text-[11px] text-white/40">
               {needsReview.length
@@ -498,13 +504,11 @@ export default function Deals() {
         onToggleHidden={isAdmin ? handleToggleHidden : undefined}
         onUpdate={persistInline}
         loading={loading}
+        audit={onReview ? audit : null}
+        canAudit={canAudit}
       />
 
       {!loading && <Pager {...pagerProps} />}
-
-      {onReview && !loading && (
-        <AuditQueue deals={pageDeals} canAudit={canAudit} onDealChanged={() => load(true)} />
-      )}
 
       {/* FAB — creating deals is admin-only */}
       {isAdmin && (

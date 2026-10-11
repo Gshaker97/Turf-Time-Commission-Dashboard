@@ -1,12 +1,13 @@
 import { useState, useRef, useEffect, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import { RepPickList } from './RepMultiSelect'
-import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, X, MessageSquare, BadgeCheck, AlertCircle, EyeOff } from 'lucide-react'
+import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, X, MessageSquare, BadgeCheck, AlertCircle, EyeOff, RefreshCw } from 'lucide-react'
 import { calcDealCommissions, fmt, fmtPct, isCanceled, isHidden, countsInTotals, officeOverrideRate, deductionBreakdown } from '../utils/commission'
 import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
 import { fetchDealNotes, fetchDealNoteCounts, addDealNote, updateDealNote, deleteDealNote } from '../lib/db'
 import DateRangeFilter from './DateRangeFilter'
+import AuditStrip, { AuditBadge } from './AuditStrip'
 import { toast } from '../lib/toast'
 
 // Date columns the Dates header can filter on.
@@ -740,7 +741,7 @@ function NotesThread({ deal, profile, users, onCountChange }) {
 const subline = (deal) => [deal.office, deal.payment_method].filter(Boolean).join(' · ') || '—'
 
 // ── Mobile card (below lg) ────────────────────────────────────
-function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onToggleHidden, onUpdate, statusColor, statusLabels, profile, users, noteCount, onCountChange }) {
+function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onToggleHidden, onUpdate, statusColor, statusLabels, profile, users, noteCount, onCountChange, audit = null, canAudit = false }) {
   const baseline = parseFloat(deal.baseline_revenue) || 0
   const jobPrice = parseFloat(deal.job_price)        || 0
   const [showNotes, setShowNotes] = useState(false)
@@ -751,6 +752,7 @@ function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onToggleHidden, 
           <div className="flex items-center gap-2">
             <button onClick={() => setShowNotes(s => !s)} className="text-[14px] font-semibold text-white truncate text-left">{deal.deal_name}</button>
             <ChangeAlertTag deal={deal} canEdit={canEdit} onUpdate={onUpdate} />
+            {audit?.byId[deal.id] && <AuditBadge done={audit.byId[deal.id].done} total={audit.byId[deal.id].total} reviewed={audit.byId[deal.id].reviewed} />}
             {(deal.notes || noteCount > 0) && (
               <span className="flex items-center gap-0.5 text-teal/70 flex-shrink-0">
                 <MessageSquare size={12} />
@@ -782,6 +784,21 @@ function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onToggleHidden, 
         </div>
       </div>
 
+      {audit?.byId[deal.id] && (
+        <div className="mt-3">
+          {canAudit && (
+            <div className="flex justify-end mb-1.5">
+              <button onClick={() => audit.rerun(deal.id)} disabled={audit.busy[deal.id]}
+                className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-white/50 hover:text-white disabled:opacity-40"
+                style={{ background: '#1e1e1e', border: '1px solid #2e2e2e' }}>
+                <RefreshCw size={11} className={audit.busy[deal.id] ? 'animate-spin' : ''} /> Re-run
+              </button>
+            </div>
+          )}
+          <AuditStrip deal={deal} audit={audit} canAudit={canAudit} />
+        </div>
+      )}
+
       {showNotes && (
         <div className="mt-3 rounded-lg p-3" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
           <p className="text-[10px] font-bold uppercase tracking-wider text-white/30 mb-2">Notes</p>
@@ -808,6 +825,7 @@ export default function DealTable({
   dateField, setDateField,
   dateFrom, dateTo, datePreset, setDateRange,
   onEdit, onDelete, onToggleHidden, onUpdate, loading, openNotesId,
+  audit = null, canAudit = false,
 }) {
   const { statusColor, statusLabels, offices, paymentMethods } = useSettings()
   // Editing deal data anywhere is an admin-only action. Everyone else gets a
@@ -907,6 +925,7 @@ export default function DealTable({
                       {deal.deal_name}
                     </button>
                     <ChangeAlertTag deal={deal} canEdit={canEdit} onUpdate={onUpdate} />
+                    {audit?.byId[deal.id] && <AuditBadge done={audit.byId[deal.id].done} total={audit.byId[deal.id].total} reviewed={audit.byId[deal.id].reviewed} />}
                     {(deal.notes || noteCounts[deal.id] > 0) && (
                       <span className="flex items-center gap-0.5 text-teal/70 flex-shrink-0">
                         <MessageSquare size={12} />
@@ -943,9 +962,27 @@ export default function DealTable({
                 <td className="px-3 py-3"><RevenueCell baseline={baseline} jobPrice={jobPrice} /></td>
                 <td className="px-3 py-3"><CommissionCell deal={deal} canVerify={canVerify} onUpdate={onUpdate} /></td>
                 {canEdit && (
-                  <td className="px-3 py-3"><ActionButtons deal={deal} onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} /></td>
+                  <td className="px-3 py-3">
+                    <div className="flex items-center justify-end gap-1.5">
+                      {audit?.byId[deal.id] && canAudit && (
+                        <button onClick={() => audit.rerun(deal.id)} disabled={audit.busy[deal.id]} title="Re-run audit"
+                          className="p-1 rounded text-white/40 hover:text-white disabled:opacity-40"
+                          style={{ background: '#1e1e1e', border: '1px solid #2e2e2e' }}>
+                          <RefreshCw size={12} className={audit.busy[deal.id] ? 'animate-spin' : ''} />
+                        </button>
+                      )}
+                      <ActionButtons deal={deal} onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} />
+                    </div>
+                  </td>
                 )}
               </tr>
+              {audit && audit.byId[deal.id] && (
+                <tr style={{ background: isEven ? '#242424' : '#262626' }}>
+                  <td colSpan={colCount} className="px-3 pb-3 pt-0">
+                    <AuditStrip deal={deal} audit={audit} canAudit={canAudit} />
+                  </td>
+                </tr>
+              )}
               {notesOpen.has(deal.id) && (
                 <tr style={{ background: isEven ? '#242424' : '#262626' }}>
                   <td colSpan={colCount} className="px-3 pb-3 pt-0">
@@ -967,7 +1004,8 @@ export default function DealTable({
         {deals.map(deal => (
           <DealCard key={deal.id} deal={deal} canEdit={canEdit} canVerify={canVerify}
             onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} onUpdate={onUpdate}
-            statusColor={statusColor} statusLabels={statusLabels}/>
+            statusColor={statusColor} statusLabels={statusLabels}
+            audit={audit} canAudit={canAudit}/>
         ))}
       </div>
     </div>
