@@ -8,6 +8,7 @@ import { headIdSet, saleOwnerId, buildChangesByProfile, teamOfSale, teamLabel } 
 import FilterBar from '../components/FilterBar'
 import KpiCard from '../components/KpiCard'
 import DealTable, { dealNeedsReview } from '../components/DealTable'
+import AuditQueue from '../components/AuditQueue'
 import DealModal from '../components/DealModal'
 import { calcDealCommissions, dealAmounts, fmt, isHidden, countsInTotals } from '../utils/commission'
 import { getPresetRange } from '../utils/dateRanges'
@@ -242,6 +243,9 @@ export default function Deals() {
   )
   const onReview = canStage && reviewTab === 'review'
   const shownDeals = onReview ? needsReview : filtered
+  // Auditors (admin/Keaton) run the live audit + fixes; a plain VP sees it read-only.
+  const isKeaton = profile?.email?.toLowerCase() === 'keaton@turftime.com' || profile?.name === 'Keaton Shaker'
+  const canAudit = isAdmin || isKeaton
 
   // Any change to what's being listed starts back at page 1.
   useEffect(() => { setPage(1) },
@@ -497,6 +501,10 @@ export default function Deals() {
       />
 
       {!loading && <Pager {...pagerProps} />}
+
+      {onReview && !loading && (
+        <AuditQueue deals={pageDeals} canAudit={canAudit} onDealChanged={() => load(true)} />
+      )}
 
       {/* FAB — creating deals is admin-only */}
       {isAdmin && (

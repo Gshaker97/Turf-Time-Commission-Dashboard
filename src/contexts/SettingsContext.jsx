@@ -12,6 +12,7 @@ const NOTE_NOTIFY_DEFAULT = { closer: true, setter: false, manager: false, admin
 const DEFAULTS = {
   deal_statuses: [
     { label: 'Deal Review',     color: '#94a3b8' },
+    { label: 'Deal Reviewed',   color: '#a78bfa' },
     { label: 'Pending Install', color: '#2dd4bf' },
     { label: 'Change Order',    color: '#f59e0b' },
     { label: 'Pay Finalized',   color: '#22d3ee' },

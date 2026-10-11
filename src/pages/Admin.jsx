@@ -6,6 +6,7 @@ import {
 } from '../lib/db'
 import { toast } from '../lib/toast'
 import UserModal from '../components/UserModal'
+import ManagerBackfillModal from '../components/ManagerBackfillModal'
 import PeopleChart from '../components/PeopleChart'
 import { teamLabel } from '../utils/team'
 import { leadFeedHealth } from '../utils/feedHealth'
@@ -124,6 +125,7 @@ export default function Admin() {
   const [loading,  setLoading]  = useState(true)
   const [userModal, setUserModal] = useState(false)
   const [editUser,  setEditUser]  = useState(null)
+  const [backfill,  setBackfill]  = useState(null)  // { rep, manager } after a team assignment
 
   useEffect(() => { loadAll() }, [])
 
@@ -166,6 +168,10 @@ export default function Admin() {
           await Promise.all(directs.map(d => updateUser(d.id, { manager_id: destId })))
         }
       }
+      // New reports-to is a manager → offer to backfill the rep's past
+      // manager-less deals (future deals already pick the manager up).
+      const newLead = (data.manager_id ?? null) ? users.find(u => u.id === data.manager_id) : null
+      if (movedTeams && newLead && newLead.role === 'manager') setBackfill({ rep: editUser, manager: newLead })
     } else {
       const { error } = await insertUser(data)
       if (error) { toast.error('Could not create profile: ' + error.message); return }
@@ -269,6 +275,10 @@ export default function Admin() {
     // Refresh just the log so the "since" date on their card updates.
     const { data: tc } = await fetchTeamChanges()
     setTeamChanges(tc ?? [])
+    // If the new team's lead is a manager, offer to backfill this rep's past
+    // manager-less deals with that manager + override.
+    const dest = destId ? users.find(x => x.id === destId) : null
+    if (dest && dest.role === 'manager') setBackfill({ rep: u, manager: dest })
   }
 
   // Official team name — lives on the head's profile (migration 046) so every
@@ -343,6 +353,8 @@ export default function Admin() {
       {tab === 'Settings' && <SettingsPanel />}
 
       {userModal && <UserModal user={editUser} allUsers={users} teamChanges={teamChanges} onSave={saveUser} onClose={() => { setUserModal(false); setEditUser(null) }} />}
+      {backfill && <ManagerBackfillModal rep={backfill.rep} manager={backfill.manager}
+        onClose={(n) => { setBackfill(null); if (n) toast.success(`Backfilled ${n} deal${n === 1 ? '' : 's'} with ${backfill.manager.name}`); loadAll() }} />}
     </div>
   )
 }
