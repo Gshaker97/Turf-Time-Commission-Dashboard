@@ -34,28 +34,49 @@ export function AuditControls({ audit, canAudit }) {
   )
 }
 
-// One chip in the horizontal strip. Auto items are display-only; manual items
-// (Financing, Drawing & commission) are a clickable checkbox for admin/Keaton.
-function AuditChip({ item, canAudit, busy, onToggle }) {
-  const done = item.checked
-  const clickable = item.manual && canAudit
-  const icon = done
-    ? <Check size={13} className="text-teal" />
-    : clickable ? <Circle size={13} className="text-white/35" />
-    : item.manual ? <Lock size={11} className="text-white/25" />
-    : <X size={12} className="text-amber-400" />
-  const body = (
-    <span className={`inline-flex items-center gap-1 text-[11px] whitespace-nowrap ${done ? 'text-white/50' : 'text-white/85'}`}>
-      {icon}{item.label}
-    </span>
-  )
-  if (!clickable) return body
-  return (
-    <button onClick={() => onToggle(!done)} disabled={busy} title={done ? 'Uncheck' : 'Check'}
-      className="disabled:opacity-40 hover:opacity-80 transition-opacity">
-      {body}
-    </button>
-  )
+const nm = (p) => (p && p.name) || '—'
+
+// The detail lines listed UNDER each check — the actual values the check looks
+// at (setter/closer, dates, customer fields, manager), plus the engine's reason
+// when something is off. Pulled from the deal row (which carries the joined
+// people + customer fields) so every item shows its info, whether it passed or
+// not. `a` is the audit result (carries on_calendar + each item's reason/fix).
+function detailLines(item, deal, a) {
+  const lines = []
+  switch (item.key) {
+    case 'on_calendar':
+      lines.push(a.on_calendar ? 'Matched a non-cancelled install booking on the calendar.' : (item.reason || 'No calendar booking matched this deal.'))
+      break
+    case 'install_date':
+      lines.push(`Site install date: ${deal.install_date || '—'}`)
+      if (item.reason) lines.push(item.reason)
+      break
+    case 'financing':
+      lines.push(`Payment method: ${deal.payment_method || '—'}`)
+      if (item.reason) lines.push(item.reason)
+      break
+    case 'setter_closer':
+      lines.push(`Setter: ${nm(deal.setter)}`)
+      lines.push(`Closer: ${nm(deal.closer)}`)
+      if (item.reason) lines.push(item.reason)
+      break
+    case 'customer_info':
+      lines.push(`Name: ${deal.deal_name || '—'}`)
+      lines.push(`Phone: ${deal.customer_phone || '—'}`)
+      lines.push(`Address: ${deal.customer_address || '—'}`)
+      if (item.reason) lines.push(item.reason)
+      break
+    case 'manager_override':
+      lines.push(`Manager: ${nm(deal.manager)}`)
+      if (item.reason) lines.push(item.reason)
+      break
+    case 'drawing_commission':
+      if (item.reason) lines.push(item.reason)
+      break
+    default:
+      if (item.reason) lines.push(item.reason)
+  }
+  return lines.filter(Boolean)
 }
 
 function FixButton({ fix, busy, onFix }) {
@@ -72,40 +93,64 @@ function FixButton({ fix, busy, onFix }) {
   )
 }
 
-// The compact, full-width checklist rendered directly under a deal's row on the
-// Needs-review table: a horizontal strip of the 7 items, with each unchecked
-// item's reason (and its fix button) listed beneath.
+// One check section: the check (icon + label) on top, then its info listed
+// underneath. Auto items are display-only; manual items (Financing, Drawing &
+// commission) are a clickable checkbox for admin/Keaton.
+function AuditRow({ deal, item, audit, canAudit, busy, onToggle, onFix }) {
+  const done = item.checked
+  const clickable = item.manual && canAudit
+  const icon = done
+    ? <Check size={14} className="text-teal" />
+    : clickable ? <Circle size={14} className="text-white/35" />
+    : item.manual ? <Lock size={12} className="text-white/25" />
+    : <X size={13} className="text-amber-400" />
+  const label = (
+    <span className={`inline-flex items-center gap-1.5 text-[12px] font-semibold ${done ? 'text-white/55' : 'text-white/90'}`}>
+      {icon}{item.label}{item.manual && <span className="text-white/25 text-[10px] font-normal">(manual)</span>}
+    </span>
+  )
+  const lines = detailLines(item, deal, audit.byId[deal.id])
+  return (
+    <li className="py-2">
+      {clickable
+        ? <button onClick={() => onToggle(!done)} disabled={busy} title={done ? 'Uncheck' : 'Check'}
+            className="disabled:opacity-40 hover:opacity-80 transition-opacity">{label}</button>
+        : label}
+      {lines.length > 0 && (
+        <div className="mt-1 ml-[22px] space-y-0.5">
+          {lines.map((ln, i) => (
+            <p key={i} className="text-[11px] text-white/45 leading-snug">{ln}</p>
+          ))}
+          {canAudit && item.fix && (
+            <div className="pt-0.5"><FixButton fix={item.fix} busy={busy} onFix={onFix} /></div>
+          )}
+        </div>
+      )}
+    </li>
+  )
+}
+
+// The full-width checklist rendered directly under a deal's row on the
+// Needs-review table: a vertical list of the 7 checks, each with its own info
+// listed beneath it.
 export default function AuditStrip({ deal, audit, canAudit }) {
   const a = audit.byId[deal.id]
   const busy = !!audit.busy[deal.id]
 
-  // While the queue is still loading, the status chip by the tabs says so — a
-  // per-row spinner under every deal would just be noise. Likewise an error /
-  // demo-disabled state is reported once up there, not on each row.
+  // The queue's loading / error / demo-disabled state is reported once up by
+  // the tabs, not on every row — so there's nothing to draw until a result
+  // exists for this deal.
   if (!a) return null
 
-  const unchecked = a.items.filter(it => !it.checked && (it.reason || it.fix))
   return (
-    <div className="rounded-lg px-3 py-2 space-y-1.5" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+    <div className="rounded-lg px-3 py-1.5" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+      <ul className="divide-y divide-white/5">
         {a.items.map(it => (
-          <AuditChip key={it.key} item={it} canAudit={canAudit} busy={busy}
-            onToggle={(v) => audit.toggleManual(deal.id, it.key, v)} />
+          <AuditRow key={it.key} deal={deal} item={it} audit={audit} canAudit={canAudit} busy={busy}
+            onToggle={(v) => audit.toggleManual(deal.id, it.key, v)}
+            onFix={() => audit.applyFix(deal.id, it.fix)} />
         ))}
-      </div>
-      {unchecked.length > 0 && (
-        <div className="space-y-1 pt-0.5 border-t border-white/5">
-          {unchecked.map(it => (
-            <div key={it.key} className="flex items-center flex-wrap gap-x-2 gap-y-1 text-[11px] text-white/45">
-              <span className="text-white/35">{it.label}:</span>
-              {it.reason && <span>{it.reason}</span>}
-              {canAudit && it.fix && (
-                <FixButton fix={it.fix} busy={busy} onFix={() => audit.applyFix(deal.id, it.fix)} />
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+      </ul>
     </div>
   )
 }
