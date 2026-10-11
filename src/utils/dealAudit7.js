@@ -22,6 +22,7 @@ export const AUDIT_ITEMS = [
   { key: 'customer_info',      label: 'Customer info',       manual: false },
   { key: 'manager_override',   label: 'Manager & override',  manual: false },
   { key: 'drawing_commission', label: 'Drawing & commission', manual: true },
+  { key: 'ghl_information',     label: 'GHL information',      manual: false },
 ]
 export const AUDIT_ITEM_KEYS = AUDIT_ITEMS.map(i => i.key)
 export const MANUAL_ITEM_KEYS = AUDIT_ITEMS.filter(i => i.manual).map(i => i.key)
@@ -74,9 +75,17 @@ const nameById = (id, usersById) => (id && usersById[id] && usersById[id].name) 
 //                payment, customerPhone, customerAddress
 //              }
 //   usersById — { id: { id, name } } for showing site names
+//   ghl      — null, or {
+//                configured,                 // GHL token present server-side
+//                matched,                    // a GHL contact matched the deal
+//                error,                      // string if the GHL read failed
+//                contactName,                // the matched contact's name
+//                has: { sales_rep, install_date, commission, payment_method }
+//                  each 'present' | 'empty' | 'no_field'
+//              }
 // Returns { items: [{ key, label, manual, pass, reason, fix }] } — manual
 // items carry pass:null (their state lives in the stored checklist).
-export function computeAudit(deal, booking, usersById = {}) {
+export function computeAudit(deal, booking, usersById = {}, ghl = null) {
   const onCal = !!(booking && booking.onCalendar)
   const items = []
 
@@ -176,6 +185,35 @@ export function computeAudit(deal, booking, usersById = {}) {
     reason: 'Confirm the drawing matches and commission is right.',
     fix: null,
   })
+
+  // 8 — GHL information: the deal's GoHighLevel contact has the sales rep,
+  // install date, commission, and payment method filled in. Auto, read-only
+  // (no in-app fix — GHL is edited in GHL).
+  {
+    let pass = false, reason = null
+    if (!ghl || ghl.configured === false) {
+      reason = 'GHL is not connected yet (set GHL_API_TOKEN on the site).'
+    } else if (ghl.error) {
+      reason = `Couldn’t read GHL: ${ghl.error}`
+    } else if (!ghl.matched) {
+      reason = 'No GHL contact matched this deal (by phone or name).'
+    } else {
+      const has = ghl.has || {}
+      const word = (s) => s === 'present' ? 'in GHL' : s === 'no_field' ? 'no field in GHL' : 'missing'
+      const FIELDS = [
+        ['sales rep', has.sales_rep],
+        ['install date', has.install_date],
+        ['commission', has.commission],
+        ['payment method', has.payment_method],
+      ]
+      pass = FIELDS.every(([, s]) => s === 'present')
+      // Always summarise all four so the row shows each field's state, passing
+      // or not. The frontend splits this on ' • ' into its own line each.
+      reason = FIELDS.map(([label, s]) => `${label}: ${word(s)}`).join(' • ')
+        + (ghl.contactName ? ` • contact: ${ghl.contactName}` : '')
+    }
+    items.push({ key: 'ghl_information', label: 'GHL information', manual: false, pass, reason, fix: null })
+  }
 
   return { items }
 }

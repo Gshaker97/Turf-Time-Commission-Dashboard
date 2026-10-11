@@ -933,6 +933,112 @@ async function readInstallSheet() {
   return data
 }
 
+// ── Deal audit — GoHighLevel (read-only) ────────────────────────────────────
+// Item 8 (ghl_information): confirm the deal's GHL contact has the sales rep,
+// install date, commission, and payment method filled in. Uses a read-only
+// Private Integration token (GHL_API_TOKEN) scoped to contacts + custom fields;
+// the location defaults to Turf Time's sub-account. Entirely non-fatal — any
+// failure (no token, Cloudflare block, no match) just fails item 8 and leaves
+// the other seven checks working.
+const GHL_API_TOKEN   = (process.env.GHL_API_TOKEN || '').trim()
+const GHL_LOCATION_ID = (process.env.GHL_LOCATION_ID || 'lm0glrcKsZ05EcZrGS9t').trim()
+const GHL_BASE = 'https://services.leadconnectorhq.com'
+// Known custom-field ids (fallbacks when name resolution misses them).
+const GHL_KNOWN_FIELDS = { sales_rep: 'QoJSUx7z3LIeaZw6fwDb', install_date: 'IMYajaM4Jv4eOG65exQZ' }
+// GHL custom-field NAMES (lowercased) that map to each thing we confirm.
+const GHL_FIELD_NAMES = {
+  sales_rep:      ['sales rep', 'sales representative', 'rep', 'closer'],
+  install_date:   ['install date', 'installation date'],
+  commission:     ['commission'],
+  payment_method: ['payment method', 'payment type', 'payment'],
+}
+let _ghlFields = { at: 0, map: null }  // our key -> resolved field id
+
+// GHL sits behind Cloudflare, which 1010-blocks non-browser agents — a browser
+// User-Agent + the Version header are required.
+function ghlHeaders() {
+  return {
+    Authorization: `Bearer ${GHL_API_TOKEN}`,
+    Version: '2021-07-28',
+    Accept: 'application/json',
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
+  }
+}
+
+async function ghlGet(path) {
+  const resp = await fetch(`${GHL_BASE}${path}`, { headers: ghlHeaders() })
+  if (!resp.ok) throw new Error(`GHL ${resp.status}: ${(await resp.text()).slice(0, 120)}`)
+  return resp.json()
+}
+
+// Resolve the 4 target field ids by NAME (cached 10m), with the known ids as
+// fallbacks — so a renamed/added GHL field is picked up without a code change.
+async function ghlFieldMap() {
+  if (_ghlFields.map && Date.now() - _ghlFields.at < 600000) return _ghlFields.map
+  const j = await ghlGet(`/locations/${GHL_LOCATION_ID}/customFields`)
+  const byName = {}
+  for (const f of j.customFields || []) byName[String(f.name || '').trim().toLowerCase()] = f.id
+  const map = {}
+  for (const [key, names] of Object.entries(GHL_FIELD_NAMES)) {
+    map[key] = names.map(n => byName[n]).find(Boolean) || GHL_KNOWN_FIELDS[key] || null
+  }
+  _ghlFields = { at: Date.now(), map }
+  return map
+}
+
+const ghlDigits = (s) => String(s || '').replace(/\D/g, '').slice(-10)
+const ghlNorm = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase()
+// Customer name = the deal name up to the first dash/comma (deal names look
+// like "Smith — 1 Maple Rd" / "Smith, 1 Maple Rd").
+const ghlCustomerName = (deal) => String(deal.deal_name || '').split(/[—–-]|,/)[0].trim()
+
+// Find the GHL contact for a deal: phone first (exact 10 digits), then name.
+async function ghlFindContact(deal) {
+  const phone = ghlDigits(deal.customer_phone)
+  if (phone) {
+    try {
+      const j = await ghlGet(`/contacts/search/duplicate?locationId=${GHL_LOCATION_ID}&number=%2B1${phone}`)
+      if (j.contact && j.contact.id) return j.contact.id
+    } catch { /* fall through to a name match */ }
+  }
+  const name = ghlCustomerName(deal)
+  if (name) {
+    const j = await ghlGet(`/contacts/?locationId=${GHL_LOCATION_ID}&query=${encodeURIComponent(name)}&limit=10`)
+    const want = ghlNorm(name)
+    const hit = (j.contacts || []).find(c => ghlNorm(c.contactName || `${c.firstName || ''} ${c.lastName || ''}`) === want)
+    if (hit) return hit.id
+  }
+  return null
+}
+
+// The GHL side of item 8 for ONE deal. Never throws — returns the shape
+// computeAudit() reads ({ configured, matched, error, contactName, has }).
+async function readDealGhl(deal) {
+  if (!GHL_API_TOKEN) return { configured: false }
+  try {
+    const fields = await ghlFieldMap()
+    const contactId = await ghlFindContact(deal)
+    if (!contactId) return { configured: true, matched: false }
+    const { contact } = await ghlGet(`/contacts/${contactId}`)
+    const cf = {}
+    for (const f of (contact && contact.customFields) || []) cf[f.id] = f.value
+    const present = (v) => Array.isArray(v) ? v.length > 0 : String(v ?? '').trim() !== ''
+    const status = (key) => !fields[key] ? 'no_field' : present(cf[fields[key]]) ? 'present' : 'empty'
+    const nm = contact && (contact.contactName || `${contact.firstName || ''} ${contact.lastName || ''}`.trim())
+    return {
+      configured: true, matched: true, contactName: nm || null,
+      has: {
+        sales_rep: status('sales_rep'),
+        install_date: status('install_date'),
+        commission: status('commission'),
+        payment_method: status('payment_method'),
+      },
+    }
+  } catch (e) {
+    return { configured: true, error: e.message || 'request failed' }
+  }
+}
+
 // A sheet date cell → 'YYYY-MM-DD' (date only). Handles ISO, M/D/YYYY, and a
 // parseable date (resolved in Phoenix). null when unparseable/empty.
 function toYMD(v) {
@@ -1039,7 +1145,7 @@ async function auditDataStart() {
 
 // Run the audit for ONE deal (deal object already loaded), with the shared
 // sheet + roster. Persists auto items, backfills contact info, flips the deal
-// to Deal Reviewed when all 7 are checked. Returns the per-item result.
+// to Deal Reviewed when all items are checked. Returns the per-item result.
 async function auditOneDeal(deal, sheet, profiles, usersById, callerId) {
   const booking = buildBooking(deal, sheet, profiles)
 
@@ -1055,7 +1161,9 @@ async function auditOneDeal(deal, sheet, profiles, usersById, callerId) {
     }
   }
 
-  const { items } = computeAudit(deal, booking, usersById)
+  // Item 8 (GHL) — read-only, non-fatal; failures just fail that one item.
+  const ghl = await readDealGhl(deal)
+  const { items } = computeAudit(deal, booking, usersById, ghl)
 
   // Existing checklist rows for this deal.
   const existing = {}
@@ -1089,7 +1197,7 @@ async function auditOneDeal(deal, sheet, profiles, usersById, callerId) {
   const doneCount = result.filter(r => r.checked).length
   const allChecked = doneCount === AUDIT_ITEM_KEYS.length
 
-  // All 7 checked → Deal Reviewed + gold check, in one write. Never auto-revert.
+  // All items checked → Deal Reviewed + gold check, in one write. Never auto-revert.
   if (allChecked && (deal.status !== 'Deal Reviewed' || deal.commission_verified !== true)) {
     await restPatch(`/rest/v1/deals?id=eq.${deal.id}`, { status: 'Deal Reviewed', commission_verified: true })
     deal.status = 'Deal Reviewed'; deal.commission_verified = true

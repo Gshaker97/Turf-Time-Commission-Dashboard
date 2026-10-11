@@ -73,6 +73,12 @@ function detailLines(item, deal, a) {
     case 'drawing_commission':
       if (item.reason) lines.push(item.reason)
       break
+    case 'ghl_information':
+      // The server summarises all four GHL fields in one ' • '-joined string;
+      // split it so each (sales rep / install date / commission / payment
+      // method / contact) lists on its own line, like setter/closer above.
+      if (item.reason) item.reason.split(' • ').forEach(part => lines.push(part))
+      break
     default:
       if (item.reason) lines.push(item.reason)
   }
