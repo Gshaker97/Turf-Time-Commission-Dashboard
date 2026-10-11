@@ -961,6 +961,8 @@ export const auditDeal  = (dealId) => auditPost('/api/audit/deal', { deal_id: de
 export const auditQueue = () => auditPost('/api/audit/queue', {})
 export const setChecklistItem = (dealId, itemKey, checked) =>
   auditPost('/api/audit/check', { deal_id: dealId, item_key: itemKey, checked })
+// Fill the empty GHL fields for a deal from the site's values, then re-audit.
+export const ghlFill = (dealId) => auditPost('/api/audit/ghl-fill', { deal_id: dealId })
 
 // Stored checklist rows for a set of deals → { [deal_id]: { [item_key]: row } }.
 export async function fetchDealChecklists(dealIds) {

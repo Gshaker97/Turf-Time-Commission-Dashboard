@@ -971,20 +971,31 @@ async function ghlGet(path) {
   return resp.json()
 }
 
-// Resolve the 4 target field ids by NAME (cached 10m), with the known ids as
-// fallbacks — so a renamed/added GHL field is picked up without a code change.
+// Resolve the 4 target fields by NAME (cached 10m) → { id, dataType }, with the
+// known ids as fallbacks — so a renamed/added GHL field is picked up without a
+// code change. dataType drives how a written value is formatted.
 async function ghlFieldMap() {
   if (_ghlFields.map && Date.now() - _ghlFields.at < 600000) return _ghlFields.map
   const j = await ghlGet(`/locations/${GHL_LOCATION_ID}/customFields`)
   const byName = {}
-  for (const f of j.customFields || []) byName[String(f.name || '').trim().toLowerCase()] = f.id
+  for (const f of j.customFields || []) byName[String(f.name || '').trim().toLowerCase()] = { id: f.id, dataType: f.dataType || null }
   const map = {}
   for (const [key, names] of Object.entries(GHL_FIELD_NAMES)) {
-    map[key] = names.map(n => byName[n]).find(Boolean) || GHL_KNOWN_FIELDS[key] || null
+    map[key] = names.map(n => byName[n]).find(Boolean)
+      || (GHL_KNOWN_FIELDS[key] ? { id: GHL_KNOWN_FIELDS[key], dataType: null } : null)
   }
   _ghlFields = { at: Date.now(), map }
   return map
 }
+
+// GHL custom-field value → a comparable 'YYYY-MM-DD' (install date is epoch ms).
+function ghlFieldToYMD(v) {
+  if (v == null || v === '') return null
+  const n = Number(v)
+  if (!isNaN(n) && n > 10000000000) return toYMD(new Date(n).toISOString())
+  return toYMD(String(v))
+}
+const ghlToNumber = (v) => { const n = parseFloat(String(v ?? '').replace(/[^0-9.\-]/g, '')); return isNaN(n) ? null : n }
 
 const ghlDigits = (s) => String(s || '').replace(/\D/g, '').slice(-10)
 const ghlNorm = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase()
@@ -1011,8 +1022,11 @@ async function ghlFindContact(deal) {
   return null
 }
 
+const GHL_KEYS = ['install_date', 'sales_rep', 'commission', 'payment_method']
+
 // The GHL side of item 8 for ONE deal. Never throws — returns the shape
-// computeAudit() reads ({ configured, matched, error, contactName, has }).
+// computeAudit() reads: the per-field GHL value, whether the field exists, and
+// whether it's populated. computeAudit does the three-way compare vs site/sheet.
 async function readDealGhl(deal) {
   if (!GHL_API_TOKEN) return { configured: false }
   try {
@@ -1022,21 +1036,72 @@ async function readDealGhl(deal) {
     const { contact } = await ghlGet(`/contacts/${contactId}`)
     const cf = {}
     for (const f of (contact && contact.customFields) || []) cf[f.id] = f.value
+    const raw = (key) => (fields[key] ? cf[fields[key].id] : undefined)
     const present = (v) => Array.isArray(v) ? v.length > 0 : String(v ?? '').trim() !== ''
-    const status = (key) => !fields[key] ? 'no_field' : present(cf[fields[key]]) ? 'present' : 'empty'
     const nm = contact && (contact.contactName || `${contact.firstName || ''} ${contact.lastName || ''}`.trim())
-    return {
-      configured: true, matched: true, contactName: nm || null,
-      has: {
-        sales_rep: status('sales_rep'),
-        install_date: status('install_date'),
-        commission: status('commission'),
-        payment_method: status('payment_method'),
-      },
+    const fieldExists = {}, isPresent = {}, values = {}
+    for (const key of GHL_KEYS) {
+      fieldExists[key] = !!fields[key]
+      isPresent[key] = present(raw(key))
+      values[key] = !isPresent[key] ? null
+        : key === 'install_date' ? ghlFieldToYMD(raw(key))
+        : key === 'commission'   ? ghlToNumber(raw(key))
+        : String(raw(key)).trim()
     }
+    return { configured: true, matched: true, contactId, contactName: nm || null, fieldExists, present: isPresent, values }
   } catch (e) {
     return { configured: true, error: e.message || 'request failed' }
   }
+}
+
+// WRITE: fill ONLY the empty GHL fields with the site's values — never
+// overwrites a value already there (a conflicting value is flagged by the
+// audit, not clobbered). Needs a write-scoped token; a 401/403 says so.
+async function ghlFillBlanks(deal, usersById) {
+  if (!GHL_API_TOKEN) throw new Error('GHL is not connected (GHL_API_TOKEN not set).')
+  const fields = await ghlFieldMap()
+  const contactId = await ghlFindContact(deal)
+  if (!contactId) throw new Error('No GHL contact matched this deal (by phone or name).')
+  const { contact } = await ghlGet(`/contacts/${contactId}`)
+  const cf = {}
+  for (const f of (contact && contact.customFields) || []) cf[f.id] = f.value
+  const present = (v) => Array.isArray(v) ? v.length > 0 : String(v ?? '').trim() !== ''
+
+  const amt = dealAmounts(deal)
+  const closerName = (deal.closer_id && usersById[deal.closer_id] && usersById[deal.closer_id].name)
+    || (deal.setter_id && usersById[deal.setter_id] && usersById[deal.setter_id].name) || null
+  const site = {
+    install_date: deal.install_date || null,
+    sales_rep: closerName,
+    commission: amt.repCommission != null ? Math.round(amt.repCommission * 100) / 100 : null,
+    payment_method: deal.payment_method || null,
+  }
+
+  const writes = []
+  for (const key of GHL_KEYS) {
+    const f = fields[key]
+    if (!f) continue                                      // no such GHL field
+    if (present(cf[f.id])) continue                       // already set — never overwrite
+    if (site[key] == null || site[key] === '') continue   // nothing to write
+    const dt = String(f.dataType || '').toUpperCase()
+    let value
+    if (key === 'install_date') value = Date.parse(`${site.install_date}T12:00:00Z`)        // epoch ms
+    else if (dt.includes('MONET') || dt.includes('NUMER') || dt === 'NUMBER') value = Number(site[key])
+    else value = String(site[key])
+    writes.push({ id: f.id, value })
+  }
+  if (!writes.length) return { filled: 0 }
+  const resp = await fetch(`${GHL_BASE}/contacts/${contactId}`, {
+    method: 'PUT',
+    headers: { ...ghlHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ customFields: writes }),
+  })
+  if (!resp.ok) {
+    const txt = (await resp.text()).slice(0, 160)
+    if (resp.status === 401 || resp.status === 403) throw new Error(`GHL write denied (${resp.status}) — the token needs the contacts.write scope. ${txt}`)
+    throw new Error(`GHL write failed (${resp.status}): ${txt}`)
+  }
+  return { filled: writes.length }
 }
 
 // A sheet date cell → 'YYYY-MM-DD' (date only). Handles ISO, M/D/YYYY, and a
@@ -1274,6 +1339,34 @@ async function handleAuditCheck(rawBody) {
   return ok({ audit: await auditOneDeal(deal, sheet, profiles, usersById, caller.id) })
 }
 
+// Fill the empty GHL fields for ONE deal from the site's values, then re-audit.
+async function handleGhlFill(rawBody) {
+  if (!SUPABASE_URL || !SERVICE_KEY) return err('Audit is not configured — SUPABASE_SERVICE_KEY is missing on the site service.')
+  let body; try { body = JSON.parse(rawBody || '{}') } catch { return err('Bad request body.') }
+  let caller; try { caller = await verifyAuditor(body) } catch (e) { return err(e.message) }
+  if (!body.deal_id) return err('Missing deal_id')
+  const deal = (await restGet(`/rest/v1/deals?select=${DEAL_COLS}&id=eq.${body.deal_id}`))[0]
+  if (!deal) return err('Deal not found')
+  const { profiles, usersById } = await loadRosterForAudit()
+  let fill; try { fill = await ghlFillBlanks(deal, usersById) } catch (e) { return err(e.message) }
+  let sheet; try { sheet = await readInstallSheet() } catch (e) { return err(e.message) }
+  return ok({ filled: fill.filled, audit: await auditOneDeal(deal, sheet, profiles, usersById, caller.id) })
+}
+
+// Admin/Keaton discovery: the location's custom fields + which ones we resolved
+// to install date / sales rep / commission / payment. Used to confirm the
+// mapping once the token is live (no secret ever leaves the server).
+async function handleGhlFields(rawBody) {
+  let body; try { body = JSON.parse(rawBody || '{}') } catch { return err('Bad request body.') }
+  try { await verifyAuditor(body) } catch (e) { return err(e.message) }
+  if (!GHL_API_TOKEN) return err('GHL_API_TOKEN is not set on the site service.')
+  try {
+    const j = await ghlGet(`/locations/${GHL_LOCATION_ID}/customFields`)
+    const fields = (j.customFields || []).map(f => ({ name: f.name, id: f.id, dataType: f.dataType }))
+    return ok({ resolved: await ghlFieldMap(), fields })
+  } catch (e) { return err(e.message) }
+}
+
 const app = express()
 app.use(express.text({ type: '*/*', limit: '1mb' }))
 
@@ -1344,6 +1437,14 @@ app.post('/api/audit/queue', async (req, res) => {
 app.post('/api/audit/check', async (req, res) => {
   try { res.json(await handleAuditCheck(req.body)) }
   catch (e) { res.json(err(e.message || 'Audit failed')) }
+})
+app.post('/api/audit/ghl-fill', async (req, res) => {
+  try { res.json(await handleGhlFill(req.body)) }
+  catch (e) { res.json(err(e.message || 'Fill failed')) }
+})
+app.post('/api/audit/ghl-fields', async (req, res) => {
+  try { res.json(await handleGhlFields(req.body)) }
+  catch (e) { res.json(err(e.message || 'Request failed')) }
 })
 
 app.use(express.static(dist))
