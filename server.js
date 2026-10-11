@@ -940,7 +940,12 @@ async function readInstallSheet() {
 // the location defaults to Turf Time's sub-account. Entirely non-fatal — any
 // failure (no token, Cloudflare block, no match) just fails item 8 and leaves
 // the other seven checks working.
+// Two tokens, least-privilege: GHL_API_TOKEN (read-only) does every read — the
+// verify side that runs on every audit — and GHL_WRITE_TOKEN (write-scoped) is
+// used ONLY for the "Fill blanks" write. GHL_WRITE_TOKEN falls back to
+// GHL_API_TOKEN when unset, so a single-token setup still works.
 const GHL_API_TOKEN   = (process.env.GHL_API_TOKEN || '').trim()
+const GHL_WRITE_TOKEN = (process.env.GHL_WRITE_TOKEN || '').trim() || GHL_API_TOKEN
 const GHL_LOCATION_ID = (process.env.GHL_LOCATION_ID || 'lm0glrcKsZ05EcZrGS9t').trim()
 const GHL_BASE = 'https://services.leadconnectorhq.com'
 // Known custom-field ids (fallbacks when name resolution misses them).
@@ -956,9 +961,9 @@ let _ghlFields = { at: 0, map: null }  // our key -> resolved field id
 
 // GHL sits behind Cloudflare, which 1010-blocks non-browser agents — a browser
 // User-Agent + the Version header are required.
-function ghlHeaders() {
+function ghlHeaders(token = GHL_API_TOKEN) {
   return {
-    Authorization: `Bearer ${GHL_API_TOKEN}`,
+    Authorization: `Bearer ${token}`,
     Version: '2021-07-28',
     Accept: 'application/json',
     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
@@ -1093,7 +1098,7 @@ async function ghlFillBlanks(deal, usersById) {
   if (!writes.length) return { filled: 0 }
   const resp = await fetch(`${GHL_BASE}/contacts/${contactId}`, {
     method: 'PUT',
-    headers: { ...ghlHeaders(), 'Content-Type': 'application/json' },
+    headers: { ...ghlHeaders(GHL_WRITE_TOKEN), 'Content-Type': 'application/json' },
     body: JSON.stringify({ customFields: writes }),
   })
   if (!resp.ok) {
