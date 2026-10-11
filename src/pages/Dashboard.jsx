@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, Fragment } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   format, subMonths, startOfWeek, endOfWeek, addDays, getDaysInMonth,
@@ -72,6 +72,34 @@ function Delta({ cur, prev }) {
   )
 }
 
+// The numeric <td>s shared by a drill-table row and an expanded rep sub-row, so
+// the two always line up with the same header. (Optional Set/Ran, then Revenue,
+// Deals, Avg deal, Markup, Commission — the Goal cell is rendered by the caller
+// since its percentage depends on which goal applies.)
+function StatCells({ st, prev, showActivity }) {
+  return (
+    <>
+      {showActivity && (
+        <>
+          <td className="text-right py-2 px-2 tabular-nums text-white/60">
+            {st.set ?? 0}
+            {st.showRate != null && <span className="block text-[10px] text-white/30 font-normal">{st.showRate.toFixed(0)}% ran</span>}
+          </td>
+          <td className="text-right py-2 px-2 tabular-nums text-white/60">
+            {st.ran ?? 0}
+            {st.dealCloseRate != null && <span className="block text-[10px] text-teal/60 font-normal">{st.dealCloseRate.toFixed(0)}% closed</span>}
+          </td>
+        </>
+      )}
+      <td className="text-right py-2 px-2 tabular-nums text-white font-semibold">{fmt(st.revenue)}<Delta cur={st.revenue} prev={prev?.revenue} /></td>
+      <td className="text-right py-2 px-2 tabular-nums text-white/60">{st.deals}<Delta cur={st.deals} prev={prev?.deals} /></td>
+      <td className="text-right py-2 px-2 tabular-nums text-white/60">{st.avgDeal != null ? fmt(st.avgDeal) : '—'}</td>
+      <td className="text-right py-2 px-2 tabular-nums text-white/60">{st.markupPct != null ? `${st.markupPct.toFixed(1)}%` : '—'}</td>
+      <td className="text-right py-2 px-2 tabular-nums text-white/60">{fmt(st.commission)}</td>
+    </>
+  )
+}
+
 function StatCard({ label, value, sub, trend, value2, valueLabel, value2Label }) {
   return (
     <div className="rounded-xl p-3 md:p-4 min-w-0 flex-1" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
@@ -122,6 +150,11 @@ export default function Dashboard() {
   // and clicking into an office from the Offices view would otherwise land on
   // a grouping that level does not have.
   const [officeGroup,  setOfficeGroup]  = useState('team')
+  // Which team rows are expanded in the company-level Teams breakdown. Clicking
+  // a team drops its reps in underneath, in place, instead of re-scoping the
+  // whole page to that team (per Keaton — the full-page shift was jarring).
+  const [expandedTeams, setExpandedTeams] = useState(() => new Set())
+  const toggleTeam = (key) => setExpandedTeams(s => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n })
   const [showActivity, setShowActivity] = useState(false)      // extra door/appointment columns
   const [leads,        setLeads]        = useState([])
   const [officeGoals,  setOfficeGoals]  = useState({})   // { '': company, Phoenix: n, … }
@@ -318,6 +351,16 @@ export default function Dashboard() {
     setBoardSort(v => (v.key === key ? { key, dir: v.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }))
   const repBoard = useMemo(() => sortLeaderboard(repBoardRaw, boardSort.key, boardSort.dir),
     [repBoardRaw, boardSort])
+
+  // A team's own rep rows (for the inline accordion) — those with activity in
+  // range, ghosts hidden from non-admins, ranked by revenue.
+  const teamRepRows = (key) => {
+    const t = perf?.teams.find(x => x.key === key)
+    return (t?.rows || [])
+      .filter(r => r.deals || r.leadCloses || r.revenue || r.commission)
+      .filter(r => isAdmin || !r.ghost)
+      .sort((a, b) => b.revenue - a.revenue)
+  }
 
   // Copy the leaderboard as a REAL TABLE (text/html) with a tab-separated
   // fallback, so it pastes formatted into Canva / Sheets / Docs — Keaton
@@ -895,7 +938,7 @@ export default function Dashboard() {
                       axes never crossed before, so picking Tucson dropped you
                       straight into a flat rep list with no way back to teams
                       (per Keaton). */}
-                  {(node.level === 'company' ? ['team', 'office'] : ['team', 'rep']).map(g => {
+                  {(node.level === 'company' ? ['team', 'office', 'rep'] : ['team', 'rep']).map(g => {
                     const on = grouping === g
                     const set = node.level === 'company' ? setGroupBy : setOfficeGroup
                     return (
@@ -917,15 +960,79 @@ export default function Dashboard() {
                 </h3>
               )}
             </div>
-            <button onClick={() => setShowActivity(v => !v)}
-              className={`px-2.5 py-1 rounded-full text-[11px] transition-colors ${showActivity
-                ? 'bg-teal text-dark font-semibold' : 'text-white/45 hover:text-white'}`}
-              style={showActivity ? undefined : { border: '1px solid #3a3a3a' }}>
-              {showActivity ? '✓' : '+'} Appointments
-            </button>
+            {grouping === 'rep' ? (
+              <button onClick={copyLeaderboard}
+                title="Copy as a table — pastes formatted into Canva, Sheets or Docs"
+                className={`px-2.5 py-1.5 rounded-lg text-[11.5px] font-semibold inline-flex items-center gap-1.5 transition-colors ${
+                  copiedBoard ? 'text-emerald-400' : 'text-white/45 hover:text-teal'}`}
+                style={{ background: '#1a1a1a', border: '1px solid #333' }}>
+                {copiedBoard ? <Check size={12} /> : <Copy size={12} />}{copiedBoard ? 'Copied' : 'Copy table'}
+              </button>
+            ) : (
+              <button onClick={() => setShowActivity(v => !v)}
+                className={`px-2.5 py-1 rounded-full text-[11px] transition-colors ${showActivity
+                  ? 'bg-teal text-dark font-semibold' : 'text-white/45 hover:text-white'}`}
+                style={showActivity ? undefined : { border: '1px solid #3a3a3a' }}>
+                {showActivity ? '✓' : '+'} Appointments
+              </button>
+            )}
           </div>
 
-          {node.children.length > 0 ? (
+          {grouping === 'rep' && (node.level === 'company' || node.level === 'office') ? (
+            repBoard.length > 0 ? (
+              <div className="overflow-x-auto">
+                <p className="text-[11px] text-white/30 mb-2">
+                  {repBoard.length} {repBoard.length === 1 ? 'rep' : 'reps'} with activity · tap a column to rank by it ·
+                  Set Deals + Self-Gen are the deals they own · Leads Closed is what Total Revenue adds on top
+                </p>
+                <table className="w-full text-[12.5px]">
+                  <thead>
+                    <tr>
+                      <th className="text-left font-semibold py-1.5 pr-1 w-8 text-[9px] uppercase tracking-widest text-white/30">#</th>
+                      <SortTh first label="Rep" col="name" sort={boardSort} onSort={toggleBoardSort} />
+                      <SortTh label="Revenue" col="revenue" sort={boardSort} onSort={toggleBoardSort}
+                        title="Revenue on the deals they OWN — what they set, or closed with no setter recorded" />
+                      <SortTh label="Total Revenue" col="totalRevenue" sort={boardSort} onSort={toggleBoardSort}
+                        title="Every deal they were involved in: their own, plus the ones they closed for another setter. A self-gen counts once." />
+                      <SortTh label="Set Deals" col="setForOthers" sort={boardSort} onSort={toggleBoardSort}
+                        title="They set it, another rep closed it — the setter keeps the deal and its revenue" />
+                      <SortTh label="Self-Gen" col="selfGen" sort={boardSort} onSort={toggleBoardSort}
+                        title="They set AND closed it themselves" />
+                      <SortTh label="Leads Closed" col="leadCloses" sort={boardSort} onSort={toggleBoardSort}
+                        title="Another rep set it, they closed it — the setter still owns the deal" />
+                      <SortTh label="Commission" col="commission" sort={boardSort} onSort={toggleBoardSort} />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {repBoard.map((r, i) => (
+                      <tr key={r.id}
+                        onClick={onClickUnlessSelecting(() => setScope({ level: 'rep', key: r.id }))}
+                        className="border-t border-white/5 cursor-pointer hover:bg-white/[0.03]">
+                        <td className="py-2 pr-1 text-white/25 tabular-nums">{i + 1}</td>
+                        <td className="py-2 pr-2">
+                          <span className="font-semibold text-teal">{r.ghost && !isAdmin ? 'Hidden' : r.name} ›</span>
+                          {isCompany(scope) && r.team && <span className="block text-[10px] text-white/30 font-normal">{r.team}</span>}
+                        </td>
+                        <td className="text-right py-2 px-2 tabular-nums text-white font-semibold">
+                          {fmt(r.revenue)}<Delta cur={r.revenue} prev={r.prev?.revenue} />
+                        </td>
+                        <td className="text-right py-2 px-2 tabular-nums text-white/75">
+                          {fmt(r.totalRevenue)}
+                          {r.leadRevenue > 0 && <span className="block text-[10px] text-white/30 font-normal">+{fmt(r.leadRevenue)} closed</span>}
+                        </td>
+                        <td className="text-right py-2 px-2 tabular-nums text-white/70">{r.setForOthers}</td>
+                        <td className="text-right py-2 px-2 tabular-nums text-white/70">{r.selfGen}</td>
+                        <td className="text-right py-2 px-2 tabular-nums text-white/70">{r.leadCloses}</td>
+                        <td className="text-right py-2 px-2 tabular-nums text-white/70">{fmt(r.commission)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-[12px] text-white/30 py-3">No reps with activity in this range.</p>
+            )
+          ) : node.children.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="w-full text-[12.5px]">
                 <thead>
@@ -945,13 +1052,20 @@ export default function Dashboard() {
                             : (teamGoalMap[c.key] ?? null)
                     const gp = g ? (st.revenue / g) * 100 : null
                     const fl = c.kind === 'rep' ? repFlags(st, flagFloors) : {}
+                    // Company-level team rows expand IN PLACE to show their reps,
+                    // instead of re-scoping the whole page (per Keaton).
+                    const isTeamAcc = node.level === 'company' && c.kind === 'team'
+                    const expanded = isTeamAcc && expandedTeams.has(c.key)
                     return (
-                      <tr key={`${c.kind}-${c.key}`}
-                        onClick={c.drillable ? onClickUnlessSelecting(() => setScope({ level: c.kind, key: c.key })) : undefined}
-                        className={`border-t border-white/5 ${c.drillable ? 'cursor-pointer hover:bg-white/[0.03]' : ''}`}>
+                      <Fragment key={`${c.kind}-${c.key}`}>
+                      <tr
+                        onClick={isTeamAcc
+                          ? onClickUnlessSelecting(() => toggleTeam(c.key))
+                          : (c.drillable ? onClickUnlessSelecting(() => setScope({ level: c.kind, key: c.key })) : undefined)}
+                        className={`border-t border-white/5 ${(isTeamAcc || c.drillable) ? 'cursor-pointer hover:bg-white/[0.03]' : ''}`}>
                         <td className="py-2 pr-2">
-                          <span className={`font-semibold ${c.drillable ? 'text-teal' : 'text-white/70'}`}>
-                            {c.ghost && !isAdmin ? 'Hidden' : c.label}{c.drillable ? ' ›' : ''}
+                          <span className={`font-semibold ${(isTeamAcc || c.drillable) ? 'text-teal' : 'text-white/70'}`}>
+                            {c.ghost && !isAdmin ? 'Hidden' : c.label}{isTeamAcc ? (expanded ? ' ⌄' : ' ›') : (c.drillable ? ' ›' : '')}
                           </span>
                           {c.sub && <span className="block text-[10px] text-white/30 font-normal">{c.sub}</span>}
                         </td>
@@ -989,6 +1103,29 @@ export default function Dashboard() {
                           )}
                         </td>
                       </tr>
+                      {isTeamAcc && expanded && teamRepRows(c.key).map(r => {
+                        const rg = repGoalMap[r.id]
+                        const rgp = rg ? (r.revenue / rg) * 100 : null
+                        return (
+                          <tr key={`rep-${c.key}-${r.id}`}
+                            onClick={onClickUnlessSelecting(() => setScope({ level: 'rep', key: r.id }))}
+                            className="border-t border-white/5 cursor-pointer hover:bg-white/[0.03]"
+                            style={{ background: '#1c1c1c' }}>
+                            <td className="py-1.5 pr-2 pl-7">
+                              <span className="text-teal/80 text-[12px]">{r.ghost && !isAdmin ? 'Hidden' : r.name} ›</span>
+                            </td>
+                            <StatCells st={r} prev={r.prev} showActivity={showActivity} />
+                            <td className="text-right py-2 px-2 tabular-nums">
+                              {rgp == null ? <span className="text-white/20">—</span> : (
+                                <span className={rgp >= 100 ? 'text-emerald-400 font-semibold' : rgp >= 80 ? 'text-white/60' : 'text-amber-400'}>
+                                  {Math.round(rgp)}%
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                      </Fragment>
                     )
                   })}
                   <tr className="border-t border-white/10" style={{ background: '#1f1f1f' }}>
@@ -1022,7 +1159,11 @@ export default function Dashboard() {
                   </tr>
                 </tbody>
               </table>
-              <p className="text-[10.5px] text-white/25 mt-2">Click a row to scope the whole page to it.</p>
+              <p className="text-[10.5px] text-white/25 mt-2">
+                {node.level === 'company' && grouping === 'team'
+                  ? 'Click a team to drop its reps in below; click a rep to see their deals.'
+                  : 'Click a row to scope the whole page to it.'}
+              </p>
             </div>
           ) : node.level === 'rep' ? (
             <div className="overflow-x-auto">
@@ -1059,98 +1200,6 @@ export default function Dashboard() {
       )}
 
 
-      {/* ── Rep leaderboard — FULL WIDTH, under the teams table ──────────
-          Brought back after the merge removed it (per Keaton, who uses it
-          constantly and pastes it into a meeting). The drill table shows
-          TEAMS at company level, so this is the only place individuals are
-          visible at a glance. It follows the scope like everything else.
-
-          NOTE the three counts are MUTUALLY EXCLUSIVE and none contains
-          another (per Keaton — the old layout had "Deals" as a TOTAL with
-          Self-Gen nested inside it and Lead Closes outside it, two levels in
-          one header row, and "Deals 7 · Lead Closes 19" read like the 7 was
-          wrong). Every deal a rep touched lands in exactly one:
-            Set Deals    — they set it, someone else closed it
-            Self-Gen     — they set AND closed it
-            Leads Closed — someone else set it, they closed it
-          Deals they OWN = Set Deals + Self-Gen, and that is what Revenue is
-          the revenue of; Leads Closed is what Total Revenue adds on top.
-          "Set Deals" is never bare "Set": on this same page "Set" means
-          APPOINTMENTS in the funnel above, and two meanings for one word is
-          the exact problem the merge existed to kill. */}
-      {repBoard.length > 0 && (
-        <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
-          <div className="flex items-start justify-between gap-2 flex-wrap mb-3">
-            <div>
-              <h3 className="text-[13px] md:text-[14px] font-semibold text-white">
-                Rep Leaderboard{scopeName ? ` — ${scopeName}` : ''}
-              </h3>
-              <p className="text-[11px] text-white/30 mt-0.5">
-                {repBoard.length} {repBoard.length === 1 ? 'rep' : 'reps'} with activity · tap a column to rank by it ·
-                Set Deals + Self-Gen are the deals they own · Leads Closed is what Total Revenue adds on top
-              </p>
-            </div>
-            <button onClick={copyLeaderboard}
-              title="Copy as a table — pastes formatted into Canva, Sheets or Docs"
-              className={`px-2.5 py-1.5 rounded-lg text-[11.5px] font-semibold inline-flex items-center gap-1.5 transition-colors ${
-                copiedBoard ? 'text-emerald-400' : 'text-white/45 hover:text-teal'}`}
-              style={{ background: '#1a1a1a', border: '1px solid #333' }}>
-              {copiedBoard ? <Check size={12} /> : <Copy size={12} />}{copiedBoard ? 'Copied' : 'Copy table'}
-            </button>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-[12.5px]">
-              <thead>
-                <tr>
-                  <th className="text-left font-semibold py-1.5 pr-1 w-8 text-[9px] uppercase tracking-widest text-white/30">#</th>
-                  <SortTh first label="Rep" col="name" sort={boardSort} onSort={toggleBoardSort} />
-                  <SortTh label="Revenue" col="revenue" sort={boardSort} onSort={toggleBoardSort}
-                    title="Revenue on the deals they OWN — what they set, or closed with no setter recorded" />
-                  <SortTh label="Total Revenue" col="totalRevenue" sort={boardSort} onSort={toggleBoardSort}
-                    title="Every deal they were involved in: their own, plus the ones they closed for another setter. A self-gen counts once. Per-person — do not add these up across a team, since a deal whose setter AND closer are both on it would count twice." />
-                  <SortTh label="Set Deals" col="setForOthers" sort={boardSort} onSort={toggleBoardSort}
-                    title="They set it, another rep closed it — the setter keeps the deal and its revenue" />
-                  <SortTh label="Self-Gen" col="selfGen" sort={boardSort} onSort={toggleBoardSort}
-                    title="They set AND closed it themselves" />
-                  <SortTh label="Leads Closed" col="leadCloses" sort={boardSort} onSort={toggleBoardSort}
-                    title="Another rep set it, they closed it — the setter still owns the deal" />
-                  <SortTh label="Commission" col="commission" sort={boardSort} onSort={toggleBoardSort} />
-                </tr>
-              </thead>
-              <tbody>
-                {repBoard.map((r, i) => (
-                  <tr key={r.id}
-                    onClick={onClickUnlessSelecting(() => setScope({ level: 'rep', key: r.id }))}
-                    className="border-t border-white/5 cursor-pointer hover:bg-white/[0.03]">
-                    <td className="py-2 pr-1 text-white/25 tabular-nums">{i + 1}</td>
-                    <td className="py-2 pr-2">
-                      <span className="font-semibold text-teal">{r.name} ›</span>
-                      {isCompany(scope) && r.team && (
-                        <span className="block text-[10px] text-white/30 font-normal">{r.team}</span>
-                      )}
-                    </td>
-                    <td className="text-right py-2 px-2 tabular-nums text-white font-semibold">
-                      {fmt(r.revenue)}
-                      <Delta cur={r.revenue} prev={r.prev?.revenue} />
-                    </td>
-                    <td className="text-right py-2 px-2 tabular-nums text-white/75">
-                      {fmt(r.totalRevenue)}
-                      {r.leadRevenue > 0 && (
-                        <span className="block text-[10px] text-white/30 font-normal">+{fmt(r.leadRevenue)} closed</span>
-                      )}
-                    </td>
-                    <td className="text-right py-2 px-2 tabular-nums text-white/70">{r.setForOthers}</td>
-                    <td className="text-right py-2 px-2 tabular-nums text-white/70">{r.selfGen}</td>
-                    <td className="text-right py-2 px-2 tabular-nums text-white/70">{r.leadCloses}</td>
-                    <td className="text-right py-2 px-2 tabular-nums text-white/70">{fmt(r.commission)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
 
       {/* ── Weekly + Annual — stack on mobile ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-5">
