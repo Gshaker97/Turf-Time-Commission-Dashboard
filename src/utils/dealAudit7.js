@@ -22,6 +22,7 @@ export const AUDIT_ITEMS = [
   { key: 'customer_info',      label: 'Customer info',       manual: false },
   { key: 'manager_override',   label: 'Manager & override',  manual: false },
   { key: 'drawing_commission', label: 'Drawing & commission', manual: true },
+  { key: 'ghl_information',     label: 'GHL information',      manual: false },
 ]
 export const AUDIT_ITEM_KEYS = AUDIT_ITEMS.map(i => i.key)
 export const MANUAL_ITEM_KEYS = AUDIT_ITEMS.filter(i => i.manual).map(i => i.key)
@@ -64,6 +65,20 @@ export function saleTypeFromLead(leadSource) {
 
 const nameById = (id, usersById) => (id && usersById[id] && usersById[id].name) || null
 
+// Display + compare helpers for the GHL three-way match (item 8).
+function fmtGhlVal(cmp, v) {
+  if (v == null || v === '') return '—'
+  if (cmp === 'money') { const n = Number(v); return isNaN(n) ? String(v) : `$${(Math.round(n * 100) / 100).toFixed(2)}` }
+  return String(v)
+}
+function ghlValuesAgree(cmp, a, b) {
+  if (a == null || b == null || a === '' || b === '') return false
+  if (cmp === 'date') return String(a) === String(b)
+  if (cmp === 'money') { const x = Number(a), y = Number(b); return !isNaN(x) && !isNaN(y) && Math.round(x) === Math.round(y) }
+  const x = norm(a), y = norm(b)   // name / text: case-insensitive, either contains the other
+  return x === y || x.includes(y) || y.includes(x)
+}
+
 // Compute the auto items' pass/fail + reasons + fix payloads.
 //   deal     — the deals row (all columns)
 //   booking  — null, or {
@@ -74,9 +89,17 @@ const nameById = (id, usersById) => (id && usersById[id] && usersById[id].name) 
 //                payment, customerPhone, customerAddress
 //              }
 //   usersById — { id: { id, name } } for showing site names
+//   ghl      — null, or {
+//                configured,                 // GHL token present server-side
+//                matched,                    // a GHL contact matched the deal
+//                error,                      // string if the GHL read failed
+//                contactName,                // the matched contact's name
+//                has: { sales_rep, install_date, commission, payment_method }
+//                  each 'present' | 'empty' | 'no_field'
+//              }
 // Returns { items: [{ key, label, manual, pass, reason, fix }] } — manual
 // items carry pass:null (their state lives in the stored checklist).
-export function computeAudit(deal, booking, usersById = {}) {
+export function computeAudit(deal, booking, usersById = {}, ghl = null) {
   const onCal = !!(booking && booking.onCalendar)
   const items = []
 
@@ -176,6 +199,59 @@ export function computeAudit(deal, booking, usersById = {}) {
     reason: 'Confirm the drawing matches and commission is right.',
     fix: null,
   })
+
+  // 8 — GHL information: the deal's GoHighLevel contact has install date, sales
+  // rep, commission and payment method filled in AND they MATCH the site + the
+  // install sheet. Auto. Empty GHL fields can be filled from the site via the
+  // 'ghl_fill' fix; a GHL value that CONFLICTS is flagged, never overwritten.
+  {
+    let pass = false, reason = null, fix = null
+    if (!ghl || ghl.configured === false) {
+      reason = 'GHL is not connected yet (set GHL_API_TOKEN on the site).'
+    } else if (ghl.error) {
+      reason = `Couldn’t read GHL: ${ghl.error}`
+    } else if (!ghl.matched) {
+      reason = 'No GHL contact matched this deal (by phone or name).'
+    } else {
+      const siteRep = nameById(deal.closer_id, usersById) || nameById(deal.setter_id, usersById)
+      const amt = dealAmounts(deal)
+      const specs = [
+        { key: 'install_date',   label: 'install date',   cmp: 'date',  site: deal.install_date || null,   sheet: (booking && booking.installDate) || null },
+        { key: 'sales_rep',      label: 'sales rep',      cmp: 'name',  site: siteRep || null,              sheet: (booking && booking.closerName) || null },
+        { key: 'commission',     label: 'commission',     cmp: 'money', site: amt.repCommission,            sheet: null },
+        { key: 'payment_method', label: 'payment method', cmp: 'text',  site: deal.payment_method || null,  sheet: (booking && booking.payment) || null },
+      ]
+      const parts = []
+      const fillable = []
+      let allOk = true
+      for (const s of specs) {
+        const exists = ghl.fieldExists ? ghl.fieldExists[s.key] : false
+        const has = ghl.present ? ghl.present[s.key] : false
+        const gv = ghl.values ? ghl.values[s.key] : null
+        const hasSite = s.site != null && s.site !== ''
+        if (!exists) { parts.push(`${s.label}: no field in GHL`); allOk = false; continue }
+        if (!has) {
+          parts.push(`${s.label}: blank in GHL${hasSite ? ` (site ${fmtGhlVal(s.cmp, s.site)})` : ''}`)
+          allOk = false
+          if (hasSite) fillable.push(s.key)
+          continue
+        }
+        if (ghlValuesAgree(s.cmp, gv, s.site)) {
+          parts.push(`${s.label}: matches (${fmtGhlVal(s.cmp, gv)})`)
+        } else {
+          allOk = false
+          const bits = [`GHL ${fmtGhlVal(s.cmp, gv)}`,
+            hasSite ? `site ${fmtGhlVal(s.cmp, s.site)}` : null,
+            (s.sheet != null && s.sheet !== '') ? `sheet ${fmtGhlVal(s.cmp, s.sheet)}` : null].filter(Boolean)
+          parts.push(`${s.label}: mismatch — ${bits.join(' vs ')}`)
+        }
+      }
+      pass = allOk
+      if (fillable.length) fix = { type: 'ghl_fill', fields: fillable }
+      reason = parts.join(' • ') + (ghl.contactName ? ` • contact: ${ghl.contactName}` : '')
+    }
+    items.push({ key: 'ghl_information', label: 'GHL information', manual: false, pass, reason, fix })
+  }
 
   return { items }
 }

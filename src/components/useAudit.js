@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { auditQueue, auditDeal, setChecklistItem, updateDeal, fetchDealChecklists } from '../lib/db'
+import { auditQueue, auditDeal, setChecklistItem, updateDeal, fetchDealChecklists, ghlFill } from '../lib/db'
 import { AUDIT_ITEMS } from '../utils/dealAudit7'
 import { payDateFromInstall } from '../utils/dateRanges'
 import { toast } from '../lib/toast'
@@ -79,6 +79,14 @@ export function useAudit({ deals = [], canAudit = false, enabled = true, onDealC
     const deal = dealById[id]
     if (!deal || !fix) return
     if (fix.type === 'assign_team') { navigate('/admin'); return }
+    if (fix.type === 'ghl_fill') {
+      mark(id, true)
+      const res = await ghlFill(id)
+      if (res?.ok && res.audit) { setById(m => ({ ...m, [id]: res.audit })); onDealChanged?.() }
+      else toast.error(res?.error || 'Could not fill GHL')
+      mark(id, false)
+      return
+    }
     mark(id, true)
     let res
     if (fix.type === 'use_calendar_date') {

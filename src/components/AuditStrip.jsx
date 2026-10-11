@@ -1,4 +1,4 @@
-import { Check, Circle, X, Lock, RefreshCw, CalendarClock, Users } from 'lucide-react'
+import { Check, Circle, X, Lock, RefreshCw, CalendarClock, Users, UploadCloud } from 'lucide-react'
 
 // X/7 pill shown next to the deal name on the Needs-review table.
 export function AuditBadge({ done, total, reviewed }) {
@@ -73,6 +73,12 @@ function detailLines(item, deal, a) {
     case 'drawing_commission':
       if (item.reason) lines.push(item.reason)
       break
+    case 'ghl_information':
+      // The server summarises all four GHL fields in one ' • '-joined string;
+      // split it so each (sales rep / install date / commission / payment
+      // method / contact) lists on its own line, like setter/closer above.
+      if (item.reason) item.reason.split(' • ').forEach(part => lines.push(part))
+      break
     default:
       if (item.reason) lines.push(item.reason)
   }
@@ -82,9 +88,11 @@ function detailLines(item, deal, a) {
 function FixButton({ fix, busy, onFix }) {
   const label = fix.type === 'use_calendar_date' ? 'Use calendar date'
     : fix.type === 'use_calendar_people' ? 'Use calendar setter/closer'
-    : fix.type === 'assign_team' ? 'Assign team' : null
+    : fix.type === 'assign_team' ? 'Assign team'
+    : fix.type === 'ghl_fill' ? 'Fill blanks in GHL' : null
   if (!label) return null
-  const Icon = fix.type === 'use_calendar_date' ? CalendarClock : Users
+  const Icon = fix.type === 'use_calendar_date' ? CalendarClock
+    : fix.type === 'ghl_fill' ? UploadCloud : Users
   return (
     <button onClick={onFix} disabled={busy}
       className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold text-dark bg-teal disabled:opacity-40">
