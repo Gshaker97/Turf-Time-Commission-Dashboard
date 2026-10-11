@@ -76,8 +76,15 @@ function detailLines(item, deal, a) {
     case 'ghl_information':
       // The server summarises all four GHL fields in one ' • '-joined string;
       // split it so each (sales rep / install date / commission / payment
-      // method / contact) lists on its own line, like setter/closer above.
-      if (item.reason) item.reason.split(' • ').forEach(part => lines.push(part))
+      // method / contact) lists on its own line, and colour each by state:
+      // match = green, mismatch = red, blank in GHL = amber, no field = grey.
+      if (item.reason) item.reason.split(' • ').forEach(part => {
+        const tone = /no field in GHL/i.test(part) ? 'nofield'
+          : /blank in GHL/i.test(part) ? 'blank'
+          : /mismatch/i.test(part) ? 'mismatch'
+          : /matches/i.test(part) ? 'match' : null
+        lines.push({ text: part, tone })
+      })
       break
     default:
       if (item.reason) lines.push(item.reason)
@@ -126,9 +133,16 @@ function AuditRow({ deal, item, audit, canAudit, busy, onToggle, onFix }) {
         : label}
       {lines.length > 0 && (
         <div className="mt-1 ml-[22px] space-y-0.5">
-          {lines.map((ln, i) => (
-            <p key={i} className="text-[11px] text-white/45 leading-snug">{ln}</p>
-          ))}
+          {lines.map((ln, i) => {
+            const text = typeof ln === 'string' ? ln : ln.text
+            const tone = typeof ln === 'string' ? null : ln.tone
+            const cls = tone === 'match' ? 'text-teal'
+              : tone === 'mismatch' ? 'text-red-400'
+              : tone === 'blank' ? 'text-amber-400'
+              : tone === 'nofield' ? 'text-white/35'
+              : 'text-white/45'
+            return <p key={i} className={`text-[11px] leading-snug ${cls}`}>{text}</p>
+          })}
           {canAudit && item.fix && (
             <div className="pt-0.5"><FixButton fix={item.fix} busy={busy} onFix={onFix} /></div>
           )}
