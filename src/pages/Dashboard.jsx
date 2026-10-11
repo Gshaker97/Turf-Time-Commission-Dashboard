@@ -4,7 +4,7 @@ import {
   format, subMonths, startOfWeek, endOfWeek, addDays, getDaysInMonth,
 } from 'date-fns'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { Check, X, TrendingUp, TrendingDown, Minus, ChevronRight, ChevronDown, ChevronUp, ChevronsUpDown, Copy, AlertCircle } from 'lucide-react'
+import { Check, X, TrendingUp, TrendingDown, Minus, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, ChevronsUpDown, Copy, AlertCircle } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import {
@@ -335,6 +335,13 @@ export default function Dashboard() {
     t.push({ label: node.title, scope: null })
     return t
   }, [node])
+
+  // One level up from the current node (the breadcrumb's second-to-last step),
+  // so a drilled-in rep / office-team can back out from inside its own section
+  // without scrolling up to the breadcrumb.
+  const backStep   = node && node.level !== 'company' ? trail[trail.length - 2] : null
+  const backScope  = backStep ? backStep.scope : undefined
+  const backLabel  = backStep ? backStep.label : null
 
   const flagFloors = perfFloors || undefined
 
@@ -955,12 +962,22 @@ export default function Dashboard() {
                   )}
                 </>
               ) : (
-                <h3 className="text-[13px] md:text-[14px] font-semibold text-white">
-                  {node.childKind || `${node.title} · deals`}
-                </h3>
+                <div className="flex items-center gap-2 min-w-0">
+                  {backScope !== undefined && (
+                    <button onClick={() => setScope(backScope)}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-white/55 hover:text-white transition-colors flex-shrink-0"
+                      style={{ background: '#1a1a1a', border: '1px solid #333' }}
+                      title={backLabel ? `Back to ${backLabel}` : 'Back'}>
+                      <ChevronLeft size={13} /> Back{backLabel ? ` to ${backLabel}` : ''}
+                    </button>
+                  )}
+                  <h3 className="text-[13px] md:text-[14px] font-semibold text-white truncate">
+                    {node.childKind || `${node.title} · deals`}
+                  </h3>
+                </div>
               )}
             </div>
-            {grouping === 'rep' ? (
+            {grouping === 'rep' && (node.level === 'company' || node.level === 'office') ? (
               <button onClick={copyLeaderboard}
                 title="Copy as a table — pastes formatted into Canva, Sheets or Docs"
                 className={`px-2.5 py-1.5 rounded-lg text-[11.5px] font-semibold inline-flex items-center gap-1.5 transition-colors ${
