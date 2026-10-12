@@ -75,8 +75,11 @@ function ghlValuesAgree(cmp, a, b) {
   if (a == null || b == null || a === '' || b === '') return false
   if (cmp === 'date') return String(a) === String(b)
   if (cmp === 'money') { const x = Number(a), y = Number(b); return !isNaN(x) && !isNaN(y) && Math.round(x) === Math.round(y) }
-  const x = norm(a), y = norm(b)   // name / text: case-insensitive, either contains the other
-  return x === y || x.includes(y) || y.includes(x)
+  // name / text: strip spaces + punctuation so "Self Pay" == "Self-Pay" and
+  // "Selfpay + Sunlight" == "Self-Pay + Sunlight"; either-contains for partials.
+  const strip = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '')
+  const x = strip(a), y = strip(b)
+  return !!x && !!y && (x === y || x.includes(y) || y.includes(x))
 }
 
 // Compute the auto items' pass/fail + reasons + fix payloads.

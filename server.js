@@ -1013,10 +1013,13 @@ const ghlToNumber = (v) => { const n = parseFloat(String(v ?? '').replace(/[^0-9
 function matchGhlOption(value, options) {
   if (!options || !options.length) return null
   const optText = (o) => String(typeof o === 'string' ? o : (o.name || o.label || o.value || '')).trim()
-  const want = String(value ?? '').trim().toLowerCase()
+  // Strip spaces/punctuation so "Self-Pay" matches "Self Pay",
+  // "Self-Pay + Sunlight" matches "Selfpay + Sunlight", etc.
+  const strip = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+  const want = strip(value)
   if (!want) return null
-  let hit = options.find(o => optText(o).toLowerCase() === want)
-  if (!hit) hit = options.find(o => { const n = optText(o).toLowerCase(); return n && (n.includes(want) || want.includes(n)) })
+  let hit = options.find(o => strip(optText(o)) === want)
+  if (!hit) hit = options.find(o => { const n = strip(optText(o)); return n && (n.includes(want) || want.includes(n)) })
   return hit ? optText(hit) : null
 }
 
@@ -1077,9 +1080,21 @@ async function readDealGhl(deal) {
   }
 }
 
+// "9626 W MITCHELL DR, Phoenix, AZ 85037" → { address1, city, state, postalCode }.
+function parseAddress(s) {
+  const parts = String(s || '').split(',').map(x => x.trim()).filter(Boolean)
+  if (!parts.length) return null
+  const out = { address1: parts[0] }
+  if (parts[1]) out.city = parts[1]
+  const m = parts.slice(2).join(' ').match(/([A-Za-z]{2})\s*(\d{5})?/)
+  if (m) { out.state = m[1].toUpperCase(); if (m[2]) out.postalCode = m[2] }
+  return out
+}
+
 // WRITE: fill ONLY the empty GHL fields with the site's values — never
 // overwrites a value already there (a conflicting value is flagged by the
-// audit, not clobbered). Needs a write-scoped token; a 401/403 says so.
+// audit, not clobbered). Fills the 4 custom fields AND the customer's phone /
+// address on the contact. Needs a write-scoped token; a 401/403 says so.
 async function ghlFillBlanks(deal, usersById) {
   if (!GHL_API_TOKEN) throw new Error('GHL is not connected (GHL_API_TOKEN not set).')
   const fields = await ghlFieldMap()
@@ -1126,18 +1141,32 @@ async function ghlFillBlanks(deal, usersById) {
     else value = String(site[key])
     writes.push({ id: f.id, value })
   }
-  if (!writes.length) return { filled: 0 }
+
+  // Customer info → standard contact fields (phone + address), blanks only.
+  const std = {}
+  if (!present(contact && contact.phone) && String(deal.customer_phone || '').trim()) {
+    std.phone = String(deal.customer_phone).trim()
+  }
+  if (!present(contact && contact.address1) && String(deal.customer_address || '').trim()) {
+    const a = parseAddress(deal.customer_address)
+    if (a) Object.assign(std, a)
+  }
+
+  const count = writes.length + Object.keys(std).length
+  if (!count) return { filled: 0 }
+  const body = { ...std }
+  if (writes.length) body.customFields = writes
   const resp = await fetch(`${GHL_BASE}/contacts/${contactId}`, {
     method: 'PUT',
     headers: { ...ghlHeaders(GHL_WRITE_TOKEN), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ customFields: writes }),
+    body: JSON.stringify(body),
   })
   if (!resp.ok) {
     const txt = (await resp.text()).slice(0, 160)
     if (resp.status === 401 || resp.status === 403) throw new Error(`GHL write denied (${resp.status}) — the token needs the contacts.write scope. ${txt}`)
     throw new Error(`GHL write failed (${resp.status}): ${txt}`)
   }
-  return { filled: writes.length }
+  return { filled: count }
 }
 
 // A sheet date cell → 'YYYY-MM-DD' (date only). Handles ISO, M/D/YYYY, and a
@@ -1247,7 +1276,7 @@ async function auditDataStart() {
 // Run the audit for ONE deal (deal object already loaded), with the shared
 // sheet + roster. Persists auto items, backfills contact info, flips the deal
 // to Deal Reviewed when all items are checked. Returns the per-item result.
-async function auditOneDeal(deal, sheet, profiles, usersById, callerId) {
+async function auditOneDeal(deal, sheet, profiles, usersById, callerId, autoFill = false) {
   const booking = buildBooking(deal, sheet, profiles)
 
   // Item 5 backfill: fill empty contact fields from the Jobs tab, never
@@ -1263,7 +1292,19 @@ async function auditOneDeal(deal, sheet, profiles, usersById, callerId) {
   }
 
   // Item 8 (GHL) — read-only, non-fatal; failures just fail that one item.
-  const ghl = await readDealGhl(deal)
+  let ghl = await readDealGhl(deal)
+  // Auto-fill: when asked (the queue + per-deal re-run), push the site's values
+  // into the empty GHL fields automatically — no button click. Fills blanks
+  // only, never overwrites a conflict, and is non-fatal (a write failure just
+  // leaves the field blank + the manual "Fill blanks" button). Re-read after a
+  // successful write so the row reflects what GHL now holds.
+  if (autoFill && ghl.matched && GHL_WRITE_TOKEN) {
+    const blanks = GHL_KEYS.some(k => ghl.fieldExists?.[k] && !ghl.present?.[k])
+    if (blanks) {
+      try { const r = await ghlFillBlanks(deal, usersById); if (r.filled > 0) ghl = await readDealGhl(deal) }
+      catch { /* non-fatal — manual fill stays available */ }
+    }
+  }
   const { items } = computeAudit(deal, booking, usersById, ghl)
 
   // Existing checklist rows for this deal.
@@ -1330,7 +1371,7 @@ async function handleAuditDeal(rawBody) {
   if (!deal) return err('Deal not found')
   let sheet; try { sheet = await readInstallSheet() } catch (e) { return err(e.message) }
   const { profiles, usersById } = await loadRosterForAudit()
-  return ok({ audit: await auditOneDeal(deal, sheet, profiles, usersById, caller.id) })
+  return ok({ audit: await auditOneDeal(deal, sheet, profiles, usersById, caller.id, true) })
 }
 
 async function handleAuditQueue(rawBody) {
@@ -1347,7 +1388,7 @@ async function handleAuditQueue(rawBody) {
   const deals = all.filter(d => dealNeedsReview(d, cutoff))
   const audits = []
   for (const d of deals) {
-    try { audits.push(await auditOneDeal(d, sheet, profiles, usersById, caller.id)) }
+    try { audits.push(await auditOneDeal(d, sheet, profiles, usersById, caller.id, true)) }
     catch (e) { audits.push({ deal_id: d.id, deal_name: d.deal_name, error: e.message }) }
   }
   return ok({ count: audits.length, audits })
