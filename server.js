@@ -1090,7 +1090,10 @@ async function ghlFillBlanks(deal, usersById) {
     if (site[key] == null || site[key] === '') continue   // nothing to write
     const dt = String(f.dataType || '').toUpperCase()
     let value
-    if (key === 'install_date') value = Date.parse(`${site.install_date}T12:00:00Z`)        // epoch ms
+    // GHL DATE custom fields want a 'YYYY-MM-DD' string on write (epoch ms is
+    // rejected with "Invalid Custom Field Value"), even though reads come back
+    // as epoch ms. site.install_date is already 'YYYY-MM-DD'.
+    if (key === 'install_date' || dt.includes('DATE')) value = String(site[key])
     else if (dt.includes('MONET') || dt.includes('NUMER') || dt === 'NUMBER') value = Number(site[key])
     else value = String(site[key])
     writes.push({ id: f.id, value })
