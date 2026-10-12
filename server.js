@@ -983,11 +983,16 @@ async function ghlFieldMap() {
   if (_ghlFields.map && Date.now() - _ghlFields.at < 600000) return _ghlFields.map
   const j = await ghlGet(`/locations/${GHL_LOCATION_ID}/customFields`)
   const byName = {}
-  for (const f of j.customFields || []) byName[String(f.name || '').trim().toLowerCase()] = { id: f.id, dataType: f.dataType || null }
+  for (const f of j.customFields || []) {
+    byName[String(f.name || '').trim().toLowerCase()] = {
+      id: f.id, dataType: f.dataType || null,
+      options: f.picklistOptions || f.options || null,   // dropdown choices, when any
+    }
+  }
   const map = {}
   for (const [key, names] of Object.entries(GHL_FIELD_NAMES)) {
     map[key] = names.map(n => byName[n]).find(Boolean)
-      || (GHL_KNOWN_FIELDS[key] ? { id: GHL_KNOWN_FIELDS[key], dataType: null } : null)
+      || (GHL_KNOWN_FIELDS[key] ? { id: GHL_KNOWN_FIELDS[key], dataType: null, options: null } : null)
   }
   _ghlFields = { at: Date.now(), map }
   return map
@@ -1001,6 +1006,19 @@ function ghlFieldToYMD(v) {
   return toYMD(String(v))
 }
 const ghlToNumber = (v) => { const n = parseFloat(String(v ?? '').replace(/[^0-9.\-]/g, '')); return isNaN(n) ? null : n }
+
+// Match a site value to one of a dropdown field's options (exact first, then
+// either-contains), returning the option's exact text or null. Options may be
+// plain strings or { name|label|value } objects.
+function matchGhlOption(value, options) {
+  if (!options || !options.length) return null
+  const optText = (o) => String(typeof o === 'string' ? o : (o.name || o.label || o.value || '')).trim()
+  const want = String(value ?? '').trim().toLowerCase()
+  if (!want) return null
+  let hit = options.find(o => optText(o).toLowerCase() === want)
+  if (!hit) hit = options.find(o => { const n = optText(o).toLowerCase(); return n && (n.includes(want) || want.includes(n)) })
+  return hit ? optText(hit) : null
+}
 
 const ghlDigits = (s) => String(s || '').replace(/\D/g, '').slice(-10)
 const ghlNorm = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase()
@@ -1089,12 +1107,22 @@ async function ghlFillBlanks(deal, usersById) {
     if (present(cf[f.id])) continue                       // already set — never overwrite
     if (site[key] == null || site[key] === '') continue   // nothing to write
     const dt = String(f.dataType || '').toUpperCase()
+    const isSingleOpt = dt === 'SINGLE_OPTIONS' || dt === 'RADIO'
+    const isMultiOpt  = dt === 'MULTIPLE_OPTIONS' || dt === 'CHECKBOX'
     let value
     // GHL DATE custom fields want a 'YYYY-MM-DD' string on write (epoch ms is
     // rejected with "Invalid Custom Field Value"), even though reads come back
     // as epoch ms. site.install_date is already 'YYYY-MM-DD'.
     if (key === 'install_date' || dt.includes('DATE')) value = String(site[key])
     else if (dt.includes('MONET') || dt.includes('NUMER') || dt === 'NUMBER') value = Number(site[key])
+    else if (isSingleOpt || isMultiOpt) {
+      // A dropdown/radio/checkbox only accepts one of its own options — send the
+      // matching option, never a raw string (which 400s like the date did). No
+      // match → skip this field rather than break the whole write.
+      const opt = matchGhlOption(site[key], f.options)
+      if (!opt) continue
+      value = isMultiOpt ? [opt] : opt
+    }
     else value = String(site[key])
     writes.push({ id: f.id, value })
   }
