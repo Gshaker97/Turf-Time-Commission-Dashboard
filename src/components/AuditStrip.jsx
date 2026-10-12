@@ -126,13 +126,13 @@ function AuditRow({ deal, item, audit, canAudit, busy, onToggle, onFix }) {
   )
   const lines = detailLines(item, deal, audit.byId[deal.id])
   return (
-    <li className="py-2">
+    <div className="rounded-lg px-2.5 py-1.5" style={{ background: '#242424', border: '1px solid #2a2a2a' }}>
       {clickable
         ? <button onClick={() => onToggle(!done)} disabled={busy} title={done ? 'Uncheck' : 'Check'}
             className="disabled:opacity-40 hover:opacity-80 transition-opacity">{label}</button>
         : label}
       {lines.length > 0 && (
-        <div className="mt-1 ml-[22px] space-y-0.5">
+        <div className="mt-1 ml-[20px] space-y-0.5">
           {lines.map((ln, i) => {
             const text = typeof ln === 'string' ? ln : ln.text
             const tone = typeof ln === 'string' ? null : ln.tone
@@ -148,13 +148,13 @@ function AuditRow({ deal, item, audit, canAudit, busy, onToggle, onFix }) {
           )}
         </div>
       )}
-    </li>
+    </div>
   )
 }
 
 // The full-width checklist rendered directly under a deal's row on the
-// Needs-review table: a vertical list of the 7 checks, each with its own info
-// listed beneath it.
+// Needs-review table: a compact grid of the checks (3 across on desktop, 2 on
+// tablet, 1 on phones) so it stays short, each cell with its own info beneath.
 export default function AuditStrip({ deal, audit, canAudit }) {
   const a = audit.byId[deal.id]
   const busy = !!audit.busy[deal.id]
@@ -165,14 +165,14 @@ export default function AuditStrip({ deal, audit, canAudit }) {
   if (!a) return null
 
   return (
-    <div className="rounded-lg px-3 py-1.5" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-      <ul className="divide-y divide-white/5">
+    <div className="rounded-lg px-3 py-2" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
         {a.items.map(it => (
           <AuditRow key={it.key} deal={deal} item={it} audit={audit} canAudit={canAudit} busy={busy}
             onToggle={(v) => audit.toggleManual(deal.id, it.key, v)}
             onFix={() => audit.applyFix(deal.id, it.fix)} />
         ))}
-      </ul>
+      </div>
     </div>
   )
 }
