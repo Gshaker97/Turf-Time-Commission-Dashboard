@@ -5,26 +5,56 @@ import { AUDIT_ITEMS } from '../utils/dealAudit7'
 import { payDateFromInstall } from '../utils/dateRanges'
 import { toast } from '../lib/toast'
 
-// The shared engine for the inline 7-item deal-audit checklist on Deals →
-// Needs review. Lifted verbatim out of the old <AuditQueue> panel so each deal
-// row can render its own strip while the data is still fetched ONCE for the
-// whole page. Auditors (admin/Keaton) get the live audit with auto-checks +
-// fix buttons; everyone else on the review tab sees the last stored result,
-// read-only. The audit logic, endpoints and permissions are unchanged — only
-// where the result is rendered moved.
+// The shared engine for the inline deal-audit checklist on Deals → Needs
+// review. Auditors (admin/Keaton) get the live audit with auto-checks + fix
+// buttons; everyone else sees the last stored result, read-only.
+//
+// The live audit reads the install sheet + GoHighLevel for every deal, which is
+// slow, so the auditor view CACHES the whole queue result in localStorage for
+// an hour. Opening Needs review reuses that cache instantly; "Re-run all"
+// forces a fresh audit, and any single-deal change (toggle / fix / re-run)
+// patches the cache in place so it stays correct without resetting the timer.
+const CACHE_KEY = 'tt_audit_queue_cache'
+const CACHE_TTL = 60 * 60 * 1000   // 1 hour
+
+function readCache() {
+  try {
+    const c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null')
+    return c && typeof c.at === 'number' && c.byId ? c : null
+  } catch { return null }
+}
+function writeCache(byId) {
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), byId })) } catch { /* ignore */ }
+}
+// Update one deal in the cache WITHOUT resetting the hourly timer.
+function patchCache(dealId, audit) {
+  try {
+    const c = readCache(); if (!c) return
+    c.byId[dealId] = audit
+    localStorage.setItem(CACHE_KEY, JSON.stringify(c))
+  } catch { /* ignore */ }
+}
+
 export function useAudit({ deals = [], canAudit = false, enabled = true, onDealChanged }) {
   const navigate = useNavigate()
   const [byId, setById]   = useState({})     // deal_id -> audit result (or stored rows)
   const [state, setState] = useState('idle') // idle|loading|error|ready|disabled
   const [err, setErr]     = useState(null)
   const [busy, setBusy]   = useState({})
+  const [cachedAt, setCachedAt] = useState(null)  // when the shown queue was last fully audited
   const dealById = Object.fromEntries(deals.map(d => [d.id, d]))
   const ids = deals.map(d => d.id).join(',')
 
-  const run = useCallback(async () => {
+  const run = useCallback(async (force = false) => {
     if (!enabled) { setState('idle'); return }
-    setState('loading'); setErr(null)
     if (canAudit) {
+      // Serve the cached queue instantly unless it's stale (>1h) or a refresh
+      // was explicitly asked for (the "Re-run all" button).
+      if (!force) {
+        const c = readCache()
+        if (c && Date.now() - c.at < CACHE_TTL) { setById(c.byId); setCachedAt(c.at); setState('ready'); return }
+      }
+      setState('loading'); setErr(null)
       const res = await auditQueue()
       if (res?.ok === false) {
         if (/demo/i.test(res.error || '')) { setState('disabled'); return }
@@ -32,9 +62,10 @@ export function useAudit({ deals = [], canAudit = false, enabled = true, onDealC
       }
       const map = {}
       for (const a of res.audits || []) map[a.deal_id] = a
-      setById(map); setState('ready')
+      setById(map); writeCache(map); setCachedAt(Date.now()); setState('ready')
     } else {
-      // Read-only: show the last stored checklist for the shown deals.
+      // Read-only: the last stored checklist for the shown deals (already fast).
+      setState('loading'); setErr(null)
       const { data } = await fetchDealChecklists(deals.map(d => d.id))
       const map = {}
       for (const d of deals) {
@@ -50,19 +81,21 @@ export function useAudit({ deals = [], canAudit = false, enabled = true, onDealC
       }
       setById(map); setState('ready')
     }
-    // The id-string dep makes the audit rerun only when the shown set of deals
-    // changes, as the old panel did. (Deliberately not depending on `deals`/
-    // `onDealChanged` objects, which change identity every render.)
+    // id-string dep: reruns only when the shown set of deals changes (a cache
+    // hit then makes that instant). Not depending on the deals/onDealChanged
+    // objects, which change identity every render.
   }, [enabled, canAudit, ids])
 
   useEffect(() => { run() }, [run])
 
   const mark = (id, v) => setBusy(b => ({ ...b, [id]: v }))
+  // Apply a fresh single-deal audit to both the live view and the cache.
+  const applyAudit = (id, audit) => { setById(m => ({ ...m, [id]: audit })); patchCache(id, audit) }
 
   async function rerun(id) {
     mark(id, true)
     const res = await auditDeal(id)
-    if (res?.ok && res.audit) setById(m => ({ ...m, [id]: res.audit }))
+    if (res?.ok && res.audit) applyAudit(id, res.audit)
     else if (res?.ok === false) toast.error(res.error || 'Audit failed')
     mark(id, false)
   }
@@ -70,7 +103,7 @@ export function useAudit({ deals = [], canAudit = false, enabled = true, onDealC
   async function toggleManual(id, key, checked) {
     mark(id, true)
     const res = await setChecklistItem(id, key, checked)
-    if (res?.ok && res.audit) { setById(m => ({ ...m, [id]: res.audit })); onDealChanged?.() }
+    if (res?.ok && res.audit) { applyAudit(id, res.audit); onDealChanged?.() }
     else toast.error(res?.error || 'Could not save')
     mark(id, false)
   }
@@ -82,7 +115,7 @@ export function useAudit({ deals = [], canAudit = false, enabled = true, onDealC
     if (fix.type === 'ghl_fill') {
       mark(id, true)
       const res = await ghlFill(id)
-      if (res?.ok && res.audit) { setById(m => ({ ...m, [id]: res.audit })); onDealChanged?.() }
+      if (res?.ok && res.audit) { applyAudit(id, res.audit); onDealChanged?.() }
       else toast.error(res?.error || 'Could not fill GHL')
       mark(id, false)
       return
@@ -97,10 +130,10 @@ export function useAudit({ deals = [], canAudit = false, enabled = true, onDealC
     }
     if (res?.error) { toast.error(res.error.message || 'Update failed'); mark(id, false); return }
     const a = await auditDeal(id)
-    if (a?.ok && a.audit) setById(m => ({ ...m, [id]: a.audit }))
+    if (a?.ok && a.audit) applyAudit(id, a.audit)
     onDealChanged?.()
     mark(id, false)
   }
 
-  return { byId, state, err, busy, rerunAll: run, rerun, toggleManual, applyFix }
+  return { byId, state, err, busy, cachedAt, rerunAll: () => run(true), rerun, toggleManual, applyFix }
 }

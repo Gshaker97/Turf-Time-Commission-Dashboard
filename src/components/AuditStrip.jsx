@@ -11,17 +11,32 @@ export function AuditBadge({ done, total, reviewed }) {
   )
 }
 
+// A short "updated 12m ago" / "just now" label from a timestamp.
+function agoLabel(at) {
+  if (!at) return null
+  const m = Math.round((Date.now() - at) / 60000)
+  if (m < 1) return 'just now'
+  if (m < 60) return `${m}m ago`
+  const h = Math.round(m / 60)
+  return `${h}h ago`
+}
+
 // Re-run all + queue status, shown up by the Needs review / All deals tabs.
 export function AuditControls({ audit, canAudit }) {
   const anyBusy = Object.values(audit.busy).some(Boolean)
+  const ago = agoLabel(audit.cachedAt)
   return (
     <div className="flex items-center gap-2 flex-wrap">
       {canAudit && (
         <button onClick={audit.rerunAll} disabled={anyBusy || audit.state === 'loading'}
           className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-white/60 hover:text-white disabled:opacity-40"
-          style={{ background: '#1e1e1e', border: '1px solid #2e2e2e' }}>
-          <RefreshCw size={12} className={audit.state === 'loading' ? 'animate-spin' : ''} /> Re-run all
+          style={{ background: '#1e1e1e', border: '1px solid #2e2e2e' }}
+          title="Re-check every deal against the install sheet + GHL now (otherwise cached for an hour)">
+          <RefreshCw size={12} className={audit.state === 'loading' ? 'animate-spin' : ''} /> Refresh
         </button>
+      )}
+      {canAudit && audit.state === 'ready' && ago && (
+        <span className="text-[11px] text-white/35">updated {ago}</span>
       )}
       {audit.state === 'loading' && <span className="text-[11px] text-white/40">Running audit…</span>}
       {audit.state === 'disabled' && <span className="text-[11px] text-white/40">The audit runs on the live site (disabled in demo mode).</span>}
