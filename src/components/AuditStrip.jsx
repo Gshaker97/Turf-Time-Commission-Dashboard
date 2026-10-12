@@ -180,7 +180,12 @@ export default function AuditStrip({ deal, audit, canAudit }) {
   if (!a) return null
 
   return (
-    <div className="rounded-lg px-3 py-2" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+    <div className="rounded-xl px-3 py-2.5" style={{ background: '#1e1e1e', border: '1px solid #313131' }}>
+      {/* Name the customer this checklist belongs to, so each card is clearly its own. */}
+      <div className="flex items-center gap-2 mb-2.5 pb-2 border-b border-white/10">
+        <span className="text-[11px] font-bold uppercase tracking-wide text-white/70 truncate">{deal.deal_name}</span>
+        <AuditBadge done={a.done} total={a.total} reviewed={a.reviewed} />
+      </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
         {a.items.map(it => (
           <AuditRow key={it.key} deal={deal} item={it} audit={audit} canAudit={canAudit} busy={busy}

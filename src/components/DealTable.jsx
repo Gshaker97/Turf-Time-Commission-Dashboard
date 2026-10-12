@@ -983,6 +983,11 @@ export default function DealTable({
                   </td>
                 </tr>
               )}
+              {/* A dark band ends each customer's block so the next one reads as a
+                  separate card (Needs-review / audit view only). */}
+              {audit && audit.byId[deal.id] && (
+                <tr aria-hidden="true"><td colSpan={colCount} style={{ background: '#161616', height: 10, padding: 0 }} /></tr>
+              )}
               {notesOpen.has(deal.id) && (
                 <tr style={{ background: isEven ? '#242424' : '#262626' }}>
                   <td colSpan={colCount} className="px-3 pb-3 pt-0">
@@ -999,8 +1004,9 @@ export default function DealTable({
         </tbody>
       </table>
 
-      {/* Mobile / tablet cards (below lg) */}
-      <div className="lg:hidden divide-y divide-white/5">
+      {/* Mobile / tablet cards (below lg) — a thick dark divider in the audit
+          view so each customer's card is clearly its own. */}
+      <div className={`lg:hidden ${audit ? 'divide-y-[10px] divide-[#161616]' : 'divide-y divide-white/5'}`}>
         {deals.map(deal => (
           <DealCard key={deal.id} deal={deal} canEdit={canEdit} canVerify={canVerify}
             onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} onUpdate={onUpdate}
