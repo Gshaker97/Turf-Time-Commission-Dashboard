@@ -533,6 +533,7 @@ export default function Home() {
           <StatTile icon={CalendarCheck} label="Appts set this wk" value={repCard.apptsThisWeek == null ? "—" : repCard.apptsThisWeek.toLocaleString("en-US")} color="#a78bfa" />
           <StatTile icon={DoorOpen}      label="Doors last month"  value={repCard.doorsLastMonth == null ? "—" : repCard.doorsLastMonth.toLocaleString("en-US")} color="#fff" />
         </div>
+        <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold mb-2">Averages · last 90 days</p>
         <div className="rounded-xl px-4 py-3 mb-3 grid grid-cols-3 gap-3" style={{ background: "#1e1e1e", border: "1px solid #282828" }}>
           <Avg label="Avg doors / day" sub="per day knocked" value={repCard.avgDoorsPerDay == null ? "—" : repCard.avgDoorsPerDay.toFixed(1)} />
           <Avg label="Doors / appt"    sub="to set one"      value={repCard.doorsPerAppt == null ? "—" : repCard.doorsPerAppt.toFixed(1)} />
