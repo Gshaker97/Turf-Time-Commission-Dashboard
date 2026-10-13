@@ -76,6 +76,41 @@ function Delta({ cur, prev }) {
 // the two always line up with the same header. (Optional Set/Ran, then Revenue,
 // Deals, Avg deal, Markup, Commission — the Goal cell is rendered by the caller
 // since its percentage depends on which goal applies.)
+// One rep's deals, shown inline under the rep row in the team accordion (no
+// page shift). Mirrors the rep-scope deals table.
+function RepDealsInline({ deals, repId }) {
+  return (
+    <div className="rounded-lg overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+      <table className="w-full text-[11.5px]">
+        <thead>
+          <tr className="text-[9px] uppercase tracking-widest text-white/30">
+            <th className="text-left font-semibold py-1.5 px-3">Deal</th>
+            <th className="text-left font-semibold py-1.5 px-2">Sold</th>
+            <th className="text-right font-semibold py-1.5 px-2">Revenue</th>
+            <th className="text-left font-semibold py-1.5 px-2">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {deals.map(d => (
+            <tr key={d.id} className="border-t border-white/5">
+              <td className="py-1.5 px-3 text-white/85 truncate max-w-[240px]">{d.deal_name}</td>
+              <td className="py-1.5 px-2 text-white/40 whitespace-nowrap">{d.sale_date}</td>
+              <td className="text-right py-1.5 px-2 tabular-nums text-white/70">{fmt(parseFloat(d.baseline_revenue) || 0)}</td>
+              <td className="py-1.5 px-2 text-white/40">{d.status}</td>
+            </tr>
+          ))}
+          {deals.length === 0 && (
+            <tr><td colSpan={4} className="py-3 text-center text-white/30">No deals in this range.</td></tr>
+          )}
+        </tbody>
+      </table>
+      <div className="px-3 py-1.5 border-t border-white/5">
+        <a href={`/deals?scope=all&rep=${repId}`} className="text-[11px] text-teal hover:underline">Open in Deals →</a>
+      </div>
+    </div>
+  )
+}
+
 function StatCells({ st, prev, showActivity }) {
   return (
     <>
@@ -155,6 +190,10 @@ export default function Dashboard() {
   // whole page to that team (per Keaton — the full-page shift was jarring).
   const [expandedTeams, setExpandedTeams] = useState(() => new Set())
   const toggleTeam = (key) => setExpandedTeams(s => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n })
+  // A rep inside an expanded team can expand again to show its own deals, in
+  // place, without scoping the page to that rep (per Keaton).
+  const [expandedReps, setExpandedReps] = useState(() => new Set())
+  const toggleRep = (id) => setExpandedReps(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
   const [showActivity, setShowActivity] = useState(false)      // extra door/appointment columns
   const [leads,        setLeads]        = useState([])
   const [officeGoals,  setOfficeGoals]  = useState({})   // { '': company, Phoenix: n, … }
@@ -1123,13 +1162,16 @@ export default function Dashboard() {
                       {isTeamAcc && expanded && teamRepRows(c.key).map(r => {
                         const rg = repGoalMap[r.id]
                         const rgp = rg ? (r.revenue / rg) * 100 : null
+                        const repOpen = expandedReps.has(r.id)
+                        const drillColCount = 1 + (showActivity ? 2 : 0) + 6
                         return (
-                          <tr key={`rep-${c.key}-${r.id}`}
-                            onClick={onClickUnlessSelecting(() => setScope({ level: 'rep', key: r.id }))}
+                          <Fragment key={`rep-${c.key}-${r.id}`}>
+                          <tr
+                            onClick={onClickUnlessSelecting(() => toggleRep(r.id))}
                             className="border-t border-white/5 cursor-pointer hover:bg-white/[0.03]"
                             style={{ background: '#1c1c1c' }}>
                             <td className="py-1.5 pr-2 pl-7">
-                              <span className="text-teal/80 text-[12px]">{r.ghost && !isAdmin ? 'Hidden' : r.name} ›</span>
+                              <span className="text-teal/80 text-[12px]">{r.ghost && !isAdmin ? 'Hidden' : r.name}{repOpen ? ' ⌄' : ' ›'}</span>
                             </td>
                             <StatCells st={r} prev={r.prev} showActivity={showActivity} />
                             <td className="text-right py-2 px-2 tabular-nums">
@@ -1140,6 +1182,14 @@ export default function Dashboard() {
                               )}
                             </td>
                           </tr>
+                          {repOpen && (
+                            <tr style={{ background: '#181818' }}>
+                              <td colSpan={drillColCount} className="py-2 pl-10 pr-3">
+                                <RepDealsInline deals={repDealsFor(deals, r.id, { from: dateFrom, to: dateTo })} repId={r.id} />
+                              </td>
+                            </tr>
+                          )}
+                          </Fragment>
                         )
                       })}
                       </Fragment>
