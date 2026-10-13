@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { startOfWeek, endOfWeek, addDays, format as dfFormat } from "date-fns";
-import { Trophy, TrendingUp, Award, Target, ClipboardList, Percent, DollarSign, Wallet, Layers, Flame, Clock, Share2, Check, X } from "lucide-react";
-import { fetchDeals, fetchCompetitions, fetchUsers, fetchWeeklyStats, fetchPersonalGoals, fetchLeads, fetchTeamChanges } from "../lib/db";
+import { Trophy, TrendingUp, Award, Target, ClipboardList, Percent, DollarSign, Wallet, Layers, Flame, Clock, Share2, Check, X, DoorOpen, CalendarCheck } from "lucide-react";
+import { fetchDeals, fetchCompetitions, fetchUsers, fetchWeeklyStats, fetchFieldActivity, fetchLeads, fetchTeamChanges } from "../lib/db";
 import { headIdSet, teamKeyFor, buildChangesByProfile } from "../utils/team";
 import { estimatesFor } from "../utils/estimates";
-import { currentPeriods, resolveGoal, goalIsSet, repProduction, periodElapsed, metricProgress, estimateStreak } from "../utils/goals";
+import { currentPeriods } from "../utils/goals";
 import { onClickUnlessSelecting } from "../utils/selection";
 import { getUserCommission, countsInTotals, fmt } from "../utils/commission";
 import { personalBests } from "../utils/records";
@@ -36,6 +36,17 @@ function rateColor(r) {
   if (r >= 40) return "#4ade80";
   if (r >= 25) return "#fbbf24";
   return "#fb923c";
+}
+
+// A compact derived-average cell for the RepCard metrics row.
+function Avg({ label, value, sub }) {
+  return (
+    <div className="text-center">
+      <p className="text-[9px] uppercase tracking-[0.12em] text-white/35 font-bold">{label}</p>
+      <p className="text-[20px] md:text-[22px] font-bold text-white mt-0.5 tabular-nums">{value}</p>
+      <p className="text-[9px] text-white/25">{sub}</p>
+    </div>
+  );
 }
 
 function StatTile({ icon: Icon, label, value, sub, color = "#00b894", trend, onClick }) {
@@ -70,7 +81,6 @@ export default function Home() {
   const me = viewId || profile?.id;
   const { dataStartDate, estimatesFrom } = useSettings();
   const [leads, setLeads] = useState([]);
-  const estOpts = useMemo(() => ({ leads, estimatesFrom }), [leads, estimatesFrom]);
 
   // Personal bests (owner-credited, completed periods) + how close the
   // current month is to the rep's best — the "beat yourself" nudge.
@@ -81,14 +91,14 @@ export default function Home() {
   const viewUser = useMemo(() => users.find(u => u.id === me) || profile, [users, me, profile]);
   const viewingOther = !!viewId && viewId !== profile?.id;
 
-  const [personalGoals, setPersonalGoals] = useState([]);
+  const [fieldActivity, setFieldActivity] = useState([]);
   const [teamChanges, setTeamChanges] = useState([]);
   useEffect(() => {
-    Promise.all([fetchDeals(), fetchCompetitions(), fetchUsers(), fetchWeeklyStats(), fetchPersonalGoals(), fetchLeads(), fetchTeamChanges()])
-      .then(([{ data: d }, { data: c }, { data: u }, { data: w }, { data: pg }, { data: ld }, { data: tc }]) => {
+    Promise.all([fetchDeals(), fetchCompetitions(), fetchUsers(), fetchWeeklyStats(), fetchFieldActivity(), fetchLeads(), fetchTeamChanges()])
+      .then(([{ data: d }, { data: c }, { data: u }, { data: w }, { data: fa }, { data: ld }, { data: tc }]) => {
         setAllDeals((d ?? []).filter(countsInTotals));
         setComps(c || []); setUsers(u || []); setWeekly(w || []);
-        setPersonalGoals(pg || []);
+        setFieldActivity(fa || []);
         setLeads(ld || []);
         setTeamChanges(tc || []);
         setLoading(false);
@@ -105,6 +115,49 @@ export default function Home() {
     changesByProfile: buildChangesByProfile(teamChanges),
   }), [users, teamChanges]);
   const monthDeals = useMemo(() => allDeals.filter(d => d.sale_date?.startsWith(mr.key)), [allDeals, mr.key]);
+
+  // RepCard field metrics for the shown rep: doors + appointments set, and the
+  // derived rates. Doors come from the field-activity feed (Arizona days);
+  // appointments from the leads feed (set_at = when the rep booked it); closes
+  // are the rep's own set deals. The three averages use the rep's field-active
+  // span so doors/appts/closes compare over the same period.
+  const repCard = useMemo(() => {
+    const todayIso = dfFormat(new Date(), "yyyy-MM-dd");
+    const weekStart = currentPeriods(todayIso).week.start;
+    const now = new Date(todayIso + "T12:00:00");
+    const pm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastMonthKey = `${pm.getFullYear()}-${String(pm.getMonth() + 1).padStart(2, "0")}`;
+    const azDay = (ts) => {
+      try { return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Phoenix", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ts)); }
+      catch { return String(ts || "").slice(0, 10); }
+    };
+    const weekKey = (iso) => {
+      const dt = new Date(iso + "T12:00:00");
+      const s = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() - dt.getDay());
+      return `${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, "0")}-${String(s.getDate()).padStart(2, "0")}`;
+    };
+    const myFA = fieldActivity.filter((r) => r.profile_id === me);
+    const mySets = leads.filter((l) => l.setter_id === me && (l.set_at || l.appointment_at));
+    const myCloses = allDeals.filter((d) => d.setter_id === me && d.sale_date);
+
+    const doorsThisWeek = myFA.filter((r) => r.activity_date >= weekStart && r.activity_date <= todayIso).reduce((s, r) => s + (r.doors_knocked || 0), 0);
+    const apptsThisWeek = mySets.filter((l) => azDay(l.set_at || l.appointment_at) >= weekStart).length;
+    const doorsLastMonth = myFA.filter((r) => String(r.activity_date || "").startsWith(lastMonthKey)).reduce((s, r) => s + (r.doors_knocked || 0), 0);
+
+    const withDoors = myFA.filter((r) => (r.doors_knocked || 0) > 0);
+    const totalDoors = withDoors.reduce((s, r) => s + (r.doors_knocked || 0), 0);
+    const firstDoor = withDoors.reduce((a, r) => (a === null || r.activity_date < a ? r.activity_date : a), null);
+    const activeWeeks = new Set(withDoors.map((r) => weekKey(r.activity_date))).size;
+    const apptsSpan = firstDoor ? mySets.filter((l) => azDay(l.set_at || l.appointment_at) >= firstDoor).length : 0;
+    const closesSpan = firstDoor ? myCloses.filter((d) => d.sale_date >= firstDoor).length : 0;
+
+    return {
+      doorsThisWeek, apptsThisWeek, doorsLastMonth,
+      avgDoorsPerDay: activeWeeks > 0 ? totalDoors / (activeWeeks * 6) : null,
+      doorsPerAppt: apptsSpan > 0 ? totalDoors / apptsSpan : null,
+      apptsPerClose: closesSpan > 0 ? apptsSpan / closesSpan : null,
+    };
+  }, [fieldActivity, leads, allDeals, me]);
 
   const setterRevForMonth = (key) => allDeals
     .filter(d => d.setter_id === me && d.sale_date?.startsWith(key))
@@ -461,77 +514,18 @@ export default function Home() {
         <StatTile icon={TrendingUp} label="Avg Deal"   value={money(stats.avgDeal)} sub="per self-gen deal · tap" color="#fff" onClick={() => toggleDrill("avgDeal")} />
       </div>
 
-      {/* My Goals — mirror of the Goals page (edit there; this stays current) */}
-      {(() => {
-        const today = dfFormat(new Date(), "yyyy-MM-dd");
-        const periods = currentPeriods(today);
-        const wGoal = resolveGoal(personalGoals, me, "week", periods.week.start);
-        const mGoal = resolveGoal(personalGoals, me, "month", periods.month.start);
-        const streak = estimateStreak(personalGoals, allDeals, weekly, me, today, 26, estOpts);
-        const bar = (label, value, prog, money) => {
-          if (!prog) return null;
-          const color = prog.status === "done" ? "#4ade80" : prog.status === "ahead" ? "#00b894" : "#fbbf24";
-          const pace = prog.status === "done" ? "✓ hit" : prog.status === "ahead" ? "on pace" : money ? `−${fmt(prog.gap)}` : `−${Math.ceil(prog.gap)}`;
-          return (
-            <div key={label} className="py-[7px]">
-              <div className="flex items-baseline gap-2 text-[11.5px] leading-none">
-                <span className="text-white/40">{label}</span>
-                <span className="text-[10px] font-semibold" style={{ color }}>{pace}</span>
-                <span className="ml-auto whitespace-nowrap">
-                  <span className="font-bold text-white">{money ? fmt(value) : value}</span>
-                  <span className="text-white/35"> / {money ? fmt(prog.target) : prog.target}</span>
-                </span>
-              </div>
-              <div className="h-[5px] rounded-full overflow-hidden mt-1.5" style={{ background: "rgba(255,255,255,0.06)" }}>
-                <div className="h-full rounded-full" style={{ width: `${prog.frac * 100}%`, background: color }} />
-              </div>
-            </div>
-          );
-        };
-        const blockFor = (title, p, goal) => {
-          const prod = repProduction(allDeals, weekly, me, p, estOpts);
-          const el = periodElapsed(p, today);
-          const rows = [
-            bar("SG Est", prod.sgEst, metricProgress(prod.sgEst, goal?.est_target, el)),
-            bar("Deals", prod.deals, metricProgress(prod.deals, goal?.deals_target, el)),
-            bar("Revenue", prod.revenue, metricProgress(prod.revenue, goal?.revenue_target, el), true),
-          ].filter(Boolean);
-          return (
-            <div className="flex-1 min-w-0">
-              <div className="flex items-baseline justify-between">
-                <p className="text-[9px] uppercase tracking-[0.14em] text-white/35 font-bold">{title}</p>
-                <p className="text-[9px] text-white/20">{p.sub}</p>
-              </div>
-              {rows.length ? <div className="mt-0.5">{rows}</div> : (
-                <p className="text-[11px] text-white/30 mt-2">No goals set yet.</p>
-              )}
-              <p className="text-[10px] text-white/25 mt-1">Leads: {prod.leadsRan} ran · {prod.leadsClosed} closed</p>
-            </div>
-          );
-        };
-        return (
-          <>
-            <div className="flex items-center gap-2 mb-2">
-              <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold">My goals</p>
-              {streak > 1 && (
-                <span className="flex items-center gap-1 text-[10px] font-bold text-amber-300">
-                  <Flame size={10} /> {streak}-week estimate streak
-                </span>
-              )}
-              <Link to="/goals" className="ml-auto text-[10px] text-teal hover:underline">
-                {goalIsSet(wGoal) || goalIsSet(mGoal) ? "Manage on Goals →" : "Set goals →"}
-              </Link>
-            </div>
-            <div className="rounded-xl px-4 py-3 mb-3" style={{ background: "#1e1e1e", border: "1px solid #282828" }}>
-              <div className="flex flex-col md:flex-row gap-x-7 gap-y-3">
-                {blockFor("This Week", periods.week, wGoal)}
-                <div className="hidden md:block w-px self-stretch" style={{ background: "#2a2a2a" }} />
-                {blockFor("This Month", periods.month, mGoal)}
-              </div>
-            </div>
-          </>
-        );
-      })()}
+      {/* Field activity · RepCard — doors + appointments (replaces the goals mirror) */}
+      <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold mb-2">Field activity · RepCard</p>
+      <div className="grid grid-cols-3 gap-2 md:gap-3 mb-2">
+        <StatTile icon={DoorOpen}      label="Doors this wk"     value={repCard.doorsThisWeek.toLocaleString("en-US")} color="#74b9ff" />
+        <StatTile icon={CalendarCheck} label="Appts set this wk" value={repCard.apptsThisWeek.toLocaleString("en-US")} color="#a78bfa" />
+        <StatTile icon={DoorOpen}      label="Doors last month"  value={repCard.doorsLastMonth.toLocaleString("en-US")} color="#fff" />
+      </div>
+      <div className="rounded-xl px-4 py-3 mb-3 grid grid-cols-3 gap-3" style={{ background: "#1e1e1e", border: "1px solid #282828" }}>
+        <Avg label="Avg doors / day" sub="6-day week"   value={repCard.avgDoorsPerDay == null ? "—" : repCard.avgDoorsPerDay.toFixed(1)} />
+        <Avg label="Doors / appt"    sub="to set one"   value={repCard.doorsPerAppt == null ? "—" : repCard.doorsPerAppt.toFixed(1)} />
+        <Avg label="Appts / close"   sub="to close one" value={repCard.apptsPerClose == null ? "—" : repCard.apptsPerClose.toFixed(1)} />
+      </div>
 
       {/* Personal bests — all-time, owner-credited, completed periods only */}
       {bests && (bests.bestMonth.best || bests.biggestDeal) && (<>
