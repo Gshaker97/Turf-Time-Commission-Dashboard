@@ -1444,8 +1444,83 @@ async function handleGhlFields(rawBody) {
   } catch (e) { return err(e.message) }
 }
 
+// ── RepCard leaderboard (door knocks + appointments) ────────────────────────
+// RepCard tallies every pin a rep drops onto its D2D leaderboard; its public
+// API returns those per-rep totals for any date range. We read that board so
+// the Home card shows the SAME door numbers reps see inside RepCard. The
+// /customers API and the knock WEBHOOK only expose pins attached to a saved
+// contact card, so both badly undercount (Charlie read 3 of 33 one week); the
+// leaderboard is the only source that reconciles. Entirely non-fatal: no token
+// → { configured: false } and the card simply hides its door metrics.
+const REPCARD_API_TOKEN   = (process.env.REPCARD_API_TOKEN || '').trim()
+const REPCARD_API_BASE    = (process.env.REPCARD_API_BASE_URL || 'https://app.repcard.com/api/').replace(/\/*$/, '/')
+const REPCARD_LEADERBOARD = (process.env.REPCARD_LEADERBOARD_NAME || 'D2D Leaderboard').trim()
+const _rcCache = new Map()            // `${from}|${to}` -> { at, rows }
+const RC_TTL = 10 * 60 * 1000         // 10 min — every rep loads the same board
+
+// RepCard sits behind the same Cloudflare posture as GHL; a browser User-Agent
+// avoids the 1010 bot block.
+function repcardHeaders() {
+  return {
+    'x-api-key': REPCARD_API_TOKEN,
+    Accept: 'application/json',
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
+  }
+}
+
+// Per-rep rows of the D2D board for [from,to] (YYYY-MM-DD): each is
+// { item_id, name, doors, appts, ran, sold, knockDays }. Metrics are resolved
+// by the board's own short_name → mapped_field map (DK/APPT/RAN/SALE/DKD), so a
+// renamed stat column fails soft instead of reading a stale field name.
+async function repcardLeaderboard(from, to) {
+  if (!REPCARD_API_TOKEN) return { configured: false, rows: [] }
+  const key = `${from}|${to}`
+  const hit = _rcCache.get(key)
+  if (hit && Date.now() - hit.at < RC_TTL) return { configured: true, cached: true, rows: hit.rows }
+
+  const url = `${REPCARD_API_BASE}leaderboards?from_date=${encodeURIComponent(from)}&to_date=${encodeURIComponent(to)}`
+  const resp = await fetch(url, { headers: repcardHeaders() })
+  if (!resp.ok) throw new Error(`RepCard ${resp.status}: ${(await resp.text()).slice(0, 120)}`)
+  const body = await resp.json()
+
+  const boards = Array.isArray(body?.result) ? body.result : []
+  const board = boards.find(b => String(b?.leaderboard_name || '').trim().toLowerCase() === REPCARD_LEADERBOARD.toLowerCase()) || boards[0]
+  const headers = board?.stats?.headers || []
+  const fieldFor = (short) => headers.find(h => String(h?.short_name || '').toUpperCase() === short)?.mapped_field || null
+  const fDK = fieldFor('DK'), fAPPT = fieldFor('APPT'), fRAN = fieldFor('RAN'), fSALE = fieldFor('SALE'), fDKD = fieldFor('DKD')
+  const num = (v) => { const n = Number(v); return isNaN(n) ? 0 : n }
+
+  const rows = (board?.stats?.stats || [])
+    .filter(r => r && r.item_type !== 'team' && r.item_type !== 'office' && String(r.item_title || '').trim())
+    .map(r => ({
+      item_id: r.item_id,
+      name: String(r.item_title || '').trim(),
+      doors: fDK ? num(r[fDK]) : 0,
+      appts: fAPPT ? num(r[fAPPT]) : 0,
+      ran: fRAN ? num(r[fRAN]) : 0,
+      sold: fSALE ? num(r[fSALE]) : 0,
+      knockDays: fDKD ? num(r[fDKD]) : 0,
+    }))
+  _rcCache.set(key, { at: Date.now(), rows })
+  return { configured: true, rows }
+}
+
 const app = express()
 app.use(express.text({ type: '*/*', limit: '1mb' }))
+
+// Read-only RepCard door/appointment numbers for a date range. Low-sensitivity
+// (no money, already shown company-wide on the Home/Dashboard cards), so it is
+// a plain GET with no per-user token. Always 200s: on any failure it returns
+// { ok:false } with empty rows so the card degrades to hiding doors.
+app.get('/api/repcard/leaderboard', async (req, res) => {
+  const from = String(req.query.from || '').trim()
+  const to   = String(req.query.to || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    return res.status(400).json(err('from and to must be YYYY-MM-DD'))
+  }
+  try { res.json({ ok: true, ...(await repcardLeaderboard(from, to)) }) }
+  catch (e) { res.json({ ok: false, configured: !!REPCARD_API_TOKEN, rows: [], error: e.message || 'RepCard read failed' }) }
+})
 
 app.get('/api/export/deals', async (req, res) => {
   if (!SUPABASE_URL || !SERVICE_KEY) return res.status(503).json(err('Export is not configured — SUPABASE_SERVICE_KEY is missing on the site service.'))
@@ -1463,6 +1538,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
     userAdmin: !!(SUPABASE_URL && SERVICE_KEY),
+    repcard: !!REPCARD_API_TOKEN,
     build: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) || null,
     at: new Date().toISOString(),
   })
