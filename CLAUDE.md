@@ -1637,7 +1637,32 @@ missing concept is a **balance owed**, not another adjustment. It all lives in
 Script trigger (every minute) drives everything: the **Jobs** tab (ArcSite
 "sold" feed) is the source of truth — every APPROVED job becomes a deal as soon
 as it lands (status `Deal Review`; Rhett/Ronnie excluded; hand-entered deals
-protected by name). The **Schedule** tab then layers on install date (+pay
+protected by name).
+**A PROJECT ID IDENTIFIES A JOB; A CUSTOMER NAME DOES NOT** (per Keaton —
+ArcSite keeps the Project ID constant across change orders, so the ID is the
+reliable key). The name fallback used to cover EVERY deal, which meant the
+SECOND job sold to an existing customer matched that customer's FIRST deal:
+the row-dedup (`targetOf`) kept only one of the two sheet rows, the matcher
+read the new job's money as a change order, raised a ❗ on the wrong deal and
+RE-POINTED that deal's `project_id` at the new job — after which the two rows
+fought over one deal and **one real sale stayed permanently invisible**,
+revenue and commission included. Some ❗ alerts dismissed as re-signs were
+probably second sales; the alert looks identical either way.
+The fallback now covers **only deals with NO `project_id`** — the case it was
+written for: a hand-entered deal the sheet later catches up with, adopted and
+stamped rather than duplicated. Once a deal carries an ID it can only ever be
+matched by that ID. FOUR places had to change together, and missing any one
+of them still loses the sale: the `dealByName` build, `targetOf` (an
+unmatched row keys on `pid:` now, not `cust:` — two jobs for one customer
+collided there and the dedup threw one away before the write loop saw it),
+the `existing` lookup, and the `handEnteredNames` create guard (was
+`namesSeen`, which tested every existing deal name). `schDiagnose` builds the
+same narrowed map and says "CUSTOMER NAME (a hand-entered deal with no
+Project ID)" so it can never explain a match the sync would not make.
+Simulated before/after on five cases: second job → CREATE (was: dropped +
+bogus alert), change order → unchanged, hand-entered adopt → unchanged,
+duplicate rows on one ID → still deduped, and two new jobs for one new
+customer in a single run → both created (one was silently dropped). The **Schedule** tab then layers on install date (+pay
 date), payment, office (detected by VALUE — Tucson/Phoenix/Mesa — since the
 column header is blank; office sets the 3.75%/5% dir+VP rate), and the real
 setter from Lead Source (names resolved leniently: "JC" → "JC Correa" via

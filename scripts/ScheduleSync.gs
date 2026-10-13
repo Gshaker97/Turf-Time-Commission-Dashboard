@@ -57,7 +57,7 @@ const SCH_PAID_STATUS      = 'Paid';
 const SCH_BASELINE_PROP   = 'SCHED_BASELINE_IDS';
 // Version stamp — reported in the heartbeat and shown on Admin → System
 // Health, so a stale/botched paste is visible at a glance. Bump when editing.
-const SCH_VERSION         = '2026-09-25';
+const SCH_VERSION         = '2026-10-13';
 // SAFETY: preview mode (logs what it WOULD do, writes nothing) now lives in
 // SCRIPT PROPERTIES, not code — so re-pasting this file can never silently
 // disable the sync again. To preview: Project Settings → Script Properties →
@@ -141,17 +141,31 @@ function schSyncLocked_() {
     });
   } catch (e) { /* settings rows not there yet — use built-in defaults */ }
 
-  // Existing deals, keyed by project_id; plus the set of customer names (to
-  // protect hand-entered deals from being duplicated).
+  // Existing deals, keyed by project_id.
+  //
+  // A PROJECT ID IDENTIFIES A JOB; A CUSTOMER NAME DOES NOT (per Keaton).
+  // The name fallback used to cover EVERY deal, so the second job sold to an
+  // existing customer matched that customer's FIRST deal: the row-dedup kept
+  // only one of the two sheet rows, the matcher read the new job's money as a
+  // change order, raised a ❗ on the wrong deal and RE-POINTED that deal's
+  // project_id at the new job — after which the two rows fought over one deal
+  // and one real sale stayed permanently invisible, revenue and commission
+  // included. ArcSite keeps the Project ID constant across change orders
+  // (confirmed with Keaton), so the ID is the reliable key and the name is not.
+  //
+  // The fallback now covers ONLY deals with NO project_id — which is the case
+  // it was actually written for: a HAND-ENTERED deal that the sheet later
+  // catches up with, adopted and stamped rather than duplicated. Once a deal
+  // carries an ID it can only ever be matched by that ID.
   const deals = schGetAll_(url, key,
     '/rest/v1/deals?select=id,project_id,deal_name,status,sale_date,baseline_revenue,job_price,install_date,pay_date,payment_method,office,setter_id,closer_id,manager_override_pct,director_override_pct,vp_override_pct,commission_verified,checklist,synced_baseline,synced_job_price');
-  const byProject = {}, namesSeen = new Set(), dealByName = {};
+  const byProject = {}, handEnteredNames = new Set(), dealByName = {};
   deals.forEach(d => {
     if (d.project_id) byProject[String(d.project_id)] = d;
-    if (d.deal_name) {
+    if (d.deal_name && !d.project_id) {
       const k = String(d.deal_name).trim().toLowerCase();
-      namesSeen.add(k);
-      dealByName[k] = d;   // name fallback so a re-sign under a new Project ID still matches
+      handEnteredNames.add(k);   // no ID yet — the sheet may still be the same job
+      dealByName[k] = d;
     }
   });
 
@@ -253,7 +267,11 @@ function schSyncLocked_() {
         // Resolved BEFORE the write loop so a project_id stamped mid-run can't
         // shift a later row's key out from under the dedup.
         const hit = (pid && byProject[pid]) || dealByName[cust];
-        targetOf[r] = hit ? 'deal:' + hit.id : 'cust:' + cust;
+        // An unmatched row's target is the JOB it will create, so the key is
+        // its Project ID. Keying it on the customer made two different jobs
+        // for one customer collide here and the dedup threw one away before
+        // the write loop ever saw it.
+        targetOf[r] = hit ? 'deal:' + hit.id : (pid ? 'pid:' + pid : 'cust:' + cust);
       }
       const newestRow = {};
       for (let r = 1; r < rows.length; r++) {
@@ -302,9 +320,9 @@ function schSyncLocked_() {
 
         const baselineVal = schMoney_(row[ix.baseline]);
         const saleVal     = schMoney_(row[ix.sale]);
-        // Match by Project ID; fall back to customer name so a re-sign that
-        // lands under a NEW Project/Proposal ID is still recognized as the same
-        // deal (otherwise the re-sign would be silently missed).
+        // Match by Project ID. The name fallback reaches ONLY hand-entered
+        // deals (no project_id) — see the dealByName build above for why it
+        // must never reach a deal that already carries an ID.
         const existing    = byProject[projectId] || dealByName[customer.toLowerCase()];
 
         if (existing) {
@@ -375,7 +393,10 @@ function schSyncLocked_() {
 
         // New deal.
         if (ignoreCreate.has(projectId)) { out.skipped++; continue; }
-        if (namesSeen.has(customer.toLowerCase())) { out.skipped++; continue; }  // protect hand-entered
+        // Protect hand-entered deals only. This used to test EVERY existing
+        // deal name, so it silently skipped the second job for a returning
+        // customer even if the matcher above had let it through.
+        if (handEnteredNames.has(customer.toLowerCase())) { out.skipped++; continue; }
         // Resolve the Sales Rep leniently (whitespace-insensitive, unique
         // first-name). An UNRESOLVED rep no longer blocks the import — the
         // deal is the money, the name is fixable: it lands with NO
@@ -406,10 +427,10 @@ function schSyncLocked_() {
           vp_override_pct: schOfficeRate_('', newSaleDate),
         };
         if (SCH_DRY_RUN) {
-          out.created++; byProject[projectId] = Object.assign({ id: 'preview' }, deal); namesSeen.add(customer.toLowerCase());
+          out.created++; byProject[projectId] = Object.assign({ id: 'preview' }, deal);
           out.details.push('WOULD CREATE — ' + customer + ' (base ' + (baselineVal || 0) + ', ' + repName + ')');
         } else {
-          try { schPost_(url, key, '/rest/v1/deals', deal); byProject[projectId] = Object.assign({ id: 'new' }, deal); namesSeen.add(customer.toLowerCase()); out.created++; }
+          try { schPost_(url, key, '/rest/v1/deals', deal); byProject[projectId] = Object.assign({ id: 'new' }, deal); out.created++; }
           catch (e) { out.errors++; out.details.push(customer + ': ' + e.message); }
         }
       }
@@ -828,10 +849,13 @@ function schDiagnose(name) {
   const byName = {};
   profiles.forEach(function (p) { if (p && p.name) byName[String(p.name).trim().toLowerCase()] = p; });
   const deals = schGetAll_(url, key, '/rest/v1/deals?select=id,project_id,deal_name,status,synced_baseline,synced_job_price');
+  // Same narrowing as schSync — the name fallback reaches hand-entered deals
+  // only. Keep the two in step or the diagnostic explains a match that the
+  // real sync would never make.
   const byProject = {}, dealByName = {};
   deals.forEach(function (d) {
     if (d.project_id) byProject[String(d.project_id)] = d;
-    if (d.deal_name) dealByName[String(d.deal_name).trim().toLowerCase()] = d;
+    if (d.deal_name && !d.project_id) dealByName[String(d.deal_name).trim().toLowerCase()] = d;
   });
   const ignoreCreate = (props.getProperty(SCH_BASELINE_PROP) || '').split(',').filter(Boolean);
 
@@ -874,7 +898,7 @@ function schDiagnose(name) {
     if (schRepExcluded_(repName)) { log(pfx + 'SKIPPED — Sales Rep "' + repName + '" is on the excluded-reps list'); continue; }
     const existing = byProject[projectId] || dealByName[customer.toLowerCase()];
     if (existing) {
-      const how = byProject[projectId] ? 'Project ID' : 'CUSTOMER NAME';
+      const how = byProject[projectId] ? 'Project ID' : 'CUSTOMER NAME (a hand-entered deal with no Project ID)';
       const snapMissing = existing.synced_baseline == null && existing.synced_job_price == null;
       const changed = !snapMissing && (schChanged_(existing.synced_baseline, schMoney_(row[ix.baseline])) || schChanged_(existing.synced_job_price, schMoney_(row[ix.sale])));
       log(pfx + 'MATCHED AN EXISTING DEAL by ' + how + ' → deal "' + existing.deal_name + '" (status ' + existing.status + ', project ' + (existing.project_id || 'none') + '). '
