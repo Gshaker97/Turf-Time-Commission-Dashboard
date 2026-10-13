@@ -957,6 +957,17 @@ async function auditPost(pathname, payload) {
     return await resp.json()
   } catch (e) { return { ok: false, error: e.message || 'Request failed.' } }
 }
+// RepCard D2D leaderboard door/appointment totals for a date range (YYYY-MM-DD).
+// Read-only, no auth — returns { ok, configured, rows:[{ item_id, name, doors,
+// appts, ran, sold, knockDays }] }. Fails soft so the Home card can hide doors.
+export async function fetchRepcardLeaderboard(from, to) {
+  if (DEMO_MODE) return { ok: false, configured: false, rows: [] }
+  try {
+    const resp = await fetch(`/api/repcard/leaderboard?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)
+    return await resp.json()
+  } catch (e) { return { ok: false, configured: false, rows: [], error: e.message || 'Request failed.' } }
+}
+
 export const auditDeal  = (dealId) => auditPost('/api/audit/deal', { deal_id: dealId })
 export const auditQueue = () => auditPost('/api/audit/queue', {})
 export const setChecklistItem = (dealId, itemKey, checked) =>

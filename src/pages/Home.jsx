@@ -2,10 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { startOfWeek, endOfWeek, addDays, format as dfFormat } from "date-fns";
 import { Trophy, TrendingUp, Award, Target, ClipboardList, Percent, DollarSign, Wallet, Layers, Flame, Clock, Share2, Check, X, DoorOpen, CalendarCheck } from "lucide-react";
-import { fetchDeals, fetchCompetitions, fetchUsers, fetchWeeklyStats, fetchFieldActivity, fetchLeads, fetchTeamChanges } from "../lib/db";
+import { fetchDeals, fetchCompetitions, fetchUsers, fetchWeeklyStats, fetchLeads, fetchTeamChanges, fetchRepcardLeaderboard } from "../lib/db";
 import { headIdSet, teamKeyFor, buildChangesByProfile } from "../utils/team";
 import { estimatesFor } from "../utils/estimates";
-import { currentPeriods } from "../utils/goals";
 import { onClickUnlessSelecting } from "../utils/selection";
 import { getUserCommission, countsInTotals, fmt } from "../utils/commission";
 import { personalBests } from "../utils/records";
@@ -91,18 +90,42 @@ export default function Home() {
   const viewUser = useMemo(() => users.find(u => u.id === me) || profile, [users, me, profile]);
   const viewingOther = !!viewId && viewId !== profile?.id;
 
-  const [fieldActivity, setFieldActivity] = useState([]);
   const [teamChanges, setTeamChanges] = useState([]);
   useEffect(() => {
-    Promise.all([fetchDeals(), fetchCompetitions(), fetchUsers(), fetchWeeklyStats(), fetchFieldActivity(), fetchLeads(), fetchTeamChanges()])
-      .then(([{ data: d }, { data: c }, { data: u }, { data: w }, { data: fa }, { data: ld }, { data: tc }]) => {
+    Promise.all([fetchDeals(), fetchCompetitions(), fetchUsers(), fetchWeeklyStats(), fetchLeads(), fetchTeamChanges()])
+      .then(([{ data: d }, { data: c }, { data: u }, { data: w }, { data: ld }, { data: tc }]) => {
         setAllDeals((d ?? []).filter(countsInTotals));
         setComps(c || []); setUsers(u || []); setWeekly(w || []);
-        setFieldActivity(fa || []);
         setLeads(ld || []);
         setTeamChanges(tc || []);
         setLoading(false);
       });
+  }, []);
+
+  // RepCard D2D leaderboard — the ONLY source whose door numbers reconcile with
+  // what reps see in RepCard (the webhook/customers feeds only capture pins
+  // attached to a saved contact and undercount badly). Fetched once for three
+  // fixed ranges (every rep reads the same board); the card picks its rep's
+  // row by name. configured:null = still loading / unknown.
+  const [repcard, setRepcard] = useState({ configured: null, week: [], lastMonth: [], span: [] });
+  useEffect(() => {
+    const iso = (d) => dfFormat(d, "yyyy-MM-dd");
+    const today = new Date();
+    const wkStart = startOfWeek(today, { weekStartsOn: 1 });   // RepCard weeks run Mon–Sun
+    const wkEnd = endOfWeek(today, { weekStartsOn: 1 });
+    const lmStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    const lmEnd = new Date(today.getFullYear(), today.getMonth(), 0);
+    const spanStart = addDays(today, -90);
+    Promise.all([
+      fetchRepcardLeaderboard(iso(wkStart), iso(wkEnd)),
+      fetchRepcardLeaderboard(iso(lmStart), iso(lmEnd)),
+      fetchRepcardLeaderboard(iso(spanStart), iso(today)),
+    ]).then(([w, m, s]) => {
+      setRepcard({
+        configured: !!(w?.configured ?? m?.configured ?? s?.configured),
+        week: w?.rows || [], lastMonth: m?.rows || [], span: s?.rows || [],
+      });
+    }).catch(() => setRepcard({ configured: false, week: [], lastMonth: [], span: [] }));
   }, []);
 
   const ghostIds = useMemo(() => new Set(users.filter(u => u.ghost).map(u => u.id)), [users]);
@@ -116,48 +139,34 @@ export default function Home() {
   }), [users, teamChanges]);
   const monthDeals = useMemo(() => allDeals.filter(d => d.sale_date?.startsWith(mr.key)), [allDeals, mr.key]);
 
-  // RepCard field metrics for the shown rep: doors + appointments set, and the
-  // derived rates. Doors come from the field-activity feed (Arizona days);
-  // appointments from the leads feed (set_at = when the rep booked it); closes
-  // are the rep's own set deals. The three averages use the rep's field-active
-  // span so doors/appts/closes compare over the same period.
+  // RepCard field metrics for the shown rep, read straight off RepCard's D2D
+  // leaderboard so the numbers equal what the rep sees in RepCard. Doors +
+  // appointments come from the board (this week / last month / a trailing
+  // 90-day span); CLOSES stay our own deals (per Keaton — go off actual sales,
+  // not the CRM's "sold"). Rows are matched to the rep BY NAME, the same
+  // fallback the leads feed uses. Returns configured=false → the card hides its
+  // door tiles; null → still loading.
   const repCard = useMemo(() => {
-    const todayIso = dfFormat(new Date(), "yyyy-MM-dd");
-    const weekStart = currentPeriods(todayIso).week.start;
-    const now = new Date(todayIso + "T12:00:00");
-    const pm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const lastMonthKey = `${pm.getFullYear()}-${String(pm.getMonth() + 1).padStart(2, "0")}`;
-    const azDay = (ts) => {
-      try { return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Phoenix", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ts)); }
-      catch { return String(ts || "").slice(0, 10); }
-    };
-    const weekKey = (iso) => {
-      const dt = new Date(iso + "T12:00:00");
-      const s = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() - dt.getDay());
-      return `${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, "0")}-${String(s.getDate()).padStart(2, "0")}`;
-    };
-    const myFA = fieldActivity.filter((r) => r.profile_id === me);
-    const mySets = leads.filter((l) => l.setter_id === me && (l.set_at || l.appointment_at));
-    const myCloses = allDeals.filter((d) => d.setter_id === me && d.sale_date);
+    if (repcard.configured === null) return { configured: null };
+    if (!repcard.configured) return { configured: false };
+    const myName = (users.find((u) => u.id === me)?.name || viewUser?.name || "").trim().toLowerCase();
+    const pick = (rows) => rows.find((r) => r.name.toLowerCase() === myName) || null;
+    const wk = pick(repcard.week), lm = pick(repcard.lastMonth), sp = pick(repcard.span);
 
-    const doorsThisWeek = myFA.filter((r) => r.activity_date >= weekStart && r.activity_date <= todayIso).reduce((s, r) => s + (r.doors_knocked || 0), 0);
-    const apptsThisWeek = mySets.filter((l) => azDay(l.set_at || l.appointment_at) >= weekStart).length;
-    const doorsLastMonth = myFA.filter((r) => String(r.activity_date || "").startsWith(lastMonthKey)).reduce((s, r) => s + (r.doors_knocked || 0), 0);
+    const spanStartIso = dfFormat(addDays(new Date(), -90), "yyyy-MM-dd");
+    const closesSpan = allDeals.filter((d) => d.setter_id === me && d.sale_date && d.sale_date >= spanStartIso).length;
 
-    const withDoors = myFA.filter((r) => (r.doors_knocked || 0) > 0);
-    const totalDoors = withDoors.reduce((s, r) => s + (r.doors_knocked || 0), 0);
-    const firstDoor = withDoors.reduce((a, r) => (a === null || r.activity_date < a ? r.activity_date : a), null);
-    const activeWeeks = new Set(withDoors.map((r) => weekKey(r.activity_date))).size;
-    const apptsSpan = firstDoor ? mySets.filter((l) => azDay(l.set_at || l.appointment_at) >= firstDoor).length : 0;
-    const closesSpan = firstDoor ? myCloses.filter((d) => d.sale_date >= firstDoor).length : 0;
-
+    const doorsSpan = sp?.doors || 0, apptsSpan = sp?.appts || 0, knockDays = sp?.knockDays || 0;
     return {
-      doorsThisWeek, apptsThisWeek, doorsLastMonth,
-      avgDoorsPerDay: activeWeeks > 0 ? totalDoors / (activeWeeks * 6) : null,
-      doorsPerAppt: apptsSpan > 0 ? totalDoors / apptsSpan : null,
+      configured: true,
+      doorsThisWeek: wk?.doors ?? 0,
+      apptsThisWeek: wk?.appts ?? 0,
+      doorsLastMonth: lm?.doors ?? 0,
+      avgDoorsPerDay: knockDays > 0 ? doorsSpan / knockDays : null,
+      doorsPerAppt: apptsSpan > 0 ? doorsSpan / apptsSpan : null,
       apptsPerClose: closesSpan > 0 ? apptsSpan / closesSpan : null,
     };
-  }, [fieldActivity, leads, allDeals, me]);
+  }, [repcard, users, me, viewUser, allDeals]);
 
   const setterRevForMonth = (key) => allDeals
     .filter(d => d.setter_id === me && d.sale_date?.startsWith(key))
@@ -514,18 +523,22 @@ export default function Home() {
         <StatTile icon={TrendingUp} label="Avg Deal"   value={money(stats.avgDeal)} sub="per self-gen deal · tap" color="#fff" onClick={() => toggleDrill("avgDeal")} />
       </div>
 
-      {/* Field activity · RepCard — doors + appointments (replaces the goals mirror) */}
-      <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold mb-2">Field activity · RepCard</p>
-      <div className="grid grid-cols-3 gap-2 md:gap-3 mb-2">
-        <StatTile icon={DoorOpen}      label="Doors this wk"     value={repCard.doorsThisWeek.toLocaleString("en-US")} color="#74b9ff" />
-        <StatTile icon={CalendarCheck} label="Appts set this wk" value={repCard.apptsThisWeek.toLocaleString("en-US")} color="#a78bfa" />
-        <StatTile icon={DoorOpen}      label="Doors last month"  value={repCard.doorsLastMonth.toLocaleString("en-US")} color="#fff" />
-      </div>
-      <div className="rounded-xl px-4 py-3 mb-3 grid grid-cols-3 gap-3" style={{ background: "#1e1e1e", border: "1px solid #282828" }}>
-        <Avg label="Avg doors / day" sub="6-day week"   value={repCard.avgDoorsPerDay == null ? "—" : repCard.avgDoorsPerDay.toFixed(1)} />
-        <Avg label="Doors / appt"    sub="to set one"   value={repCard.doorsPerAppt == null ? "—" : repCard.doorsPerAppt.toFixed(1)} />
-        <Avg label="Appts / close"   sub="to close one" value={repCard.apptsPerClose == null ? "—" : repCard.apptsPerClose.toFixed(1)} />
-      </div>
+      {/* Field activity · RepCard — doors + appointments straight off RepCard's
+          D2D leaderboard, so they match what the rep sees in RepCard. Hidden
+          entirely when RepCard isn't connected (no API token on the service). */}
+      {repCard.configured !== false && (<>
+        <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold mb-2">Field activity · RepCard</p>
+        <div className="grid grid-cols-3 gap-2 md:gap-3 mb-2">
+          <StatTile icon={DoorOpen}      label="Doors this wk"     value={repCard.doorsThisWeek == null ? "—" : repCard.doorsThisWeek.toLocaleString("en-US")} color="#74b9ff" />
+          <StatTile icon={CalendarCheck} label="Appts set this wk" value={repCard.apptsThisWeek == null ? "—" : repCard.apptsThisWeek.toLocaleString("en-US")} color="#a78bfa" />
+          <StatTile icon={DoorOpen}      label="Doors last month"  value={repCard.doorsLastMonth == null ? "—" : repCard.doorsLastMonth.toLocaleString("en-US")} color="#fff" />
+        </div>
+        <div className="rounded-xl px-4 py-3 mb-3 grid grid-cols-3 gap-3" style={{ background: "#1e1e1e", border: "1px solid #282828" }}>
+          <Avg label="Avg doors / day" sub="per day knocked" value={repCard.avgDoorsPerDay == null ? "—" : repCard.avgDoorsPerDay.toFixed(1)} />
+          <Avg label="Doors / appt"    sub="to set one"      value={repCard.doorsPerAppt == null ? "—" : repCard.doorsPerAppt.toFixed(1)} />
+          <Avg label="Appts / close"   sub="to close one"    value={repCard.apptsPerClose == null ? "—" : repCard.apptsPerClose.toFixed(1)} />
+        </div>
+      </>)}
 
       {/* Personal bests — all-time, owner-credited, completed periods only */}
       {bests && (bests.bestMonth.best || bests.biggestDeal) && (<>
