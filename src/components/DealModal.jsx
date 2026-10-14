@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { X, AlertTriangle, History, ChevronDown } from 'lucide-react'
 import { format } from 'date-fns'
 import { fetchDealHistory } from '../lib/db'
+import { confirmDialog } from '../lib/dialog'
 import { calcDealCommissions, fmt, fmtPct, officeOverrideRate, managerDefaultRate } from '../utils/commission'
 import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
@@ -406,7 +407,13 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
 
   async function handleSubmit(e) {
     e.preventDefault()
-    if (duplicate && !window.confirm(`A deal named "${duplicate.deal_name}" already exists${duplicate.sale_date ? ` (sold ${duplicate.sale_date})` : ''}. Create this one anyway?`)) return
+    if (duplicate && !await confirmDialog({
+      tone: 'warn',
+      title: `A deal named "${duplicate.deal_name}" already exists`,
+      message: duplicate.sale_date ? `Sold ${duplicate.sale_date}.` : undefined,
+      bullets: ['If this is a second job for the same customer, that is fine — ArcSite keys jobs by Project ID, not name.'],
+      confirmLabel: 'Create it anyway',
+    })) return
     setSaving(true)
     // bonus_mode is a UI-only toggle (not a column) — don't send it to the DB.
     const { bonus_mode: _bonusMode, ...formCols } = form

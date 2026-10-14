@@ -10,6 +10,7 @@ import { fetchDealNotes, fetchDealNoteCounts, addDealNote, updateDealNote, delet
 import DateRangeFilter from './DateRangeFilter'
 import AuditStrip, { AuditBadge } from './AuditStrip'
 import { toast } from '../lib/toast'
+import { confirmDialog } from '../lib/dialog'
 
 // Date columns the Dates header can filter on.
 export const DATE_FIELDS = [
@@ -391,14 +392,20 @@ function ChangeAlertTag({ deal, canEdit, onUpdate }) {
                     039) refuses to re-price a deal on a LOCKED run — that
                     surfaces as a toast + revert via persistInline, which is
                     the right answer: a frozen payout can't be silently changed. */}
-                <button onClick={() => {
+                <button onClick={async () => {
                     const finalized = deal.status === 'Paid' || deal.status === 'Pay Finalized'
-                    const msg = `Apply the sheet's new figures to this deal?\n\n`
-                      + `Baseline ${money(ca.prev_baseline)} → ${money(ca.baseline)}\n`
-                      + `Sale price ${money(ca.prev_job_price)} → ${money(ca.job_price)}\n\n`
-                      + `Every commission and override on the deal recomputes from the new numbers, and the gold check is removed so it can be re-verified.`
-                      + (finalized ? `\n\n⚠ This deal is ${deal.status}. If its pay run is locked, the change will be refused — unlock the run on the Payroll page first.` : '')
-                    if (!confirm(msg)) return
+                    const ok = await confirmDialog({
+                      tone: 'warn',
+                      title: "Apply the sheet's new figures to this deal?",
+                      message: `Baseline ${money(ca.prev_baseline)} → ${money(ca.baseline)}\nSale price ${money(ca.prev_job_price)} → ${money(ca.job_price)}`,
+                      bullets: [
+                        'Every commission and override recomputes from the new numbers.',
+                        'The gold check comes off — it signed off the OLD figures — so the deal goes back to Needs review.',
+                        finalized ? `This deal is ${deal.status}. If its pay run is locked you will be asked to confirm a logged override.` : '',
+                      ],
+                      confirmLabel: 'Apply new numbers',
+                    })
+                    if (!ok) return
                     onUpdate?.(deal.id, {
                       baseline_revenue: ca.baseline, job_price: ca.job_price,
                       setter_amount: null, closer_amount: null, manager_amount: null, director_amount: null, vp_amount: null,
@@ -411,8 +418,16 @@ function ChangeAlertTag({ deal, canEdit, onUpdate }) {
                   style={{ background: '#f59e0b' }}>
                   Apply new numbers to the deal
                 </button>
-                <button onClick={() => {
-                    if (!confirm('Dismiss this change alert without changing the deal?\n\nUse this when the deal is already right (or you updated it by hand). This clears the ❗ for good — it only returns if the sheet changes again.')) return
+                <button onClick={async () => {
+                    if (!await confirmDialog({
+                      title: 'Dismiss this change alert?',
+                      message: 'The deal is left exactly as it is.',
+                      bullets: [
+                        'Use this when the deal is already right, or you updated it by hand.',
+                        'It clears the ❗ for good — it only comes back if the sheet changes again.',
+                      ],
+                      confirmLabel: 'Dismiss alert',
+                    })) return
                     onUpdate?.(deal.id, { change_alert: null }); setOpen(false)
                   }}
                   className="w-full py-1.5 rounded-lg text-[11px] font-semibold transition-colors hover:bg-white/5"
@@ -638,7 +653,7 @@ function NotesThread({ deal, profile, users, onCountChange }) {
     setEditId(null); setEditText(''); reload()
   }
   async function removeNote(id) {
-    if (!confirm('Delete this comment? This cannot be undone.')) return
+    if (!await confirmDialog({ tone: 'danger', title: 'Delete this comment?', message: 'This cannot be undone.', confirmLabel: 'Delete' })) return
     const { error } = await deleteDealNote(id)
     if (error) { toast.error('Could not delete: ' + (error.message || '')); return }
     reload()

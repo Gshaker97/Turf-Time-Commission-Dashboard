@@ -5,6 +5,7 @@ import {
   userAdmin, userAdminConfigured, fetchTeamChanges, fetchLeads,
 } from '../lib/db'
 import { toast } from '../lib/toast'
+import { confirmDialog, choiceDialog, revealDialog } from '../lib/dialog'
 import UserModal from '../components/UserModal'
 import ManagerBackfillModal from '../components/ManagerBackfillModal'
 import PeopleChart from '../components/PeopleChart'
@@ -164,7 +165,16 @@ export default function Admin() {
       if (directs.length && (movedTeams || lostHeadship)) {
         const destId = data.manager_id ?? null
         const destName = destId ? (users.find(u => u.id === destId)?.name || 'their new lead') : 'Unassigned'
-        if (confirm(`${editUser.name} has ${directs.length} direct report${directs.length === 1 ? '' : 's'}. Move ${directs.length === 1 ? 'them' : 'them all'} to ${destName} too?\n\nOK = reports follow (each move is date-stamped) · Cancel = they keep reporting to ${editUser.name}.`)) {
+        if (await confirmDialog({
+          title: `${editUser.name} has ${directs.length} direct report${directs.length === 1 ? '' : 's'}`,
+          message: `Move ${directs.length === 1 ? 'them' : 'them all'} to ${destName} too?`,
+          bullets: [
+            'Each move is date-stamped in the team change log, so past deals stay with the old team.',
+            `Leave it and they keep reporting to ${editUser.name}.`,
+          ],
+          confirmLabel: 'Move the reports too',
+          cancelLabel: 'Leave them',
+        })) {
           await Promise.all(directs.map(d => updateUser(d.id, { manager_id: destId })))
         }
       }
@@ -186,7 +196,15 @@ export default function Admin() {
   }
 
   async function handleDeleteUser(id) {
-    if (!confirm('Delete this user?')) return
+    if (!await confirmDialog({
+      tone: 'danger',
+      title: 'Delete this user?',
+      message: 'Deleting is only for a row created by mistake.',
+      bullets: [
+        'Their deals still reference them — if this is a real person who left, Deactivate instead.',
+      ],
+      confirmLabel: 'Delete',
+    })) return
     await deleteUser(id); loadAll()
   }
 
@@ -204,10 +222,16 @@ export default function Admin() {
   // an invite so they set their own password (needs SMTP on the auth service);
   // fallback: admin sets a temporary password by hand.
   async function createLogin(u) {
-    const viaEmail = confirm(
-      `Create ${u.name}'s login?\n\nOK — EMAIL AN INVITE to ${u.email} so they choose their own password (recommended).\nCancel — set a temporary password by hand instead.`)
+    const how = await choiceDialog({
+      title: `Create ${u.name}'s login?`,
+      options: [
+        { key: 'invite', label: 'Email an invite', description: `${u.email} gets a link and chooses their own password. Needs SMTP on the auth service.` },
+        { key: 'manual', label: 'Set a temporary password', description: 'The site generates one and shows it to you to share securely.' },
+      ],
+    })
+    if (!how) return
     setBusyUser(u.id)
-    if (viaEmail) {
+    if (how === 'invite') {
       const r = await userAdmin('invite', { email: u.email })
       setBusyUser('')
       if (!r.ok) return toast.error('Invite failed: ' + (r.error || 'unknown error'))
@@ -219,16 +243,26 @@ export default function Admin() {
     setBusyUser('')
     if (!r.ok) return toast.error('Could not create login: ' + (r.error || 'unknown error'))
     loadAll()
-    window.prompt(`Login created for ${u.name}. Copy their temporary password and share it securely:`, r.password || '')
+    await revealDialog({
+      title: `Login created for ${u.name}`,
+      message: 'Copy their temporary password and share it securely — it is not shown again.',
+      value: r.password || '',
+    })
   }
 
   // Reset a user's password. Preferred: email them a reset link; fallback:
   // set a new temporary password by hand.
   async function resetLogin(u) {
-    const viaEmail = confirm(
-      `Reset ${u.name}'s password?\n\nOK — EMAIL a reset link to ${u.email} so they choose a new password (recommended).\nCancel — set a temporary password by hand instead.`)
+    const how = await choiceDialog({
+      title: `Reset ${u.name}'s password?`,
+      options: [
+        { key: 'email',  label: 'Email a reset link', description: `${u.email} chooses a new password themselves. Needs SMTP on the auth service.` },
+        { key: 'manual', label: 'Set a temporary password', description: 'The site generates one and shows it to you to share securely.' },
+      ],
+    })
+    if (!how) return
     setBusyUser(u.id)
-    if (viaEmail) {
+    if (how === 'email') {
       const r = await userAdmin('send_reset', { email: u.email })
       setBusyUser('')
       if (!r.ok) return toast.error('Could not send the reset email: ' + (r.error || 'unknown error'))
@@ -238,7 +272,11 @@ export default function Admin() {
     const r = await userAdmin('reset_password', { email: u.email })
     setBusyUser('')
     if (!r.ok) return toast.error('Could not reset password: ' + (r.error || 'unknown error'))
-    window.prompt(`New temporary password for ${u.name} — copy and share securely:`, r.password || '')
+    await revealDialog({
+      title: `New temporary password for ${u.name}`,
+      message: 'Copy and share it securely — it is not shown again.',
+      value: r.password || '',
+    })
   }
 
   // Activate / deactivate: flips profiles.active (blocks site access while all
@@ -246,7 +284,16 @@ export default function Admin() {
   // when the endpoint is configured.
   async function toggleActive(u) {
     const next = u.active === false   // becoming active?
-    if (!next && !confirm(`Deactivate ${u.name}? They lose access to the site immediately. All their deals and stats stay exactly as they are.`)) return
+    if (!next && !await confirmDialog({
+      tone: 'warn',
+      title: `Deactivate ${u.name}?`,
+      message: 'They lose access to the site immediately.',
+      bullets: [
+        'All their deals and stats stay exactly as they are and keep counting everywhere.',
+        'They move to the Deactivated drawer, where you can reactivate them.',
+      ],
+      confirmLabel: 'Deactivate',
+    })) return
     patchUser(u.id, { active: next })
     if (hasUserAdmin && u.auth_id) {
       const r = await userAdmin('set_active', { email: u.email, active: next })
@@ -270,7 +317,14 @@ export default function Admin() {
   async function moveUser(u, destId) {
     const destLabel = destId ? teamLabel(users.find(x => x.id === destId)) : 'Unassigned'
     const fromLabel = u.manager_id ? teamLabel(users.find(x => x.id === u.manager_id)) : 'Unassigned'
-    if (!confirm(`Move ${u.name} to ${destLabel}?\n\nLogged today in the team change log. ${u.name}'s past deals stay with ${fromLabel} — only sales from today forward count for ${destLabel}.`)) return
+    if (!await confirmDialog({
+      title: `Move ${u.name} to ${destLabel}?`,
+      bullets: [
+        'Logged today in the team change log.',
+        `${u.name}'s past deals stay with ${fromLabel} — only sales from today forward count for ${destLabel}.`,
+      ],
+      confirmLabel: 'Move them',
+    })) return
     await patchUser(u.id, { manager_id: destId })
     // Refresh just the log so the "since" date on their card updates.
     const { data: tc } = await fetchTeamChanges()

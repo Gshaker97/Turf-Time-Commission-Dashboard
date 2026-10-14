@@ -335,6 +335,9 @@ setup + deploy steps.
   `056` adds `deals.comp_excluded` (+ `comp_excluded_at`/`_by`/`_note`) —
   earns NO credit in any competition while counting normally everywhere money
   is counted; see "Excluding a deal from competitions" below;
+  `057` adds `payroll_lock_overrides` + the `override_locked_deal()` RPC — the
+  ONE path that gets past `guard_locked_payroll()`, admin-only and logged; see
+  "Overriding a locked pay run" below;
   `047` adds `competitions.excluded_ids` (jsonb
   array of profile ids) for the **Team Average (per rep)** competition type
   `team_avg` — entrants are TEAM HEADS (any `headIdSet` head, picked in the
@@ -487,6 +490,83 @@ re-checks the caller and raises 42501 before returning numbers.
 db.js); the Joseph Burgos row is a seeded PLACEHOLDER profile pending a real
 email + login. `sales_teams.name` is the POD's name, not an org-chart team's
 — see `teamLabel` for those.
+
+## Dialogs — never `window.confirm` / `prompt` / `alert`
+
+**`src/lib/dialog.js` + `src/components/DialogHost.jsx` (mounted once in
+Layout, beside `<Notices/>`) are the ONE rule.** Promise-based, so every call
+site reads like the native version it replaced:
+
+    if (!await confirmDialog({ tone: 'danger', title: 'Delete this deal?' })) return
+    const why = await promptDialog({ title: 'Hide it?', label: 'Reason' })
+    if (why === null) return          // cancelled — same contract as prompt()
+    const how = await choiceDialog({ title: '…', options: [{ key, label, description }] })
+    await revealDialog({ title: 'Login created', value: password })   // + Copy button
+
+Why (per Keaton: "the current pop ups for warnings / approvals looks cheap"):
+the browser's dialogs can't be styled, print the page's hostname, render a
+`\n`-joined body as one grey wall, and block the tab. They carried the most
+consequential actions on the site — deleting a deal, paying nineteen people,
+overriding a locked pay run. All 24 call sites across 7 files were converted;
+there are none left.
+- **`bullets: []` is the point, not decoration.** A confirm's consequences used
+  to be `\n\n`-joined into a paragraph nobody read; they now render as a list.
+  When writing one, put the QUESTION in `title`, one sentence of context in
+  `message`, and each consequence in `bullets`.
+- **`tone`** is `default` | `danger` | `warn` — it colours a 3px stripe, the
+  icon and the confirm button, so a destructive dialog reads as destructive
+  before you reach the button.
+- **`choiceDialog` exists because a confirm cannot ask a three-way question.**
+  Admin's create-login and reset-password were `OK = email an invite, Cancel =
+  set a password by hand`, which meant **pressing Esc created a password**.
+  Whenever both buttons DO something, backing out has to be its own answer.
+- **`promptDialog({ required: true })`** disables the confirm until something
+  is typed; `multiline` gives a textarea, where plain Enter is a newline and
+  only Cmd/Ctrl+Enter submits.
+- Esc and a backdrop click cancel. One dialog at a time — a second request is
+  QUEUED, never dropped, so no caller's promise is left unresolved.
+- Non-browser contexts (tests, server.js) resolve to the cancel answer instead
+  of throwing, so engine code can import the module safely.
+- Keep using `toast.*` for things that need no answer. Dialogs are for
+  questions.
+
+## Overriding a locked pay run (migration 057)
+
+Per Keaton: "its locked since payroll was ran so wont let me fix it… make it
+so as the admin I can override the locked payroll to update a locked deal."
+Unlocking the whole run to correct one field was the wrong tool — it unfreezes
+every other payout on it, and the sync's auto-lock then re-arms on a 24h timer.
+- **`override_locked_deal(deal_id, patch, reason)` is the ONLY path past
+  `guard_locked_payroll()`.** SECURITY DEFINER, and it re-checks everything
+  itself rather than trusting the caller: `my_role() = 'admin'`, a non-blank
+  reason, every patch key a REAL column of `deals` and not in the blocklist
+  (`id`/`created_at`/`updated_at`). Values are typed by
+  `jsonb_populate_record`, never concatenated, and column names are
+  interpolated as identifiers from that validated set — so a patch cannot
+  inject SQL or rewrite a deal's identity.
+- **Every override writes a `payroll_lock_overrides` row** (who, deal, pay
+  date, reason, exact patch) and `deal_history` logs the diff as usual. The
+  log renders inside the Payroll **lock banner** — the one thing that gets
+  past the freeze has to be readable next to the freeze.
+- **The bypass is a transaction-local GUC holding THE ID OF THE ONE DEAL**
+  (`app.lock_override`), set immediately before that UPDATE and cleared after,
+  so it cannot wave through a second row or outlive the call. PostgREST gives
+  a client no way to set a GUC. It is NOT a defence against a raw SQL session —
+  anyone who can `SET` can also `DISABLE TRIGGER` — and was never meant to be.
+- **Frontend: `src/lib/dealWrite.js` → `saveDealFields(id, patch, opts)` is
+  the write path for any deal that might be on a locked run.** The lock lives
+  in a trigger, so a rejection can only be found by trying; rather than teach
+  every page about locks, this attempts the write, matches the trigger's own
+  wording (`isLockError`), and offers the admin the reason box right there.
+  Returns `overridden` (forced through) or `cancelled` (lock refused it and
+  the admin said no — `error` is still set, so resync, but do NOT toast).
+  Used by the DealModal save on both Deals and Payroll, the Deals inline
+  edits, Hide, and the contest-exclusion toggle.
+- **Payroll's `openEdit` no longer blocks a locked finalized deal.** It used
+  to `toast.info('unlock the run first')` and stop, which is the dead end
+  Keaton hit. The editor opens; the SAVE is where the override is offered.
+- Still frozen, deliberately: `payroll_adjustments` on a locked run (they ARE
+  the payout), and everything for a non-admin.
 
 ## Excluding a deal from competitions (`deals.comp_excluded`, migration 056)
 
@@ -1487,6 +1567,25 @@ default, 25–200 remembered in `tt_deals_page_size`); KPIs and Export CSV
 cover the WHOLE filtered set, never just the visible page. Page resets to 1
 on any filter/sort/scope/tab change, clamps when the list shrinks, and the
 bell deep-link jumps to the page holding the deal.
+
+**A PAID, GOLD-CHECKED DEAL CAN COME BACK INTO NEEDS REVIEW — by design, and
+the sheet is what does it.** `dealNeedsReview` is an OR: not gold-checked, OR
+carrying a `change_alert`, OR missing a required field. The sync's JOBS pass
+stamps `change_alert` on ANY existing deal whose sheet baseline/sale price
+moved — it has NO status or gold-check guard (that guard is on the SCHEDULE
+pass, `:480`), and migration 039 deliberately lets that one write through a
+LOCKED pay run so the alert can be stamped and dismissed. So a job that paid
+out in July reappears in the queue the moment someone edits its Jobs row.
+That is the intended alarm, not a bug — but note what it does NOT do: the
+alert patch writes only `change_alert` / `synced_baseline` / `synced_job_price`
+(+ `project_id` when a re-sign came in under a new ID). **The sync never
+rewrites a paid deal's money, status, people or gold check**, so "it overrode
+my changes" is worth checking before believing: the ❗ panel prints the SHEET's
+old→new figures, which look like a claim about the deal even when the stored
+numbers are untouched. **`deal_history` (migration 019) is the authority** —
+it logs every UPDATE diff on every path, service-role writes included (editor
+null = the sync), and it renders in the edit modal's collapsible "Edit
+history" panel. Read that before theorising about who changed what.
 
 **Staging ("Needs review").** The Deals page gives VP/admin two tabs: **Needs
 review** (deals not yet vetted) and **All deals**. A deal graduates out of
