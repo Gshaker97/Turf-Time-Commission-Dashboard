@@ -1529,7 +1529,16 @@ const ARCSITE_API_TOKEN      = (process.env.ARCSITE_API_TOKEN || '').trim()
 const ARCSITE_API_BASE       = (process.env.ARCSITE_API_BASE || 'https://api.arcsite.com/v1').replace(/\/+$/, '')
 const ARCSITE_WEBHOOK_SECRET = (process.env.ARCSITE_WEBHOOK_SECRET || '').trim()
 // Statuses that mean "a real deal exists" (lower-cased, punctuation-insensitive).
-const ARC_SOLD_STATUSES = new Set(['esigned by client', 'approved online', 'signed on device', 'approved on device'])
+// A committed proposal. The webhook sends API-style status CODES (APPROVED,
+// APPROVED_ON_DEVICE, ESIGNED, SIGNED_ON_DEVICE, …), NOT the UI labels
+// ("Approved Online"), so match on the key words rather than an exact list —
+// any "approved"/"signed"/"esigned", excluding pending/draft/expired/paid/void.
+function arcCommitted(status) {
+  const n = arcNorm(status)
+  if (!n) return false
+  if (/pending|draft|expired|void|cancel|reject|paid/.test(n)) return false
+  return /approv|sign/.test(n)
+}
 // Inside-sales estimators → Estimators pipeline. Name tokens, admin-overridable.
 const ARC_ESTIMATORS = (process.env.ARCSITE_ESTIMATOR_NAMES || 'rhett,ronnie,josh')
   .split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
@@ -1737,7 +1746,7 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   // Only act on a committed proposal.
   const normStatus = arcNorm(status)
   if (type && !/status.?changed|proposal/i.test(type)) return { ok: true, ignored: true, reason: `event ${type}` }
-  if (!ARC_SOLD_STATUSES.has(normStatus)) return { ok: true, ignored: true, reason: `status "${status}" not a committed status` }
+  if (!arcCommitted(status)) return { ok: true, ignored: true, reason: `status "${status}" not a committed status` }
 
   // Resolve project_id from the proposal if the payload didn't carry it.
   if (!projectId && proposalId) {
