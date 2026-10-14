@@ -1552,9 +1552,10 @@ const GHL_OPP_FIELD_IDS = {
   setter: 'u3sMxbOvn2jHK53XrAu0', closer: 'q2AwMVrGnqaLTeosTpd7',
   sales_rep: 'mVfmImqXyOUQacAOAX5K',
 }
+const GHL_CHANGE_ORDER_PRICE = '7V3m3DhffrhMuOurTQ0N'   // "Change Order Price" (MONETORY)
 const GHL_PIPELINES = {
-  outside:   { id: (process.env.GHL_OUTSIDE_PIPELINE_ID   || 'EWGmXwXP63Da5eBMNiDU').trim(), closed: (process.env.GHL_OUTSIDE_CLOSED_STAGE   || '7f686159-9e37-4ffb-9311-3f10106cf250').trim() },
-  estimator: { id: (process.env.GHL_ESTIMATOR_PIPELINE_ID || 'jfhZWICxnmISGllte9Rv').trim(), closed: (process.env.GHL_ESTIMATOR_CLOSED_STAGE || '72a74bdf-a2ab-4412-89b0-52142a1e8c0b').trim() },
+  outside:   { id: (process.env.GHL_OUTSIDE_PIPELINE_ID   || 'EWGmXwXP63Da5eBMNiDU').trim(), closed: (process.env.GHL_OUTSIDE_CLOSED_STAGE   || '7f686159-9e37-4ffb-9311-3f10106cf250').trim(), changeOrder: (process.env.GHL_OUTSIDE_CO_STAGE   || '7ee61ae8-7b86-4300-bdf7-d7a0fa4d8471').trim() },
+  estimator: { id: (process.env.GHL_ESTIMATOR_PIPELINE_ID || 'jfhZWICxnmISGllte9Rv').trim(), closed: (process.env.GHL_ESTIMATOR_CLOSED_STAGE || '72a74bdf-a2ab-4412-89b0-52142a1e8c0b').trim(), changeOrder: (process.env.GHL_ESTIMATOR_CO_STAGE || 'be9cde80-5545-477c-8e27-706a529ac952').trim() },
 }
 
 const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36'
@@ -1618,6 +1619,11 @@ async function ghlContactOpps(contactId) {
 const oppProjectId = (opp) => {
   for (const c of (opp.customFields || [])) if (c.id === GHL_OPP_FIELD_IDS.project_id) return String(c.fieldValueString || c.fieldValue || c.value || '').trim()
   return ''
+}
+// A custom field's raw value on an opportunity (search/GET shapes differ).
+const oppFieldVal = (opp, fieldId) => {
+  for (const c of (opp.customFields || [])) if (c.id === fieldId) return c.fieldValueString ?? c.fieldValueNumber ?? c.fieldValue ?? c.value ?? null
+  return null
 }
 async function ghlCreateOpp(body) {
   const resp = await fetch(`${GHL_BASE}/opportunities/`, {
@@ -1826,32 +1832,56 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   if (!contactId) return { ok: false, error: 'contact upsert returned no id', plan }
 
   const opps = await ghlContactOpps(contactId).catch(() => [])
-  let oppId = (opps.find(o => oppProjectId(o) === projectId) || {}).id || null
-  if (!oppId) oppId = (opps.find(o => o.status === 'open' && !oppProjectId(o) && o.pipelineId === pipeline.id) || {}).id || null
+  let existing = opps.find(o => oppProjectId(o) === projectId) || null
+  if (!existing) existing = opps.find(o => o.status === 'open' && !oppProjectId(o) && o.pipelineId === pipeline.id) || null
+  let oppId = existing ? existing.id : null
+
+  // CHANGE ORDER: a committed proposal for a Project ID that ALREADY has an
+  // opportunity whose price differs from the new total = a 2nd (revised)
+  // contract. Move it to the Change Order stage, record the DELTA in Change
+  // Order Price, keep the original Price + value, and APPEND the new PDF.
+  const curPrice = existing ? Number(oppFieldVal(existing, GHL_OPP_FIELD_IDS.price)) : NaN
+  const isChangeOrder = !!existing && oppProjectId(existing) === projectId
+    && sellTotal != null && !isNaN(curPrice) && Math.abs(sellTotal - curPrice) > 0.01
+
+  let oppFields = customFields
+  if (isChangeOrder) {
+    oppFields = customFields.filter(w => w.id !== GHL_OPP_FIELD_IDS.price)   // keep the original price
+    const w = oppFieldWrite(GHL_CHANGE_ORDER_PRICE, Math.round((sellTotal - curPrice) * 100) / 100, defs)
+    if (w) oppFields.push(w)
+  }
 
   const oppBody = {
-    pipelineId: pipeline.id, pipelineStageId: pipeline.closed, name: custName, contactId,
-    status: 'open', customFields,
+    pipelineId: pipeline.id,
+    pipelineStageId: isChangeOrder ? pipeline.changeOrder : pipeline.closed,
+    name: custName, contactId, status: 'open', customFields: oppFields,
   }
-  if (sellTotal != null) oppBody.monetaryValue = sellTotal
+  if (sellTotal != null && !isChangeOrder) oppBody.monetaryValue = sellTotal   // keep original value on a change order
   if (ownerId) oppBody.assignedTo = ownerId
 
   let action
-  if (oppId) { await ghlUpdateOpp(oppId, oppBody); action = 'updated' }
+  if (oppId) { await ghlUpdateOpp(oppId, oppBody); action = isChangeOrder ? 'change_order' : 'updated' }
   else { oppBody.locationId = GHL_LOCATION_ID; oppId = await ghlCreateOpp(oppBody); action = 'created' }
 
-  // ── Attach the contract PDF (best-effort: needs the token's medias.write
-  // scope; any failure is logged and never blocks the opportunity).
+  // ── Contract PDF (best-effort; needs the token's medias.write scope). On a
+  // change order the new contract is APPENDED so both contracts are kept.
   let pdf = pdfUrl ? 'pending' : 'none'
   if (pdfUrl && oppId) {
     try {
       const hosted = await ghlHostPdf(pdfUrl, `${custName} - contract.pdf`.replace(/[\/\\]/g, '-'))
-      if (hosted) { await ghlUpdateOpp(oppId, { customFields: [{ id: GHL_PDF_FIELD, field_value: hosted }] }); pdf = 'uploaded' }
-      else pdf = 'skipped: no url from upload'
+      if (hosted) {
+        // GHL's FILE_UPLOAD field takes a single URL STRING per write and APPENDS
+        // it (an array 400s; "" clears). So a change order APPENDS the new
+        // contract (keeping the original), while a normal set CLEARS first so a
+        // webhook re-fire can't stack duplicate copies of the same contract.
+        if (!isChangeOrder) await ghlUpdateOpp(oppId, { customFields: [{ id: GHL_PDF_FIELD, field_value: '' }] })
+        await ghlUpdateOpp(oppId, { customFields: [{ id: GHL_PDF_FIELD, field_value: hosted }] })
+        pdf = isChangeOrder ? 'appended' : 'uploaded'
+      } else pdf = 'skipped: no url from upload'
     } catch (e) { pdf = 'skipped: ' + (e.message || 'upload failed') }
   }
 
-  return { ok: true, ...plan, action, opportunity_id: oppId, contact_id: contactId, owner: oppBody.assignedTo ? closerName : null, pdf }
+  return { ok: true, ...plan, action, change_order: isChangeOrder, opportunity_id: oppId, contact_id: contactId, owner: oppBody.assignedTo ? closerName : null, pdf }
 }
 
 const app = express()
