@@ -600,11 +600,15 @@ deal counts everywhere the money is and nowhere a trophy is.
   `canceled`. (Fixed while here: a HIDDEN deal used to render its FULL
   contribution in that list while scoring nothing, so the drill-down's total
   disagreed with the standing it was explaining.)
-- **Two surfaces, both admin-only:** the `Ban` button on each row of a
-  competition's standings drill-down (where you notice the problem), and the
-  `Ban` row action on the Deals page beside Hide — the second one matters
-  because once no live contest lists the deal, the drill-down can no longer
-  reach it to put it back.
+- **ONE surface: the `Ban` button on each row of a competition's standings
+  drill-down**, admin-only. A matching row action + badge on the DEALS page
+  was built and then REMOVED at Keaton's request ("i dont need that on the
+  deals list, i just need that on the competitions themselves") — the Deals
+  row actions are crowded and this is a contest concern. The argument for
+  keeping it was that a deal becomes unreachable once no live contest lists
+  it; in practice finished contests stay expandable under "Past
+  competitions", so the deal is still reachable there. Do not re-add it to
+  the Deals page.
 - Migration 056 also extends `guard_locked_payroll()` so an update touching
   ONLY the four `comp_excluded*` columns passes on a locked run — same shape
   and same reasoning as 039's change_alert allowance. A contest flag is not a
@@ -1838,7 +1842,35 @@ Project ID)" so it can never explain a match the sync would not make.
 Simulated before/after on five cases: second job → CREATE (was: dropped +
 bogus alert), change order → unchanged, hand-entered adopt → unchanged,
 duplicate rows on one ID → still deduped, and two new jobs for one new
-customer in a single run → both created (one was silently dropped). The **Schedule** tab then layers on install date (+pay
+customer in a single run → both created (one was silently dropped). **THE SYNC CANNOT TELL A RE-SIGN FROM A SECOND JOB, SO IT NO LONGER TRIES.**
+Matching strictly on Project ID fixed the second-sale bug and introduced its
+mirror image: ArcSite sometimes re-issues the SAME job under a FRESH Project
+ID, which the old name fallback used to catch (raising a change alert on the
+original). With the fallback narrowed to deals with no `project_id`, that
+re-sign now imports as a SECOND DEAL — found live on Alex Lieberman, two
+Project IDs (…28338629 / …33196248) carrying identical baseline, closing
+date, install date and people, one Paid and one sitting in Deal Review.
+Both guesses are lossy: adopting the old deal makes a real second sale
+invisible, creating blindly leaves a silent duplicate that inflates revenue.
+So the rule is **always CREATE, and always SAY SO** — a sale must never be
+invisible, and a duplicate must never be silent. Two surfaces:
+- The sync pushes a detail line when a brand-new Project ID arrives for a
+  customer that already has a deal (`allByName`, built for this warning only
+  and NEVER used for matching). Same baseline AND closing date reads
+  `LIKELY DUPLICATE`; different figures read `Repeat customer`. A likely
+  duplicate is `unshift`ed so it survives the heartbeat's 8-detail slice.
+- `duplicateDealIds(deals)` in `utils/needsReview.js` flags the pairs in-app
+  — an amber **2x** badge in the Deals name cell. The signature is TIGHT on
+  purpose (same customer + same baseline + same closing date): repeat
+  customers are common here and flagging every one would be noise, while a
+  genuine second job differs in at least one of the three. It requires a
+  **positive** baseline — `Number(null)` is 0, so a finite-only check made
+  the entire un-priced backlog flag as duplicates of each other. Canceled
+  and hidden deals drop out, so **hiding one of a pair is how you resolve
+  it** and the flag clears. Returns a Map of id → how many OTHERS share the
+  signature, not a Set, so a row can say "1 other deal" instead of counting
+  every pair on the page.
+The **Schedule** tab then layers on install date (+pay
 date), payment, office (detected by VALUE — Tucson/Phoenix/Mesa — since the
 column header is blank; office sets the 3.75%/5% dir+VP rate), and the real
 setter from Lead Source (names resolved leniently: "JC" → "JC Correa" via

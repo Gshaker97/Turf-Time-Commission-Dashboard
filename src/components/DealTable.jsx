@@ -1,9 +1,8 @@
 import { useState, useRef, useEffect, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import { RepPickList } from './RepMultiSelect'
-import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, X, MessageSquare, BadgeCheck, AlertCircle, EyeOff, Ban, RefreshCw } from 'lucide-react'
+import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, X, MessageSquare, BadgeCheck, AlertCircle, EyeOff, RefreshCw } from 'lucide-react'
 import { calcDealCommissions, fmt, fmtPct, isCanceled, isHidden, countsInTotals, officeOverrideRate, deductionBreakdown } from '../utils/commission'
-import { compExcluded as isCompExcluded } from '../utils/competition'
 import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
 import { fetchDealNotes, fetchDealNoteCounts, addDealNote, updateDealNote, deleteDealNote } from '../lib/db'
@@ -62,6 +61,20 @@ function HiddenMark() {
   )
 }
 
+// Amber "2x": this deal shares its customer, baseline AND closing date with
+// another — almost always one job that ArcSite re-issued under a second
+// Project ID. The sync cannot tell that from a real second sale, so it
+// imports both and flags the pair here (see duplicateDealIds).
+function DupeMark({ other }) {
+  return (
+    <span className="w-[22px] h-[22px] rounded-full flex items-center justify-center flex-shrink-0 text-[9px] font-extrabold"
+      style={{ background: '#f59e0b18', border: '1px solid #f59e0b55', color: '#fbbf24' }}
+      title={`Possible duplicate — same customer, baseline and closing date as ${other} other deal${other === 1 ? '' : 's'}. If the job was re-signed under a new Project ID, hide the one you don't want.`}>
+      2x
+    </span>
+  )
+}
+
 function CanceledMark() {
   return (
     <span className="w-[22px] h-[22px] rounded-full flex items-center justify-center flex-shrink-0"
@@ -70,20 +83,6 @@ function CanceledMark() {
     </span>
   )
 }
-
-// Amber slash: this job earns no CONTEST credit (migration 056). Much narrower
-// than Hidden beside it — the money all still counts, it just wins no trophy.
-function NoCompMark({ note }) {
-  return (
-    <span className="w-[22px] h-[22px] rounded-full flex items-center justify-center flex-shrink-0"
-      style={{ background: '#fbbf2418', border: '1px solid #fbbf2455' }}
-      title={`No competition credit — still counts in revenue, commission and payroll${note ? ` · ${note}` : ''}`}>
-      <Ban size={12} strokeWidth={2.5} className="text-amber-300" />
-    </span>
-  )
-}
-
-
 
 // Consolidated columns — related fields are stacked inside one cell so the
 // whole table fits on screen without horizontal scrolling.
@@ -574,31 +573,14 @@ function StatusCell({ status, color, options, canEdit, dealId, onUpdate }) {
   )
 }
 
-function ActionButtons({ deal, onEdit, onDelete, onToggleHidden, onToggleComp }) {
+function ActionButtons({ deal, onEdit, onDelete, onToggleHidden }) {
   const hidden = isHidden(deal)
-  const noComp = isCompExcluded(deal)
   return (
     <div className="flex gap-1.5 justify-end">
       <button onClick={() => onEdit(deal)}
         className="p-1.5 rounded text-white/30 hover:text-teal hover:bg-teal/10 transition-colors">
         <Pencil size={13} />
       </button>
-      {/* Contest exclusion (056) — a MUCH narrower thing than Hide beside it:
-          the deal still pays and still counts everywhere money is counted, it
-          just wins no competitions. The toggle also lives in a competition's
-          drill-down; it is here as well so an excluded deal can always be put
-          back, even when no live contest lists it any more. */}
-      {onToggleComp && !hidden && (
-        <button onClick={() => onToggleComp(deal)}
-          title={noComp
-            ? `Count in competitions again${deal.comp_excluded_note ? ` (excluded: ${deal.comp_excluded_note})` : ''}`
-            : 'Exclude from every competition — still pays commission'}
-          className={`p-1.5 rounded transition-colors ${noComp
-            ? 'text-amber-300/80 hover:text-amber-300 hover:bg-amber-400/10'
-            : 'text-white/30 hover:text-amber-300 hover:bg-amber-400/10'}`}>
-          <Ban size={13} />
-        </button>
-      )}
       {/* Hide, NOT delete — the row has to survive or the sheet sync
           re-creates it within the minute (see migration 052). */}
       {onToggleHidden && (
@@ -786,7 +768,7 @@ function NotesThread({ deal, profile, users, onCountChange }) {
 const subline = (deal) => [deal.office, deal.payment_method].filter(Boolean).join(' · ') || '—'
 
 // ── Mobile card (below lg) ────────────────────────────────────
-function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onToggleHidden, onToggleComp, onUpdate, statusColor, statusLabels, profile, users, noteCount, onCountChange, audit = null, canAudit = false }) {
+function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onToggleHidden, onUpdate, dupeIds, statusColor, statusLabels, profile, users, noteCount, onCountChange, audit = null, canAudit = false }) {
   const baseline = parseFloat(deal.baseline_revenue) || 0
   const jobPrice = parseFloat(deal.job_price)        || 0
   const [showNotes, setShowNotes] = useState(false)
@@ -806,7 +788,7 @@ function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onToggleHidden, 
             )}
             {isCanceled(deal) && <CanceledMark />}
             {isHidden(deal) && <HiddenMark />}
-                    {isCompExcluded(deal) && !isHidden(deal) && <NoCompMark note={deal.comp_excluded_note} />}
+                    {dupeIds?.has(deal.id) && <DupeMark other={dupeIds.get(deal.id)} />}
           </div>
           <p className="text-[11px] text-white/40 truncate">{subline(deal)}</p>
         </div>
@@ -854,7 +836,7 @@ function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onToggleHidden, 
 
       {canEdit && (
         <div className="mt-3 pt-3 border-t border-white/5">
-          <ActionButtons deal={deal} onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} onToggleComp={onToggleComp} />
+          <ActionButtons deal={deal} onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} />
         </div>
       )}
     </div>
@@ -870,7 +852,7 @@ export default function DealTable({
   paymentFilter, setPaymentFilter,
   dateField, setDateField,
   dateFrom, dateTo, datePreset, setDateRange,
-  onEdit, onDelete, onToggleHidden, onToggleComp, onUpdate, loading, openNotesId,
+  onEdit, onDelete, onToggleHidden, onUpdate, dupeIds, loading, openNotesId,
   audit = null, canAudit = false,
 }) {
   const { statusColor, statusLabels, offices, paymentMethods } = useSettings()
@@ -980,7 +962,7 @@ export default function DealTable({
                     )}
                     {isCanceled(deal) && <CanceledMark />}
                     {isHidden(deal) && <HiddenMark />}
-                    {isCompExcluded(deal) && !isHidden(deal) && <NoCompMark note={deal.comp_excluded_note} />}
+                    {dupeIds?.has(deal.id) && <DupeMark other={dupeIds.get(deal.id)} />}
                   </div>
                   {deal.project_id && <p className="text-[11px] text-white/40 truncate max-w-[260px]">{deal.project_id}</p>}
                 </td>
@@ -1018,7 +1000,7 @@ export default function DealTable({
                           <RefreshCw size={12} className={audit.busy[deal.id] ? 'animate-spin' : ''} />
                         </button>
                       )}
-                      <ActionButtons deal={deal} onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} onToggleComp={onToggleComp} />
+                      <ActionButtons deal={deal} onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} />
                     </div>
                   </td>
                 )}
@@ -1056,7 +1038,7 @@ export default function DealTable({
       <div className={`lg:hidden ${audit ? 'divide-y-[10px] divide-[#161616]' : 'divide-y divide-white/5'}`}>
         {deals.map(deal => (
           <DealCard key={deal.id} deal={deal} canEdit={canEdit} canVerify={canVerify}
-            onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} onToggleComp={onToggleComp} onUpdate={onUpdate}
+            onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} onUpdate={onUpdate} dupeIds={dupeIds}
             statusColor={statusColor} statusLabels={statusLabels}
             audit={audit} canAudit={canAudit}/>
         ))}

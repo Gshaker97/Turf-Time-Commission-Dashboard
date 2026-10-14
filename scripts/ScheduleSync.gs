@@ -160,12 +160,17 @@ function schSyncLocked_() {
   const deals = schGetAll_(url, key,
     '/rest/v1/deals?select=id,project_id,deal_name,status,sale_date,baseline_revenue,job_price,install_date,pay_date,payment_method,office,setter_id,closer_id,manager_override_pct,director_override_pct,vp_override_pct,commission_verified,checklist,synced_baseline,synced_job_price');
   const byProject = {}, handEnteredNames = new Set(), dealByName = {};
+  // Every deal keyed by customer name, INCLUDING ones that already carry a
+  // Project ID. Not used for matching — see dealByName — only to WARN when a
+  // brand-new Project ID lands for a customer we already have a deal for.
+  const allByName = {};
   deals.forEach(d => {
     if (d.project_id) byProject[String(d.project_id)] = d;
+    const nk = d.deal_name ? String(d.deal_name).trim().toLowerCase() : '';
+    if (nk) (allByName[nk] = allByName[nk] || []).push(d);
     if (d.deal_name && !d.project_id) {
-      const k = String(d.deal_name).trim().toLowerCase();
-      handEnteredNames.add(k);   // no ID yet — the sheet may still be the same job
-      dealByName[k] = d;
+      handEnteredNames.add(nk);  // no ID yet — the sheet may still be the same job
+      dealByName[nk] = d;
     }
   });
 
@@ -404,6 +409,31 @@ function schSyncLocked_() {
         // the issue below names exactly who to assign.
         const rep = byName[repName.toLowerCase()] || schResolvePerson_(repName, profiles);
         if (!rep) out.details.push('Unknown rep "' + repName + '" for ' + customer + ' — imported with no setter/closer; assign them on the deal');
+
+        // SAME CUSTOMER, NEW PROJECT ID — could be a second job, could be the
+        // same job re-issued under a fresh ID. The sheet does not say which,
+        // and guessing is how both of this matcher's bugs happened: adopting
+        // the old deal LOSES a real second sale, creating blindly leaves a
+        // silent DUPLICATE of a re-signed job. So always CREATE (a sale must
+        // never be invisible) and always SAY SO, loudly enough to act on.
+        // A matching baseline AND sale date means it is almost certainly the
+        // same job twice; differing figures look like a genuine second job.
+        const twins = (allByName[customer.toLowerCase()] || []);
+        if (twins.length) {
+          const same = twins.filter(function (d) {
+            return !schChanged_(d.baseline_revenue, baselineVal) && String(d.sale_date || '') === String(schDate_(row[ix.approved]) || '');
+          });
+          const ids = twins.map(function (d) { return d.project_id || 'no ID'; }).join(', ');
+          const msg = (same.length ? 'LIKELY DUPLICATE' : 'Repeat customer')
+            + ': "' + customer + '" already has ' + twins.length + ' deal(s) (Project ' + ids
+            + ') and Jobs row ' + (r + 1) + ' brought a NEW Project ID ' + projectId
+            + (same.length
+                ? ' with the SAME baseline and closing date — if the job was re-signed under a new ID, hide one of them on the Deals page.'
+                : ' with different figures, so it imported as a separate job. Check it is a real second sale.');
+          // The heartbeat only carries the first 8 details, so a likely
+          // duplicate jumps the queue — it is the one worth reading.
+          if (same.length) out.details.unshift(msg); else out.details.push(msg);
+        }
 
         const newSaleDate = schDate_(row[ix.approved]);
         const deal = {
