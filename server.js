@@ -1550,7 +1550,7 @@ const GHL_OPP_FIELD_IDS = {
   baseline: 'rI6UeVz5CTQcXsssBqIm', install_date: 'j3gHe7eeXd2yfujzpln8',
   payment_method: 'IpcldbuGsu2HeNCZeZYl', commission: 'P5PdaF8CnR4ru4Xru3UA',
   setter: 'u3sMxbOvn2jHK53XrAu0', closer: 'q2AwMVrGnqaLTeosTpd7',
-  sales_rep: 'mVfmImqXyOUQacAOAX5K',
+  sales_rep: 'mVfmImqXyOUQacAOAX5K', markup: 'Vi6FxBjJ1iVcSPEH8tFE',
 }
 const GHL_CHANGE_ORDER_PRICE = '7V3m3DhffrhMuOurTQ0N'   // "Change Order Price" (MONETORY)
 const GHL_PIPELINES = {
@@ -1704,6 +1704,93 @@ async function dealForProject(projectId) {
   }
 }
 
+// The Jobs-tab row for a project (the ArcSite "sold" sheet), keyed by Project
+// ID. Source of truth for baseline, job price and commission across ALL reps —
+// including estimators, who have no dashboard deal. Columns are matched by
+// header keyword so a column move doesn't break it. Fails soft to null (sheet
+// not reachable, or the row not written yet — it lands a few seconds after the
+// sale). Parenthesised negatives like "($1,356.73)" parse as -1356.73.
+async function jobRowForProject(projectId, { fresh = false } = {}) {
+  if (fresh) _sheetCache = { at: 0, data: null }   // bypass the 60s cache for a retry
+  let data
+  try { data = await readInstallSheet() } catch { return null }
+  const jobs = data && data.jobs
+  if (!jobs || !jobs.headers || !jobs.headers.length) return null
+  const h = (re) => jobs.headers.find(x => re.test(String(x).toLowerCase()))
+  const pidH = h(/project\s*id/)
+  if (!pidH) return null
+  const want = String(projectId).trim()
+  const row = jobs.rows.find(r => String(r[pidH] || '').trim() === want)
+  if (!row) return null
+  const num = (v) => {
+    if (v == null || String(v).trim() === '') return null
+    const s = String(v).trim(), neg = /^\(.*\)$/.test(s) || s.trim().startsWith('-')
+    const n = Number(s.replace(/[^0-9.]/g, ''))
+    return isNaN(n) ? null : (neg ? -n : n)
+  }
+  const baseH = h(/baseline/)
+  const priceH = h(/pre.?tax\s*sale/) || h(/approved\s*total/)
+  const commH = jobs.headers.find(x => /commission/.test(String(x).toLowerCase()) && !String(x).includes('%'))
+  return {
+    baseline:   baseH  ? num(row[baseH])  : null,
+    jobPrice:   priceH ? num(row[priceH]) : null,
+    commission: commH  ? num(row[commH])  : null,
+  }
+}
+
+// Build the money custom-field writes (baseline, markup, commission) from a
+// sheet job row. Commission stays BLANK for salaried estimators. Shared by the
+// main flow and the retry sweep so both agree on the mapping.
+function arcMoneyFields(job, estimator, defs) {
+  if (!job) return []
+  const baseline = job.baseline != null ? job.baseline : null
+  const markup = job.jobPrice != null && job.baseline != null
+    ? Math.round((job.jobPrice - job.baseline) * 100) / 100 : null
+  const commission = estimator ? null : (job.commission != null ? job.commission : null)
+  const out = []
+  for (const [k, v] of [['baseline', baseline], ['markup', markup], ['commission', commission]]) {
+    if (v == null) continue
+    const w = oppFieldWrite(GHL_OPP_FIELD_IDS[k], v, defs)
+    if (w) out.push(w)
+  }
+  return out
+}
+
+// The sheet row (written by ArcSite's import) can land a few seconds AFTER the
+// webhook fires, so a just-created opp may be missing baseline/markup/
+// commission. Queue those for a few cache-busting retries; once the row shows
+// up, patch the money fields onto the existing opp. Give up after ~5 min.
+const _arcEnrich = new Map()   // oppId -> { projectId, estimator, tries }
+let _arcEnrichTimer = null
+function arcEnrichQueue(oppId, projectId, estimator) {
+  if (!oppId || !projectId) return
+  _arcEnrich.set(oppId, { projectId, estimator, tries: 0 })
+  if (!_arcEnrichTimer) {
+    _arcEnrichTimer = setInterval(arcEnrichSweep, 45000)
+    _arcEnrichTimer.unref?.()   // don't keep the process alive just for the sweep
+  }
+}
+async function arcEnrichSweep() {
+  if (!_arcEnrich.size) return
+  let defs = null
+  for (const [oppId, item] of [..._arcEnrich]) {
+    item.tries++
+    let row = null
+    try { row = await jobRowForProject(item.projectId, { fresh: true }) } catch {}
+    if (row) {
+      try {
+        if (!defs) defs = await ghlOppFields()
+        const fields = arcMoneyFields(row, item.estimator, defs)
+        if (fields.length) await ghlUpdateOpp(oppId, { customFields: fields })
+      } catch {}
+      _arcEnrich.delete(oppId)
+    } else if (item.tries >= 6) {
+      _arcEnrich.delete(oppId)   // give up; the sheet row never appeared
+    }
+  }
+  if (!_arcEnrich.size && _arcEnrichTimer) { clearInterval(_arcEnrichTimer); _arcEnrichTimer = null }
+}
+
 // In-memory dedupe: collapse a burst of retries for the same project+status.
 const _arcSeen = new Map()
 function arcRecentlyHandled(key) {
@@ -1782,11 +1869,23 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
     }
   }
 
-  // ── Our side: the dashboard deal (outside sales only) for baseline/install/
-  // payment/setter/closer/commission.
-  const enriched = estimator ? null : await dealForProject(projectId).catch(() => null)
+  // ── Money from the SHEET (Jobs tab), the source of truth for ALL reps —
+  // baseline, job price and commission. install/payment/setter-closer still come
+  // from the dashboard deal (outside sales), and estimators have no deal.
+  const [job, enriched] = await Promise.all([
+    jobRowForProject(projectId).catch(() => null),
+    estimator ? Promise.resolve(null) : dealForProject(projectId).catch(() => null),
+  ])
   const deal = enriched && enriched.deal
   const pipeline = estimator ? GHL_PIPELINES.estimator : GHL_PIPELINES.outside
+
+  const baseline = job && job.baseline != null ? job.baseline : null
+  // Markup = job price − baseline (per Keaton). Both from the sheet so they agree.
+  const markup = job && job.jobPrice != null && job.baseline != null
+    ? Math.round((job.jobPrice - job.baseline) * 100) / 100 : null
+  // Commission = the sheet's Commission column (a formula, source of truth);
+  // BLANK for salaried estimators.
+  const commission = estimator ? null : (job && job.commission != null ? job.commission : null)
 
   // People: outside sales from the deal; estimator = the ArcSite rep (inside
   // sales sets+closes, salaried → no commission).
@@ -1805,10 +1904,9 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   const planned = {
     project_id: projectId,
     price: sellTotal,
-    baseline: estimator ? null : (deal && deal.baseline_revenue != null ? Number(deal.baseline_revenue) : null),
+    baseline, markup, commission,
     install_date: deal && deal.install_date || null,
     payment_method: deal && deal.payment_method || null,
-    commission: estimator ? null : (enriched && enriched.commission),  // estimators salaried
     setter: setterName, closer: closerName, sales_rep: closerName,
   }
   const customFields = []
@@ -1887,7 +1985,12 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
     } catch (e) { pdf = 'skipped: ' + (e.message || 'upload failed') }
   }
 
-  return { ok: true, ...plan, action, change_order: isChangeOrder, opportunity_id: oppId, contact_id: contactId, owner: oppBody.assignedTo ? closerName : null, pdf }
+  // If the sheet row wasn't there yet, retry filling baseline/markup/commission
+  // once it lands (see arcEnrichSweep). Skip on change orders — the price delta
+  // is already written and we don't want to overwrite it.
+  if (!job && !isChangeOrder) arcEnrichQueue(oppId, projectId, estimator)
+
+  return { ok: true, ...plan, action, change_order: isChangeOrder, opportunity_id: oppId, contact_id: contactId, owner: oppBody.assignedTo ? closerName : null, pdf, enrich: !job ? 'queued' : undefined }
 }
 
 const app = express()
