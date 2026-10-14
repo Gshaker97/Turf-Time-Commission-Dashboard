@@ -8,6 +8,7 @@ import { headIdSet, saleOwnerId, buildChangesByProfile, teamOfSale, teamLabel } 
 import FilterBar from '../components/FilterBar'
 import KpiCard from '../components/KpiCard'
 import DealTable, { dealNeedsReview } from '../components/DealTable'
+import { duplicateDealIds } from '../utils/needsReview'
 import { useAudit } from '../components/useAudit'
 import { AuditControls } from '../components/AuditStrip'
 import DealModal from '../components/DealModal'
@@ -259,6 +260,11 @@ export default function Deals() {
     [deals, canStage, dataStartDate]
   )
   const onReview = canStage && reviewTab === 'review'
+  // Flagged across EVERY loaded deal, not just the filtered page: a duplicate
+  // whose twin is filtered out is still a duplicate, and the pair is usually
+  // what you are hunting for.
+  const dupeIds = useMemo(() => duplicateDealIds(deals), [deals])
+
   const shownDeals = onReview ? needsReview : filtered
   // Auditors (admin/Keaton) run the live audit + fixes; a plain VP sees it read-only.
   const isKeaton = profile?.email?.toLowerCase() === 'keaton@turftime.com' || profile?.name === 'Keaton Shaker'
@@ -432,47 +438,6 @@ export default function Deals() {
     }
   }
 
-  // CONTEST EXCLUSION (migration 056) — far narrower than Hide above: the deal
-  // keeps every dollar (revenue, commission, payroll, records, the backup
-  // export) and only stops earning credit in competitions, in all of them at
-  // once. The same toggle sits in a competition's standings drill-down; it is
-  // here too so an excluded deal can always be put back, even once no live
-  // contest lists it.
-  async function handleToggleComp(deal) {
-    const off = !deal.comp_excluded
-    let note = null
-    if (off) {
-      const why = await promptDialog({
-        tone: 'warn',
-        title: `Exclude "${deal.deal_name}" from competitions?`,
-        message: 'It earns no credit in any competition — standings, rounds and team averages.',
-        bullets: [
-          'Nothing else changes: revenue, commission, payroll and the records all still count it.',
-          'It stays listed in a competition drill-down, struck out, so you can put it back.',
-        ],
-        label: 'Reason (optional)',
-        placeholder: 'e.g. finance docs not signed',
-        confirmLabel: 'Exclude from contests',
-      })
-      if (why === null) return   // cancelled
-      note = why.trim() || null
-    }
-    const patch = off
-      ? { comp_excluded: true, comp_excluded_at: new Date().toISOString(),
-          comp_excluded_by: profile?.id ?? null, comp_excluded_note: note }
-      : { comp_excluded: false, comp_excluded_at: null, comp_excluded_by: null, comp_excluded_note: null }
-    setDeals(ds => ds.map(d => (d.id === deal.id ? { ...d, ...patch } : d)))
-    const res = await writeDeal(deal, patch, 'this contest change')
-    if (res?.error) {
-      if (!res.cancelled) toast.error(`Could not update "${deal.deal_name}" — ${res.error.message || 'the write was rejected'}.`)
-      load(true)
-    } else {
-      toast.success(off
-        ? `"${deal.deal_name}" no longer counts in any competition.`
-        : `"${deal.deal_name}" counts in competitions again.`)
-    }
-  }
-
   // Export the deals currently in view (respects filters + the review tab) to a
   // clean, deal-per-row CSV.
   function exportDeals() {
@@ -590,8 +555,8 @@ export default function Deals() {
         onEdit={d => { setEditDeal(d); setModal(true) }}
         onDelete={handleDelete}
         onToggleHidden={isAdmin ? handleToggleHidden : undefined}
-        onToggleComp={isAdmin ? handleToggleComp : undefined}
         onUpdate={persistInline}
+        dupeIds={dupeIds}
         loading={loading}
         audit={onReview ? audit : null}
         canAudit={canAudit}
