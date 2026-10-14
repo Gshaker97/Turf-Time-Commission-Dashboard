@@ -157,7 +157,9 @@ export default function CompetitionModal({ competition, users = [], deals = [], 
       goal_mode: form.goal_mode,
       goal_target: form.goal_mode === 'target' && form.goal_target !== '' ? Number(form.goal_target) : null,
       credit_mode: form.credit_mode,
-      credit_split_pct: form.credit_mode === 'split'
+      // 'lead_bonus' reuses this column as the CLOSER's part share, so it has
+      // to survive the save the same way 'split' does.
+      credit_split_pct: (form.credit_mode === 'split' || form.credit_mode === 'lead_bonus')
         ? Math.min(1, Math.max(0, Number(form.credit_split_pct) || 0)) : null,
       start_date: form.start_date || null,
       end_date: form.end_date || null,
@@ -239,6 +241,26 @@ export default function CompetitionModal({ competition, users = [], deals = [], 
               {COMP_CREDIT_MODES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
             </Sel>
           </Field>
+          {form.credit_mode === 'lead_bonus' && (
+            <div className="rounded-lg px-3 py-3 space-y-2" style={inputStyle}>
+              <div className="flex items-center justify-between text-[12px]">
+                <span className="text-white/60">Setter 100%</span>
+                <span className="text-white/60">Closer {Math.round((Number(form.credit_split_pct) || 0) * 100)}%</span>
+              </div>
+              <input type="range" min="0" max="100" step="5"
+                value={Math.round((Number(form.credit_split_pct) || 0) * 100)}
+                onChange={e => set('credit_split_pct', Number(e.target.value) / 100)}
+                className="w-full accent-teal" />
+              <p className="text-[10px] text-white/30">
+                The setter always keeps a full credit; the closer earns this much on top for closing
+                someone else&rsquo;s lead, so one lead is worth{' '}
+                {(1 + (Number(form.credit_split_pct) || 0)).toFixed(2).replace(/0+$/, '').replace(/\.$/, '')} to the contest.
+                A self-gen counts once &mdash; no lead changed hands.
+                {(form.type === 'team' || form.type === 'squads' || form.type === 'team_avg') &&
+                  ' On a team contest a deal still counts once, so this only changes individual standings.'}
+              </p>
+            </div>
+          )}
           {form.credit_mode === 'split' && (
             <div className="rounded-lg px-3 py-3 space-y-2" style={inputStyle}>
               <div className="flex items-center justify-between text-[12px]">
