@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Trophy, Plus, Pencil, Trash2, ChevronDown, Download, Copy, Check, Image as ImageIcon } from 'lucide-react'
+import { Trophy, Plus, Pencil, Trash2, ChevronDown, Download, Copy, Check, Ban, Image as ImageIcon } from 'lucide-react'
 import { format } from 'date-fns'
 import { toPng, toBlob } from 'html-to-image'
 import { useAuth } from '../contexts/AuthContext'
-import { fetchCompetitions, fetchDeals, fetchUsers, fetchTeamChanges, insertCompetition, updateCompetition, deleteCompetition } from '../lib/db'
+import { fetchCompetitions, fetchDeals, fetchUsers, fetchTeamChanges, insertCompetition, updateCompetition, deleteCompetition, updateDeal } from '../lib/db'
 import { copyTable } from '../lib/clipboard'
 import {
   competitionStandings, competitionStatus, competitionEntryDeals,
@@ -34,7 +34,7 @@ const STATUS = {
 }
 const RANK_COLOR = { 1: '#fbbf24', 2: '#cbd5e1', 3: '#fb923c' }
 
-function StandRow({ e, comp, deals, users, canManage, mine, teamCtx }) {
+function StandRow({ e, comp, deals, users, canManage, mine, teamCtx, onToggleComp }) {
   const metric = comp.metric
   // Team Average: the score is an AVERAGE (total ÷ rep count), so the row
   // shows the math under it instead of the deals-type revenue sub-line.
@@ -49,6 +49,9 @@ function StandRow({ e, comp, deals, users, canManage, mine, teamCtx }) {
     [open, comp, e.id, deals, users, teamCtx]
   )
   const fmtDate = (d) => d ? format(new Date(d + 'T12:00:00'), 'MMM d') : '—'
+  // Deals that actually scored — canceled, hidden and contest-excluded ones
+  // are listed but worth 0, so none of them belongs in this count.
+  const counted = entryDeals.filter(x => !x.canceled && !x.excluded && !x.hidden).length
 
   return (
     <div className="rounded-lg" style={mine ? { background: '#00b89415', border: '1px solid #00b89430' } : undefined}>
@@ -89,27 +92,52 @@ function StandRow({ e, comp, deals, users, canManage, mine, teamCtx }) {
           ) : (
             <>
               <div className="flex items-center justify-between px-1 pb-1.5 mb-1 border-b border-white/5 text-[9px] font-bold uppercase tracking-wider text-white/30">
-                <span>{entryDeals.filter(x => !x.canceled).length} deal{entryDeals.filter(x => !x.canceled).length === 1 ? '' : 's'} counted</span>
+                <span>{counted} deal{counted === 1 ? '' : 's'} counted</span>
                 <span>Counts toward score</span>
               </div>
-              {entryDeals.map(({ deal, value, credit, contribution, canceled }) => {
+              {entryDeals.map(({ deal, value, credit, contribution, canceled, excluded, hidden }) => {
                 const personName = (joined, id) => joined?.name ?? users.find(u => u.id === id)?.name ?? '—'
+                // Canceled / contest-excluded / hidden all score 0 and all read
+                // the same way: struck out, with a badge saying which it is.
+                const dead = canceled || excluded || hidden
                 return (
-                  <div key={deal.id} className={`px-1 py-1 ${canceled ? 'opacity-60' : ''}`}>
+                  <div key={deal.id} className={`px-1 py-1 ${dead ? 'opacity-60' : ''}`}>
                     <div className="flex items-center gap-2 text-[11px]">
-                      <span className={`flex-1 min-w-0 truncate ${canceled ? 'line-through text-white/40' : 'text-white/75'}`}>{deal.deal_name || '—'}</span>
+                      <span className={`flex-1 min-w-0 truncate ${dead ? 'line-through text-white/40' : 'text-white/75'}`}>{deal.deal_name || '—'}</span>
                       {canceled && <span className="text-[8px] font-bold uppercase tracking-wide text-red-400 whitespace-nowrap">canceled</span>}
-                      {credit !== 1 && <span className={`whitespace-nowrap ${canceled ? 'text-white/25' : 'text-white/30'}`}>{Math.round(credit * 100)}%</span>}
-                      {metric === 'deals' && (
-                        <span className={`whitespace-nowrap ${canceled ? 'line-through text-white/25' : 'text-white/40'}`}>{fmt(Number(deal.baseline_revenue) || 0)}</span>
+                      {hidden && !canceled && <span className="text-[8px] font-bold uppercase tracking-wide text-white/40 whitespace-nowrap">hidden</span>}
+                      {excluded && !canceled && !hidden && (
+                        <span className="text-[8px] font-bold uppercase tracking-wide text-amber-300 whitespace-nowrap"
+                          title={deal.comp_excluded_note || 'Pulled out of every competition'}>excluded</span>
                       )}
-                      <span className={`font-semibold whitespace-nowrap w-20 text-right ${canceled ? 'line-through text-red-400/60' : 'text-white/80'}`}>
-                        {fmtScore(canceled ? value * credit : contribution, metric)}
+                      {credit !== 1 && <span className={`whitespace-nowrap ${dead ? 'text-white/25' : 'text-white/30'}`}>{Math.round(credit * 100)}%</span>}
+                      {metric === 'deals' && (
+                        <span className={`whitespace-nowrap ${dead ? 'line-through text-white/25' : 'text-white/40'}`}>{fmt(Number(deal.baseline_revenue) || 0)}</span>
+                      )}
+                      <span className={`font-semibold whitespace-nowrap w-20 text-right ${dead ? 'line-through text-red-400/60' : 'text-white/80'}`}>
+                        {fmtScore(dead ? value * credit : contribution, metric)}
                       </span>
+                      {/* Exclude / put back — this is where the need shows up
+                          (per Keaton), so the toggle lives here and not only
+                          in the deal editor. Canceled/hidden deals already
+                          count nowhere, so there is nothing to exclude. */}
+                      {canManage && onToggleComp && !canceled && !hidden ? (
+                        <button
+                          onClick={(ev) => { ev.stopPropagation(); onToggleComp(deal) }}
+                          title={excluded
+                            ? 'Put this deal back into every competition'
+                            : 'Exclude this deal from every competition (it still pays commission)'}
+                          className={`p-1 rounded flex-shrink-0 transition-colors ${excluded
+                            ? 'text-amber-300 hover:bg-amber-300/10'
+                            : 'text-white/20 hover:text-amber-300 hover:bg-amber-300/10'}`}>
+                          <Ban size={12} />
+                        </button>
+                      ) : <span className="w-[22px] flex-shrink-0" />}
                     </div>
                     <p className="text-[10px] text-white/30 truncate">
                       Set: {personName(deal.setter, deal.setter_id)} · Closed: {personName(deal.closer, deal.closer_id)}
                       {' '}· Sold {fmtDate(deal.sale_date)} · Install {fmtDate(deal.install_date)}
+                      {excluded && deal.comp_excluded_note ? ` · excluded: ${deal.comp_excluded_note}` : ''}
                     </p>
                   </div>
                 )
@@ -120,7 +148,7 @@ function StandRow({ e, comp, deals, users, canManage, mine, teamCtx }) {
                   {perRep && <span className="text-white/50 font-semibold">{fmtScore(e.total, metric)} ÷ {e.count} rep{e.count === 1 ? '' : 's'} = </span>}
                   {fmtScore(e.score, metric, perRep)}
                   {!perRep && metric === 'deals' && (
-                    <span className="text-white/50 font-semibold"> · {fmt(entryDeals.reduce((s, x) => s + (x.canceled ? 0 : (Number(x.deal.baseline_revenue) || 0) * x.credit), 0))}</span>
+                    <span className="text-white/50 font-semibold"> · {fmt(entryDeals.reduce((s, x) => s + ((x.canceled || x.excluded || x.hidden) ? 0 : (Number(x.deal.baseline_revenue) || 0) * x.credit), 0))}</span>
                   )}
                 </span>
               </div>
@@ -134,8 +162,14 @@ function StandRow({ e, comp, deals, users, canManage, mine, teamCtx }) {
 
 const ROUND_ST = { active: '#00b894', upcoming: '#fdcb6e', ended: '#94a3b8' }
 
-function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, teamCtx, onEdit, onDelete, onExport, onCopy, onRoundWinner, copied, exporting }) {
-  const [open, setOpen] = useState(false)
+function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, teamCtx, onEdit, onDelete, onExport, onCopy, onRoundWinner, onToggleComp, copied, exporting }) {
+  // EVERY entrant is listed by default (per Keaton: "show me everyone's scores
+  // for the competition, not just the people that earned it"). It used to show
+  // the top 5 behind a "Show all N" link — and on a TARGET contest the top of
+  // the board is exactly the people who already earned it, so the card read as
+  // a list of winners with everyone else invisible. The toggle now collapses
+  // instead of expanding.
+  const [open, setOpen] = useState(true)
   const ghostIds = useMemo(() => new Set(users.filter(u => u.ghost).map(u => u.id)), [users])
   const opts = useMemo(() => ({ hiddenIds: isAdmin ? null : ghostIds, teamCtx }), [isAdmin, ghostIds, teamCtx])
 
@@ -264,13 +298,13 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, te
           {standings.length === 0 ? (
             <p className="text-[12px] text-white/30 px-3 py-2">No participants yet.</p>
           ) : (
-            top.map(e => <StandRow key={e.id} e={e} comp={dispComp} deals={deals} users={users} canManage={canManage} mine={isMine(e)} teamCtx={teamCtx} />)
+            top.map(e => <StandRow key={e.id} e={e} comp={dispComp} deals={deals} users={users} canManage={canManage} mine={isMine(e)} teamCtx={teamCtx} onToggleComp={onToggleComp} />)
           )}
           {/* If the viewer is outside the visible top and not shown, pin their row */}
           {!open && myEntry && myEntry.rank > 5 && (
             <>
               <p className="text-center text-white/20 text-[11px]">···</p>
-              <StandRow e={myEntry} comp={dispComp} deals={deals} users={users} canManage={canManage} mine teamCtx={teamCtx} />
+              <StandRow e={myEntry} comp={dispComp} deals={deals} users={users} canManage={canManage} mine teamCtx={teamCtx} onToggleComp={onToggleComp} />
             </>
           )}
         </div>
@@ -279,7 +313,9 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, te
           <button onClick={() => setOpen(o => !o)}
             className="mt-2 flex items-center gap-1 text-[11px] text-white/40 hover:text-white transition-colors">
             <ChevronDown size={13} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
-            {open ? 'Show less' : (standings.length > 5 ? `Show all ${standings.length}` : 'Details')}
+            {standings.length > 5
+              ? (open ? 'Show top 5 only' : `Show all ${standings.length}`)
+              : (open ? 'Hide details' : 'Details')}
           </button>
         )}
 
@@ -847,6 +883,41 @@ export default function Competitions() {
       .sort((a, b) => String(b.end_date ?? '').localeCompare(String(a.end_date ?? '')))
   }, [sorted])
 
+  // Pull one deal out of CONTEST SCORING, or put it back (migration 056). The
+  // deal keeps its revenue, commission and payroll — this only stops it
+  // winning trophies, in EVERY competition at once, which is what Keaton
+  // asked for ("for all competitions as the default"). Done from the
+  // standings drill-down because that is where you notice it.
+  async function handleToggleComp(deal) {
+    const off = !deal.comp_excluded
+    let note = deal.comp_excluded_note ?? null
+    if (off) {
+      const why = prompt(
+        `Exclude "${deal.deal_name}" from competitions?\n\n` +
+        'It stops earning contest credit in EVERY competition — standings, rounds ' +
+        'and team averages. Nothing else changes: it still counts in revenue, ' +
+        'commission, payroll and the records. It stays listed here, struck out, ' +
+        'so you can put it back.\n\n' +
+        'Reason (optional, e.g. "finance docs not signed"):', '')
+      if (why === null) return   // cancelled the prompt
+      note = why.trim() || null
+    }
+    const patch = off
+      ? { comp_excluded: true, comp_excluded_at: new Date().toISOString(),
+          comp_excluded_by: profile?.id ?? null, comp_excluded_note: note }
+      : { comp_excluded: false, comp_excluded_at: null, comp_excluded_by: null, comp_excluded_note: null }
+    setDeals(ds => ds.map(d => (d.id === deal.id ? { ...d, ...patch } : d)))
+    const res = await updateDeal(deal.id, patch)
+    if (res?.error) {
+      toast.error(`Could not update "${deal.deal_name}" — ${res.error.message || 'the write was rejected'}.`)
+      load()
+    } else {
+      toast.success(off
+        ? `"${deal.deal_name}" no longer counts in any competition.`
+        : `"${deal.deal_name}" counts in competitions again.`)
+    }
+  }
+
   // Round winner override: null = back to auto. Saved on the rounds jsonb.
   async function handleRoundWinner(comp, roundId, winnerId) {
     const rounds = (comp.rounds || []).map(r => r.id === roundId ? { ...r, winner_id: winnerId } : r)
@@ -919,6 +990,7 @@ export default function Competitions() {
                   profileId={profile?.id} canManage={canManage} isAdmin={isAdmin} teamCtx={teamCtx}
                   onEdit={(c) => { setEditComp(c); setModal(true) }} onDelete={handleDelete}
                   onExport={exportOne} onCopy={copyOne} onRoundWinner={handleRoundWinner}
+                  onToggleComp={canManage ? handleToggleComp : null}
                   copied={copiedId === comp.id} exporting={exporting} />
               ))}
             </div>
@@ -939,6 +1011,7 @@ export default function Competitions() {
                       profileId={profile?.id} canManage={canManage} isAdmin={isAdmin} teamCtx={teamCtx}
                       onEdit={(c) => { setEditComp(c); setModal(true) }} onDelete={handleDelete}
                       onExport={exportOne} onCopy={copyOne} onRoundWinner={handleRoundWinner}
+                      onToggleComp={canManage ? handleToggleComp : null}
                       copied={copiedId === comp.id} exporting={exporting} />
                   ))}
                 </div>

@@ -13,7 +13,7 @@
 //                  closer share it by credit_split_pct = the closer's share),
 //                  or 'lead_bonus' (setter full, closer a part share on top).
 // ============================================================
-import { fmt, isCanceled, countsInTotals } from './commission'
+import { fmt, isCanceled, isHidden, countsInTotals } from './commission'
 import { teamOfSale, teamLabel, headIdSet } from './team'
 
 export const COMP_TYPES = [
@@ -72,6 +72,19 @@ const inWindow = (deal, comp) => {
   return true
 }
 
+// Pulled out of CONTEST SCORING only (migration 056) — a real deal that pays
+// commission and sits in revenue, but should not win a trophy (finance docs
+// unsigned, etc.). Deliberately NOT part of countsInTotals(): no payout, KPI,
+// record or export figure moves because of it. Applies to every competition.
+export const compExcluded = (deal) => deal?.comp_excluded === true
+
+// THE ONE SCORING GATE for every competition fn: in this contest's window,
+// counts in totals at all (not canceled/hidden), and not pulled from contests.
+// Every scorer goes through it so the standings, the rounds, the team averages
+// and the Team-Average roster can never disagree about which deals count.
+const scores = (deal, comp) =>
+  inWindow(deal, comp) && countsInTotals(deal) && !compExcluded(deal)
+
 const dealValue = (deal, metric) =>
   metric === 'deals' ? 1 : (Number(deal.baseline_revenue) || 0)
 
@@ -124,7 +137,7 @@ function personCredit(deal, userId, comp) {
 function personScore(userId, deals, comp) {
   let total = 0, revenue = 0
   for (const d of deals) {
-    if (!inWindow(d, comp) || !countsInTotals(d)) continue   // canceled/hidden jobs don't count
+    if (!scores(d, comp)) continue   // canceled / hidden / contest-excluded don't count
     const credit = personCredit(d, userId, comp)
     if (credit) {
       total   += dealValue(d, comp.metric) * credit
@@ -142,7 +155,7 @@ function teamScore(managerId, deals, users, comp) {
   const ids = new Set([managerId, ...users.filter(u => u.manager_id === managerId).map(u => u.id)])
   let total = 0, revenue = 0
   for (const d of deals) {
-    if (!inWindow(d, comp) || !countsInTotals(d)) continue   // canceled/hidden jobs don't count
+    if (!scores(d, comp)) continue   // canceled / hidden / contest-excluded don't count
     if (teamCounts(d, ids, comp)) {
       total   += dealValue(d, comp.metric)
       revenue += Number(d.baseline_revenue) || 0
@@ -199,7 +212,7 @@ function sideCounts(deal, side, comp, teamCtx) {
 function sideScore(side, deals, comp, teamCtx) {
   let total = 0, revenue = 0
   for (const d of deals) {
-    if (!inWindow(d, comp) || !countsInTotals(d)) continue
+    if (!scores(d, comp)) continue   // canceled / hidden / contest-excluded don't count
     if (sideCounts(d, side, comp, teamCtx)) {
       total   += dealValue(d, comp.metric)
       revenue += Number(d.baseline_revenue) || 0
@@ -282,7 +295,7 @@ export function teamAvgRoster(headId, deals = [], users = [], comp = {}, teamCtx
   const none = new Set()
   const ids = new Set()
   for (const d of deals) {
-    if (!inWindow(d, comp) || !countsInTotals(d)) continue
+    if (!scores(d, comp)) continue   // canceled / hidden / contest-excluded don't count
     teamAvgCredited(d, comp, onTeam, none).forEach(p => ids.add(p))
   }
   const today = localToday()
@@ -299,7 +312,7 @@ function teamAvgScore(headId, deals, users, comp, teamCtx) {
   const onTeam = teamAvgMembership(headId, users, teamCtx)
   let total = 0, revenue = 0
   for (const d of deals) {
-    if (!inWindow(d, comp) || !countsInTotals(d)) continue
+    if (!scores(d, comp)) continue   // canceled / hidden / contest-excluded don't count
     if (!teamAvgCredited(d, comp, onTeam, excluded).length) continue
     total   += dealValue(d, comp.metric)
     revenue += Number(d.baseline_revenue) || 0
@@ -368,11 +381,18 @@ export function competitionEntryDeals(comp, entrantId, deals = [], users = [], o
           ? (teamAvgCredited(d, comp, avgOnTeam, avgExcluded).length ? 1 : 0)
           : personCredit(d, entrantId, comp)
     if (!credit) continue
-    // Include canceled deals too, but flagged & worth 0 — they show struck-out
-    // so an admin can see what WOULD count if the job weren't canceled.
+    // Include canceled and contest-excluded deals too, but flagged & worth 0 —
+    // they show struck-out so an admin can see what WOULD count, and can undo
+    // the exclusion from right here, which is where the need shows up.
+    // A HIDDEN deal (052) is worth 0 here too — it scores nowhere. It used to
+    // render with its full contribution because only `isCanceled` was tested,
+    // so the drill-down's total disagreed with the standing it explained.
     const canceled = isCanceled(d)
+    const excluded = compExcluded(d)
+    const dead = canceled || excluded || isHidden(d)
     const value = dealValue(d, comp.metric)
-    out.push({ deal: d, value, credit, contribution: canceled ? 0 : value * credit, canceled })
+    out.push({ deal: d, value, credit, canceled, excluded, hidden: isHidden(d),
+               contribution: dead ? 0 : value * credit })
   }
   return out.sort((a, b) => ((a.deal.sale_date ?? '') < (b.deal.sale_date ?? '') ? 1 : -1))
 }

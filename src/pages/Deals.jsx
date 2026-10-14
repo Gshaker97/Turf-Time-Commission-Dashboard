@@ -385,6 +385,41 @@ export default function Deals() {
     }
   }
 
+  // CONTEST EXCLUSION (migration 056) — far narrower than Hide above: the deal
+  // keeps every dollar (revenue, commission, payroll, records, the backup
+  // export) and only stops earning credit in competitions, in all of them at
+  // once. The same toggle sits in a competition's standings drill-down; it is
+  // here too so an excluded deal can always be put back, even once no live
+  // contest lists it.
+  async function handleToggleComp(deal) {
+    const off = !deal.comp_excluded
+    let note = null
+    if (off) {
+      const why = prompt(
+        `Exclude "${deal.deal_name}" from competitions?\n\n` +
+        'It earns no credit in any competition — standings, rounds, team averages. ' +
+        'Nothing else changes: revenue, commission, payroll and the records all ' +
+        'still count it.\n\n' +
+        'Reason (optional, e.g. "finance docs not signed"):', '')
+      if (why === null) return   // cancelled the prompt
+      note = why.trim() || null
+    }
+    const patch = off
+      ? { comp_excluded: true, comp_excluded_at: new Date().toISOString(),
+          comp_excluded_by: profile?.id ?? null, comp_excluded_note: note }
+      : { comp_excluded: false, comp_excluded_at: null, comp_excluded_by: null, comp_excluded_note: null }
+    setDeals(ds => ds.map(d => (d.id === deal.id ? { ...d, ...patch } : d)))
+    const res = await updateDeal(deal.id, patch)
+    if (res?.error) {
+      toast.error(`Could not update "${deal.deal_name}" — ${res.error.message || 'the write was rejected'}.`)
+      load(true)
+    } else {
+      toast.success(off
+        ? `"${deal.deal_name}" no longer counts in any competition.`
+        : `"${deal.deal_name}" counts in competitions again.`)
+    }
+  }
+
   // Export the deals currently in view (respects filters + the review tab) to a
   // clean, deal-per-row CSV.
   function exportDeals() {
@@ -502,6 +537,7 @@ export default function Deals() {
         onEdit={d => { setEditDeal(d); setModal(true) }}
         onDelete={handleDelete}
         onToggleHidden={isAdmin ? handleToggleHidden : undefined}
+        onToggleComp={isAdmin ? handleToggleComp : undefined}
         onUpdate={persistInline}
         loading={loading}
         audit={onReview ? audit : null}
