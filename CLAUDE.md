@@ -157,6 +157,10 @@ setup + deploy steps.
    finalized/paid deal on a LOCKED pay run is rejected by
    `guard_locked_payroll()` — that is intended, and the toast says to unlock the
    run first rather than reporting a generic write failure.
+   There is a THIRD flag that is deliberately NOT part of this rule:
+   `deals.comp_excluded` (migration 056) stops a deal winning COMPETITIONS and
+   touches no dollar anywhere. It lives in `competition.js`, never in
+   `countsInTotals` — see "Excluding a deal from competitions" below.
 
 ## Database migrations — read before touching the DB
 
@@ -328,6 +332,9 @@ setup + deploy steps.
   goals, and PostgREST cannot upsert against the partial index that would fix
   that. Office could not borrow `rep_goals` because its `subject_id` is a UUID
   keyed to profiles and an office is a string;
+  `056` adds `deals.comp_excluded` (+ `comp_excluded_at`/`_by`/`_note`) —
+  earns NO credit in any competition while counting normally everywhere money
+  is counted; see "Excluding a deal from competitions" below;
   `047` adds `competitions.excluded_ids` (jsonb
   array of profile ids) for the **Team Average (per rep)** competition type
   `team_avg` — entrants are TEAM HEADS (any `headIdSet` head, picked in the
@@ -480,6 +487,60 @@ re-checks the caller and raises 42501 before returning numbers.
 db.js); the Joseph Burgos row is a seeded PLACEHOLDER profile pending a real
 email + login. `sales_teams.name` is the POD's name, not an org-chart team's
 — see `teamLabel` for those.
+
+## Excluding a deal from competitions (`deals.comp_excluded`, migration 056)
+
+Per Keaton: "I need the ability to exclude deals from counting even though
+they are on the list — for all competitions as the default", for things like
+finance docs that aren't done. None of the states we already had says that:
+**Canceled** means the job fell through (it didn't), **`hidden`** (052) means
+the job isn't ours to count ANYWHERE (the rep still gets paid for this one),
+and **`competitions.excluded_ids`** (047) excludes a PERSON from a Team
+Average contest, not a deal. So this is a fourth, much narrower flag: the
+deal counts everywhere the money is and nowhere a trophy is.
+- **It is NOT part of `countsInTotals`.** Nothing about revenue, KPIs,
+  leaderboards, records, goals, commission, payroll or the backup export
+  changes — only `src/utils/competition.js` reads it (`compExcluded`).
+- **The flag is on the DEAL, so it applies to EVERY competition at once** —
+  that is what Keaton asked for, and it means an exclusion never has to be
+  re-applied contest by contest. There is no per-competition override; don't
+  add one speculatively.
+- **`scores(deal, comp)` in competition.js is the ONE scoring gate** —
+  `inWindow && countsInTotals && !compExcluded`. All five scorers
+  (`personScore`, `teamScore`, `sideScore`, `teamAvgScore` and
+  `teamAvgRoster`) go through it, so standings, rounds, team averages and the
+  Team-Average DIVISOR can never disagree about which deals count. Excluding
+  it from `teamAvgRoster` too is deliberate: the roster is "everyone who
+  earned credit", and an excluded deal earns none, which keeps numerator and
+  denominator on one population.
+- **The deal is still LISTED in the drill-down**, struck out with an amber
+  "excluded" badge, worth 0, with the reason printed under it — the same
+  treatment Canceled already got there, so an admin can see what WOULD count.
+  `competitionEntryDeals` returns `excluded` and `hidden` alongside
+  `canceled`. (Fixed while here: a HIDDEN deal used to render its FULL
+  contribution in that list while scoring nothing, so the drill-down's total
+  disagreed with the standing it was explaining.)
+- **Two surfaces, both admin-only:** the `Ban` button on each row of a
+  competition's standings drill-down (where you notice the problem), and the
+  `Ban` row action on the Deals page beside Hide — the second one matters
+  because once no live contest lists the deal, the drill-down can no longer
+  reach it to put it back.
+- Migration 056 also extends `guard_locked_payroll()` so an update touching
+  ONLY the four `comp_excluded*` columns passes on a locked run — same shape
+  and same reasoning as 039's change_alert allowance. A contest flag is not a
+  payout, and without it a deal excluded before payout could never be let
+  back in once its run locked.
+
+## Competition standings list EVERYONE
+
+Per Keaton: "show me everyone's scores for the competition, not just the
+people that earned it." The card used to render `standings.slice(0, 5)` behind
+a "Show all N" link — and on a TARGET contest the top of the board is exactly
+the people who already earned it, so the card read as a list of winners with
+everybody else invisible. `CompetitionCard`'s `open` now defaults to **true**
+and the toggle collapses ("Show top 5 only") instead of expanding.
+`competitionStandings` always returned every entrant including zero scores —
+the truncation was purely the card's, and the export image was already full.
 
 ## Records & big moments (`src/utils/records.js`)
 
