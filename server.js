@@ -950,6 +950,15 @@ const GHL_WRITE_TOKEN = (process.env.GHL_WRITE_TOKEN || '').trim() || GHL_API_TO
 // opportunity-write token 401s on /medias. Falls back to the write token.
 const GHL_MEDIA_TOKEN = (process.env.GHL_MEDIA_TOKEN || '').trim() || GHL_WRITE_TOKEN
 const GHL_LOCATION_ID = (process.env.GHL_LOCATION_ID || 'lm0glrcKsZ05EcZrGS9t').trim()
+// New-sale TEXT alerts need their OWN token: GHL scopes conversations
+// message-send separately, so the opportunity token 401s on /conversations.
+// Without this set, sale-alert texts simply don't send (everything else works).
+const GHL_SMS_TOKEN = (process.env.GHL_SMS_TOKEN || '').trim()
+// Who gets the new-sale text — GHL contact ids, comma-separated. Defaults to
+// Tanner / Keaton / Garrison; override with SALE_ALERT_CONTACT_IDS.
+const SALE_ALERT_CONTACTS = (process.env.SALE_ALERT_CONTACT_IDS
+  || 'OjhxskL9Tc6kE6wXPcFU,QPCjvSdLNjsfFnhC07YM,tyHlLNS6nuB1BdQRe1hH')
+  .split(',').map(s => s.trim()).filter(Boolean)
 const GHL_BASE = 'https://services.leadconnectorhq.com'
 // Known custom-field ids (fallbacks when name resolution misses them).
 const GHL_KNOWN_FIELDS = { sales_rep: 'QoJSUx7z3LIeaZw6fwDb', install_date: 'IMYajaM4Jv4eOG65exQZ' }
@@ -1760,11 +1769,11 @@ function arcMoneyFields(job, estimator, defs) {
 // webhook fires, so a just-created opp may be missing baseline/markup/
 // commission. Queue those for a few cache-busting retries; once the row shows
 // up, patch the money fields onto the existing opp. Give up after ~5 min.
-const _arcEnrich = new Map()   // oppId -> { projectId, estimator, tries }
+const _arcEnrich = new Map()   // oppId -> { projectId, estimator, alert, tries }
 let _arcEnrichTimer = null
-function arcEnrichQueue(oppId, projectId, estimator) {
+function arcEnrichQueue(oppId, projectId, estimator, alert = null) {
   if (!oppId || !projectId) return
-  _arcEnrich.set(oppId, { projectId, estimator, tries: 0 })
+  _arcEnrich.set(oppId, { projectId, estimator, alert, tries: 0 })
   if (!_arcEnrichTimer) {
     _arcEnrichTimer = setInterval(arcEnrichSweep, 45000)
     _arcEnrichTimer.unref?.()   // don't keep the process alive just for the sweep
@@ -1783,12 +1792,63 @@ async function arcEnrichSweep() {
         const fields = arcMoneyFields(row, item.estimator, defs)
         if (fields.length) await ghlUpdateOpp(oppId, { customFields: fields })
       } catch {}
+      // The new-sale text was deferred because the sheet row wasn't ready; now
+      // that it is, send it with the real baseline/markup.
+      if (item.alert) {
+        const markup = row.jobPrice != null && row.baseline != null
+          ? Math.round((row.jobPrice - row.baseline) * 100) / 100 : null
+        try { await sendSaleAlert(item.projectId, { ...item.alert, baseline: row.baseline, markup }) } catch {}
+      }
       _arcEnrich.delete(oppId)
     } else if (item.tries >= 6) {
-      _arcEnrich.delete(oppId)   // give up; the sheet row never appeared
+      // Give up filling the fields — but still send the text with what we have,
+      // so a new sale is never silent just because its sheet row never landed.
+      if (item.alert) { try { await sendSaleAlert(item.projectId, { ...item.alert, baseline: null, markup: null }) } catch {} }
+      _arcEnrich.delete(oppId)
     }
   }
   if (!_arcEnrich.size && _arcEnrichTimer) { clearInterval(_arcEnrichTimer); _arcEnrichTimer = null }
+}
+
+// ── New-sale text alert ─────────────────────────────────────────────────────
+// When a deal comes in, text a fixed set of GHL contacts a one-line summary.
+// Fires once per project; needs GHL_SMS_TOKEN (a key with the Conversations
+// message-send scope — the opportunity token lacks it). Safe no-op otherwise.
+const _arcAlerted = new Set()
+function usd(n) {
+  if (n == null || isNaN(n)) return 'n/a'
+  const s = '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return n < 0 ? '-' + s : s
+}
+function saleAlertText(d) {
+  return [
+    `Customer Name: ${d.customer || 'Customer'}`,
+    `Address: ${d.address || 'n/a'}`,
+    `Job Price: ${usd(d.price)}`,
+    `Sales Rep: ${d.rep || 'n/a'}`,
+    `Baseline: ${usd(d.baseline)}`,
+    `Markup: ${usd(d.markup)}`,
+  ].join('\n')
+}
+async function ghlSendSms(contactId, message) {
+  const resp = await fetch(`${GHL_BASE}/conversations/messages`, {
+    method: 'POST',
+    headers: { ...ghlHeaders(GHL_SMS_TOKEN), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'SMS', contactId, message }),
+  })
+  if (!resp.ok) throw new Error(`GHL SMS ${resp.status}: ${(await resp.text()).slice(0, 120)}`)
+  return resp.json()
+}
+async function sendSaleAlert(projectId, data) {
+  if (!GHL_SMS_TOKEN || !SALE_ALERT_CONTACTS.length) return { sent: 0, skipped: 'not configured' }
+  if (projectId && _arcAlerted.has(projectId)) return { sent: 0, skipped: 'already alerted' }
+  if (projectId) _arcAlerted.add(projectId)
+  const text = saleAlertText(data)
+  let sent = 0
+  for (const cid of SALE_ALERT_CONTACTS) {
+    try { await ghlSendSms(cid, text); sent++ } catch { /* one bad contact shouldn't block the others */ }
+  }
+  return { sent }
 }
 
 // In-memory dedupe: collapse a burst of retries for the same project+status.
@@ -1985,12 +2045,26 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
     } catch (e) { pdf = 'skipped: ' + (e.message || 'upload failed') }
   }
 
-  // If the sheet row wasn't there yet, retry filling baseline/markup/commission
-  // once it lands (see arcEnrichSweep). Skip on change orders — the price delta
-  // is already written and we don't want to overwrite it.
-  if (!job && !isChangeOrder) arcEnrichQueue(oppId, projectId, estimator)
+  // ── New-sale text alert. A brand-new opportunity = a deal just came in, so
+  // text the team the summary. (Updates and change orders don't re-text.)
+  const isNewSale = action === 'created' && !isChangeOrder
+  const alertData = {
+    customer: custName,
+    address: [addr.street, addr.city, addr.state].filter(Boolean).join(', ') || null,
+    price: sellTotal, rep: closerName,
+  }
+  let alert
+  if (!job && !isChangeOrder) {
+    // Sheet row wasn't ready: retry filling baseline/markup/commission once it
+    // lands (arcEnrichSweep), and on a new sale send the text from there too so
+    // the numbers are real. Updates queue the field fill but carry no text.
+    arcEnrichQueue(oppId, projectId, estimator, isNewSale ? alertData : null)
+  } else if (isNewSale) {
+    // Numbers already in hand — text now.
+    alert = await sendSaleAlert(projectId, { ...alertData, baseline, markup }).catch(() => null)
+  }
 
-  return { ok: true, ...plan, action, change_order: isChangeOrder, opportunity_id: oppId, contact_id: contactId, owner: oppBody.assignedTo ? closerName : null, pdf, enrich: !job ? 'queued' : undefined }
+  return { ok: true, ...plan, action, change_order: isChangeOrder, opportunity_id: oppId, contact_id: contactId, owner: oppBody.assignedTo ? closerName : null, pdf, enrich: !job ? 'queued' : undefined, alert: alert ? alert.sent : (isNewSale && !job ? 'deferred' : undefined) }
 }
 
 const app = express()
@@ -2028,6 +2102,7 @@ app.get('/api/health', (req, res) => {
     userAdmin: !!(SUPABASE_URL && SERVICE_KEY),
     repcard: !!REPCARD_API_TOKEN,
     arcsite: !!ARCSITE_API_TOKEN,
+    saleAlerts: !!GHL_SMS_TOKEN,
     build: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) || null,
     at: new Date().toISOString(),
   })
