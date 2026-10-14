@@ -187,7 +187,23 @@ setup + deploy steps.
   `014` adds `deals.notes` (free-text, the collapsible notes box on the Deals
   page); `015` adds competition goal/credit params (`goal_mode`+`goal_target`
   for target-based contests with a progress bar, `credit_mode`+`credit_split_pct`
-  for how setter/closer are credited — see `src/utils/competition.js`); `016`
+  for how setter/closer are credited — see `src/utils/competition.js`.
+  **`credit_mode: 'lead_bonus'`** (per Keaton: "setter gets full credit, and
+  closer for the lead gets 1/2 credit") is the one mode where credit does
+  NOT conserve: the setter keeps a FULL credit and the closer of someone
+  else's lead earns `credit_split_pct` ON TOP, so a lead is worth 1.5 deals
+  to the contest. That is the incentive — it pays one rep to hand a lead
+  over AND another to go close it; `split` is the opposite trade, dividing
+  one deal between them. It REUSES `credit_split_pct` as the closer's share
+  (default 0.5), so there is no migration — but `handleSave` must persist
+  that column for `lead_bonus` as well as `split` or the share silently
+  nulls to the default. Two rules keep it honest: a SELF-GEN pays 1, not
+  1.5 (no lead changed hands), and a deal with NO SETTER recorded pays the
+  closer a FULL credit — the same closer-fallback `saleOwnerId` uses, so a
+  blank field never costs a rep half a deal. At TEAM level (`teamCounts` /
+  `sideCounts` / `teamAvgCredited`) it falls through to `both`, so a deal
+  counts ONCE and a team cannot score 1.5 by employing both halves of one
+  sale; the modal's hint says so when the type is team/squads/team_avg); `016`
   adds `profiles.ghost` (a ghost user's deals still count in every total, but
   their name is hidden from non-admins on leaderboards/competitions/team
   rows/rep filters — gated by `isAdmin`; the guard trigger also protects

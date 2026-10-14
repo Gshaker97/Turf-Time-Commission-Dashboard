@@ -9,8 +9,9 @@
 //                  earn it — drives a progress bar + "earned" state).
 //   • credit_mode: how a deal's metric is attributed when the setter and closer
 //                  differ — 'both' (each gets full credit, default), 'self_gen'
-//                  (only solo deals), 'setter', 'closer', or 'split' (setter and
-//                  closer share it by credit_split_pct = the closer's share).
+//                  (only solo deals), 'setter', 'closer', 'split' (setter and
+//                  closer share it by credit_split_pct = the closer's share),
+//                  or 'lead_bonus' (setter full, closer a part share on top).
 // ============================================================
 import { fmt, isCanceled, countsInTotals } from './commission'
 import { teamOfSale, teamLabel, headIdSet } from './team'
@@ -39,7 +40,16 @@ export const COMP_CREDIT_MODES = [
   { key: 'closer',   label: 'Closer only — the rep who closed it' },
   { key: 'self_gen', label: 'Solo only — one rep both set AND closed it' },
   { key: 'split',    label: 'Split between setter & closer' },
+  { key: 'lead_bonus', label: 'Setter full credit + closer part on a lead' },
 ]
+
+// The closer's share under 'split' and 'lead_bonus', clamped. Default half.
+export function creditCloserShare(comp) {
+  const v = comp?.credit_split_pct
+  if (v == null || v === '') return 0.5
+  const n = Number(v)
+  return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0.5
+}
 
 export const typeLabel    = (k) => COMP_TYPES.find(t => t.key === k)?.label   ?? k
 export const metricLabel  = (k) => COMP_METRICS.find(m => m.key === k)?.label ?? k
@@ -84,6 +94,25 @@ function personCredit(deal, userId, comp) {
       if (deal.closer_id === userId) c += closerShare
       return c
     }
+    // Setter keeps FULL credit and the closer of someone else's lead earns a
+    // part share ON TOP (per Keaton: "setter gets full credit, and closer for
+    // the lead gets 1/2 credit"). Credit deliberately does NOT conserve —
+    // a lead is worth 1.5 deals to the contest, which is the incentive: it
+    // pays one rep to hand the lead over and another to go close it.
+    // 'split' is the opposite trade, dividing one deal between them.
+    case 'lead_bonus': {
+      // No lead changed hands, so there is no bonus to pay: the rep who set
+      // AND closed it earns one credit, not one and a half.
+      if (solo) return isSetter ? 1 : 0
+      // Nobody recorded as setter — treat it as the closer's own deal, the
+      // same fallback `saleOwnerId` uses everywhere else, so a blank field
+      // costs the closer nothing.
+      if (!deal.setter_id) return isCloser ? 1 : 0
+      let c = 0
+      if (isSetter) c += 1
+      if (deal.closer_id === userId) c += creditCloserShare(comp)
+      return c
+    }
     case 'both':
     default: return (isSetter || isCloser) ? 1 : 0
   }
@@ -106,7 +135,9 @@ function personScore(userId, deals, comp) {
 }
 
 // A team's score: deals in the window the team is credited for under the chosen
-// credit_mode (split behaves like 'both' at the team level — counted once).
+// credit_mode. 'split' and 'lead_bonus' behave like 'both' here — a deal counts
+// ONCE for a team however its two reps are credited individually, so a team
+// cannot score 1.5 for one sale by employing both halves of it.
 function teamScore(managerId, deals, users, comp) {
   const ids = new Set([managerId, ...users.filter(u => u.manager_id === managerId).map(u => u.id)])
   let total = 0, revenue = 0
