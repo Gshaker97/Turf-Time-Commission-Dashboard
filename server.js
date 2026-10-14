@@ -1505,6 +1505,285 @@ async function repcardLeaderboard(from, to) {
   return { configured: true, rows }
 }
 
+// ============================================================================
+// ArcSite → site → GHL native integration (replaces the Zapier ArcSite→GHL zap)
+// ----------------------------------------------------------------------------
+// ArcSite POSTs `proposal.status_changed` here when a proposal is committed. We
+// verify the signature, fetch full detail from ArcSite's API, and upsert the
+// GHL contact + opportunity keyed by ArcSite's project_id (stable across change
+// orders, so a re-fire UPDATES the same opportunity instead of duplicating).
+//
+// Routing: a deal CLOSED by an estimator (Rhett/Ronnie/Josh) goes to the Inside
+// Sales (Estimators) pipeline; everyone else to Outside Sales. Field sources:
+// price/PDF/line-items from ArcSite; baseline/install/payment/setter/closer/
+// commission from the dashboard deal (which the sheet sync already populated).
+// Estimator deals have no dashboard deal (outside-sales only) and no commission
+// (salaried) — their setter/closer come from the ArcSite sales rep.
+// Non-fatal everywhere: anything missing (no token, no deal yet, a GHL error)
+// is logged and the call still 200s so ArcSite does not retry forever.
+// ============================================================================
+const ARCSITE_API_TOKEN      = (process.env.ARCSITE_API_TOKEN || '').trim()
+const ARCSITE_API_BASE       = (process.env.ARCSITE_API_BASE || 'https://api.arcsite.com/v1').replace(/\/+$/, '')
+const ARCSITE_WEBHOOK_SECRET = (process.env.ARCSITE_WEBHOOK_SECRET || '').trim()
+// Statuses that mean "a real deal exists" (lower-cased, punctuation-insensitive).
+const ARC_SOLD_STATUSES = new Set(['esigned by client', 'approved online', 'signed on device', 'approved on device'])
+// Inside-sales estimators → Estimators pipeline. Name tokens, admin-overridable.
+const ARC_ESTIMATORS = (process.env.ARCSITE_ESTIMATOR_NAMES || 'rhett,ronnie,josh')
+  .split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+
+// GHL opportunity custom-field ids (Turf Time location). Resolved live by name
+// too (ghlOppFields) so a renamed field still works; these are the fallback.
+const GHL_OPP_FIELD_IDS = {
+  project_id: 'OEpWsIX1eOfXHqrSI273', price: 'dScpoYWZbeghBsAMBR4o',
+  baseline: 'rI6UeVz5CTQcXsssBqIm', install_date: 'j3gHe7eeXd2yfujzpln8',
+  payment_method: 'IpcldbuGsu2HeNCZeZYl', commission: 'P5PdaF8CnR4ru4Xru3UA',
+  setter: 'u3sMxbOvn2jHK53XrAu0', closer: 'q2AwMVrGnqaLTeosTpd7',
+  sales_rep: 'mVfmImqXyOUQacAOAX5K',
+}
+const GHL_PIPELINES = {
+  outside:   { id: (process.env.GHL_OUTSIDE_PIPELINE_ID   || 'EWGmXwXP63Da5eBMNiDU').trim(), closed: (process.env.GHL_OUTSIDE_CLOSED_STAGE   || '7f686159-9e37-4ffb-9311-3f10106cf250').trim() },
+  estimator: { id: (process.env.GHL_ESTIMATOR_PIPELINE_ID || 'jfhZWICxnmISGllte9Rv').trim(), closed: (process.env.GHL_ESTIMATOR_CLOSED_STAGE || '72a74bdf-a2ab-4412-89b0-52142a1e8c0b').trim() },
+}
+
+const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36'
+async function arcGet(path) {
+  const resp = await fetch(`${ARCSITE_API_BASE}${path}`, { headers: { Authorization: `Bearer ${ARCSITE_API_TOKEN}`, Accept: 'application/json', 'User-Agent': BROWSER_UA } })
+  if (!resp.ok) throw new Error(`ArcSite ${resp.status}: ${(await resp.text()).slice(0, 120)}`)
+  return resp.json()
+}
+const arcNorm = (s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim()
+const isEstimatorRep = (name) => { const n = arcNorm(name); return !!n && ARC_ESTIMATORS.some(e => n.includes(e)) }
+
+// Opportunity custom-field definitions (id → {dataType, options}), cached 10m,
+// so dropdown writes send a real option and date/money writes are typed right.
+let _ghlOppFields = { at: 0, byId: null }
+async function ghlOppFields() {
+  if (_ghlOppFields.byId && Date.now() - _ghlOppFields.at < 600000) return _ghlOppFields.byId
+  const byId = {}
+  try {
+    const j = await ghlGet(`/locations/${GHL_LOCATION_ID}/customFields?model=opportunity`)
+    for (const f of (j.customFields || [])) byId[f.id] = { dataType: f.dataType, options: f.options || [], name: f.name }
+  } catch { /* fall back to untyped writes */ }
+  _ghlOppFields = { at: Date.now(), byId }
+  return byId
+}
+// Format one opportunity custom-field write by its GHL data type.
+function oppFieldWrite(fieldId, rawValue, defs) {
+  if (rawValue == null || rawValue === '') return null
+  const dt = String((defs[fieldId] || {}).dataType || '').toUpperCase()
+  const opts = (defs[fieldId] || {}).options || []
+  if (dt.includes('DATE')) { const d = toYMD(rawValue); return d ? { id: fieldId, field_value: d } : null }
+  if (dt.includes('MONET') || dt.includes('NUMER') || dt === 'NUMBER') { const n = Number(rawValue); return isNaN(n) ? null : { id: fieldId, field_value: n } }
+  if (dt === 'SINGLE_OPTIONS' || dt === 'RADIO' || dt === 'MULTIPLE_OPTIONS' || dt === 'CHECKBOX') {
+    const opt = matchGhlOption(rawValue, opts); if (!opt) return null
+    return { id: fieldId, field_value: (dt === 'MULTIPLE_OPTIONS' || dt === 'CHECKBOX') ? [opt] : opt }
+  }
+  return { id: fieldId, field_value: String(rawValue) }
+}
+
+// GHL contact upsert (dedupes by email/phone — one contact per person).
+async function ghlUpsertContact(person) {
+  const body = { locationId: GHL_LOCATION_ID }
+  if (person.name) body.name = person.name
+  if (person.phone) body.phone = person.phone
+  if (person.email) body.email = person.email
+  if (person.address1) body.address1 = person.address1
+  if (person.city) body.city = person.city
+  if (person.state) body.state = person.state
+  if (person.postalCode) body.postalCode = person.postalCode
+  const resp = await fetch(`${GHL_BASE}/contacts/upsert`, {
+    method: 'POST', headers: { ...ghlHeaders(GHL_WRITE_TOKEN), 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+  if (!resp.ok) throw new Error(`GHL contact upsert ${resp.status}: ${(await resp.text()).slice(0, 140)}`)
+  const j = await resp.json()
+  return (j.contact && j.contact.id) || j.id || null
+}
+// A contact's opportunities (to find the one for this project_id).
+async function ghlContactOpps(contactId) {
+  const j = await ghlGet(`/opportunities/search?location_id=${GHL_LOCATION_ID}&contact_id=${contactId}&limit=100`)
+  return j.opportunities || []
+}
+const oppProjectId = (opp) => {
+  for (const c of (opp.customFields || [])) if (c.id === GHL_OPP_FIELD_IDS.project_id) return String(c.fieldValueString || c.fieldValue || c.value || '').trim()
+  return ''
+}
+async function ghlCreateOpp(body) {
+  const resp = await fetch(`${GHL_BASE}/opportunities/`, {
+    method: 'POST', headers: { ...ghlHeaders(GHL_WRITE_TOKEN), 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+  if (!resp.ok) throw new Error(`GHL opp create ${resp.status}: ${(await resp.text()).slice(0, 140)}`)
+  const j = await resp.json(); return (j.opportunity && j.opportunity.id) || j.id || null
+}
+async function ghlUpdateOpp(id, body) {
+  const resp = await fetch(`${GHL_BASE}/opportunities/${id}`, {
+    method: 'PUT', headers: { ...ghlHeaders(GHL_WRITE_TOKEN), 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+  if (!resp.ok) throw new Error(`GHL opp update ${resp.status}: ${(await resp.text()).slice(0, 140)}`)
+  return true
+}
+
+// Pull the dashboard deal (sheet-synced) + rep names for the money/people fields
+// that live on OUR side, keyed by project_id. Null when no deal exists yet.
+async function dealForProject(projectId) {
+  if (!SUPABASE_URL || !SERVICE_KEY) return null
+  const rows = await restGet(`/rest/v1/deals?project_id=eq.${encodeURIComponent(projectId)}&select=*&limit=1`).catch(() => [])
+  const deal = Array.isArray(rows) ? rows[0] : null
+  if (!deal) return null
+  const ids = [deal.setter_id, deal.closer_id].filter(Boolean)
+  let byId = {}
+  if (ids.length) {
+    const profs = await restGet(`/rest/v1/profiles?id=in.(${ids.join(',')})&select=id,name`).catch(() => [])
+    for (const p of (profs || [])) byId[p.id] = p.name
+  }
+  const amt = dealAmounts(deal)
+  return {
+    deal,
+    setter: deal.setter_id ? (byId[deal.setter_id] || null) : null,
+    closer: deal.closer_id ? (byId[deal.closer_id] || null) : null,
+    commission: amt.repCommission != null ? Math.round(amt.repCommission * 100) / 100 : null,
+  }
+}
+
+// In-memory dedupe: collapse a burst of retries for the same project+status.
+const _arcSeen = new Map()
+function arcRecentlyHandled(key) {
+  const now = Date.now()
+  for (const [k, t] of _arcSeen) if (now - t > 120000) _arcSeen.delete(k)
+  if (_arcSeen.has(key) && now - _arcSeen.get(key) < 120000) return true
+  _arcSeen.set(key, now); return false
+}
+
+// Verify ArcSite-Signature: header `t=<ts>,v=<hmac>`, HMAC-SHA256 of `<ts>.<body>`
+// with the shared secret. Skipped (returns true) until the secret is configured,
+// so the endpoint can be wired up before the signing secret is set in ArcSite.
+// (If a real delivery shows ArcSite signs the body alone, drop the `t.` prefix.)
+function arcSignatureOk(rawBody, header) {
+  if (!ARCSITE_WEBHOOK_SECRET) return true
+  const m = String(header || '').match(/t=(\d+)\s*,\s*v=([a-f0-9]+)/i)
+  if (!m) return false
+  const [, ts, v] = m
+  if (Math.abs(Date.now() / 1000 - Number(ts)) > 600) return false   // 10-min window
+  const expect = crypto.createHmac('sha256', ARCSITE_WEBHOOK_SECRET).update(`${ts}.${rawBody}`).digest('hex')
+  try { return crypto.timingSafeEqual(Buffer.from(expect), Buffer.from(v)) } catch { return false }
+}
+
+async function arcLog(result) {
+  if (!SUPABASE_URL || !SERVICE_KEY) return
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/app_settings?on_conflict=key`, {
+      method: 'POST', headers: { ...jsonHeaders, Prefer: 'resolution=merge-duplicates' },
+      body: JSON.stringify({ key: 'arcsite_last_result', value: { ...result, at: new Date().toISOString() } }),
+    })
+  } catch { /* logging is best-effort */ }
+}
+
+// The orchestrator. `dryRun` returns the plan without writing to GHL.
+async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
+  if (!ARCSITE_API_TOKEN) return { ok: false, error: 'ARCSITE_API_TOKEN not set' }
+  if (!GHL_WRITE_TOKEN)   return { ok: false, error: 'GHL token not set' }
+
+  let evt
+  try { evt = typeof rawBody === 'string' ? JSON.parse(rawBody) : rawBody } catch { return { ok: false, error: 'invalid JSON' } }
+  const type = evt.event || evt.type || evt.event_type || ''
+  const status = evt.status || (evt.proposal && evt.proposal.status) || (evt.data && evt.data.status) || ''
+  let projectId = String(evt.project_id || (evt.proposal && evt.proposal.project_id) || (evt.data && evt.data.project_id) || '').trim()
+  const proposalId = evt.proposal_id || (evt.proposal && evt.proposal.proposal_id) || null
+
+  // Only act on a committed proposal.
+  const normStatus = arcNorm(status)
+  if (type && !/status.?changed|proposal/i.test(type)) return { ok: true, ignored: true, reason: `event ${type}` }
+  if (!ARC_SOLD_STATUSES.has(normStatus)) return { ok: true, ignored: true, reason: `status "${status}" not a committed status` }
+
+  // Resolve project_id from the proposal if the payload didn't carry it.
+  if (!projectId && proposalId) {
+    const p = await arcGet(`/proposals/${proposalId}`).catch(() => null)
+    if (p) projectId = String(p.project_id || '').trim()
+  }
+  if (!projectId) return { ok: false, error: 'no project_id in event' }
+
+  if (!dryRun && arcRecentlyHandled(`${projectId}:${normStatus}`)) return { ok: true, deduped: true, project_id: projectId }
+
+  // ── Pull ArcSite detail: project (customer/address/rep) + proposal total + PDF.
+  const project = await arcGet(`/projects/${projectId}`)
+  const customer = project.customer || {}
+  const rep = (project.sales_rep && project.sales_rep.name) || evt.sales_representative || ''
+  const estimator = isEstimatorRep(rep)
+
+  // Approved total + PDF url: from the event, else the newest proposal option.
+  let sellTotal = Number(evt.total) || (evt.approved_option && Number(evt.approved_option.total)) || null
+  let pdfUrl = (evt.approved_option && evt.approved_option.pdf_url) || null
+  if ((sellTotal == null || !pdfUrl) && (proposalId || projectId)) {
+    const props = proposalId ? [await arcGet(`/proposals/${proposalId}`).catch(() => null)].filter(Boolean)
+      : (await arcGet(`/proposals?project_id=${projectId}&per_page=20`).catch(() => [])) || []
+    for (const pr of props) {
+      const full = pr.proposal_options ? pr : await arcGet(`/proposals/${pr.proposal_id}`).catch(() => null)
+      const opt = full && (full.proposal_options || [])[0]
+      if (opt) { if (sellTotal == null) sellTotal = Number(opt.total) || null; if (!pdfUrl) pdfUrl = opt.pdf_url || null; break }
+    }
+  }
+
+  // ── Our side: the dashboard deal (outside sales only) for baseline/install/
+  // payment/setter/closer/commission.
+  const enriched = estimator ? null : await dealForProject(projectId).catch(() => null)
+  const deal = enriched && enriched.deal
+  const pipeline = estimator ? GHL_PIPELINES.estimator : GHL_PIPELINES.outside
+
+  // People: outside sales from the deal; estimator = the ArcSite rep (inside
+  // sales sets+closes, salaried → no commission).
+  const setterName = estimator ? rep : (enriched && enriched.setter) || null
+  const closerName = estimator ? rep : (enriched && enriched.closer) || rep || null
+  const custName = customer.name || evt.customer_name || (deal && deal.deal_name) || 'Customer'
+
+  // ── Field plan.
+  const addr = customer.address || {}
+  const person = {
+    name: custName, phone: customer.phone || null, email: customer.email || evt.customer_email || null,
+    address1: addr.street || null, city: addr.city || null, state: addr.state || null, postalCode: addr.zip_code || null,
+  }
+  const defs = await ghlOppFields()
+  const F = GHL_OPP_FIELD_IDS
+  const planned = {
+    project_id: projectId,
+    price: sellTotal,
+    baseline: estimator ? null : (deal && deal.baseline_revenue != null ? Number(deal.baseline_revenue) : null),
+    install_date: deal && deal.install_date || null,
+    payment_method: deal && deal.payment_method || null,
+    commission: estimator ? null : (enriched && enriched.commission),  // estimators salaried
+    setter: setterName, closer: closerName, sales_rep: closerName,
+  }
+  const customFields = []
+  for (const [key, id] of Object.entries(F)) {
+    const w = oppFieldWrite(id, planned[key], defs)
+    if (w) customFields.push(w)
+  }
+
+  const plan = {
+    project_id: projectId, pipeline: estimator ? 'estimator' : 'outside', rep, estimator,
+    customer: custName, sell: sellTotal, hasDeal: !!deal, fields: customFields.length, pdf: !!pdfUrl,
+  }
+  if (dryRun) return { ok: true, dryRun: true, plan, planned }
+
+  // ── Upsert contact, then find-or-create the opportunity by project_id.
+  const contactId = await ghlUpsertContact(person)
+  if (!contactId) return { ok: false, error: 'contact upsert returned no id', plan }
+
+  const opps = await ghlContactOpps(contactId).catch(() => [])
+  let oppId = (opps.find(o => oppProjectId(o) === projectId) || {}).id || null
+  if (!oppId) oppId = (opps.find(o => o.status === 'open' && !oppProjectId(o) && o.pipelineId === pipeline.id) || {}).id || null
+
+  const oppBody = {
+    pipelineId: pipeline.id, pipelineStageId: pipeline.closed, name: custName, contactId,
+    status: 'open', customFields,
+  }
+  if (sellTotal != null) oppBody.monetaryValue = sellTotal
+
+  let action
+  if (oppId) { await ghlUpdateOpp(oppId, oppBody); action = 'updated' }
+  else { oppBody.locationId = GHL_LOCATION_ID; oppId = await ghlCreateOpp(oppBody); action = 'created' }
+
+  return { ok: true, action, opportunity_id: oppId, contact_id: contactId, ...plan }
+}
+
 const app = express()
 app.use(express.text({ type: '*/*', limit: '1mb' }))
 
@@ -1539,6 +1818,7 @@ app.get('/api/health', (req, res) => {
     ok: true,
     userAdmin: !!(SUPABASE_URL && SERVICE_KEY),
     repcard: !!REPCARD_API_TOKEN,
+    arcsite: !!ARCSITE_API_TOKEN,
     build: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) || null,
     at: new Date().toISOString(),
   })
@@ -1571,6 +1851,25 @@ app.post('/api/field/ingest', async (req, res) => {
   if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
   try { res.json(await routeCrmEvents(req.body, 'field')) }
   catch (e) { res.status(500).json(err(e.message || 'Ingest failed')) }
+})
+
+// ArcSite → GHL native webhook (replaces the Zapier ArcSite→GHL zap). Signature
+// is verified once ARCSITE_WEBHOOK_SECRET is set; until then it accepts and
+// processes so the endpoint can be wired up first. Always 200s on a handler
+// error so ArcSite's retries don't hammer a transient failure forever.
+app.post('/api/arcsite/webhook', async (req, res) => {
+  const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {})
+  if (!arcSignatureOk(rawBody, req.headers['arcsite-signature'])) return res.status(401).json(err('bad signature'))
+  try { const r = await arcsiteToGhl(rawBody); await arcLog(r); res.json(r) }
+  catch (e) { const r = { ok: false, error: e.message || 'ArcSite webhook failed' }; await arcLog(r); res.status(200).json(r) }
+})
+// Dry-run: same mapping, NO GHL writes — returns the plan. Guarded by the feed
+// secret. Body = a sample event, or just { "status": "...", "project_id": "..." }.
+app.post('/api/arcsite/dry-run', async (req, res) => {
+  if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
+  const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {})
+  try { res.json(await arcsiteToGhl(rawBody, { dryRun: true })) }
+  catch (e) { res.status(200).json({ ok: false, error: e.message }) }
 })
 
 app.post('/api/user-admin', async (req, res) => {
