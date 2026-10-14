@@ -14,6 +14,8 @@ import DealModal from '../components/DealModal'
 import { calcDealCommissions, dealAmounts, fmt, isHidden, countsInTotals } from '../utils/commission'
 import { getPresetRange } from '../utils/dateRanges'
 import { toast } from '../lib/toast'
+import { confirmDialog, promptDialog } from '../lib/dialog'
+import { saveDealFields, isLockError } from '../lib/dealWrite'
 
 // Build + download a CSV from an array of rows (first row = header).
 function downloadCsv(name, rows) {
@@ -168,6 +170,20 @@ export default function Deals() {
     for (let attempt = 0; ; attempt++) {
       const res = await updateDeal(id, data)
       if (!res?.error) return
+      // A LOCKED pay run is a decision, not a flaky network — never retry it.
+      // Offer the admin the override instead (migration 057).
+      if (isLockError(res.error)) {
+        const d = deals.find(x => x.id === id)
+        const out = await saveDealFields(id, data, {
+          isAdmin, payDate: d?.pay_date, dealName: d?.deal_name ? `"${d.deal_name}"` : 'This deal',
+          what: 'this change',
+        })
+        if (out?.overridden) { toast.success('Saved — the lock override is logged on that pay run.'); return }
+        if (!out?.error) return
+        if (!out.cancelled) toast.error(out.error.message || 'The write was rejected.')
+        load(true)
+        return
+      }
       if (attempt < 2) { await new Promise(r => setTimeout(r, 500 * (attempt + 1))); continue }
       toast.error('Could not save that change, so it was reverted:\n' + (res.error.message || 'network error') +
             '\n\nIf this keeps happening, reload the page (your session may have expired).')
@@ -322,8 +338,13 @@ export default function Deals() {
       // Optimistic edit — reflect the change immediately, then reconcile.
       setDeals(ds => ds.map(d => d.id === editDeal.id ? { ...d, ...withJoins(data) } : d))
       setModal(false); setEditDeal(null)
-      const res = await updateDeal(editDeal.id, data)
-      if (res?.error) toast.error('Could not save this deal: ' + (res.error.message || 'unknown error'))
+      const res = await saveDealFields(editDeal.id, data, {
+        isAdmin, payDate: editDeal.pay_date,
+        dealName: editDeal.deal_name ? `"${editDeal.deal_name}"` : 'This deal',
+        what: 'these edits',
+      })
+      if (res?.overridden) toast.success('Saved — the lock override is logged on that pay run.')
+      else if (res?.error && !res.cancelled) toast.error('Could not save this deal: ' + (res.error.message || 'unknown error'))
       load(true)
       return
     }
@@ -337,7 +358,18 @@ export default function Deals() {
   }
 
   async function handleDelete(id) {
-    if (!confirm('Delete this deal? This cannot be undone.')) return
+    const d = deals.find(x => x.id === id)
+    const ok = await confirmDialog({
+      tone: 'danger',
+      title: `Delete ${d?.deal_name ? `"${d.deal_name}"` : 'this deal'}?`,
+      message: 'This cannot be undone.',
+      bullets: [
+        'Its revenue, commission and overrides disappear from every total.',
+        'If the job is on the ArcSite sheet, the sync re-creates it within the minute — use Hide instead to keep it out for good.',
+      ],
+      confirmLabel: 'Delete deal',
+    })
+    if (!ok) return
     setDeals(ds => ds.filter(d => d.id !== id))   // optimistic remove
     const res = await deleteDeal(id)
     const deletedCount = Array.isArray(res?.data) ? res.data.length : 1
@@ -351,23 +383,38 @@ export default function Deals() {
   // ours to count. Delete does NOT work here: the sheet row survives, so the
   // sync re-creates the deal within the minute. Hiding keeps the row, which is
   // exactly what stops the re-import.
+  // One write for the row-action flags (hide, contest exclusion). Goes through
+  // saveDealFields so a LOCKED pay run offers the admin override (057) rather
+  // than reporting a dead end — hiding or un-excluding a paid job has nothing
+  // to do with its payout, but the lock trigger cannot know that.
+  const writeDeal = (deal, patch, what) =>
+    saveDealFields(deal.id, patch, {
+      isAdmin, payDate: deal.pay_date,
+      dealName: deal.deal_name ? `"${deal.deal_name}"` : 'This deal', what,
+    })
+
   async function handleToggleHidden(deal) {
     const hide = !isHidden(deal)
     if (hide) {
-      const why = prompt(
-        `Hide "${deal.deal_name}"?\n\n` +
-        'It stops counting toward revenue, KPIs, leaderboards, teams, competitions, ' +
-        'records, goals, Performance, commissions and payroll, and drops out of the ' +
-        'backup spreadsheet. The record stays on this page so you can un-hide it.\n\n' +
-        'Reason (optional):', '')
-      if (why === null) return   // cancelled the prompt
+      const why = await promptDialog({
+        tone: 'warn',
+        title: `Hide "${deal.deal_name}"?`,
+        message: 'The record stays on this page so you can un-hide it at any time.',
+        bullets: [
+          'It stops counting toward revenue, KPIs, leaderboards, teams, competitions, records, goals, commissions and payroll.',
+          'It drops out of the backup spreadsheet entirely.',
+          'Because the row survives, the sheet sync will not re-create it.',
+        ],
+        label: 'Reason (optional)',
+        placeholder: 'e.g. Tanner\u2019s job, came in under Keaton\u2019s ArcSite login',
+        confirmLabel: 'Hide deal',
+      })
+      if (why === null) return   // cancelled
       const patch = { hidden: true, hidden_at: new Date().toISOString(), hidden_by: profile?.id ?? null, hidden_note: why.trim() || null }
       setDeals(ds => ds.map(d => (d.id === deal.id ? { ...d, ...patch } : d)))
-      const res = await updateDeal(deal.id, patch)
+      const res = await writeDeal(deal, patch, 'hiding this deal')
       if (res?.error) {
-        // The commonest failure is the pay-run lock: a finalized/paid deal on a
-        // locked run can't be edited at all. Say so instead of "write failed".
-        toast.error(`Could not hide this deal — ${res.error.message || 'the write was rejected'}. If it's on a locked pay run, unlock the run first.`)
+        if (!res.cancelled) toast.error(`Could not hide this deal — ${res.error.message || 'the write was rejected'}.`)
         load(true)
       } else {
         toast.success(`"${deal.deal_name}" is hidden — it counts toward nothing now.`)
@@ -376,9 +423,9 @@ export default function Deals() {
     }
     const patch = { hidden: false, hidden_at: null, hidden_by: null, hidden_note: null }
     setDeals(ds => ds.map(d => (d.id === deal.id ? { ...d, ...patch } : d)))
-    const res = await updateDeal(deal.id, patch)
+    const res = await writeDeal(deal, patch, 'un-hiding this deal')
     if (res?.error) {
-      toast.error(`Could not un-hide this deal — ${res.error.message || 'the write was rejected'}.`)
+      if (!res.cancelled) toast.error(`Could not un-hide this deal — ${res.error.message || 'the write was rejected'}.`)
       load(true)
     } else {
       toast.success(`"${deal.deal_name}" counts again everywhere.`)
@@ -395,13 +442,19 @@ export default function Deals() {
     const off = !deal.comp_excluded
     let note = null
     if (off) {
-      const why = prompt(
-        `Exclude "${deal.deal_name}" from competitions?\n\n` +
-        'It earns no credit in any competition — standings, rounds, team averages. ' +
-        'Nothing else changes: revenue, commission, payroll and the records all ' +
-        'still count it.\n\n' +
-        'Reason (optional, e.g. "finance docs not signed"):', '')
-      if (why === null) return   // cancelled the prompt
+      const why = await promptDialog({
+        tone: 'warn',
+        title: `Exclude "${deal.deal_name}" from competitions?`,
+        message: 'It earns no credit in any competition — standings, rounds and team averages.',
+        bullets: [
+          'Nothing else changes: revenue, commission, payroll and the records all still count it.',
+          'It stays listed in a competition drill-down, struck out, so you can put it back.',
+        ],
+        label: 'Reason (optional)',
+        placeholder: 'e.g. finance docs not signed',
+        confirmLabel: 'Exclude from contests',
+      })
+      if (why === null) return   // cancelled
       note = why.trim() || null
     }
     const patch = off
@@ -409,9 +462,9 @@ export default function Deals() {
           comp_excluded_by: profile?.id ?? null, comp_excluded_note: note }
       : { comp_excluded: false, comp_excluded_at: null, comp_excluded_by: null, comp_excluded_note: null }
     setDeals(ds => ds.map(d => (d.id === deal.id ? { ...d, ...patch } : d)))
-    const res = await updateDeal(deal.id, patch)
+    const res = await writeDeal(deal, patch, 'this contest change')
     if (res?.error) {
-      toast.error(`Could not update "${deal.deal_name}" — ${res.error.message || 'the write was rejected'}.`)
+      if (!res.cancelled) toast.error(`Could not update "${deal.deal_name}" — ${res.error.message || 'the write was rejected'}.`)
       load(true)
     } else {
       toast.success(off

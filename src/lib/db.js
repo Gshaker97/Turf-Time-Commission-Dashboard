@@ -159,6 +159,29 @@ export async function updateDeal(id, data) {
   ))
 }
 
+// ADMIN OVERRIDE of a locked pay run (migration 057). The ONLY path that gets
+// past guard_locked_payroll(); the DB re-checks that the caller is an admin,
+// insists on a reason and logs the override, so this wrapper adds no trust of
+// its own. Returns the same `{ data, error }` shape as updateDeal.
+export async function overrideLockedDeal(id, patch, reason) {
+  if (DEMO_MODE) return updateDeal(id, patch)
+  const { data, error } = await supabase.rpc('override_locked_deal', {
+    p_deal_id: id, p_patch: patch, p_reason: reason,
+  })
+  return { data, error }
+}
+
+// Overrides already made, newest first — the Payroll run's audit line.
+export async function fetchLockOverrides(payDate) {
+  if (DEMO_MODE) return { data: [], error: null }
+  let q = supabase.from('payroll_lock_overrides')
+    .select('id, deal_id, pay_date, profile_id, reason, patch, created_at')
+    .order('created_at', { ascending: false }).limit(100)
+  if (payDate) q = q.eq('pay_date', payDate)
+  const { data, error } = await q
+  return { data: error ? [] : (data ?? []), error }
+}
+
 // Shared zero-row check for every UPDATE path (deals, profiles, competitions,
 // notes): a write that touched no rows must read as a failure, never a success.
 function requireRow(res) {

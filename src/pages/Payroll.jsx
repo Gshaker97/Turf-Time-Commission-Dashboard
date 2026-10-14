@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight, ChevronDown, Download, Pencil, AlertTriangle, CheckCircle2, Wallet, BadgeCheck, Copy, Check, Plus, X, Trash2, Lock, Ban, MinusCircle } from 'lucide-react'
 import { format } from 'date-fns'
 import { fetchDeals, fetchUsers, updateDeal, fetchPayrollAdjustments, addPayrollAdjustment, deletePayrollAdjustment, updatePayrollAdjustment,
-  writeOffDeduction, reopenDeduction, fetchPayrollLocks, lockPayrollRun, unlockPayrollRun } from '../lib/db'
+  writeOffDeduction, reopenDeduction, fetchPayrollLocks, lockPayrollRun, unlockPayrollRun, fetchLockOverrides } from '../lib/db'
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import { dealAmounts, fmt, activeDeals, deductionLabel } from '../utils/commission'
@@ -10,6 +10,8 @@ import { onClickUnlessSelecting } from '../utils/selection'
 import DealModal from '../components/DealModal'
 import RepMultiSelect from '../components/RepMultiSelect'
 import { toast } from '../lib/toast'
+import { confirmDialog, promptDialog } from '../lib/dialog'
+import { saveDealFields } from '../lib/dealWrite'
 import DeductionModal from '../components/DeductionModal'
 import { buildLedger, openDebts, ledgerTotals, suggestedTake, wouldGoNegative, recoveryLine, STATUS_LABEL } from '../utils/deductions'
 
@@ -214,6 +216,10 @@ export default function Payroll() {
   const [adjAmt, setAdjAmt] = useState('')
   const [adjNote, setAdjNote] = useState('')
   const [locks, setLocks] = useState([])              // locked pay runs (migration 028)
+  // Admin overrides of this locked run (migration 057) — fetched per run so
+  // the one thing that gets past the freeze is visible next to the freeze.
+  const [overrides, setOverrides] = useState([])
+  const [showOverrides, setShowOverrides] = useState(false)
   // Deduction ledger (migration 050): a debt is an adjustment with NO pay
   // date. Nothing is ever taken automatically — Keaton clicks, and he types
   // how much comes out of each cheque.
@@ -307,6 +313,14 @@ export default function Payroll() {
 
   const userById = useMemo(() => Object.fromEntries(users.map(u => [u.id, u])), [users])
   const dealById = useMemo(() => Object.fromEntries(deals.map(d => [d.id, d])), [deals])
+
+  // Re-read the run's override log whenever the run changes or one is made.
+  useEffect(() => {
+    let gone = false
+    if (!view || view === 'overdue') { setOverrides([]); return }
+    fetchLockOverrides(view).then(({ data }) => { if (!gone) setOverrides(data || []) })
+    return () => { gone = true }
+  }, [view, deals])
   // "Pay Finalized" was clipped at a fixed 84px, and statuses are
   // admin-editable so the worst case isn't knowable in advance.
   const colStatus = useMemo(() => ({ ...COL.status, width: statusWidth(statusLabels) }), [statusLabels])
@@ -528,7 +542,12 @@ export default function Payroll() {
     if (!view || view === 'overdue') return
     const take = Math.round(Math.abs(parseFloat(rawAmount) || 0) * 100) / 100
     if (!take) { setApplyFor(''); return }
-    if (take > debt.remaining && !confirm(`Take ${fmt(take)} against a balance of only ${fmt(debt.remaining)}? The extra isn't owed.`)) return
+    if (take > debt.remaining && !await confirmDialog({
+      tone: 'warn',
+      title: `Take ${fmt(take)} against a balance of only ${fmt(debt.remaining)}?`,
+      message: "The extra isn't owed — it comes off this cheque anyway.",
+      confirmLabel: 'Take it anyway',
+    })) return
     const res = await addPayrollAdjustment({
       payeeId: debt.payee_id, payDate: view, amount: -take,
       note: debt.note, dealId: debt.deal_id, parentId: debt.id,
@@ -541,7 +560,14 @@ export default function Payroll() {
   }
 
   async function writeOff(debt) {
-    const why = prompt(`Write off ${fmt(debt.remaining)} still owed by ${userById[debt.payee_id]?.name || 'this rep'}?\n\nIt stops appearing on every run but stays on the record. Reason (optional):`)
+    const why = await promptDialog({
+      tone: 'warn',
+      title: `Write off ${fmt(debt.remaining)} still owed by ${userById[debt.payee_id]?.name || 'this rep'}?`,
+      message: 'It stops appearing on every run but stays on the record — nothing is deleted.',
+      label: 'Reason (optional)',
+      placeholder: 'e.g. left the company, never another run to take it from',
+      confirmLabel: 'Write it off',
+    })
     if (why === null) return
     const res = await writeOffDeduction(debt.id, why.trim() || null, profile?.id)
     if (res?.error) { toast.error('Could not write it off: ' + (res.error.message || 'unknown error')); return }
@@ -557,7 +583,12 @@ export default function Payroll() {
       toast.error('Money has already come out against this one. Write it off instead — deleting it would erase what was paid.')
       return
     }
-    if (!confirm('Delete this deduction? Nothing has been collected against it.')) return
+    if (!await confirmDialog({
+      tone: 'danger',
+      title: 'Delete this deduction?',
+      message: 'Nothing has been collected against it, so nothing is lost.',
+      confirmLabel: 'Delete it',
+    })) return
     const res = await deletePayrollAdjustment(debt.id)
     if (res?.error) { toast.error('Could not delete it: ' + (res.error.message || 'unknown error')); return }
     reloadAdjustments()
@@ -583,7 +614,10 @@ export default function Payroll() {
     // Only the locked run's PAYOUT is frozen (finalized/paid deals — matches
     // migration 034's trigger). A pending / Sales Issue deal parked on a
     // locked date stays editable so e.g. its install date can be corrected.
-    if (isRunLocked(deal.pay_date) && isFinalized(deal)) { toast.info('This deal is part of a locked pay run — unlock the run first.'); return }
+    // A locked run used to be a dead end here. It still can't be saved
+    // silently — the DB trigger rejects it — but an admin can now open it,
+    // make the fix, and be offered the logged override on save (057). That
+    // beats unlocking nineteen other payouts to correct one field.
     setEditDeal(deal); setModal(true)
   }
   const viewLabel  = view === 'overdue' ? 'Overdue (unpaid)' : (fmtDay(view) || '—')
@@ -701,7 +735,15 @@ export default function Payroll() {
     const msg = unpaid
       ? `Lock the ${viewLabel} run? ${unpaid} deal(s) are not marked Paid yet — locking freezes them as-is.`
       : `Lock the ${viewLabel} run? Its deals and adjustments become read-only until unlocked.`
-    if (!confirm(msg)) return
+    if (!await confirmDialog({
+      title: `Lock the ${viewLabel} run?`,
+      message: msg,
+      bullets: [
+        'Its deals and adjustments become read-only, enforced in the database.',
+        'An admin can still force a single deal through, with a reason that gets logged.',
+      ],
+      confirmLabel: 'Lock the run',
+    })) return
     const snapshot = {
       total: summary.total,
       payees: payees.map(p => ({ id: p.id, name: p.name, total: +p.total.toFixed(2) })),
@@ -713,7 +755,13 @@ export default function Payroll() {
   }
   async function unlockRun() {
     if (!runLock) return
-    if (!confirm(`Unlock the ${viewLabel} run? Its deals become editable again.`)) return
+    if (!await confirmDialog({
+      tone: 'warn',
+      title: `Unlock the ${viewLabel} run?`,
+      message: 'Its deals and adjustments become editable again, and the run totals will move with them.',
+      bullets: ['The sync re-locks a past-due, fully-paid run automatically after 24 hours.'],
+      confirmLabel: 'Unlock the run',
+    })) return
     const res = await unlockPayrollRun(runLock.pay_date)
     if (res?.error) { toast.error('Could not unlock: ' + (res.error.message || 'unknown error')); return }
     const { data } = await fetchPayrollLocks(); setLocks(data || [])
@@ -766,7 +814,15 @@ export default function Payroll() {
       flags.length ? `Of those, ${flags.join(', ')}.` : '',
       owed > 0 ? `${fmt(owed)} in logged deductions has not been taken off this run yet.` : '',
     ].filter(Boolean).join('\n')
-    if (!confirm(`Mark ${ids.length} deal${ids.length === 1 ? '' : 's'} as "${status}"?` + (warn ? `\n\n${warn}` : ''))) return
+    if (!await confirmDialog({
+      tone: warn ? 'warn' : 'default',
+      title: `Mark ${ids.length} deal${ids.length === 1 ? '' : 's'} as "${status}"?`,
+      bullets: [
+        flags.length ? `Of those, ${flags.join(', ')}.` : '',
+        owed > 0 ? `${fmt(owed)} in logged deductions has not been taken off this run yet.` : '',
+      ],
+      confirmLabel: `Mark as ${status}`,
+    })) return
     setDeals(ds => ds.map(d => ids.includes(d.id) ? { ...d, status } : d))
     const results = await Promise.all(ids.map(id => updateDeal(id, { status })))
     const failed = results.filter(r => r?.error)
@@ -781,9 +837,14 @@ export default function Payroll() {
     if (editDeal) {
       setDeals(ds => ds.map(d => d.id === editDeal.id ? { ...d, ...withJoins(data) } : d))
       setModal(false); setEditDeal(null)
-      const res = await updateDeal(editDeal.id, data)
-      if (res?.error) {
-        toast.error('Could not save this deal, so it was reverted:\n' + (res.error.message || 'unknown error'))
+      const res = await saveDealFields(editDeal.id, data, {
+        isAdmin, payDate: editDeal.pay_date,
+        dealName: editDeal.deal_name ? `"${editDeal.deal_name}"` : 'This deal',
+        what: 'these edits',
+      })
+      if (res?.overridden) { toast.success('Saved — the lock override is logged on this run.'); load() }
+      else if (res?.error) {
+        if (!res.cancelled) toast.error('Could not save this deal, so it was reverted:\n' + (res.error.message || 'unknown error'))
         load()
       }
     } else {
@@ -1039,6 +1100,29 @@ export default function Payroll() {
                   {runLock.locked_by ? ` by ${users.find(u => u.id === runLock.locked_by)?.name || 'an admin'}` : ''}
                   {runLock.snapshot?.total != null ? ` · locked total ${fmt(runLock.snapshot.total)}` : ''} — deals and adjustments on this run are frozen.
                 </p>
+                {/* Overrides are the one thing that gets past the freeze, so
+                    the lock banner is where they have to be readable (057). */}
+                {overrides.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-white/10">
+                    <button onClick={() => setShowOverrides(v => !v)}
+                      className="text-[11px] font-bold text-amber-300 hover:text-amber-200 transition-colors">
+                      {overrides.length} admin override{overrides.length === 1 ? '' : 's'} on this run {showOverrides ? '▴' : '▾'}
+                    </button>
+                    {showOverrides && (
+                      <ul className="mt-1.5 space-y-1">
+                        {overrides.map(o => (
+                          <li key={o.id} className="text-[11px] text-white/50 leading-relaxed">
+                            <span className="text-white/75 font-semibold">{dealById[o.deal_id]?.deal_name || 'a deleted deal'}</span>
+                            {' · '}{users.find(u => u.id === o.profile_id)?.name || 'an admin'}
+                            {' · '}{format(new Date(o.created_at), 'MMM d, h:mmaaa')}
+                            {' · changed '}{Object.keys(o.patch || {}).join(', ') || '—'}
+                            <span className="block text-white/35">“{o.reason}”</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
               </div>
               {isAdmin && (
                 <button onClick={unlockRun}

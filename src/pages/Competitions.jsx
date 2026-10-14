@@ -17,6 +17,7 @@ import { onClickUnlessSelecting } from '../utils/selection'
 import { useSettings } from '../contexts/SettingsContext'
 import CompetitionModal from '../components/CompetitionModal'
 import { toast } from '../lib/toast'
+import { confirmDialog, promptDialog } from '../lib/dialog'
 
 // LOCAL date, never UTC — .toISOString() flips to tomorrow at 5pm Arizona,
 // which ended rounds/comps 7 hours early.
@@ -892,14 +893,19 @@ export default function Competitions() {
     const off = !deal.comp_excluded
     let note = deal.comp_excluded_note ?? null
     if (off) {
-      const why = prompt(
-        `Exclude "${deal.deal_name}" from competitions?\n\n` +
-        'It stops earning contest credit in EVERY competition — standings, rounds ' +
-        'and team averages. Nothing else changes: it still counts in revenue, ' +
-        'commission, payroll and the records. It stays listed here, struck out, ' +
-        'so you can put it back.\n\n' +
-        'Reason (optional, e.g. "finance docs not signed"):', '')
-      if (why === null) return   // cancelled the prompt
+      const why = await promptDialog({
+        tone: 'warn',
+        title: `Exclude "${deal.deal_name}" from competitions?`,
+        message: 'It stops earning contest credit in EVERY competition — standings, rounds and team averages.',
+        bullets: [
+          'Nothing else changes: it still counts in revenue, commission, payroll and the records.',
+          'It stays listed here, struck out, so you can put it back.',
+        ],
+        label: 'Reason (optional)',
+        placeholder: 'e.g. finance docs not signed',
+        confirmLabel: 'Exclude from contests',
+      })
+      if (why === null) return   // cancelled
       note = why.trim() || null
     }
     const patch = off
@@ -940,7 +946,12 @@ export default function Competitions() {
     setModal(false); setEditComp(null); load()
   }
   async function handleDelete(comp) {
-    if (!confirm(`Delete the competition "${comp.name}"? This cannot be undone.`)) return
+    if (!await confirmDialog({
+      tone: 'danger',
+      title: `Delete the competition "${comp.name}"?`,
+      message: 'This cannot be undone. Standings are computed from deals, so nothing about the deals themselves changes.',
+      confirmLabel: 'Delete competition',
+    })) return
     setComps(cs => cs.filter(c => c.id !== comp.id))
     const res = await deleteCompetition(comp.id)
     if (res?.error) load()

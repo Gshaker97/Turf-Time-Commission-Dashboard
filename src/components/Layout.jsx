@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import NavBar from './NavBar'
 import Notices from './Notices'
+import DialogHost from './DialogHost'
 import ErrorBoundary from './ErrorBoundary'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchMyTeams } from '../lib/db'
@@ -139,6 +140,7 @@ export default function Layout() {
               <Outlet />
             </ErrorBoundary>
             <Notices />
+            <DialogHost />
           </Suspense>
         </main>
       </div>

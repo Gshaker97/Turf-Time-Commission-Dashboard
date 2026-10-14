@@ -8,6 +8,7 @@ import { csvToLeads } from '../utils/leadImport'
 import { gapReasons, duplicateIds, needsAttention, nonRepSet, isNonRep } from '../utils/leadGaps'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 import { toast } from '../lib/toast'
+import { confirmDialog } from '../lib/dialog'
 import { useSettings } from '../contexts/SettingsContext'
 import { leadFeedHealth } from '../utils/feedHealth'
 import { apptDay } from '../utils/estimates'
@@ -277,7 +278,16 @@ export default function Leads() {
   // people against the feed; ignoring just takes the row out of the counts.
   async function toggleIgnore(l) {
     const next = !l.ignored
-    if (next && !confirm(`Ignore this appointment?\n\n${l.customer_name || 'Unnamed'} — it stays on this page, greyed, but stops counting anywhere.`)) return
+    if (next && !await confirmDialog({
+      tone: 'warn',
+      title: 'Ignore this appointment?',
+      message: l.customer_name || 'Unnamed',
+      bullets: [
+        'It stays on this page, greyed, but stops counting anywhere.',
+        'Use it for the duplicate RepCard creates when an appointment is reassigned.',
+      ],
+      confirmLabel: 'Ignore it',
+    })) return
     setLeads(ls => ls.map(x => x.id === l.id ? { ...x, ignored: next } : x))
     const res = await updateLead(l.id, { ignored: next })
     if (res?.error) { toast.error('Could not update: ' + (res.error.message || 'unknown error')); load() }
