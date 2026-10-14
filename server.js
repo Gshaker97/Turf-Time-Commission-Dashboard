@@ -1840,9 +1840,9 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   // opportunity whose price differs from the new total = a 2nd (revised)
   // contract. Move it to the Change Order stage, record the DELTA in Change
   // Order Price, keep the original Price + value, and APPEND the new PDF.
-  const curPrice = existing ? Number(oppFieldVal(existing, GHL_OPP_FIELD_IDS.price)) : NaN
+  const curPrice = existing ? Math.round(Number(oppFieldVal(existing, GHL_OPP_FIELD_IDS.price)) * 100) / 100 : NaN
   const isChangeOrder = !!existing && oppProjectId(existing) === projectId
-    && sellTotal != null && !isNaN(curPrice) && Math.abs(sellTotal - curPrice) > 0.01
+    && sellTotal != null && !isNaN(curPrice) && Math.abs(Math.round(sellTotal * 100) / 100 - curPrice) > 0.01
 
   let oppFields = customFields
   if (isChangeOrder) {
@@ -1861,7 +1861,13 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
 
   let action
   if (oppId) { await ghlUpdateOpp(oppId, oppBody); action = isChangeOrder ? 'change_order' : 'updated' }
-  else { oppBody.locationId = GHL_LOCATION_ID; oppId = await ghlCreateOpp(oppBody); action = 'created' }
+  else {
+    oppBody.locationId = GHL_LOCATION_ID; oppId = await ghlCreateOpp(oppBody); action = 'created'
+    // GHL's opportunity CREATE silently drops MONETARY custom fields (Price,
+    // Baseline, Commission) though it keeps text ones; a follow-up UPDATE sets
+    // every field type, so re-apply them so a brand-new opp isn't missing price.
+    if (oppFields.length) await ghlUpdateOpp(oppId, { customFields: oppFields })
+  }
 
   // ── Contract PDF (best-effort; needs the token's medias.write scope). On a
   // change order the new contract is APPENDED so both contracts are kept.
