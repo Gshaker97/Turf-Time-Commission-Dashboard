@@ -946,6 +946,9 @@ async function readInstallSheet() {
 // GHL_API_TOKEN when unset, so a single-token setup still works.
 const GHL_API_TOKEN   = (process.env.GHL_API_TOKEN || '').trim()
 const GHL_WRITE_TOKEN = (process.env.GHL_WRITE_TOKEN || '').trim() || GHL_API_TOKEN
+// Media upload needs its OWN token: GHL scopes medias.write separately, so the
+// opportunity-write token 401s on /medias. Falls back to the write token.
+const GHL_MEDIA_TOKEN = (process.env.GHL_MEDIA_TOKEN || '').trim() || GHL_WRITE_TOKEN
 const GHL_LOCATION_ID = (process.env.GHL_LOCATION_ID || 'lm0glrcKsZ05EcZrGS9t').trim()
 const GHL_BASE = 'https://services.leadconnectorhq.com'
 // Known custom-field ids (fallbacks when name resolution misses them).
@@ -1658,7 +1661,7 @@ async function ghlHostPdf(pdfUrl, name) {
   form.append('hosted', 'false')
   form.append('name', name)
   form.append('locationId', GHL_LOCATION_ID)
-  const resp = await fetch(`${GHL_BASE}/medias/upload-file`, { method: 'POST', headers: ghlHeaders(GHL_WRITE_TOKEN), body: form })
+  const resp = await fetch(`${GHL_BASE}/medias/upload-file`, { method: 'POST', headers: ghlHeaders(GHL_MEDIA_TOKEN), body: form })
   if (!resp.ok) throw new Error(`medias upload ${resp.status}: ${(await resp.text()).slice(0, 120)}`)
   const j = await resp.json()
   return j.url || j.fileUrl || (j.file && j.file.url) || j.link || null
