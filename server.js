@@ -1622,6 +1622,48 @@ async function ghlUpdateOpp(id, body) {
   return true
 }
 
+// Resolve a rep name → GHL user id, for the opportunity owner (assignedTo).
+// Exact normalized full name first, then a UNIQUE first-name match; cached 10m.
+let _ghlUsers = { at: 0, byName: null }
+async function ghlUserIdByName(name) {
+  if (!name) return null
+  if (!_ghlUsers.byName || Date.now() - _ghlUsers.at > 600000) {
+    const byName = {}
+    try {
+      const j = await ghlGet(`/users/?locationId=${GHL_LOCATION_ID}`)
+      for (const u of (j.users || [])) {
+        const nm = (u.name || `${u.firstName || ''} ${u.lastName || ''}`).trim()
+        if (nm) byName[ghlNorm(nm)] = u.id
+      }
+    } catch { /* leave owner unset if users can't be read */ }
+    _ghlUsers = { at: Date.now(), byName }
+  }
+  const want = ghlNorm(name)
+  if (_ghlUsers.byName[want]) return _ghlUsers.byName[want]
+  const first = want.split(' ')[0]
+  const hits = Object.entries(_ghlUsers.byName).filter(([n]) => n.startsWith(want + ' ') || n.split(' ')[0] === first)
+  return hits.length === 1 ? hits[0][1] : null
+}
+
+const GHL_PDF_FIELD = 'uluDL3vxcRVmeHSqpaj4'   // "Contract / PDF" (FILE_UPLOAD)
+// Download the ArcSite PDF (its CDN link expires) and re-host it in GHL so the
+// Contract/PDF field holds a permanent file. Needs the token's medias.write
+// scope; a 401 here means that scope is missing. Returns the hosted URL.
+async function ghlHostPdf(pdfUrl, name) {
+  const dl = await fetch(pdfUrl)
+  if (!dl.ok) throw new Error(`pdf download ${dl.status}`)
+  const buf = Buffer.from(await dl.arrayBuffer())
+  const form = new FormData()
+  form.append('file', new Blob([buf], { type: 'application/pdf' }), name)
+  form.append('hosted', 'false')
+  form.append('name', name)
+  form.append('locationId', GHL_LOCATION_ID)
+  const resp = await fetch(`${GHL_BASE}/medias/upload-file`, { method: 'POST', headers: ghlHeaders(GHL_WRITE_TOKEN), body: form })
+  if (!resp.ok) throw new Error(`medias upload ${resp.status}: ${(await resp.text()).slice(0, 120)}`)
+  const j = await resp.json()
+  return j.url || j.fileUrl || (j.file && j.file.url) || j.link || null
+}
+
 // Pull the dashboard deal (sheet-synced) + rep names for the money/people fields
 // that live on OUR side, keyed by project_id. Null when no deal exists yet.
 async function dealForProject(projectId) {
@@ -1757,9 +1799,13 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
     if (w) customFields.push(w)
   }
 
+  // Opportunity owner = the closer/rep, matched to a GHL user.
+  const ownerId = await ghlUserIdByName(closerName).catch(() => null)
+
   const plan = {
     project_id: projectId, pipeline: estimator ? 'estimator' : 'outside', rep, estimator,
-    customer: custName, sell: sellTotal, hasDeal: !!deal, fields: customFields.length, pdf: !!pdfUrl,
+    customer: custName, sell: sellTotal, hasDeal: !!deal, fields: customFields.length,
+    owner: ownerId ? closerName : null, pdf: !!pdfUrl,
   }
   if (dryRun) return { ok: true, dryRun: true, plan, planned }
 
@@ -1776,12 +1822,24 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
     status: 'open', customFields,
   }
   if (sellTotal != null) oppBody.monetaryValue = sellTotal
+  if (ownerId) oppBody.assignedTo = ownerId
 
   let action
   if (oppId) { await ghlUpdateOpp(oppId, oppBody); action = 'updated' }
   else { oppBody.locationId = GHL_LOCATION_ID; oppId = await ghlCreateOpp(oppBody); action = 'created' }
 
-  return { ok: true, action, opportunity_id: oppId, contact_id: contactId, ...plan }
+  // ── Attach the contract PDF (best-effort: needs the token's medias.write
+  // scope; any failure is logged and never blocks the opportunity).
+  let pdf = pdfUrl ? 'pending' : 'none'
+  if (pdfUrl && oppId) {
+    try {
+      const hosted = await ghlHostPdf(pdfUrl, `${custName} - contract.pdf`.replace(/[\/\\]/g, '-'))
+      if (hosted) { await ghlUpdateOpp(oppId, { customFields: [{ id: GHL_PDF_FIELD, field_value: hosted }] }); pdf = 'uploaded' }
+      else pdf = 'skipped: no url from upload'
+    } catch (e) { pdf = 'skipped: ' + (e.message || 'upload failed') }
+  }
+
+  return { ok: true, ...plan, action, opportunity_id: oppId, contact_id: contactId, owner: oppBody.assignedTo ? closerName : null, pdf }
 }
 
 const app = express()
