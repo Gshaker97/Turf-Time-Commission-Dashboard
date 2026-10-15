@@ -2156,6 +2156,21 @@ app.post('/api/arcsite/dry-run', async (req, res) => {
   catch (e) { res.status(200).json({ ok: false, error: e.message }) }
 })
 
+// Reprocess: run the REAL mapping (writes to GHL, sends the text) for a sale
+// the webhook missed or failed on. Guarded by the feed secret — no ArcSite
+// signature needed, so a missed sale can be pushed without a re-fire from
+// ArcSite. Body = { project_id, status? } (status defaults to APPROVED).
+app.post('/api/arcsite/reprocess', async (req, res) => {
+  if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
+  let body = {}
+  try { body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {}) } catch {}
+  const projectId = String(body.project_id || '').trim()
+  if (!projectId) return res.status(400).json(err('project_id is required'))
+  const rawBody = JSON.stringify({ status: body.status || 'APPROVED', project_id: projectId })
+  try { const r = await arcsiteToGhl(rawBody); await arcLog(r); res.json(r) }
+  catch (e) { const r = { ok: false, error: e.message || 'reprocess failed' }; await arcLog(r); res.status(200).json(r) }
+})
+
 app.post('/api/user-admin', async (req, res) => {
   try { res.json(await handleUserAdmin(req.body)) }
   catch (e) { res.json(err(e.message || 'Server error')) }
