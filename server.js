@@ -1747,33 +1747,47 @@ async function jobRowForProject(projectId, { fresh = false } = {}) {
   }
 }
 
-// Build the money custom-field writes (baseline, markup, commission) from a
-// sheet job row. Commission stays BLANK for salaried estimators. Shared by the
-// main flow and the retry sweep so both agree on the mapping.
-function arcMoneyFields(job, estimator, defs) {
-  if (!job) return []
-  const baseline = job.baseline != null ? job.baseline : null
-  const markup = job.jobPrice != null && job.baseline != null
-    ? Math.round((job.jobPrice - job.baseline) * 100) / 100 : null
-  const commission = estimator ? null : (job.commission != null ? job.commission : null)
-  const out = []
-  for (const [k, v] of [['baseline', baseline], ['markup', markup], ['commission', commission]]) {
-    if (v == null) continue
-    const w = oppFieldWrite(GHL_OPP_FIELD_IDS[k], v, defs)
-    if (w) out.push(w)
+// The LATE-arriving field values for an opp, re-pulled from their live sources:
+// baseline/markup/commission from the Jobs sheet (lands seconds after the sale)
+// and install_date/payment_method from the dashboard deal, which the Schedule
+// sync fills from the INSTALL CALENDAR — usually a while after the sale. Only
+// non-null values are returned; commission stays blank for salaried estimators.
+async function arcLateValues(projectId, estimator) {
+  const [job, enriched] = await Promise.all([
+    jobRowForProject(projectId, { fresh: true }).catch(() => null),
+    estimator ? Promise.resolve(null) : dealForProject(projectId).catch(() => null),
+  ])
+  const deal = enriched && enriched.deal
+  const out = {}
+  if (job) {
+    if (job.baseline != null) out.baseline = job.baseline
+    if (job.jobPrice != null && job.baseline != null) out.markup = Math.round((job.jobPrice - job.baseline) * 100) / 100
+    if (!estimator && job.commission != null) out.commission = job.commission
+  }
+  if (deal) {
+    if (deal.install_date) out.install_date = deal.install_date
+    if (deal.payment_method) out.payment_method = deal.payment_method
   }
   return out
 }
 
-// The sheet row (written by ArcSite's import) can land a few seconds AFTER the
-// webhook fires, so a just-created opp may be missing baseline/markup/
-// commission. Queue those for a few cache-busting retries; once the row shows
-// up, patch the money fields onto the existing opp. Give up after ~5 min.
-const _arcEnrich = new Map()   // oppId -> { projectId, estimator, alert, tries }
+// Reconciliation queue. Two jobs, both needed because the webhook fires before
+// the data is ready:
+//   1. HARDENING — if applying the custom fields right after creating the opp
+//      failed (a transient GHL/Cloudflare blip left a blank opp, as happened to
+//      Jalyn Robbins), re-apply the FULL field set (`baseFields`) so nothing is
+//      lost.
+//   2. LATE FIELDS — keep pulling the sheet money and the install-calendar
+//      fields (install_date, payment_method) and patch them on as they land.
+// Retries every 45s for ~30 min (MAX_TRIES), long enough for an install to be
+// put on the calendar "shortly after" the sale. Writes only values that have
+// CHANGED since last time, so it doesn't hammer GHL.
+const ARC_ENRICH_MAX_TRIES = 40
+const _arcEnrich = new Map()   // oppId -> { projectId, estimator, baseFields, needBase, alert, tries, wrote, alerted }
 let _arcEnrichTimer = null
-function arcEnrichQueue(oppId, projectId, estimator, alert = null) {
+function arcEnrichQueue(oppId, projectId, estimator, { baseFields = null, needBase = false, alert = null } = {}) {
   if (!oppId || !projectId) return
-  _arcEnrich.set(oppId, { projectId, estimator, alert, tries: 0 })
+  _arcEnrich.set(oppId, { projectId, estimator, baseFields, needBase, alert, tries: 0, wrote: {}, alerted: false })
   if (!_arcEnrichTimer) {
     _arcEnrichTimer = setInterval(arcEnrichSweep, 45000)
     _arcEnrichTimer.unref?.()   // don't keep the process alive just for the sweep
@@ -1781,29 +1795,43 @@ function arcEnrichQueue(oppId, projectId, estimator, alert = null) {
 }
 async function arcEnrichSweep() {
   if (!_arcEnrich.size) return
-  let defs = null
   for (const [oppId, item] of [..._arcEnrich]) {
     item.tries++
-    let row = null
-    try { row = await jobRowForProject(item.projectId, { fresh: true }) } catch {}
-    if (row) {
-      try {
-        if (!defs) defs = await ghlOppFields()
-        const fields = arcMoneyFields(row, item.estimator, defs)
-        if (fields.length) await ghlUpdateOpp(oppId, { customFields: fields })
-      } catch {}
-      // The new-sale text was deferred because the sheet row wasn't ready; now
-      // that it is, send it with the real baseline/markup.
-      if (item.alert) {
-        const markup = row.jobPrice != null && row.baseline != null
-          ? Math.round((row.jobPrice - row.baseline) * 100) / 100 : null
-        try { await sendSaleAlert(item.projectId, { ...item.alert, baseline: row.baseline, markup }) } catch {}
+    try {
+      // 1. Restore the full field set once, if the initial apply failed.
+      if (item.needBase && item.baseFields && item.baseFields.length) {
+        await ghlUpdateOpp(oppId, { customFields: item.baseFields })
+        item.needBase = false
       }
-      _arcEnrich.delete(oppId)
-    } else if (item.tries >= 6) {
-      // Give up filling the fields — but still send the text with what we have,
-      // so a new sale is never silent just because its sheet row never landed.
-      if (item.alert) { try { await sendSaleAlert(item.projectId, { ...item.alert, baseline: null, markup: null }) } catch {} }
+      // 2. Patch on whatever late values have shown up since last tick.
+      const vals = await arcLateValues(item.projectId, item.estimator)
+      const defs = await ghlOppFields()
+      const toWrite = []
+      for (const [k, v] of Object.entries(vals)) {
+        if (item.wrote[k] === v) continue           // already pushed this value
+        const w = oppFieldWrite(GHL_OPP_FIELD_IDS[k], v, defs)
+        if (w) { toWrite.push(w); item.wrote[k] = v }
+      }
+      if (toWrite.length) await ghlUpdateOpp(oppId, { customFields: toWrite })
+
+      // Send the deferred new-sale text as soon as the money (baseline) is known.
+      if (item.alert && !item.alerted && vals.baseline != null) {
+        await sendSaleAlert(item.projectId, { ...item.alert, baseline: vals.baseline, markup: vals.markup ?? null })
+        item.alerted = true
+      }
+
+      // Done when the money AND (for outside sales) the calendar fields are in.
+      const moneyDone = vals.baseline != null
+      const schedDone = item.estimator || (vals.install_date != null && vals.payment_method != null)
+      if (moneyDone && schedDone && !item.needBase) _arcEnrich.delete(oppId)
+    } catch { /* transient — try again next tick */ }
+
+    if (_arcEnrich.has(oppId) && item.tries >= ARC_ENRICH_MAX_TRIES) {
+      // Gave up waiting on the calendar — never leave a new sale untexted.
+      if (item.alert && !item.alerted) {
+        const vals = await arcLateValues(item.projectId, item.estimator).catch(() => ({}))
+        try { await sendSaleAlert(item.projectId, { ...item.alert, baseline: vals.baseline ?? null, markup: vals.markup ?? null }) } catch {}
+      }
       _arcEnrich.delete(oppId)
     }
   }
@@ -2017,14 +2045,19 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   if (sellTotal != null && !isChangeOrder) oppBody.monetaryValue = sellTotal   // keep original value on a change order
   if (ownerId) oppBody.assignedTo = ownerId
 
-  let action
+  let action, fieldsOk = true
   if (oppId) { await ghlUpdateOpp(oppId, oppBody); action = isChangeOrder ? 'change_order' : 'updated' }
   else {
     oppBody.locationId = GHL_LOCATION_ID; oppId = await ghlCreateOpp(oppBody); action = 'created'
     // GHL's opportunity CREATE silently drops MONETARY custom fields (Price,
     // Baseline, Commission) though it keeps text ones; a follow-up UPDATE sets
     // every field type, so re-apply them so a brand-new opp isn't missing price.
-    if (oppFields.length) await ghlUpdateOpp(oppId, { customFields: oppFields })
+    // If that UPDATE blips (it left Jalyn Robbins' opp blank once), DON'T throw
+    // the whole push away — flag it so the sweep re-applies the full set.
+    if (oppFields.length) {
+      try { await ghlUpdateOpp(oppId, { customFields: oppFields }) }
+      catch { fieldsOk = false }
+    }
   }
 
   // ── Contract PDF (best-effort; needs the token's medias.write scope). On a
@@ -2053,18 +2086,29 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
     address: [addr.street, addr.city, addr.state].filter(Boolean).join(', ') || null,
     price: sellTotal, rep: closerName,
   }
+  // What still has to catch up after the webhook: the sheet money (seconds) and
+  // the install-calendar fields (install_date / payment_method, often a while
+  // later). Plus: did the field apply above actually stick?
+  const scheduleIncomplete = !estimator && (planned.install_date == null || planned.payment_method == null)
+  const needEnrich = !isChangeOrder && (!fieldsOk || !job || scheduleIncomplete)
+
   let alert
-  if (!job && !isChangeOrder) {
-    // Sheet row wasn't ready: retry filling baseline/markup/commission once it
-    // lands (arcEnrichSweep), and on a new sale send the text from there too so
-    // the numbers are real. Updates queue the field fill but carry no text.
-    arcEnrichQueue(oppId, projectId, estimator, isNewSale ? alertData : null)
-  } else if (isNewSale) {
-    // Numbers already in hand — text now.
+  const moneyKnown = job && baseline != null
+  if (isNewSale && fieldsOk && moneyKnown) {
+    // Numbers already in hand and the opp is populated — text now.
     alert = await sendSaleAlert(projectId, { ...alertData, baseline, markup }).catch(() => null)
   }
+  if (needEnrich) {
+    // Keep reconciling: re-apply fields if the push blipped, fill the sheet
+    // money, and fill install_date/payment_method once the job hits the
+    // calendar. Defer the text to the sweep only if it hasn't gone out yet.
+    arcEnrichQueue(oppId, projectId, estimator, {
+      baseFields: oppFields, needBase: !fieldsOk,
+      alert: (isNewSale && !alert) ? alertData : null,
+    })
+  }
 
-  return { ok: true, ...plan, action, change_order: isChangeOrder, opportunity_id: oppId, contact_id: contactId, owner: oppBody.assignedTo ? closerName : null, pdf, enrich: !job ? 'queued' : undefined, alert: alert ? alert.sent : (isNewSale && !job ? 'deferred' : undefined) }
+  return { ok: true, ...plan, action, change_order: isChangeOrder, opportunity_id: oppId, contact_id: contactId, owner: oppBody.assignedTo ? closerName : null, pdf, fields_ok: fieldsOk, enrich: needEnrich ? 'queued' : undefined, alert: alert ? alert.sent : (needEnrich && isNewSale ? 'deferred' : undefined) }
 }
 
 const app = express()
