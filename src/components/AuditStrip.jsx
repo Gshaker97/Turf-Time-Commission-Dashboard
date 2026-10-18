@@ -177,7 +177,12 @@ export default function AuditStrip({ deal, audit, canAudit }) {
   // The queue's loading / error / demo-disabled state is reported once up by
   // the tabs, not on every row — so there's nothing to draw until a result
   // exists for this deal.
-  if (!a) return null
+  //
+  // Test the ITEMS ARRAY, not just the object: a cached entry without one got
+  // this far and then threw on `a.items.map`, taking the whole Needs-review
+  // tab down with it. Render nothing instead — the strip is an aid, and a
+  // missing one must never cost you the page.
+  if (!a || !Array.isArray(a.items)) return null
 
   return (
     <div className="rounded-xl px-3 py-2.5" style={{ background: '#1e1e1e', border: '1px solid #313131' }}>
