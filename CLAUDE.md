@@ -1591,6 +1591,31 @@ it logs every UPDATE diff on every path, service-role writes included (editor
 null = the sync), and it renders in the edit modal's collapsible "Edit
 history" panel. Read that before theorising about who changed what.
 
+**THE AUDIT CACHE MUST NEVER SERVE A SHAPE THE STRIP CANNOT RENDER.** The
+Needs-review audit (054/055) caches the whole queue in localStorage for an
+hour (`useAudit.js`, `tt_audit_queue_cache_v2`). `AuditStrip` guarded that the
+audit OBJECT existed (`if (!a) return null`) and then mapped `a.items` — so a
+cached entry carrying no `items` array threw
+`Cannot read properties of undefined (reading 'map')` during render and the
+ErrorBoundary swallowed the whole tab. **It was self-perpetuating**: the bad
+entry came from STORAGE, the crash happened at render before anything could
+refresh it, and every reload re-read the same cache. Keaton hit it live and
+could not get the tab back by reloading. Three guards now, all needed:
+- `AuditStrip` tests the ARRAY (`!a || !Array.isArray(a.items)`), not the
+  object. The strip is an aid — a missing one must never cost the page.
+- `usableAudit(a)` (exported from `useAudit.js`) is the one shape rule, applied
+  on the way OUT of the cache, on the way IN from the server, and in
+  `applyAudit`, so a malformed audit can't reach the cache in the first place.
+  `readCache` discards the WHOLE cache if any entry fails rather than
+  filtering, since a fresh audit rebuilds every deal correctly while filtering
+  would silently leave one deal with no checklist and no explanation.
+- The cache KEY was bumped to `_v2`, which abandons every poisoned cache
+  already sitting in a browser — nobody has to clear site data.
+**Verified by reproducing it**: demo ids were temporarily made deterministic
+so a poisoned cache could match real rows; the unfixed build crashed with 0
+rows rendered, the fixed one rendered 27. A fix test that passes against the
+unfixed code proves nothing — check that it fails first.
+
 **Staging ("Needs review").** The Deals page gives VP/admin two tabs: **Needs
 review** (deals not yet vetted) and **All deals**. A deal graduates out of
 staging when its commission gets the gold check (`commission_verified` —

@@ -14,13 +14,30 @@ import { toast } from '../lib/toast'
 // an hour. Opening Needs review reuses that cache instantly; "Re-run all"
 // forces a fresh audit, and any single-deal change (toggle / fix / re-run)
 // patches the cache in place so it stays correct without resetting the timer.
-const CACHE_KEY = 'tt_audit_queue_cache'
+// v2: the key was bumped when a cached entry with no `items` array was found
+// crashing Needs review on every load (see usableAudit below). Bumping it
+// abandons every bad cache already sitting in a browser, so nobody has to
+// clear site data to get the page back.
+const CACHE_KEY = 'tt_audit_queue_cache_v2'
 const CACHE_TTL = 60 * 60 * 1000   // 1 hour
+
+// An audit is only usable if it carries the ARRAY the strip maps over.
+// AuditStrip used to test the audit OBJECT and then map `a.items`, so an
+// entry missing that array threw during render — and because the entry came
+// from the cache, the crash repeated on every reload and nothing ever got far
+// enough to refresh it. A render crash that feeds itself from storage is the
+// worst kind: the page cannot recover on its own.
+export const usableAudit = (a) => !!a && Array.isArray(a.items)
 
 function readCache() {
   try {
     const c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null')
-    return c && typeof c.at === 'number' && c.byId ? c : null
+    if (!c || typeof c.at !== 'number' || !c.byId) return null
+    // One bad entry discards the whole cache rather than being filtered out:
+    // a fresh audit then rebuilds every deal correctly, where filtering would
+    // silently leave that one deal with no checklist and no explanation.
+    if (!Object.values(c.byId).every(usableAudit)) return null
+    return c
   } catch { return null }
 }
 function writeCache(byId) {
@@ -60,8 +77,10 @@ export function useAudit({ deals = [], canAudit = false, enabled = true, onDealC
         if (/demo/i.test(res.error || '')) { setState('disabled'); return }
         setState('error'); setErr(res.error || 'Audit failed'); return
       }
+      // Same guard on the way IN from the server, so a malformed audit can
+      // never reach the cache (which is how one got stuck in the first place).
       const map = {}
-      for (const a of res.audits || []) map[a.deal_id] = a
+      for (const a of res.audits || []) if (usableAudit(a)) map[a.deal_id] = a
       setById(map); writeCache(map); setCachedAt(Date.now()); setState('ready')
     } else {
       // Read-only: the last stored checklist for the shown deals (already fast).
@@ -90,7 +109,10 @@ export function useAudit({ deals = [], canAudit = false, enabled = true, onDealC
 
   const mark = (id, v) => setBusy(b => ({ ...b, [id]: v }))
   // Apply a fresh single-deal audit to both the live view and the cache.
-  const applyAudit = (id, audit) => { setById(m => ({ ...m, [id]: audit })); patchCache(id, audit) }
+  const applyAudit = (id, audit) => {
+    if (!usableAudit(audit)) return
+    setById(m => ({ ...m, [id]: audit })); patchCache(id, audit)
+  }
 
   async function rerun(id) {
     mark(id, true)
