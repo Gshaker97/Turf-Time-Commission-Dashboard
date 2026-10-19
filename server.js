@@ -1944,17 +1944,30 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   const rep = (project.sales_rep && project.sales_rep.name) || evt.sales_representative || ''
   const estimator = isEstimatorRep(rep)
 
-  // Approved total + PDF url: from the event, else the newest proposal option.
+  // Approved total + PDF url: from the event, else the committed proposal.
+  // IMPORTANT: ArcSite exposes TWO PDFs per proposal. The PROPOSAL-level
+  // `pdf_url` is the SIGNED contract — the customer's signature is rendered on
+  // it. The option-level `proposal_options[].pdf_url` is the UNSIGNED estimate
+  // (blank signature lines). Always upload the signed proposal-level pdf; only
+  // fall back to the option pdf if a proposal has no top-level pdf at all.
   let sellTotal = Number(evt.total) || (evt.approved_option && Number(evt.approved_option.total)) || null
-  let pdfUrl = (evt.approved_option && evt.approved_option.pdf_url) || null
-  if ((sellTotal == null || !pdfUrl) && (proposalId || projectId)) {
-    const props = proposalId ? [await arcGet(`/proposals/${proposalId}`).catch(() => null)].filter(Boolean)
-      : (await arcGet(`/proposals?project_id=${projectId}&per_page=20`).catch(() => [])) || []
-    for (const pr of props) {
+  let pdfUrl = null
+  if (proposalId || projectId) {
+    const refs = proposalId
+      ? [{ proposal_id: proposalId }]
+      : ((await arcGet(`/proposals?project_id=${projectId}&per_page=20`).catch(() => [])) || [])
+    let fallbackOptPdf = null
+    for (const pr of refs) {
       const full = pr.proposal_options ? pr : await arcGet(`/proposals/${pr.proposal_id}`).catch(() => null)
-      const opt = full && (full.proposal_options || [])[0]
-      if (opt) { if (sellTotal == null) sellTotal = Number(opt.total) || null; if (!pdfUrl) pdfUrl = opt.pdf_url || null; break }
+      if (!full) continue
+      const opt = (full.proposal_options || [])[0]
+      if (sellTotal == null) sellTotal = Number(full.total) || (opt && Number(opt.total)) || null
+      if (!fallbackOptPdf && opt && opt.pdf_url) fallbackOptPdf = opt.pdf_url
+      // Signed proposal-level pdf from the committed/approved proposal wins.
+      if (!pdfUrl && full.pdf_url && (proposalId || arcCommitted(full.status))) pdfUrl = full.pdf_url
+      if (pdfUrl && sellTotal != null) break
     }
+    if (!pdfUrl) pdfUrl = fallbackOptPdf   // keep a document if no signed pdf exists yet
   }
 
   // ── Money from the SHEET (Jobs tab), the source of truth for ALL reps —
