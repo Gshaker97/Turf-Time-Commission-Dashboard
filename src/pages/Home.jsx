@@ -104,29 +104,31 @@ export default function Home() {
 
   // RepCard D2D leaderboard — the ONLY source whose door numbers reconcile with
   // what reps see in RepCard (the webhook/customers feeds only capture pins
-  // attached to a saved contact and undercount badly). Fetched once for three
-  // fixed ranges (every rep reads the same board); the card picks its rep's
-  // row by name. configured:null = still loading / unknown.
-  const [repcard, setRepcard] = useState({ configured: null, week: [], lastMonth: [], span: [] });
+  // attached to a saved contact and undercount badly). The Field-activity
+  // section lets the rep pick ONE date window; the board is fetched for that
+  // window and the card picks its rep's row by name. configured:null = loading.
+  const faIso = (d) => dfFormat(d, "yyyy-MM-dd");
+  const [faPreset, setFaPreset] = useState("week");   // week|month|lastMonth|90d|custom
+  const [faFrom, setFaFrom] = useState(() => faIso(startOfWeek(new Date(), { weekStartsOn: 1 })));
+  const [faTo, setFaTo] = useState(() => faIso(endOfWeek(new Date(), { weekStartsOn: 1 })));
+  const faRange = useMemo(() => {
+    const today = new Date(), y = today.getFullYear(), m = today.getMonth();
+    if (faPreset === "month") return { from: faIso(new Date(y, m, 1)), to: faIso(new Date(y, m + 1, 0)), label: "This month" };
+    if (faPreset === "lastMonth") return { from: faIso(new Date(y, m - 1, 1)), to: faIso(new Date(y, m, 0)), label: "Last month" };
+    if (faPreset === "90d") return { from: faIso(addDays(today, -90)), to: faIso(today), label: "Last 90 days" };
+    if (faPreset === "custom") return { from: faFrom, to: faTo, label: `${faFrom} – ${faTo}` };
+    return { from: faIso(startOfWeek(today, { weekStartsOn: 1 })), to: faIso(endOfWeek(today, { weekStartsOn: 1 })), label: "This week" };   // RepCard weeks run Mon–Sun
+  }, [faPreset, faFrom, faTo]);
+
+  const [repcard, setRepcard] = useState({ configured: null, rows: [] });
   useEffect(() => {
-    const iso = (d) => dfFormat(d, "yyyy-MM-dd");
-    const today = new Date();
-    const wkStart = startOfWeek(today, { weekStartsOn: 1 });   // RepCard weeks run Mon–Sun
-    const wkEnd = endOfWeek(today, { weekStartsOn: 1 });
-    const lmStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-    const lmEnd = new Date(today.getFullYear(), today.getMonth(), 0);
-    const spanStart = addDays(today, -90);
-    Promise.all([
-      fetchRepcardLeaderboard(iso(wkStart), iso(wkEnd)),
-      fetchRepcardLeaderboard(iso(lmStart), iso(lmEnd)),
-      fetchRepcardLeaderboard(iso(spanStart), iso(today)),
-    ]).then(([w, m, s]) => {
-      setRepcard({
-        configured: !!(w?.configured ?? m?.configured ?? s?.configured),
-        week: w?.rows || [], lastMonth: m?.rows || [], span: s?.rows || [],
-      });
-    }).catch(() => setRepcard({ configured: false, week: [], lastMonth: [], span: [] }));
-  }, []);
+    if (!faRange.from || !faRange.to) return;
+    let cancelled = false;
+    fetchRepcardLeaderboard(faRange.from, faRange.to)
+      .then((res) => { if (!cancelled) setRepcard({ configured: !!res?.configured, rows: res?.rows || [] }); })
+      .catch(() => { if (!cancelled) setRepcard({ configured: false, rows: [] }); });
+    return () => { cancelled = true; };
+  }, [faRange.from, faRange.to]);
 
   const ghostIds = useMemo(() => new Set(users.filter(u => u.ghost).map(u => u.id)), [users]);
   // Same date-effective team context the Competitions page scores with, so
@@ -150,23 +152,21 @@ export default function Home() {
     if (repcard.configured === null) return { configured: null };
     if (!repcard.configured) return { configured: false };
     const myName = (users.find((u) => u.id === me)?.name || viewUser?.name || "").trim().toLowerCase();
-    const pick = (rows) => rows.find((r) => r.name.toLowerCase() === myName) || null;
-    const wk = pick(repcard.week), lm = pick(repcard.lastMonth), sp = pick(repcard.span);
+    const row = repcard.rows.find((r) => r.name.toLowerCase() === myName) || null;
 
-    const spanStartIso = dfFormat(addDays(new Date(), -90), "yyyy-MM-dd");
-    const closesSpan = allDeals.filter((d) => d.setter_id === me && d.sale_date && d.sale_date >= spanStartIso).length;
-
-    const doorsSpan = sp?.doors || 0, apptsSpan = sp?.appts || 0, knockDays = sp?.knockDays || 0;
+    const doors = row?.doors || 0, appts = row?.appts || 0, knockDays = row?.knockDays || 0;
+    // CLOSES stay our own deals (per Keaton — go off actual sales, not the CRM's
+    // "sold"), counted in the SAME window the doors/appts come from.
+    const closes = allDeals.filter((d) => d.setter_id === me && d.sale_date
+      && d.sale_date >= faRange.from && d.sale_date <= faRange.to).length;
     return {
       configured: true,
-      doorsThisWeek: wk?.doors ?? 0,
-      apptsThisWeek: wk?.appts ?? 0,
-      doorsLastMonth: lm?.doors ?? 0,
-      avgDoorsPerDay: knockDays > 0 ? doorsSpan / knockDays : null,
-      doorsPerAppt: apptsSpan > 0 ? doorsSpan / apptsSpan : null,
-      apptsPerClose: closesSpan > 0 ? apptsSpan / closesSpan : null,
+      doors, appts, closes,
+      avgDoorsPerDay: knockDays > 0 ? doors / knockDays : null,
+      doorsPerAppt: appts > 0 ? doors / appts : null,
+      apptsPerClose: closes > 0 ? appts / closes : null,
     };
-  }, [repcard, users, me, viewUser, allDeals]);
+  }, [repcard, users, me, viewUser, allDeals, faRange.from, faRange.to]);
 
   const setterRevForMonth = (key) => allDeals
     .filter(d => d.setter_id === me && d.sale_date?.startsWith(key))
@@ -527,13 +527,33 @@ export default function Home() {
           D2D leaderboard, so they match what the rep sees in RepCard. Hidden
           entirely when RepCard isn't connected (no API token on the service). */}
       {repCard.configured !== false && (<>
-        <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold mb-2">Field activity · RepCard</p>
-        <div className="grid grid-cols-3 gap-2 md:gap-3 mb-2">
-          <StatTile icon={DoorOpen}      label="Doors this wk"     value={repCard.doorsThisWeek == null ? "—" : repCard.doorsThisWeek.toLocaleString("en-US")} color="#74b9ff" />
-          <StatTile icon={CalendarCheck} label="Appts set this wk" value={repCard.apptsThisWeek == null ? "—" : repCard.apptsThisWeek.toLocaleString("en-US")} color="#a78bfa" />
-          <StatTile icon={DoorOpen}      label="Doors last month"  value={repCard.doorsLastMonth == null ? "—" : repCard.doorsLastMonth.toLocaleString("en-US")} color="#fff" />
+        <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+          <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold">Field activity · RepCard</p>
+          <div className="flex items-center gap-1 flex-wrap">
+            {[["week", "This week"], ["month", "This month"], ["lastMonth", "Last month"], ["90d", "90 days"], ["custom", "Custom"]].map(([k, lbl]) => (
+              <button key={k} onClick={() => setFaPreset(k)}
+                className={`px-2 py-1 rounded-md text-[10px] font-semibold transition-colors ${faPreset === k ? "bg-teal text-dark" : "text-white/45 hover:text-white"}`}
+                style={faPreset === k ? {} : { background: "#1e1e1e", border: "1px solid #282828" }}>
+                {lbl}
+              </button>
+            ))}
+          </div>
         </div>
-        <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold mb-2">Averages · last 90 days</p>
+        {faPreset === "custom" && (
+          <div className="flex items-center gap-2 mb-2">
+            <input type="date" value={faFrom} max={faTo || undefined} onChange={(e) => setFaFrom(e.target.value)}
+              className="text-[11px] px-2 py-1.5 rounded-lg border border-white/10 bg-white/5 text-white" />
+            <span className="text-[11px] text-white/30">to</span>
+            <input type="date" value={faTo} min={faFrom || undefined} onChange={(e) => setFaTo(e.target.value)}
+              className="text-[11px] px-2 py-1.5 rounded-lg border border-white/10 bg-white/5 text-white" />
+          </div>
+        )}
+        <div className="grid grid-cols-3 gap-2 md:gap-3 mb-2">
+          <StatTile icon={DoorOpen}      label="Doors"     value={repCard.doors == null ? "—" : repCard.doors.toLocaleString("en-US")} sub={faRange.label} color="#74b9ff" />
+          <StatTile icon={CalendarCheck} label="Appts set" value={repCard.appts == null ? "—" : repCard.appts.toLocaleString("en-US")} sub={faRange.label} color="#a78bfa" />
+          <StatTile icon={Layers}        label="Closes"    value={repCard.closes == null ? "—" : repCard.closes.toLocaleString("en-US")} sub="your sales" color="#fff" />
+        </div>
+        <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold mb-2">Averages · {faRange.label}</p>
         <div className="rounded-xl px-4 py-3 mb-3 grid grid-cols-3 gap-3" style={{ background: "#1e1e1e", border: "1px solid #282828" }}>
           <Avg label="Avg doors / day" sub="per day knocked" value={repCard.avgDoorsPerDay == null ? "—" : repCard.avgDoorsPerDay.toFixed(1)} />
           <Avg label="Doors / appt"    sub="to set one"      value={repCard.doorsPerAppt == null ? "—" : repCard.doorsPerAppt.toFixed(1)} />
