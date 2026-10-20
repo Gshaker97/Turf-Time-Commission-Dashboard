@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { RefreshCw, Activity, CalendarClock, X, Pencil, Undo2, Trash2 } from 'lucide-react'
+import { useState, useEffect, useMemo } from 'react'
+import { RefreshCw, Activity, CalendarClock, X, Pencil, Undo2, Trash2, AlertTriangle } from 'lucide-react'
 import {
   fetchUsers, insertUser, updateUser, deleteUser, fetchDeals,
   userAdmin, userAdminConfigured, fetchTeamChanges, fetchLeads,
@@ -199,6 +199,13 @@ export default function Admin() {
 
   const [teamChanges,  setTeamChanges]  = useState([])
   const [pendingMoves, setPendingMoves] = useState([])
+  // Scheduled moves whose day has arrived but which are still pending. The
+  // comparison is against ARIZONA's today, the same definition tt_today()
+  // uses in the database, so the page and the sweep can never disagree about
+  // what "due" means.
+  const overdueMoves = useMemo(
+    () => pendingMoves.filter(m => m.effective_date <= azToday()),
+    [pendingMoves])
   // Deals are only needed for the move PREVIEW, so they are fetched on demand
   // (opening the modal, or expanding the change log) rather than on every
   // visit to a page that is mostly about the roster.
@@ -213,13 +220,25 @@ export default function Admin() {
     setDealsLoading(false)
   }
 
+  // Why the last sweep did not run, if it didn't. A scheduled move that
+  // silently fails to apply looks EXACTLY like one that is not due yet, which
+  // is the worst possible failure for this feature — the roster is wrong and
+  // nothing on screen says so. Never swallow this.
+  const [sweepError, setSweepError] = useState('')
+
+  async function sweepDueMoves() {
+    const { data, error } = await applyDueTeamMoves()
+    setSweepError(error ? (error.message || 'unknown error') : '')
+    return { data, error }
+  }
+
   async function loadAll() {
     setLoading(true)
     // Perform any scheduled move whose day has arrived BEFORE reading the
     // roster, so the chart never shows yesterday's arrangement. The site
     // server sweeps on a timer too; this is the belt-and-braces path, and
     // it is idempotent either way.
-    await applyDueTeamMoves()
+    await sweepDueMoves()
     const [{ data: u }, { data: tc }, { data: pm }] = await Promise.all([
       fetchUsers(), fetchTeamChanges(), fetchPendingTeamMoves(),
     ])
@@ -227,6 +246,18 @@ export default function Admin() {
     setTeamChanges(tc ?? [])
     setPendingMoves(pm ?? [])
     setLoading(false)
+  }
+
+  // Run the sweep by hand. The scheduled-move card offers this whenever
+  // something is overdue, so a stuck reorg is one click from being unstuck
+  // instead of a support question.
+  async function applyNow() {
+    const { data, error } = await sweepDueMoves()
+    if (error) return toast.error('Could not apply the due moves: ' + (error.message || ''))
+    const n = Number(data?.applied || 0)
+    if (n) toast.success(`${n} scheduled move${n === 1 ? '' : 's'} applied.`)
+    else toast.info('Nothing came due — the database says none of these have reached their date yet.')
+    await loadAll()
   }
 
   async function reloadMoves() {
@@ -584,20 +615,45 @@ export default function Admin() {
           {pendingMoves.length > 0 && (
             <div className="rounded-xl overflow-hidden" style={card}>
               <div className="px-3 md:px-4 py-2.5 flex items-center gap-2.5" style={{ background: '#1e1e1e' }}>
-                <CalendarClock size={14} style={{ color: '#93c5fd' }} />
+                <CalendarClock size={14} style={{ color: overdueMoves.length ? '#f59e0b' : '#93c5fd' }} />
                 <span className="text-[12px] font-bold text-white">Scheduled moves</span>
                 <span className="text-[10px] text-white/25 hidden md:inline">nothing changes until the date — the roster is live as-is</span>
                 <span className="ml-auto text-[10px] text-white/30">{pendingMoves.length} upcoming</span>
               </div>
+              {/* OVERDUE: the date has arrived and the move still has not been
+                  applied. Without this it renders identically to a move that
+                  is simply not due yet, so a stuck sweep is invisible. */}
+              {overdueMoves.length > 0 && (
+                <div className="px-3 md:px-4 py-2.5 flex items-center gap-3 flex-wrap"
+                  style={{ background: 'rgba(245,158,11,0.07)', borderBottom: '1px solid #2a2a2a' }}>
+                  <AlertTriangle size={13} className="text-amber-400 flex-shrink-0" />
+                  <span className="text-[11.5px] text-amber-200 min-w-0 flex-1">
+                    {overdueMoves.length === 1 ? 'One of these was' : `${overdueMoves.length} of these were`} due
+                    on or before today ({fmtDay(azToday(), { year: true })}) and {overdueMoves.length === 1 ? 'has' : 'have'} not
+                    been applied.
+                    {sweepError
+                      ? <span className="block text-amber-300/80 mt-0.5">The site could not run them: {sweepError}</span>
+                      : <span className="block text-amber-200/60 mt-0.5">
+                          Usually the database’s own clock has not reached the date yet — Apply now will say which.
+                        </span>}
+                  </span>
+                  <button onClick={applyNow}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold text-dark bg-amber-400 flex-shrink-0">
+                    <RefreshCw size={11} /> Apply now
+                  </button>
+                </div>
+              )}
               <div className="divide-y divide-white/5">
                 {pendingMoves.map(m => {
                   const who  = users.find(x => x.id === m.profile_id)
                   const from = who?.manager_id ? teamKeyLabel(who.manager_id, users) : 'Unassigned'
                   const to   = m.new_manager_id ? teamKeyLabel(m.new_manager_id, users) : 'Unassigned'
+                  const due  = m.effective_date <= azToday()
                   return (
                     <div key={m.id} className="px-3 md:px-4 py-2 flex items-center gap-3 flex-wrap">
-                      <span className="text-[11px] font-semibold w-[104px] flex-shrink-0" style={{ color: '#93c5fd' }}>
+                      <span className="text-[11px] font-semibold w-[104px] flex-shrink-0" style={{ color: due ? '#f59e0b' : '#93c5fd' }}>
                         {fmtDay(m.effective_date, { year: true })}
+                        {due && <span className="block text-[9px] font-bold uppercase tracking-wide">due — not applied</span>}
                       </span>
                       <span className="text-[12px] text-white/75 min-w-0 flex-1">
                         <span className="font-semibold text-white">{who?.name || '—'}</span>
