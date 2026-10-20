@@ -2484,6 +2484,46 @@ app.post('/api/audit/ghl-fields', async (req, res) => {
   catch (e) { res.json(err(e.message || 'Request failed')) }
 })
 
+// ── Scheduled team moves (migration 058) ───────────────────────────────────
+// A move dated ahead changes nothing until its day, so SOMETHING has to
+// perform it on that day. This is that something: the site server is always
+// running, so it needs no cron and no Apps Script (which would mean a manual
+// paste to deploy).
+//
+// Admin → People also sweeps on load, deliberately — either path alone is a
+// single point of failure, and apply_due_team_moves() is idempotent, so
+// running both costs nothing. 15 minutes is plenty of resolution for a change
+// whose granularity is a calendar day.
+//
+// Repeated identical failures are logged ONCE. Before the migration has been
+// run this call 404s, and a line every 15 minutes forever would bury the logs
+// that matter.
+const TEAM_MOVE_SWEEP_MS = 15 * 60 * 1000
+let _lastMoveSweepError = null
+async function teamMoveSweep() {
+  if (!SUPABASE_URL || !SERVICE_KEY) return
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/apply_due_team_moves`, {
+      method: 'POST', headers: jsonHeaders, body: '{}',
+    })
+    const text = await resp.text()
+    if (!resp.ok) throw new Error(`${resp.status}: ${text.slice(0, 200)}`)
+    _lastMoveSweepError = null
+    let applied = 0
+    try { applied = Number(JSON.parse(text)?.applied || 0) } catch { /* empty body = nothing due */ }
+    if (applied) console.log(`[team-moves] applied ${applied} scheduled move(s)`)
+  } catch (e) {
+    const msg = e.message || String(e)
+    if (msg !== _lastMoveSweepError) {
+      _lastMoveSweepError = msg
+      console.warn(`[team-moves] sweep failed (will keep retrying quietly): ${msg}`)
+    }
+  }
+}
+// A short delay at boot so a deploy isn't racing the database coming up.
+setTimeout(teamMoveSweep, 20_000).unref?.()
+setInterval(teamMoveSweep, TEAM_MOVE_SWEEP_MS).unref?.()
+
 app.use(express.static(dist))
 // SPA fallback — every non-file route serves the app shell.
 app.use((req, res) => res.sendFile(path.join(dist, 'index.html')))

@@ -64,17 +64,34 @@ export const teamShortLabel = (head) => {
 // comparison) so moving a rep never rewrites history.
 
 // 'yyyy-MM-dd' in the viewer's LOCAL timezone for a stored timestamp.
-const localDay = (ts) => {
+// Exported because ANY display of a timestamptz as a calendar day has to use
+// it: `.slice(0, 10)` reads the UTC day, which is tomorrow for anything after
+// 5pm Arizona (see the timestamps-vs-days note in CLAUDE.md).
+export const localDay = (ts) => {
   const d = new Date(ts)
   if (Number.isNaN(d.getTime())) return String(ts).slice(0, 10)
   const p = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-// team_changes rows grouped per profile, oldest first.
+// THE day a logged move counts from (migration 058). `effective_date` is the
+// admin's answer to "when does this start counting" — a plain date column, so
+// it is compared as a string like sale_date. `changed_at` only says when the
+// record was MADE, which is a different question and is wrong whenever a move
+// was backdated or scheduled ahead. Pre-058 rows have no effective_date, so
+// they fall back to it.
+export const changeDay = (c) => c?.effective_date || localDay(c?.changed_at)
+
+// team_changes rows grouped per profile, oldest EFFECTIVE day first.
+// Sorting by effective day (not changed_at) is what lets a correction
+// reorder history: backdating the second of two moves genuinely makes the
+// first one the later of the two, and every reader has to agree on that.
+// `changed_at` breaks ties, so two moves effective the same day apply in the
+// order they were recorded.
 export function buildChangesByProfile(teamChanges = []) {
   const by = {}
-  const sorted = [...teamChanges].sort((a, b) => String(a.changed_at).localeCompare(String(b.changed_at)))
+  const sorted = [...teamChanges].sort((a, b) =>
+    changeDay(a).localeCompare(changeDay(b)) || String(a.changed_at).localeCompare(String(b.changed_at)))
   for (const c of sorted) (by[c.profile_id] ||= []).push(c)
   return by
 }
@@ -91,11 +108,12 @@ export function managerAsOf(changesByProfile, user, dateISO) {
   // to Garrison, whose reports-to was first stamped July 2).
   let mgr = list[0].old_manager_id ?? list[0].new_manager_id ?? null
   for (const c of list) {
-    // LOCAL calendar day of the move, not the UTC slice: changed_at is a
+    // The move's EFFECTIVE day (058), falling back for pre-058 rows to the
+    // LOCAL calendar day of changed_at — never its UTC slice: changed_at is a
     // timestamptz, so a move made at 6pm Arizona is stored as 01:00 the NEXT
     // day in UTC. Slicing the raw string put that move on tomorrow, and a
     // deal sold the same afternoon resolved to the OLD team.
-    if (String(dateISO) >= localDay(c.changed_at)) mgr = c.new_manager_id ?? null
+    if (String(dateISO) >= changeDay(c)) mgr = c.new_manager_id ?? null
     else break
   }
   return mgr

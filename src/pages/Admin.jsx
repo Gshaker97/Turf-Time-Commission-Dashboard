@@ -1,15 +1,20 @@
 import { useState, useEffect } from 'react'
-import { RefreshCw, Activity } from 'lucide-react'
+import { RefreshCw, Activity, CalendarClock, X, Pencil, Undo2, Trash2 } from 'lucide-react'
 import {
-  fetchUsers, insertUser, updateUser, deleteUser,
+  fetchUsers, insertUser, updateUser, deleteUser, fetchDeals,
   userAdmin, userAdminConfigured, fetchTeamChanges, fetchLeads,
+  fetchPendingTeamMoves, moveTeamMembers, applyDueTeamMoves, cancelPendingTeamMove,
+  setTeamChangeDate, deleteTeamChange,
 } from '../lib/db'
 import { toast } from '../lib/toast'
 import { confirmDialog, choiceDialog, revealDialog } from '../lib/dialog'
 import UserModal from '../components/UserModal'
 import ManagerBackfillModal from '../components/ManagerBackfillModal'
 import PeopleChart from '../components/PeopleChart'
-import { teamLabel } from '../utils/team'
+import TeamMoveModal from '../components/TeamMoveModal'
+import { useAuth } from '../contexts/AuthContext'
+import { changeDay, localDay, teamLabel } from '../utils/team'
+import { azToday, fmtDay, previewDateChange, teamKeyLabel } from '../utils/teamMove'
 import { leadFeedHealth } from '../utils/feedHealth'
 import SettingsPanel from '../components/SettingsPanel'
 import { useSettings } from '../contexts/SettingsContext'
@@ -120,6 +125,67 @@ function SystemHealth() {
   )
 }
 
+// One row of the team change log. The EFFECTIVE day is the headline, because
+// that is the date attribution actually uses; `changed_at` is shown only when
+// the two differ (a backdated or scheduled move), where it answers the
+// separate question of when the record was made.
+function LogRow({ c, users, teamChanges, editing, onStartEdit, onCancelEdit, onPickDate, onRemove }) {
+  const nameOf = (id) => users.find(x => x.id === id)?.name
+  const who  = nameOf(c.profile_id) || '—'
+  const from = c.old_manager_id ? (nameOf(c.old_manager_id) || '—') : 'Unassigned'
+  const to   = c.new_manager_id ? (nameOf(c.new_manager_id) || '—') : 'Unassigned'
+  const by   = c.changed_by ? nameOf(c.changed_by) : null
+  const eff  = changeDay(c)
+  // The LOCAL day of changed_at, never its UTC slice — a move recorded at 6pm
+  // Arizona is stored as the next day in UTC, and slicing it would print a
+  // "recorded tomorrow" line under half the entries.
+  const recorded = c.changed_at ? localDay(c.changed_at) : ''
+  // Only the person's MOST RECENT entry can be undone: on an older one,
+  // old_manager_id is not where they are now, so restoring it would move them
+  // somewhere nobody asked for. The database enforces this too.
+  const isLatest = teamChanges
+    .filter(x => x.profile_id === c.profile_id)
+    .every(x => changeDay(x) < eff || (changeDay(x) === eff && String(x.changed_at) <= String(c.changed_at)))
+
+  return (
+    <div className="group px-3 md:px-4 py-2 flex items-center gap-3 flex-wrap hover:bg-white/[0.02] transition-colors">
+      {editing ? (
+        <input type="date" autoFocus defaultValue={eff}
+          onChange={e => e.target.value && onPickDate(e.target.value)}
+          onBlur={onCancelEdit}
+          onKeyDown={e => { if (e.key === 'Escape') onCancelEdit() }}
+          className="px-2 py-1 rounded-lg text-[11px] text-white focus:outline-none w-[150px] flex-shrink-0"
+          style={{ background: '#1a1a1a', border: '1px solid rgba(0,184,148,0.5)' }} />
+      ) : (
+        <span className="text-[11px] w-[150px] flex-shrink-0">
+          <span className="text-white/55 font-semibold">{fmtDay(eff, { year: true })}</span>
+          {recorded && recorded !== eff && (
+            <span className="block text-[9.5px] text-white/25">recorded {fmtDay(recorded)}</span>
+          )}
+        </span>
+      )}
+      <span className="text-[12px] text-white/75 min-w-0 flex-1">
+        <span className="font-semibold text-white">{who}</span>
+        <span className="text-white/40"> — {from} → {to}</span>
+        {by && <span className="text-white/25"> · by {by}</span>}
+        {c.note && <span className="text-white/30"> · {c.note}</span>}
+        {c.prior_effective && (
+          <span className="text-[9.5px] text-amber-300/70"> · re-dated from {fmtDay(c.prior_effective)}</span>
+        )}
+      </span>
+      <div className="flex items-center gap-0.5 flex-shrink-0 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+        <button onClick={onStartEdit} title="Change the date this move counts from"
+          className="p-1.5 rounded-lg text-white/35 hover:text-teal hover:bg-teal/10 transition-colors"><Pencil size={12} /></button>
+        <button onClick={() => onRemove(isLatest)}
+          title={isLatest ? 'Undo this move, or remove the entry' : 'Remove this entry from the log'}
+          className="p-1.5 rounded-lg text-white/35 hover:text-red-400 hover:bg-red-500/10 transition-colors">
+          {isLatest ? <Undo2 size={12} /> : <Trash2 size={12} />}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function Admin() {
   const [tab,      setTab]      = useState('People')
   const [users,    setUsers]    = useState([])
@@ -127,17 +193,46 @@ export default function Admin() {
   const [userModal, setUserModal] = useState(false)
   const [editUser,  setEditUser]  = useState(null)
   const [backfill,  setBackfill]  = useState(null)  // { rep, manager } after a team assignment
+  const { profile } = useAuth()
 
   useEffect(() => { loadAll() }, [])
 
-  const [teamChanges, setTeamChanges] = useState([])
+  const [teamChanges,  setTeamChanges]  = useState([])
+  const [pendingMoves, setPendingMoves] = useState([])
+  // Deals are only needed for the move PREVIEW, so they are fetched on demand
+  // (opening the modal, or expanding the change log) rather than on every
+  // visit to a page that is mostly about the roster.
+  const [deals, setDeals] = useState(null)
+  const [dealsLoading, setDealsLoading] = useState(false)
+
+  async function ensureDeals() {
+    if (deals || dealsLoading) return
+    setDealsLoading(true)
+    const { data } = await fetchDeals()
+    setDeals(data ?? [])
+    setDealsLoading(false)
+  }
 
   async function loadAll() {
     setLoading(true)
-    const [{ data: u }, { data: tc }] = await Promise.all([fetchUsers(), fetchTeamChanges()])
+    // Perform any scheduled move whose day has arrived BEFORE reading the
+    // roster, so the chart never shows yesterday's arrangement. The site
+    // server sweeps on a timer too; this is the belt-and-braces path, and
+    // it is idempotent either way.
+    await applyDueTeamMoves()
+    const [{ data: u }, { data: tc }, { data: pm }] = await Promise.all([
+      fetchUsers(), fetchTeamChanges(), fetchPendingTeamMoves(),
+    ])
     setUsers(u ?? [])
     setTeamChanges(tc ?? [])
+    setPendingMoves(pm ?? [])
     setLoading(false)
+  }
+
+  async function reloadMoves() {
+    const [{ data: tc }, { data: pm }] = await Promise.all([fetchTeamChanges(), fetchPendingTeamMoves()])
+    setTeamChanges(tc ?? [])
+    setPendingMoves(pm ?? [])
   }
 
   async function saveUser(data) {
@@ -308,27 +403,33 @@ export default function Admin() {
 
   const card  = { background: '#242424', border: '1px solid #2e2e2e' }
   const [showLog, setShowLog] = useState(false)
-  const fmtSince = (iso) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  const [editDate, setEditDate] = useState(null)   // log entry id whose date is being re-picked
 
-  // Drag-to-move from the People chart. Only non-heads are draggable (the
-  // chart enforces it), so no reports cascade is needed here — that stays in
-  // saveUser for the Edit form. Same patchUser → updateUser path as every
-  // other roster write, so the team_changes trigger stamps the move.
+  // Drag-to-move from the People chart — the quick one-off, always effective
+  // TODAY. Only non-heads are draggable (the chart enforces it), so no
+  // reports cascade is needed here; that stays in saveUser for the Edit form,
+  // and the Move people modal asks it explicitly.
+  // It goes through the SAME move_team_members() call as that modal rather
+  // than writing manager_id directly, so there is one write path, one place
+  // that stamps the effective date, and one definition of "today" (Arizona's,
+  // matching the database — see utils/teamMove azToday).
   async function moveUser(u, destId) {
     const destLabel = destId ? teamLabel(users.find(x => x.id === destId)) : 'Unassigned'
     const fromLabel = u.manager_id ? teamLabel(users.find(x => x.id === u.manager_id)) : 'Unassigned'
+    const today = azToday()
     if (!await confirmDialog({
       title: `Move ${u.name} to ${destLabel}?`,
       bullets: [
-        'Logged today in the team change log.',
-        `${u.name}'s past deals stay with ${fromLabel} — only sales from today forward count for ${destLabel}.`,
+        `Effective today, ${fmtDay(today, { year: true })}.`,
+        `${u.name}'s deals before today stay with ${fromLabel} — only sales from today forward count for ${destLabel}.`,
+        'Need a different date, several people at once, or a preview of what changes hands? Use "Move people" instead.',
       ],
       confirmLabel: 'Move them',
     })) return
-    await patchUser(u.id, { manager_id: destId })
-    // Refresh just the log so the "since" date on their card updates.
-    const { data: tc } = await fetchTeamChanges()
-    setTeamChanges(tc ?? [])
+    setUsers(us => us.map(x => x.id === u.id ? { ...x, manager_id: destId } : x))   // optimistic
+    const { error } = await moveTeamMembers([u.id], destId, today, null, profile?.id)
+    if (error) { toast.error('Could not move them: ' + (error.message || '')); await loadAll(); return }
+    await loadAll()
     // If the new team's lead is a manager, offer to backfill this rep's past
     // manager-less deals with that manager + override.
     const dest = destId ? users.find(x => x.id === destId) : null
@@ -338,6 +439,114 @@ export default function Admin() {
   // Official team name — lives on the head's profile (migration 046) so every
   // page that loads users labels the team the same way via teamLabel().
   function renameTeam(head, name) { patchUser(head.id, { team_name: name }) }
+
+  // ── The Move people flow (migration 058) ──────────────────────────────────
+  const [moveModal, setMoveModal] = useState(false)
+  function openMoveModal() { ensureDeals(); setMoveModal(true) }
+
+  // One call per reorg. The RESULT says what happened rather than the date
+  // being re-interpreted here: "today" is Arizona's today in the database,
+  // and a scheduled move and an applied one read very differently.
+  async function submitMove({ profileIds, newManagerId, effectiveDate, note }) {
+    const { data, error } = await moveTeamMembers(profileIds, newManagerId, effectiveDate, note, profile?.id)
+    if (error) { toast.error('Could not move them: ' + (error.message || 'unknown error')); return false }
+    const dest = newManagerId ? teamLabel(users.find(u => u.id === newManagerId)) : 'Unassigned'
+    const n = Number(data?.applied || 0), s = Number(data?.scheduled || 0)
+    if (s) toast.success(`${s} ${s === 1 ? 'person' : 'people'} scheduled to move to ${dest} on ${fmtDay(data.effective_date, { year: true })}.`)
+    else if (n) toast.success(`${n} ${n === 1 ? 'person' : 'people'} moved to ${dest}, effective ${fmtDay(data.effective_date)}.`)
+    else toast.info('Nothing to do — everyone selected is already on that team.')
+    await loadAll()
+    // Same offer as a drag: if the new lead is a manager, backfill the rep's
+    // past manager-less deals. Only for a single applied move, where "the
+    // rep" is unambiguous.
+    const dst = newManagerId ? users.find(u => u.id === newManagerId) : null
+    if (n === 1 && !s && dst?.role === 'manager') {
+      const rep = users.find(u => u.id === profileIds[0])
+      if (rep) setBackfill({ rep, manager: dst })
+    }
+    return true
+  }
+
+  async function cancelScheduled(m) {
+    const who  = users.find(u => u.id === m.profile_id)?.name || 'them'
+    const dest = m.new_manager_id ? teamLabel(users.find(u => u.id === m.new_manager_id)) : 'Unassigned'
+    if (!await confirmDialog({
+      tone: 'warn',
+      title: `Cancel this scheduled move?`,
+      message: `${who} was going to move to ${dest} on ${fmtDay(m.effective_date, { year: true })}.`,
+      bullets: ['Nothing has changed yet, so there is nothing to undo — the move simply will not happen.'],
+      confirmLabel: 'Cancel the move',
+      cancelLabel: 'Keep it',
+    })) return
+    const { error } = await cancelPendingTeamMove(m.id)
+    if (error) return toast.error(error.message || 'Could not cancel it')
+    toast.success('Scheduled move cancelled.')
+    reloadMoves()
+  }
+
+  // Correcting a logged move's date REWRITES team attribution either side of
+  // that day, so the confirm states how many deals change hands — the same
+  // preview the move modal shows, from the same engine.
+  async function editChangeDate(c, nextDate) {
+    if (!nextDate || nextDate === changeDay(c)) return
+    const who = users.find(u => u.id === c.profile_id)?.name || 'them'
+    const pv = previewDateChange({ deals: deals ?? [], users, teamChanges, changeId: c.id, effectiveDate: nextDate })
+    const bullets = [
+      `${who}'s deals closing on or after ${fmtDay(nextDate)} count for ${teamKeyLabel(c.new_manager_id || 'unassigned', users)}; earlier ones for ${teamKeyLabel(c.old_manager_id || 'unassigned', users)}.`,
+    ]
+    if (deals == null) bullets.push('The deal count could not be checked — the deals had not loaded yet.')
+    else bullets.push(pv.movingCount
+      ? `${pv.movingCount} deal${pv.movingCount === 1 ? '' : 's'} (${'$' + Math.round(pv.movingRevenue).toLocaleString()}) change teams.`
+      : 'No recorded deal changes teams — only future ones are affected.')
+    bullets.push('Every team figure on the Dashboard, the Record Book and the competitions shifts to match.')
+    if (!await confirmDialog({
+      tone: 'warn',
+      title: `Change this move to ${fmtDay(nextDate, { year: true })}?`,
+      message: 'This is a correction to history, not a new move.',
+      bullets,
+      confirmLabel: 'Change the date',
+    })) return
+    const { error } = await setTeamChangeDate(c.id, nextDate, profile?.id)
+    if (error) return toast.error(error.message || 'Could not change the date')
+    toast.success(`Move re-dated to ${fmtDay(nextDate)}.`)
+    await loadAll()
+  }
+
+  // Two different actions, deliberately kept apart:
+  //   UNDO   — their most recent move: delete the entry AND put their
+  //            reports-to back. "I moved the wrong person."
+  //   REMOVE — any entry: delete it and leave the roster matching whatever
+  //            is now the latest entry. An edit to attribution history.
+  async function removeChange(c, isLatest) {
+    const who  = users.find(u => u.id === c.profile_id)?.name || 'them'
+    const from = teamKeyLabel(c.old_manager_id || 'unassigned', users)
+    const to   = teamKeyLabel(c.new_manager_id || 'unassigned', users)
+    const how = isLatest
+      ? await choiceDialog({
+        title: `${who}: ${from} → ${to}`,
+        message: `Recorded for ${fmtDay(changeDay(c), { year: true })}. What should happen?`,
+        options: [
+          { key: 'undo',   label: 'Undo the move', description: `Remove the entry AND put ${who} back on ${from}. Use this if the wrong person was moved.` },
+          { key: 'remove', label: 'Remove the entry only', description: `${who} stays on ${to}, but their deals before ${fmtDay(changeDay(c))} no longer switch teams. Use this if the move was real but should never have been recorded.` },
+        ],
+      })
+      : (await confirmDialog({
+        tone: 'danger',
+        title: 'Remove this log entry?',
+        message: `${who}: ${from} → ${to}, ${fmtDay(changeDay(c), { year: true })}.`,
+        bullets: [
+          'It is not their latest move, so who they report to today does not change.',
+          `Their deals around ${fmtDay(changeDay(c))} will attribute to whichever team the remaining entries put them on.`,
+          'Every team figure either side of that date shifts.',
+        ],
+        confirmLabel: 'Remove it',
+      })) ? 'remove' : null
+    if (!how) return
+    const { error } = await deleteTeamChange(c.id, how === 'undo')
+    if (error) return toast.error(error.message || 'Could not remove it')
+    toast.success(how === 'undo' ? `Move undone — ${who} is back on ${from}.` : 'Log entry removed.')
+    await loadAll()
+  }
 
   return (
     <div className="space-y-4 pb-8">
@@ -356,7 +565,7 @@ export default function Admin() {
       {tab === 'People' && (
         <div className="space-y-3">
           <PeopleChart
-            users={users} teamChanges={teamChanges}
+            users={users} teamChanges={teamChanges} pendingMoves={pendingMoves}
             hasUserAdmin={hasUserAdmin} busyUser={busyUser}
             onAdd={() => { setEditUser(null); setUserModal(true) }}
             onEdit={u => { setEditUser(u); setUserModal(true) }}
@@ -365,13 +574,56 @@ export default function Admin() {
             onResetLogin={resetLogin}
             onCreateLogin={createLogin}
             onMove={moveUser}
+            onMovePeople={openMoveModal}
             onRenameTeam={renameTeam}
           />
 
-          {/* Date-stamped log of reports-to moves (trigger-written, migration 029) */}
+          {/* Scheduled moves — a reorg set up ahead of time. It changes
+              NOTHING until its day, so it needs its own place to be seen and
+              cancelled; otherwise it is invisible until it lands. */}
+          {pendingMoves.length > 0 && (
+            <div className="rounded-xl overflow-hidden" style={card}>
+              <div className="px-3 md:px-4 py-2.5 flex items-center gap-2.5" style={{ background: '#1e1e1e' }}>
+                <CalendarClock size={14} style={{ color: '#93c5fd' }} />
+                <span className="text-[12px] font-bold text-white">Scheduled moves</span>
+                <span className="text-[10px] text-white/25 hidden md:inline">nothing changes until the date — the roster is live as-is</span>
+                <span className="ml-auto text-[10px] text-white/30">{pendingMoves.length} upcoming</span>
+              </div>
+              <div className="divide-y divide-white/5">
+                {pendingMoves.map(m => {
+                  const who  = users.find(x => x.id === m.profile_id)
+                  const from = who?.manager_id ? teamKeyLabel(who.manager_id, users) : 'Unassigned'
+                  const to   = m.new_manager_id ? teamKeyLabel(m.new_manager_id, users) : 'Unassigned'
+                  return (
+                    <div key={m.id} className="px-3 md:px-4 py-2 flex items-center gap-3 flex-wrap">
+                      <span className="text-[11px] font-semibold w-[104px] flex-shrink-0" style={{ color: '#93c5fd' }}>
+                        {fmtDay(m.effective_date, { year: true })}
+                      </span>
+                      <span className="text-[12px] text-white/75 min-w-0 flex-1">
+                        <span className="font-semibold text-white">{who?.name || '—'}</span>
+                        <span className="text-white/40"> — {from} → {to}</span>
+                        {m.note && <span className="text-white/25"> · {m.note}</span>}
+                      </span>
+                      <button onClick={() => cancelScheduled(m)} title="Cancel this scheduled move"
+                        className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10.5px] font-semibold text-white/40 hover:text-red-300 hover:bg-red-500/10 transition-colors flex-shrink-0">
+                        <X size={11} /> Cancel
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Team change log — trigger-written (029), now CORRECTABLE by an
+              admin (058). It was append-only and read-only to the app, which
+              meant a mis-dated move was permanent and the only remedy was
+              another move stacked on top, leaving two false entries forever.
+              The dates here ARE the attribution rule, so being able to fix
+              one is the difference between a log and a liability. */}
           {teamChanges.length > 0 && (
             <div className="rounded-xl overflow-hidden" style={card}>
-              <button onClick={() => setShowLog(v => !v)}
+              <button onClick={() => { setShowLog(v => !v); ensureDeals() }}
                 className="w-full px-3 md:px-4 py-2.5 flex items-center justify-between gap-3 hover:bg-white/[0.02] transition-colors"
                 style={{ background: '#1e1e1e' }}>
                 <span className="text-[12px] font-bold text-white">Team change log</span>
@@ -380,22 +632,14 @@ export default function Admin() {
               </button>
               {showLog && (
                 <div className="divide-y divide-white/5">
-                  {teamChanges.map(c => {
-                    const who  = users.find(x => x.id === c.profile_id)?.name || '—'
-                    const from = c.old_manager_id ? (users.find(x => x.id === c.old_manager_id)?.name || '—') : 'Unassigned'
-                    const to   = c.new_manager_id ? (users.find(x => x.id === c.new_manager_id)?.name || '—') : 'Unassigned'
-                    const by   = c.changed_by ? users.find(x => x.id === c.changed_by)?.name : null
-                    return (
-                      <div key={c.id} className="px-3 md:px-4 py-2 flex items-center gap-3 flex-wrap">
-                        <span className="text-[11px] text-white/30 w-[104px] flex-shrink-0">{fmtSince(c.changed_at)}</span>
-                        <span className="text-[12px] text-white/75 min-w-0">
-                          <span className="font-semibold text-white">{who}</span>
-                          <span className="text-white/40"> — {from} → {to}</span>
-                          {by && <span className="text-white/25"> · by {by}</span>}
-                        </span>
-                      </div>
-                    )
-                  })}
+                  {teamChanges.map(c => (
+                    <LogRow key={c.id} c={c} users={users} teamChanges={teamChanges}
+                      editing={editDate === c.id}
+                      onStartEdit={() => { ensureDeals(); setEditDate(c.id) }}
+                      onCancelEdit={() => setEditDate(null)}
+                      onPickDate={(d) => { setEditDate(null); editChangeDate(c, d) }}
+                      onRemove={(isLatest) => removeChange(c, isLatest)} />
+                  ))}
                 </div>
               )}
             </div>
@@ -406,6 +650,14 @@ export default function Admin() {
       {/* ── SETTINGS ── */}
       {tab === 'Settings' && <SettingsPanel />}
 
+      {moveModal && (
+        <TeamMoveModal
+          users={users} deals={deals ?? []} teamChanges={teamChanges}
+          loadingDeals={dealsLoading || deals == null}
+          onSubmit={submitMove}
+          onClose={() => setMoveModal(false)}
+        />
+      )}
       {userModal && <UserModal user={editUser} allUsers={users} teamChanges={teamChanges} onSave={saveUser} onClose={() => { setUserModal(false); setEditUser(null) }} />}
       {backfill && <ManagerBackfillModal rep={backfill.rep} manager={backfill.manager}
         onClose={(n) => { setBackfill(null); if (n) toast.success(`Backfilled ${n} deal${n === 1 ? '' : 's'} with ${backfill.manager.name}`); loadAll() }} />}

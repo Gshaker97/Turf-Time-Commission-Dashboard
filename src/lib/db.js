@@ -81,6 +81,11 @@ let _weeklyStats = DEMO_WEEKLY_STATS.map(s => ({ ...s }))
 let _settings    = JSON.parse(JSON.stringify(DEMO_SETTINGS))
 let _competitions = (DEMO_COMPETITIONS || []).map(c => ({ ...c }))
 let _auditOverrides = (DEMO_AUDIT_OVERRIDES || []).map(o => ({ ...o }))
+// Team moves (029 + 058). Declared up here with the other demo stores, not
+// beside their helpers further down: updateUser() logs into _teamChanges and
+// sits above them, and the prebuild treats no-use-before-define as an error.
+let _teamChanges  = []
+let _pendingMoves = []
 
 const goalKey = (y, m, office = '') => `${y}|${m}|${office}`   // office '' = company (migration 053)
 
@@ -491,6 +496,13 @@ export async function userAdmin(action, payload = {}) {
 
 export async function updateUser(id, data) {
   if (DEMO_MODE) {
+    // Mirror the 029 trigger: a reports-to change is logged, dated today in
+    // Arizona, so demo mode shows the same "since" dates and change log the
+    // live site does.
+    const prev = _users.find(u => u.id === id)
+    if (prev && 'manager_id' in data && (data.manager_id ?? null) !== (prev.manager_id ?? null)) {
+      _demoLog(id, prev.manager_id, data.manager_id, _azToday(), null, null)
+    }
     _users = _users.map(u => u.id === id ? { ...u, ...data } : u)
     return { error: null }
   }
@@ -781,10 +793,180 @@ export async function deletePayrollAdjustment(id) {
   return supabase.from('payroll_adjustments').delete().eq('id', id).select('id')
 }
 
-// ── Team change log (reports-to moves, trigger-written; migration 029) ──
+// ── Team change log + the move process (029, extended by 058) ──
+// Every one of these goes through a SECURITY DEFINER function, not a table
+// write: the log is trigger-written and client-read-only, and each function
+// re-checks that the caller is an admin, stamps the effective date through a
+// transaction-local GUC, and keeps the roster in step with the log. Nothing
+// here is trusted by the database — see migration 058.
+//
+// Demo mode mirrors those semantics in memory (ordered by effective day,
+// scheduled moves held until their date, undo restoring the old lead) so the
+// whole flow is exercisable with no database attached. Its two stores are
+// declared at the top of this file with the others.
+// Today in ARIZONA — the company's day and the one tt_today() uses. A hoisted
+// declaration on purpose: updateUser() above calls it.
+function _azToday() {
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Phoenix', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+  } catch { return new Date().toISOString().slice(0, 10) }
+}
+// Mirrors utils/team's changeDay. The fallback derives a LOCAL day rather
+// than slicing the UTC string, for the same reason it does there.
+const _changeDay = (c) => {
+  if (c.effective_date) return c.effective_date
+  const t = new Date(c.changed_at)
+  if (Number.isNaN(t.getTime())) return String(c.changed_at || '').slice(0, 10)
+  const p = (n) => String(n).padStart(2, '0')
+  return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}`
+}
+// Latest by EFFECTIVE day, then by when it was recorded — the same ordering
+// tt_resync_profile_manager() uses, since a correction can reorder the log.
+const _latestChange = (profileId) =>
+  _teamChanges.filter(c => c.profile_id === profileId)
+    .sort((a, b) => _changeDay(a).localeCompare(_changeDay(b)) || String(a.changed_at).localeCompare(String(b.changed_at)))
+    .slice(-1)[0] || null
+function _demoResync(profileId) {
+  const latest = _latestChange(profileId)
+  if (!latest) return
+  _users = _users.map(u => u.id === profileId ? { ...u, manager_id: latest.new_manager_id ?? null } : u)
+}
+function _demoLog(profileId, oldMgr, newMgr, effective, note, by) {
+  _teamChanges = [{
+    id: 'tc-' + Math.random().toString(36).slice(2, 9),
+    profile_id: profileId, old_manager_id: oldMgr ?? null, new_manager_id: newMgr ?? null,
+    changed_by: by ?? null, changed_at: new Date().toISOString(),
+    effective_date: effective, note: note || null, edited_at: null, edited_by: null, prior_effective: null,
+  }, ..._teamChanges]
+}
+
 export async function fetchTeamChanges() {
-  if (DEMO_MODE) return { data: [], error: null }
+  if (DEMO_MODE) return { data: _teamChanges, error: null }
   return supabase.from('team_changes').select('*').order('changed_at', { ascending: false }).limit(1000)
+}
+
+// Scheduled (future-dated) moves. Applied ones are kept so the card can say
+// "moved on <date>" rather than having the row vanish.
+export async function fetchPendingTeamMoves() {
+  if (DEMO_MODE) return { data: _pendingMoves, error: null }
+  const { data, error } = await supabase.from('pending_team_moves')
+    .select('*').is('applied_at', null).is('canceled_at', null)
+    .order('effective_date', { ascending: true })
+  return { data: error ? [] : (data ?? []), error }
+}
+
+// Move a LIST of people to one lead on one effective date. Applied straight
+// away when that date is today or past (and backdated in the log); held in
+// pending_team_moves when it is future. The result says which happened —
+// never infer it from the date, because "today" is Arizona's today in the
+// database and the browser may disagree by a few hours.
+export async function moveTeamMembers(profileIds, newManagerId, effectiveDate, note, byProfileId) {
+  const ids = [...new Set((profileIds || []).filter(Boolean))]
+  if (DEMO_MODE) {
+    const eff = effectiveDate || _azToday()
+    const future = eff > _azToday()
+    let applied = 0, scheduled = 0, skipped = 0
+    for (const pid of ids) {
+      const u = _users.find(x => x.id === pid)
+      if (!u) continue
+      if (future) {
+        _pendingMoves = _pendingMoves.filter(m => !(m.profile_id === pid && !m.applied_at && !m.canceled_at))
+        _pendingMoves = [..._pendingMoves, {
+          id: 'pm-' + Math.random().toString(36).slice(2, 9),
+          profile_id: pid, new_manager_id: newManagerId ?? null, effective_date: eff,
+          note: note || null, created_by: byProfileId ?? null, created_at: new Date().toISOString(),
+          applied_at: null, canceled_at: null, canceled_by: null,
+        }]
+        scheduled++
+      } else if ((u.manager_id ?? null) === (newManagerId ?? null)) {
+        skipped++
+      } else {
+        _demoLog(pid, u.manager_id, newManagerId, eff, note, byProfileId)
+        _users = _users.map(x => x.id === pid ? { ...x, manager_id: newManagerId ?? null } : x)
+        applied++
+      }
+    }
+    return { data: { applied, scheduled, skipped, effective_date: eff, future }, error: null }
+  }
+  const { data, error } = await supabase.rpc('move_team_members', {
+    p_profile_ids: ids,
+    p_new_manager_id: newManagerId ?? null,
+    p_effective: effectiveDate,
+    p_note: note || null,
+  })
+  return { data, error }
+}
+
+// Perform every scheduled move whose day has arrived. Called on Admin →
+// People load AND by the site server on a timer, so one being down does not
+// strand a reorg; it is idempotent either way.
+export async function applyDueTeamMoves() {
+  if (DEMO_MODE) {
+    let applied = 0
+    const today = _azToday()
+    for (const m of _pendingMoves) {
+      if (m.applied_at || m.canceled_at || m.effective_date > today) continue
+      const u = _users.find(x => x.id === m.profile_id)
+      if (u && (u.manager_id ?? null) !== (m.new_manager_id ?? null)) {
+        _demoLog(m.profile_id, u.manager_id, m.new_manager_id, m.effective_date, m.note, m.created_by)
+        _users = _users.map(x => x.id === m.profile_id ? { ...x, manager_id: m.new_manager_id ?? null } : x)
+        applied++
+      }
+      m.applied_at = new Date().toISOString()
+    }
+    return { data: { applied }, error: null }
+  }
+  const { data, error } = await supabase.rpc('apply_due_team_moves')
+  return { data, error }
+}
+
+export async function cancelPendingTeamMove(id) {
+  if (DEMO_MODE) {
+    const m = _pendingMoves.find(x => x.id === id)
+    if (!m || m.applied_at || m.canceled_at) return { error: { message: 'That scheduled move has already been applied or canceled' } }
+    m.canceled_at = new Date().toISOString()
+    return { error: null }
+  }
+  const { error } = await supabase.rpc('cancel_pending_team_move', { p_id: id })
+  return { error }
+}
+
+// Correct a logged move's effective date. This DELIBERATELY rewrites team
+// attribution either side of that day — the caller states how many deals
+// change hands before committing.
+export async function setTeamChangeDate(id, effectiveDate, byProfileId) {
+  if (DEMO_MODE) {
+    const c = _teamChanges.find(x => x.id === id)
+    if (!c) return { error: { message: 'That log entry no longer exists' } }
+    c.prior_effective = c.prior_effective || c.effective_date || String(c.changed_at).slice(0, 10)
+    c.effective_date = effectiveDate
+    c.edited_at = new Date().toISOString()
+    c.edited_by = byProfileId ?? null
+    _demoResync(c.profile_id)
+    return { error: null }
+  }
+  const { error } = await supabase.rpc('set_team_change_date', { p_id: id, p_effective: effectiveDate })
+  return { error }
+}
+
+// Remove a log entry. `restore` also puts the person's reports-to back to
+// what the entry says it was — the "I moved the wrong person" undo, allowed
+// only on their most recent entry (on an older one, old_manager_id is not
+// where they are now, so restoring it would move them somewhere nobody asked).
+export async function deleteTeamChange(id, restore = false) {
+  if (DEMO_MODE) {
+    const c = _teamChanges.find(x => x.id === id)
+    if (!c) return { error: { message: 'That log entry no longer exists' } }
+    if (restore && _latestChange(c.profile_id)?.id !== id) {
+      return { error: { message: 'Only the most recent move can be undone — this one has a later move after it' } }
+    }
+    _teamChanges = _teamChanges.filter(x => x.id !== id)
+    if (restore) _users = _users.map(u => u.id === c.profile_id ? { ...u, manager_id: c.old_manager_id ?? null } : u)
+    else _demoResync(c.profile_id)
+    return { error: null }
+  }
+  const { error } = await supabase.rpc('delete_team_change', { p_id: id, p_restore: !!restore })
+  return { error }
 }
 
 // ── Payroll run locks (freeze a completed pay run, see migration 028) ──
