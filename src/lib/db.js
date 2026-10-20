@@ -991,6 +991,24 @@ export async function fetchRepcardLeaderboard(from, to) {
   } catch (e) { return { ok: false, configured: false, rows: [], error: e.message || 'Request failed.' } }
 }
 
+// Every deal, for the COMPANY-WIDE pages (Dashboard, Competitions + the
+// Record Book). `deals_select` trims a rep to their own deals, which made
+// those pages report one person's numbers as the company's — so they read
+// this instead, which serves all deals with the management override columns
+// removed server-side. See /api/company/deals in server.js for why that has
+// to happen on the server and not in a view.
+//
+// Falls back to the restricted fetchDeals() if the endpoint is unavailable
+// (older deploy, missing service key): the page then shows what it always
+// showed rather than nothing at all. `limited: true` says so.
+export async function fetchCompanyDeals() {
+  if (DEMO_MODE) return { data: _deals, error: null, limited: false }
+  const res = await auditPost('/api/company/deals', {})
+  if (res?.ok && Array.isArray(res.deals)) return { data: res.deals, error: null, limited: false }
+  const fallback = await fetchDeals()
+  return { ...fallback, limited: true, reason: res?.error || 'company feed unavailable' }
+}
+
 export const auditDeal  = (dealId) => auditPost('/api/audit/deal', { deal_id: dealId })
 export const auditQueue = () => auditPost('/api/audit/queue', {})
 export const setChecklistItem = (dealId, itemKey, checked) =>

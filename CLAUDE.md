@@ -1386,6 +1386,47 @@ a read-only "My goals" mirror (same engine) + a "Set goals →" link. Legacy
 Dashboard's goal is the company-wide revenue goal (separate `monthly_goals`
 table, admin-only).
 
+**COMPANY-WIDE PAGES READ A DIFFERENT DEAL FEED — `fetchCompanyDeals()`,
+never `fetchDeals()`.** `deals_select` (002_rls) shows a REP only the deals
+they set, closed or hold an override on. That is correct for the Deals page,
+and it silently broke every company-wide figure: a rep's Dashboard reported
+their own two deals as the company's revenue and goal progress, and the Record
+Book put their name on every line (found live — Corbin saw $30,600 / 2 deals,
+with company, rep and team records all reading the same $103,079.18, which is
+what a one-person dataset looks like). Consumers: **Dashboard** and
+**Competitions** (standings + Record Book). The Deals page, Payroll,
+Commissions and the audit queue keep the restricted `fetchDeals()` — per
+Keaton, "no new information should be shared in the deals section".
+- **It is a SERVER endpoint (`POST /api/company/deals`), not a database view,
+  and that is forced by the commission engine.** A rep's OWN commission
+  depends on override data: `dealAmounts` clamps a management-funded rep bonus
+  to what that manager earns (`Math.min(manager, bonus_manager)`). Strip the
+  override columns naively and the clamp sees 0, so the bonus vanishes and the
+  rep's commission comes out UNDERSTATED. The clamp cannot be reproduced in
+  SQL either — the override is usually not stored, it is computed from the
+  admin-editable rate eras in `app_settings`. So the server runs the REAL
+  engine over the full row and emits the already-clamped contribution in the
+  `*_amount` slot. That value is the rep's own bonus money, not the manager's
+  override; the browser's engine then reproduces setter/closer exactly while
+  `manager`/`director`/`vp` resolve to 0.
+- **The override RATES are ZEROED, not deleted.** `dealAmounts` falls back to
+  the OFFICE rate when a director/VP pct is null, so merely removing the
+  columns let the browser rebuild the override as `baseline x 5%` — the exact
+  figure the feed exists to withhold. A masking test caught this; it asserts
+  rep pay is identical through both paths and that `overrides` reads 0, across
+  bonuses, clamped bonuses, splits, deductions, solo deals, stored amounts and
+  the Tucson rate. **Keep that test honest**: it also asserts the naive strip
+  WOULD understate the rep, so it can never pass vacuously.
+- Any ACTIVE signed-in user may call it (a deactivated person is blocked at
+  login; the check stops a live token outliving that). It falls back to
+  `fetchDeals()` with `limited: true` if the endpoint is unavailable, so an
+  older deploy degrades to what it always showed rather than to nothing.
+- **"Viewing as <user>" CANNOT catch this class of bug.** `previewAs` swaps the
+  profile object in React; it never changes the Supabase session, so queries
+  still run with the admin's JWT. It shows a rep's INTERFACE over an admin's
+  DATA and will always look correct. Verify data visibility with a real second
+  login, never with preview.
+
 **Visibility (view scoping, NOT edit) by sales title:**
 - **Deals page SCOPE dropdown (per Keaton, mirrors the Dashboard's team
   filter):** `scope` state in `Deals.jsx`, options built by role in
