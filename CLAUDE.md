@@ -1421,11 +1421,51 @@ Keaton, "no new information should be shared in the deals section".
   login; the check stops a live token outliving that). It falls back to
   `fetchDeals()` with `limited: true` if the endpoint is unavailable, so an
   older deploy degrades to what it always showed rather than to nothing.
-- **"Viewing as <user>" CANNOT catch this class of bug.** `previewAs` swaps the
-  profile object in React; it never changes the Supabase session, so queries
-  still run with the admin's JWT. It shows a rep's INTERFACE over an admin's
-  DATA and will always look correct. Verify data visibility with a real second
-  login, never with preview.
+- **"Viewing as <user>" is now REAL impersonation — see below.** The old
+  `previewAs` swapped only the profile object, so queries still ran with the
+  admin's JWT: a rep's INTERFACE over an admin's DATA, which always looked
+  correct and is exactly why this bug hid.
+
+## Viewing as another user (`/api/impersonate`)
+
+Per Keaton, after the preview feature gave him false reassurance on the bug
+above: "I want true impersonation… viewing just like the user, but cant edit
+anything." Two DIFFERENT features now share the account menu — keep them
+distinct:
+- **Role preview** (`previewAs`, unchanged) — stay yourself, clamp permissions
+  to rep/manager level. For screen-sharing. AMBER banner.
+- **View as <person>** (`viewAsUser`) — the server mints a REAL session for
+  that person (GoTrue admin magic link, generated and redeemed server-side,
+  never emailed), and the browser swaps to it. RLS then treats the browser as
+  them, so the DATA is theirs too. RED banner, because it is a borrowed
+  identity rather than a permissions preview.
+- **Admin-only, active targets only** (a deactivated person cannot sign in, so
+  there is nothing to view), target must have a login, and every use appends to
+  `app_settings.impersonation_log` (last 100: who, whom, when). Deliberately
+  app_settings rather than a table — this needed no migration.
+- **The admin's own session is parked in `sessionStorage`**, not React state,
+  so a reload mid-view can still get back out. `stopViewingAs` clears the flag
+  BEFORE restoring: if the restore fails the user must not be stranded
+  read-only with no exit — landing on the login page is recoverable, a silent
+  read-only state is not.
+- **READ-ONLY is enforced at ONE chokepoint in `db.js`** (`setReadOnly`): a
+  Proxy over the Supabase client turns every `insert`/`update`/`upsert`/
+  `delete` and every `rpc` into a polite refusal, and `auditPost` blocks every
+  server action except the company-deals READ. Because all data access goes
+  through db.js (convention #3), that one guard covers every write in the app.
+  `blockedBuilder()` returns a chainable thenable — callers chain
+  `.update().eq().select()`, so a thin `{select}` stub breaks the moment
+  someone adds an `.eq()`.
+  **It is an APP-level stop, not a database one.** The browser holds that
+  person's real token, so a deliberate out-of-app call could still write.
+  Closing that needs a claim on the token plus a rule change on every table;
+  judged not worth it for an internal tool where the only holder of the button
+  is the admin. Say so plainly rather than implying it is airtight.
+  **`startImpersonation` uses the RAW client on purpose** — read-only must
+  never block switching back out of read-only.
+- `new Proxy(null, …)` throws at module load, which took the whole app down in
+  DEMO_MODE where there is no client: the wrapper is skipped unless a real
+  client exists. Verified by 6 write paths refusing with 0 network calls.
 
 **Visibility (view scoping, NOT edit) by sales title:**
 - **Deals page SCOPE dropdown (per Keaton, mirrors the Dashboard's team

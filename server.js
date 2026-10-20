@@ -2224,6 +2224,84 @@ app.get('/api/export/deals', async (req, res) => {
 // Health check — pinged hourly by the Watchdog. Reports whether the
 // user-admin key is configured and which build is running, so a broken deploy
 // or missing SUPABASE_SERVICE_KEY is caught within the hour.
+// ── View as a rep, for real (impersonation) ──────────────────
+// "Viewing as <user>" used to swap the profile object in React only: the
+// Supabase session stayed the ADMIN's, so every query still ran with admin
+// rights. It showed a rep's INTERFACE over an admin's DATA and therefore
+// could never reproduce what a rep actually sees — which is exactly how the
+// company-wide Dashboard bug hid for so long.
+//
+// This mints a REAL session for the target user (admin magic link, exchanged
+// immediately and never emailed), so RLS treats the browser as that person.
+// Admin-only, logged, and the app refuses every write while it is active
+// (see the read-only guard in src/lib/db.js).
+async function impersonationLog(entry) {
+  if (!SUPABASE_URL || !SERVICE_KEY) return
+  try {
+    const rows = await restGet(`/rest/v1/app_settings?select=value&key=eq.impersonation_log`)
+    const prev = Array.isArray(rows[0]?.value) ? rows[0].value : []
+    const next = [{ ...entry, at: new Date().toISOString() }, ...prev].slice(0, 100)
+    await fetch(`${SUPABASE_URL}/rest/v1/app_settings?on_conflict=key`, {
+      method: 'POST', headers: { ...jsonHeaders, Prefer: 'resolution=merge-duplicates' },
+      body: JSON.stringify({ key: 'impersonation_log', value: next }),
+    })
+  } catch { /* logging is best-effort — never block the view */ }
+}
+
+async function impersonate(body) {
+  const fail = (error) => ({ ok: false, error })
+  if (!SUPABASE_URL || !SERVICE_KEY) return fail('Not configured — SUPABASE_SERVICE_KEY is missing on the site service.')
+  if (!body.token) return fail('Not signed in')
+
+  // 1) Who is asking, and are they an admin?
+  const meResp = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${body.token}` },
+  })
+  if (!meResp.ok) return fail('Session invalid — sign in again')
+  const authId = (await meResp.json()).id
+  const caller = (await restGet(`/rest/v1/profiles?select=id,name,role,is_admin,active&auth_id=eq.${authId}`))[0]
+  if (!caller || caller.active === false || !(caller.role === 'admin' || caller.is_admin === true)) {
+    return fail('Admins only')
+  }
+
+  // 2) Who are they becoming? Must be an ACTIVE roster member with a login.
+  const targetId = String(body.profile_id || '')
+  if (!targetId) return fail('Pick someone to view as')
+  if (targetId === caller.id) return fail('That is already you')
+  const target = (await restGet(`/rest/v1/profiles?select=id,name,email,role,active,auth_id&id=eq.${targetId}`))[0]
+  if (!target) return fail('That person is not on the roster')
+  if (target.active === false) return fail(`${target.name} is deactivated — they cannot sign in, so there is nothing to view`)
+  if (!target.auth_id || !target.email) return fail(`${target.name} has no login yet — create one on Admin → People first`)
+
+  // 3) Mint a session for them. A magic link is generated and redeemed here;
+  //    it is never emailed and never leaves the server except as the tokens.
+  const linkResp = await fetch(`${SUPABASE_URL}/auth/v1/admin/generate_link`, {
+    method: 'POST', headers: { ...jsonHeaders },
+    body: JSON.stringify({ type: 'magiclink', email: target.email }),
+  })
+  if (!linkResp.ok) {
+    return fail(`Could not start the session (${linkResp.status}). The auth service may not allow admin links.`)
+  }
+  const link = await linkResp.json()
+  const hashed = link.hashed_token || link.properties?.hashed_token
+  if (!hashed) return fail('The auth service did not return a usable link.')
+
+  const verifyResp = await fetch(`${SUPABASE_URL}/auth/v1/verify`, {
+    method: 'POST', headers: { apikey: SERVICE_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'magiclink', token: hashed }),
+  })
+  if (!verifyResp.ok) return fail(`Could not complete the session (${verifyResp.status}).`)
+  const session = await verifyResp.json()
+  if (!session.access_token || !session.refresh_token) return fail('The auth service returned no session.')
+
+  await impersonationLog({ by: caller.name, by_id: caller.id, viewed: target.name, viewed_id: target.id })
+  return {
+    ok: true,
+    session: { access_token: session.access_token, refresh_token: session.refresh_token },
+    profile: { id: target.id, name: target.name, role: target.role },
+  }
+}
+
 // POST /api/company/deals — every deal, override columns removed, for the
 // company-wide pages. Any ACTIVE signed-in user; the browser sends only its
 // own session token (same shape as the audit endpoints).
@@ -2248,6 +2326,14 @@ app.post('/api/company/deals', async (req, res) => {
   } catch (e) {
     res.json({ ok: false, error: e.message || 'Could not load company deals' })
   }
+})
+
+// POST /api/impersonate — become another user, read-only. Admin-only.
+app.post('/api/impersonate', async (req, res) => {
+  let body
+  try { body = JSON.parse(req.body || '{}') } catch { return res.json({ ok: false, error: 'Bad request body.' }) }
+  try { res.json(await impersonate(body)) }
+  catch (e) { res.json({ ok: false, error: e.message || 'Could not start the view' }) }
 })
 
 app.get('/api/health', (req, res) => {

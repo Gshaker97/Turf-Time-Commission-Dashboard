@@ -3,7 +3,64 @@
  * Every page goes through here. In demo mode it returns in-memory data;
  * in live mode it queries Supabase. No page should import `supabase` directly.
  */
-import { supabase, DEMO_MODE } from './supabase'
+import { supabase as rawSupabase, DEMO_MODE } from './supabase'
+
+// ── READ-ONLY MODE (viewing as another user) ─────────────────
+// While an admin is impersonating a rep the browser holds that rep's real
+// session, so the DATABASE would happily accept writes made in their name.
+// Every write in this app goes through this file — that is the documented
+// gateway rule — so ONE guard here covers all of them: no edits, no deletes,
+// no status changes, no notes, no server actions.
+//
+// This is an APP-level stop, not a database one. It makes accidental writes
+// impossible; it is not a defence against someone deliberately going around
+// the app with the same token. Enforcing it in the database would mean a
+// claim on the token plus a rule change on every table — see CLAUDE.md.
+let READ_ONLY = false
+export function setReadOnly(on) { READ_ONLY = !!on }
+export const isReadOnly = () => READ_ONLY
+
+const READ_ONLY_MESSAGE = "You're viewing as someone else — switch back to make changes."
+const blocked = () => ({ data: null, error: { message: READ_ONLY_MESSAGE, readOnly: true } })
+
+// Wrap the client so a write attempt fails politely instead of reaching the
+// database. Reads pass straight through.
+const WRITE_METHODS = ['insert', 'update', 'upsert', 'delete']
+
+// A stand-in for PostgREST's query builder that swallows any chain and
+// resolves to the refusal. Callers chain freely (.update().eq().select()),
+// so every method has to return something chainable AND awaitable — a thin
+// object with just .select() breaks the moment someone adds an .eq().
+function blockedBuilder() {
+  const proxy = new Proxy({}, {
+    get(_t, m) {
+      if (m === 'then')    return (resolve) => resolve(blocked())
+      if (m === 'catch')   return () => proxy
+      if (m === 'finally') return (f) => { try { f?.() } catch { /* ignore */ } return proxy }
+      return () => proxy
+    },
+  })
+  return proxy
+}
+
+// In DEMO_MODE there is no client to wrap (and no writes reach it anyway),
+// so pass it straight through — `new Proxy(null, …)` throws at module load
+// and took the whole app down with it.
+const supabase = !rawSupabase || typeof rawSupabase !== 'object' ? rawSupabase : new Proxy(rawSupabase, {
+  get(target, prop) {
+    if (!READ_ONLY) return Reflect.get(target, prop)
+    if (prop === 'from') {
+      return (table) => new Proxy(target.from(table), {
+        get(b, m) {
+          if (WRITE_METHODS.includes(m)) return () => blockedBuilder()
+          return Reflect.get(b, m)
+        },
+      })
+    }
+    if (prop === 'rpc') return async () => blocked()
+    return Reflect.get(target, prop)
+  },
+})
 import {
   DEMO_USERS,
   DEMO_DEALS_JOINED,
@@ -969,6 +1026,9 @@ function demoTeamMonthSummary(teamId, year, month, profile) {
 // is an admin or Keaton — the browser only ever sends its session token.
 async function auditPost(pathname, payload) {
   if (DEMO_MODE) return { ok: false, error: 'Disabled in demo mode.' }
+  // The company-deals feed is a READ, so it stays available while viewing as
+  // someone else; every other server action is a write.
+  if (READ_ONLY && pathname !== '/api/company/deals') return { ok: false, error: READ_ONLY_MESSAGE }
   const { data: { session } } = await supabase.auth.getSession()
   if (!session?.access_token) return { ok: false, error: 'Not signed in.' }
   try {
@@ -1007,6 +1067,23 @@ export async function fetchCompanyDeals() {
   if (res?.ok && Array.isArray(res.deals)) return { data: res.deals, error: null, limited: false }
   const fallback = await fetchDeals()
   return { ...fallback, limited: true, reason: res?.error || 'company feed unavailable' }
+}
+
+// Start viewing as another user. Returns their session + profile; the caller
+// (AuthContext) swaps the session in. Uses the RAW client deliberately —
+// read-only mode must not block switching back out of it.
+export async function startImpersonation(profileId) {
+  if (DEMO_MODE) return { ok: false, error: 'Disabled in demo mode.' }
+  const { data: { session } } = await rawSupabase.auth.getSession()
+  if (!session?.access_token) return { ok: false, error: 'Not signed in.' }
+  try {
+    const resp = await fetch('/api/impersonate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ token: session.access_token, profile_id: profileId }),
+    })
+    return await resp.json()
+  } catch (e) { return { ok: false, error: e.message || 'Request failed.' } }
 }
 
 export const auditDeal  = (dealId) => auditPost('/api/audit/deal', { deal_id: dealId })
