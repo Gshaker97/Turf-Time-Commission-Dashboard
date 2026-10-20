@@ -345,6 +345,10 @@ setup + deploy steps.
   `prior_effective`), the `pending_team_moves` table, and the five RPCs behind
   the Move-people flow — `move_team_members` / `apply_due_team_moves` /
   `cancel_pending_team_move` / `set_team_change_date` / `delete_team_change`;
+  `059` adds `pending_team_moves.demote_to_rep` and a `p_demote` argument to
+  `move_team_members` (which REPLACES the 4-arg signature — a defaulted
+  param would have created an overload PostgREST cannot choose between), so
+  moving a TEAM LEAD dissolves their team in the same action;
   see "Moving people between teams" below;
   `047` adds `competitions.excluded_ids` (jsonb
   array of profile ids) for the **Team Average (per rep)** competition type
@@ -627,19 +631,65 @@ time. 058 fixes those four, and nothing about how attribution is computed.
     the person's most recent entry** — on an older one `old_manager_id` is not
     where they are now, so restoring it would move them somewhere nobody asked
     for. Enforced in the database, not just the UI.
+- **MOVING A TEAM LEAD DISSOLVES THEIR TEAM (migration 059).** Headship is a
+  ROLE (`headIdSet`: `if (u.role === 'manager')`), not a reports-to link, so
+  moving a lead without demoting them changed `manager_id` and left them
+  heading their own column — **the move landed in the data and vanished from
+  the chart.** Hit live on Danny Jones: his scheduled move ran, and he still
+  rendered as the head of Backyard Buccaneers. That is why drag-and-drop
+  refuses leads; the 058 modal let you pick one anyway and said nothing.
+  - `move_team_members(..., p_demote => true)` sets `role = 'rep'` in the
+    **SAME UPDATE** as `manager_id`. The log trigger fires on `manager_id`,
+    so splitting it would either write two rows or — when only the role
+    changes — write none and leave the roster and the log out of step.
+  - **A lead already reporting to the destination is NOT a no-op.** The skip
+    branch tests the demotion too, or "move Danny to Jared's team" reports
+    success and leaves him heading his own column: the exact bug again.
+  - **A scheduled demotion waits for its date** (`pending_team_moves.
+    demote_to_rep`). Demoting on the day you SET UP a Nov 1 reorg would
+    reorganise the chart three weeks early — the same class of bug 058 exists
+    to prevent.
+  - **There is deliberately NO "keep them leading it, just under a new
+    director" option** (per Keaton: "if a leader is just reporting to a
+    different director thats a simple toggle field that already exists").
+    Picking a lead in the modal means they become a rep. Don't add the
+    alternative back; the Edit form is where that case lives.
+  - The modal states the consequence and asks the one thing still open —
+    **where the team's reps go** (their lead's destination, any other team,
+    or Unassigned). Their reps are a separate group with their own
+    destination, which is why `previewTeamMoveGroups` exists: the preview
+    takes `[{ profileIds, newManagerId }]` and diffs them all in one pass, so
+    the card can never contradict the action. `previewTeamMove` is now the
+    one-group wrapper.
+  - `submitMove` makes ONE call per group (leads with demote, other picks,
+    reps). A partial failure reports "only part of this went through" rather
+    than success — one group through and another refused leaves reps pointing
+    at a lead who has moved on.
+  - **The dissolved team keeps its NAME.** `team_name` stays on the profile,
+    so `teamLabel` still reads "Backyard Buccaneers" on the historical rows
+    `teamOfSale` routes their old deals to. **Role changes are still not
+    date-logged**, and 059 does not change that: reports-to history is
+    replayable, headship is not, so "when did they stop being a manager" is
+    unrecorded. Attribution is unaffected.
 - **Surfaces.** A **"Move people"** button in the People toolbar opens the
   three-step modal (who, multi-select · where · when, with quick pills and the
-  preview; a "bring their N reports" toggle appears when a selected person
-  leads). **Dragging a card stays** as the quick one-off and now says
+  preview; picking a lead adds the dissolve panel above). **Dragging a card
+  stays** as the quick one-off — the chart only lets non-leads drag, so there
+  is never a team to dissolve on that path — and it now says
   "effective today" explicitly — it routes through the SAME
   `move_team_members` call so there is one write path and one definition of
   today. A **Scheduled moves** card under the chart lists upcoming moves with
   Cancel, and each person's card carries a blue "→ <Team> on <date>" line, so
   the chart shows BOTH where someone is now and where they are going.
-- Verified against real Postgres 16 (63 assertions: admin gating, backdating,
-  scheduling, supersede, cancel, apply-on-the-day, re-date, reorder-resync,
-  undo, non-latest refusal, GUC non-leakage, service-key context), 48 engine
-  assertions across four timezones, and a 23-step browser pass.
+- Verified against real Postgres 16 (63 assertions for 058: admin gating,
+  backdating, scheduling, supersede, cancel, apply-on-the-day, re-date,
+  reorder-resync, undo, non-latest refusal, GUC non-leakage, service-key
+  context; 37 more for 059: one-signature check, demote-with-move,
+  demote-when-already-there, no-demote compatibility, future demotion held
+  back, applied on the day, role-only change writing no log row, and that
+  nothing else on the profile is touched), 54 engine assertions across four
+  timezones, and browser passes that end on the real claim — a dissolved
+  team's column is gone and its lead is listed as a rep under the new team.
 
 ## Overriding a locked pay run (migration 057)
 

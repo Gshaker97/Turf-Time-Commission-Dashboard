@@ -65,17 +65,25 @@ export function teamKeyLabel(key, users = []) {
 }
 
 // ── The preview ─────────────────────────────────────────────────────────────
-// `profileIds` move to `newManagerId` effective `effectiveDate` (a plain
-// 'yyyy-MM-dd'). Returns what that does to already-recorded deals.
-export function previewTeamMove({
-  deals = [], users = [], teamChanges = [],
-  profileIds = [], newManagerId = null, effectiveDate = null,
+// `groups` is [{ profileIds, newManagerId }] — several destinations in one
+// preview, because dissolving a team sends its LEAD to one place and its reps
+// somewhere else, and those have to be counted together or the card
+// contradicts the action. One pass over the deals covers all of them.
+export function previewTeamMoveGroups({
+  deals = [], users = [], teamChanges = [], groups = [], effectiveDate = null,
 } = {}) {
-  const ids = [...new Set(profileIds.filter(Boolean))]
   const empty = {
     effectiveDate, movingCount: 0, movingRevenue: 0, stayingCount: 0, stayingRevenue: 0,
     moving: [], boundary: [], boundaryCount: 0, boundaryRevenue: 0, perPerson: [],
   }
+  // Last group wins for a person named twice — the caller's groups are
+  // disjoint by construction, and silently double-moving someone would be
+  // worse than picking one.
+  const destOf = new Map()
+  for (const g of groups) for (const pid of (g?.profileIds || [])) {
+    if (pid) destOf.set(pid, g.newManagerId ?? null)
+  }
+  const ids = [...destOf.keys()]
   if (!ids.length || !effectiveDate) return empty
 
   const usersById = Object.fromEntries(users.map(u => [u.id, u]))
@@ -89,7 +97,7 @@ export function previewTeamMove({
     id: `preview-${i}`,
     profile_id: pid,
     old_manager_id: managerAsOf(before, usersById[pid], effectiveDate),
-    new_manager_id: newManagerId,
+    new_manager_id: destOf.get(pid),
     effective_date: effectiveDate,
     // Sorts last among same-day entries, so an existing move already dated
     // that day is treated as earlier — which is what committing would do.
@@ -151,6 +159,11 @@ export function previewTeamMove({
     boundaryRevenue: boundary.reduce((s, m) => s + m.revenue, 0),
     perPerson: rows,
   }
+}
+
+// The single-destination case, which is most of them.
+export function previewTeamMove({ profileIds = [], newManagerId = null, ...rest } = {}) {
+  return previewTeamMoveGroups({ ...rest, groups: [{ profileIds, newManagerId }] })
 }
 
 // What CHANGING an existing log entry's date would do — the same question in

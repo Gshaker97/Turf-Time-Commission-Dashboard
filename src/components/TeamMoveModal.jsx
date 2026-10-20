@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { X, Search, Check, CalendarClock, ArrowRight, Users, AlertTriangle, Loader2 } from 'lucide-react'
+import { X, Search, Check, CalendarClock, ArrowRight, Flag, AlertTriangle, Loader2 } from 'lucide-react'
 import { headIdSet, teamKeyFor, teamLabel } from '../utils/team'
 import {
   azToday, addDays, monthStart, nextMonthStart, fmtDay,
-  previewTeamMove, teamKeyLabel, directReportsOf,
+  previewTeamMoveGroups, teamKeyLabel, directReportsOf,
 } from '../utils/teamMove'
 
 // ============================================================
@@ -16,6 +16,14 @@ import {
 //      or after it count for the new team; everything before stays put. The
 //      old drag stamped "now", so reorganising on Monday for a change that
 //      happened last Thursday sent four days of revenue to the wrong team.
+//
+// PICKING A TEAM LEAD DISSOLVES THEIR TEAM (059). Headship is a ROLE, so
+// moving a lead without demoting them changed their reports-to and left them
+// heading their own column — the move landed in the data and vanished from
+// the chart. There is deliberately NO "keep them leading it, just under a new
+// director" option (per Keaton): that is a plain reports-to edit and the Edit
+// form already does it. So the modal states the consequence and asks the one
+// question that remains — where the team's reps go.
 //
 // Then a PREVIEW that names what changes hands — including, on its own line,
 // the deals sitting exactly ON the boundary day, since that is the one thing
@@ -60,7 +68,9 @@ export default function TeamMoveModal({
   const [dest, setDest]       = useState('')          // '' = not chosen, 'unassigned' = no lead
   const [when, setWhen]       = useState(today)
   const [note, setNote]       = useState('')
-  const [bringReports, setBringReports] = useState(true)
+  // Where the reps of a dissolved team go. 'same' = wherever their lead is
+  // heading, which is the common answer; otherwise a team key.
+  const [repsDest, setRepsDest] = useState('same')
   const [q, setQ]             = useState('')
   const [saving, setSaving]   = useState(false)
 
@@ -74,36 +84,61 @@ export default function TeamMoveModal({
     () => active.filter(u => heads.has(u.id)).sort(byName).map(h => ({ id: h.id, label: teamLabel(h) })),
     [active, heads])
 
-  // Anyone can be moved here, heads included — but moving a lead takes their
-  // reports with them unless you say otherwise, which is the same question
-  // the Edit form asks and the reason drag-and-drop refuses heads.
-  const reports = useMemo(() => directReportsOf(picked, users), [picked, users])
-  const movingIds = useMemo(() => {
-    const ids = new Set(picked)
-    if (bringReports) for (const r of reports) ids.add(r.id)
-    // Moving someone INTO the team they lead is meaningless, and the database
-    // rejects it, so the destination can never be among the movers.
-    if (dest && dest !== 'unassigned') ids.delete(dest)
-    return [...ids]
-  }, [picked, reports, bringReports, dest])
+  // Moving someone INTO the team they lead is meaningless and the database
+  // rejects it, so the destination is never among the movers.
+  const pickedIds = useMemo(
+    () => picked.filter(id => !(dest && dest !== 'unassigned' && id === dest)),
+    [picked, dest])
+  // Leads among the selection: these get demoted, and their teams dissolve.
+  const pickedHeads = useMemo(() => pickedIds.filter(id => heads.has(id)).map(id => users.find(u => u.id === id)).filter(Boolean), [pickedIds, heads, users])
+  const pickedPlain = useMemo(() => pickedIds.filter(id => !heads.has(id)), [pickedIds, heads])
+  // Everyone reporting to someone in the selection — the people whose team is
+  // about to disappear from under them.
+  const reports = useMemo(() => directReportsOf(pickedIds, users), [pickedIds, users])
 
   const destId = dest === 'unassigned' ? null : (dest || null)
   const destLabel = dest === '' ? '…' : teamKeyLabel(dest, users)
+  // The lead panel sits ABOVE "Moving to", so it has to read correctly before
+  // a destination exists. A bare ellipsis mid-sentence ("makes them a rep on
+  // …") reads like a rendering fault.
+  const destPhrase = dest === '' ? 'the team you pick below' : teamKeyLabel(dest, users)
+  const repsDestKey = repsDest === 'same' ? dest : repsDest
+  const repsDestId  = repsDestKey === 'unassigned' ? null : (repsDestKey || null)
+  const repsDestLabel = dest === '' && repsDest === 'same' ? '…' : teamKeyLabel(repsDestKey, users)
   const future = when > today
 
-  const preview = useMemo(() => previewTeamMove({
-    deals, users, teamChanges,
-    profileIds: movingIds, newManagerId: destId, effectiveDate: when,
-  }), [deals, users, teamChanges, movingIds, destId, when])
+  // The groups the save will perform, and the shape the preview reads. Leads
+  // and their reps can land on DIFFERENT teams, so one destination could not
+  // describe this.
+  const groups = useMemo(() => [
+    { profileIds: pickedHeads.map(h => h.id), newManagerId: destId, demote: true },
+    { profileIds: pickedPlain,                newManagerId: destId, demote: false },
+    { profileIds: reports.map(r => r.id),     newManagerId: repsDestId, demote: false },
+  ].filter(g => g.profileIds.length), [pickedHeads, pickedPlain, reports, destId, repsDestId])
 
-  // Someone already on the destination team is a no-op the database skips —
-  // say so here rather than reporting "moved 3" when one of them never moved.
-  const alreadyThere = useMemo(
-    () => movingIds.filter(id => {
-      const u = users.find(x => x.id === id)
-      return u && teamKeyFor(u, heads) === (dest || '\0')
-    }).length,
-    [movingIds, users, heads, dest])
+  const movingIds = useMemo(() => groups.flatMap(g => g.profileIds), [groups])
+
+  const preview = useMemo(() => previewTeamMoveGroups({
+    deals, users, teamChanges, groups, effectiveDate: when,
+  }), [deals, users, teamChanges, groups, when])
+
+  // Someone already on their group's destination is a no-op the database
+  // skips — say so here rather than reporting "moved 3" when one never moved.
+  // Tested exactly as the database tests it (reports-to, not team key): for a
+  // LEAD those differ, and a lead already under the destination is still not
+  // a no-op while they have a role to lose.
+  const alreadyThere = useMemo(() => {
+    let n = 0
+    for (const g of groups) {
+      for (const id of g.profileIds) {
+        const u = users.find(x => x.id === id)
+        if (!u) continue
+        const onIt = (u.manager_id ?? null) === (g.newManagerId ?? null)
+        if (onIt && !(g.demote && u.role !== 'rep')) n++
+      }
+    }
+    return n
+  }, [groups, users])
   const willMove = movingIds.length - alreadyThere
 
   const shown = useMemo(() => {
@@ -120,7 +155,9 @@ export default function TeamMoveModal({
   async function submit() {
     if (!canSubmit) return
     setSaving(true)
-    const r = await onSubmit?.({ profileIds: movingIds, newManagerId: destId, effectiveDate: when, note: note.trim() })
+    // The modal decides WHAT happens (who, where, demote or not); the page
+    // performs it. Each group is one move_team_members call.
+    const r = await onSubmit?.({ groups, effectiveDate: when, note: note.trim(), destId })
     setSaving(false)
     if (r !== false) onClose?.()
   }
@@ -200,20 +237,64 @@ export default function TeamMoveModal({
                 )
               })}
             </div>
-            {reports.length > 0 && (
-              <label className="flex items-start gap-2 mt-2 px-2.5 py-2 rounded-lg cursor-pointer"
-                style={{ background: 'rgba(96,165,250,0.07)', border: '1px solid rgba(96,165,250,0.25)' }}>
-                <input type="checkbox" checked={bringReports} onChange={e => setBringReports(e.target.checked)}
-                  className="mt-[3px] accent-teal" />
-                <span className="text-[11.5px] text-blue-200 leading-snug">
-                  <Users size={11} className="inline mb-[2px] mr-1" />
-                  Bring {reports.length === 1 ? 'their report' : `their ${reports.length} reports`} along
-                  <span className="text-blue-200/55"> — {reports.map(r => r.name).join(', ')}</span>
-                  <span className="block text-blue-200/45 mt-0.5">
-                    Each gets their own dated entry, so their past deals stay with their old team too.
+            {/* Picking a LEAD dissolves their team. State it, then ask the
+                one thing that is genuinely open: where their reps go. */}
+            {pickedHeads.length > 0 && (
+              <div className="mt-2 px-3 py-2.5 rounded-xl"
+                style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)' }}>
+                <p className="text-[12.5px] font-bold text-amber-300 flex items-start gap-1.5">
+                  <Flag size={12} className="mt-[2px] flex-shrink-0" />
+                  <span>
+                    {pickedHeads.map(h => h.name).join(' and ')} lead{pickedHeads.length === 1 ? 's' : ''}{' '}
+                    {pickedHeads.map(h => teamLabel(h)).join(' and ')}
                   </span>
-                </span>
-              </label>
+                </p>
+                <p className="text-[11.5px] mt-1 leading-snug" style={{ color: 'rgba(245,197,114,0.72)' }}>
+                  Moving {pickedHeads.length === 1 ? 'a lead' : 'leads'} here makes {pickedHeads.length === 1 ? 'them a rep' : 'them reps'} on{' '}
+                  <strong className="text-amber-200">{destPhrase}</strong>, so{' '}
+                  {pickedHeads.length === 1 ? 'that team is' : 'those teams are'} dissolved. Past sales keep the
+                  name in every report. To just change who {pickedHeads.length === 1 ? 'they report' : 'they report'} to,
+                  use Edit instead.
+                </p>
+                {reports.length > 0 && (
+                  <div className="mt-2.5 pl-3" style={{ borderLeft: '1.5px solid rgba(245,158,11,0.3)' }}>
+                    <p className="text-[10px] font-bold text-amber-300/70 uppercase tracking-widest mb-1.5">
+                      {reports.length === 1 ? 'Its rep goes to' : `Its ${reports.length} reps go to`}
+                    </p>
+                    <select value={repsDest} onChange={e => setRepsDest(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-lg text-[12.5px] text-white focus:outline-none focus:border-teal/40 transition-colors appearance-none"
+                      style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }}>
+                      <option value="same">{dest ? `${destLabel} — same as their lead` : 'The same team as their lead'}</option>
+                      {teams.filter(t => t.id !== dest).map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+                      <option value="unassigned">Unassigned — no team lead</option>
+                    </select>
+                    <p className="text-[10.5px] text-amber-200/45 mt-1 leading-snug">
+                      {reports.map(r => r.name).join(', ')} — each gets their own dated entry, so their past
+                      deals stay with their old team too.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+            {/* A non-lead with people pointing at them: a stale reports-to
+                link, which is not a team. They still have to land somewhere. */}
+            {pickedHeads.length === 0 && reports.length > 0 && (
+              <div className="mt-2 px-3 py-2.5 rounded-xl"
+                style={{ background: 'rgba(96,165,250,0.07)', border: '1px solid rgba(96,165,250,0.25)' }}>
+                <p className="text-[10px] font-bold uppercase tracking-widest mb-1.5" style={{ color: 'rgba(147,197,253,0.7)' }}>
+                  {reports.length === 1 ? 'Their report goes to' : `Their ${reports.length} reports go to`}
+                </p>
+                <select value={repsDest} onChange={e => setRepsDest(e.target.value)}
+                  className="w-full px-2.5 py-1.5 rounded-lg text-[12.5px] text-white focus:outline-none focus:border-teal/40 transition-colors appearance-none"
+                  style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }}>
+                  <option value="same">{dest ? `${destLabel} — same as their lead` : 'The same team as whoever is moving'}</option>
+                  {teams.filter(t => t.id !== dest).map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+                  <option value="unassigned">Unassigned — no team lead</option>
+                </select>
+                <p className="text-[10.5px] mt-1 leading-snug" style={{ color: 'rgba(147,197,253,0.5)' }}>
+                  {reports.map(r => r.name).join(', ')}
+                </p>
+              </div>
             )}
           </Step>
 
@@ -269,6 +350,10 @@ export default function TeamMoveModal({
                   Nothing changes hands yet. On {fmtDay(when, { year: true })} these {willMove === 1 ? 'person' : `${willMove} people`} move
                   to <strong className="text-white">{destLabel}</strong>, and only deals closing from that day
                   forward count for it. Deals closing between now and then stay with their current team permanently.
+                  {pickedHeads.length > 0 && (
+                    <> {pickedHeads.map(h => teamLabel(h)).join(' and ')} {pickedHeads.length === 1 ? 'is' : 'are'} dissolved
+                      that same day, not today — the chart keeps working as it does now until then.</>
+                  )}
                 </p>
               </div>
             ) : loadingDeals ? (
@@ -286,6 +371,15 @@ export default function TeamMoveModal({
                     ? `${preview.boundaryCount} · ${money(preview.boundaryRevenue)} → ${destLabel}`
                     : 'none'}
                   tone={preview.boundaryCount ? 'move' : 'stay'} />
+                {pickedHeads.length > 0 && (
+                  <Row label={pickedHeads.length === 1
+                    ? `${pickedHeads[0].name} stops leading a team`
+                    : `${pickedHeads.length} leads stop leading a team`}
+                    value={reports.length
+                      ? `${reports.length} rep${reports.length === 1 ? '' : 's'} → ${repsDestLabel}`
+                      : 'no reps to reassign'}
+                    tone="move" />
+                )}
                 {preview.boundaryCount > 0 && (
                   <div className="px-3 py-2 border-t border-white/5" style={{ background: 'rgba(245,158,11,0.05)' }}>
                     <p className="text-[10.5px] text-amber-300/80 leading-snug mb-1">
