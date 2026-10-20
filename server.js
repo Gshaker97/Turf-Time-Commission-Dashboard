@@ -2280,19 +2280,65 @@ async function impersonate(body) {
     body: JSON.stringify({ type: 'magiclink', email: target.email }),
   })
   if (!linkResp.ok) {
-    return fail(`Could not start the session (${linkResp.status}). The auth service may not allow admin links.`)
+    const detail = (await linkResp.text()).slice(0, 200)
+    return fail(`Could not start the session (${linkResp.status}). ${detail}`)
   }
   const link = await linkResp.json()
-  const hashed = link.hashed_token || link.properties?.hashed_token
-  if (!hashed) return fail('The auth service did not return a usable link.')
+  const props  = link.properties || link
+  const hashed = props.hashed_token
+  const otp    = props.email_otp
+  if (!hashed && !otp) return fail('The auth service did not return a usable link.')
 
-  const verifyResp = await fetch(`${SUPABASE_URL}/auth/v1/verify`, {
-    method: 'POST', headers: { apikey: SERVICE_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ type: 'magiclink', token: hashed }),
-  })
-  if (!verifyResp.ok) return fail(`Could not complete the session (${verifyResp.status}).`)
-  const session = await verifyResp.json()
-  if (!session.access_token || !session.refresh_token) return fail('The auth service returned no session.')
+  // GoTrue's /verify has changed shape across versions and self-hosted
+  // deployments differ, so try each known form rather than guessing one.
+  // A 400 here previously reported only its status code, which told neither
+  // of us anything — the body is now carried through to the message.
+  const attempts = [
+    hashed && { label: 'token_hash', body: { type: 'magiclink', token_hash: hashed } },
+    otp    && { label: 'email_otp',  body: { type: 'magiclink', token: otp, email: target.email } },
+    hashed && { label: 'hashed+email', body: { type: 'magiclink', token: hashed, email: target.email } },
+  ].filter(Boolean)
+
+  let session = null
+  const tried = []
+
+  // FIRST: redeem the action link itself. That is exactly what clicking the
+  // email would do, so it is the form least likely to disagree with whatever
+  // GoTrue version is deployed. It answers 302 with the tokens in the URL
+  // fragment — not sent to a server normally, but readable here in Location.
+  // It goes first because a magic-link token is single use: a POST attempt
+  // that half-consumed it would leave nothing for this to redeem.
+  if (props.action_link) {
+    try {
+      const r = await fetch(props.action_link, { redirect: 'manual' })
+      const loc = r.headers.get('location') || ''
+      const q = new URLSearchParams(loc.split('#')[1] || '')
+      if (q.get('access_token') && q.get('refresh_token')) {
+        session = { access_token: q.get('access_token'), refresh_token: q.get('refresh_token') }
+      } else {
+        tried.push(`action_link → ${r.status} ${(loc || '(no redirect)').slice(0, 140)}`)
+      }
+    } catch (e) {
+      tried.push(`action_link → ${e.message}`)
+    }
+  }
+
+  for (const attempt of (session ? [] : attempts)) {
+    const resp = await fetch(`${SUPABASE_URL}/auth/v1/verify`, {
+      method: 'POST', headers: { apikey: SERVICE_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify(attempt.body),
+    })
+    const text = await resp.text()
+    if (resp.ok) {
+      try { session = JSON.parse(text) } catch { session = null }
+      if (session?.access_token) break
+      session = null
+    }
+    tried.push(`${attempt.label} → ${resp.status} ${text.slice(0, 160)}`)
+  }
+  if (!session?.access_token || !session?.refresh_token) {
+    return fail(`Could not complete the session. The auth service refused every form: ${tried.join(' | ')}`)
+  }
 
   await impersonationLog({ by: caller.name, by_id: caller.id, viewed: target.name, viewed_id: target.id })
   return {
