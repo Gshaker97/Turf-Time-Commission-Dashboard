@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { LogOut, ChevronDown, Eye, ChevronRight, KeyRound, Check, Glasses, Bell } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { toast } from '../lib/toast'
 import { useSettings } from '../contexts/SettingsContext'
 import Logo from './Logo'
 import { fetchUsers, fetchNotifications, markNotificationsRead } from '../lib/db'
@@ -109,7 +110,7 @@ function NotificationBell() {
 
 export default function NavBar() {
   const { pathname } = useLocation()
-  const { realProfile, profile: effProfile, signOut, isPreviewMode, previewAs, clearPreview, changePassword, demoMode } = useAuth()
+  const { realProfile, profile: effProfile, signOut, isPreviewMode, previewAs, clearPreview, changePassword, demoMode, viewAsUser } = useAuth()
   const { siteName } = useSettings()
   useEffect(() => { document.title = siteName }, [siteName])
   const [open,        setOpen]        = useState(false)
@@ -175,10 +176,16 @@ export default function NavBar() {
     setShowPicker(v => !v)
   }
 
-  function handleSelectUser(user) {
-    previewAs(user)
+  // Become that person for real — their session, so the data is theirs too.
+  // The old behaviour (swap the profile object, keep the admin session) showed
+  // a rep's interface over an admin's data and could never reveal a
+  // visibility bug. Writes are blocked for the duration.
+  async function handleSelectUser(user) {
     setOpen(false)
     setShowPicker(false)
+    const res = await viewAsUser(user)
+    if (!res?.ok) { toast.error(res?.error || 'Could not start the view.'); return }
+    window.location.reload()   // remount every page against the new session
   }
 
   // Group users by role for display

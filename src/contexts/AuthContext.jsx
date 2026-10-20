@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { supabase, DEMO_MODE } from '../lib/supabase'
+import { startImpersonation, setReadOnly } from '../lib/db'
 import {
   DEMO_USERS,
   DEMO_CREDENTIALS,
@@ -7,6 +8,9 @@ import {
 
 const AuthContext = createContext({})
 const SESSION_KEY = 'turftime_demo_uid'
+// Where the ADMIN's own session is parked while they view as someone else.
+// sessionStorage, not state: a reload mid-view must still be able to get back.
+const IMP_KEY = 'tt_impersonation'
 
 // ── Demo auth helpers ────────────────────────────────────────
 function demoSignIn(email, password) {
@@ -115,6 +119,49 @@ export function AuthProvider({ children }) {
 
   const loading = user === undefined
 
+  // ── Viewing as another user, for real ──────────────────────
+  // `previewAs` only swapped this object, so queries still ran with the
+  // admin's own session — a rep's interface over an admin's data, which is
+  // why it could never reproduce what a rep actually sees. This swaps the
+  // SESSION, so the database treats the browser as that person.
+  const [impersonating, setImpersonating] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem(IMP_KEY) || 'null') } catch { return null }
+  })
+  // The app refuses every write while a borrowed session is in play.
+  useEffect(() => { setReadOnly(!!impersonating) }, [impersonating])
+
+  async function viewAsUser(targetProfile) {
+    if (DEMO_MODE) return { ok: false, error: 'Disabled in demo mode.' }
+    const { data: { session: mine } } = await supabase.auth.getSession()
+    if (!mine?.refresh_token) return { ok: false, error: 'Your session could not be saved — sign in again first.' }
+    const res = await startImpersonation(targetProfile.id)
+    if (!res?.ok) return res || { ok: false, error: 'Could not start the view.' }
+    // Park our own session BEFORE swapping, so an error mid-swap is recoverable.
+    const parked = {
+      admin: { access_token: mine.access_token, refresh_token: mine.refresh_token },
+      viewing: res.profile,
+    }
+    try { sessionStorage.setItem(IMP_KEY, JSON.stringify(parked)) } catch { /* private window */ }
+    const { error } = await supabase.auth.setSession(res.session)
+    if (error) {
+      try { sessionStorage.removeItem(IMP_KEY) } catch { /* ignore */ }
+      return { ok: false, error: error.message || 'Could not switch session.' }
+    }
+    setImpersonating(parked)
+    return { ok: true }
+  }
+
+  async function stopViewingAs() {
+    const parked = impersonating
+    // Clear the flag FIRST: if the restore fails the user must not be stuck
+    // read-only with no way out — a reload then lands them on the login page,
+    // which is recoverable, where a silent read-only state is not.
+    try { sessionStorage.removeItem(IMP_KEY) } catch { /* ignore */ }
+    setImpersonating(null)
+    if (parked?.admin) await supabase.auth.setSession(parked.admin)
+    window.location.reload()
+  }
+
   // Effective profile: preview overrides the real profile for all consumers
   const effectiveProfile = previewProfile ?? profile
 
@@ -128,6 +175,11 @@ export function AuthProvider({ children }) {
     isPreviewMode:  !!previewProfile,
     previewAs:      (userProfile) => setPreviewProfile(userProfile),
     clearPreview:   () => setPreviewProfile(null),
+    // Real impersonation (session swap), distinct from the role-clamp preview.
+    isViewingAs:    !!impersonating,
+    viewingAs:      impersonating?.viewing ?? null,
+    viewAsUser,
+    stopViewingAs,
     loading,
     demoMode: DEMO_MODE,
     deactivated,
