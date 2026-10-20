@@ -1466,6 +1466,23 @@ distinct:
 - `new Proxy(null, …)` throws at module load, which took the whole app down in
   DEMO_MODE where there is no client: the wrapper is skipped unless a real
   client exists. Verified by 6 write paths refusing with 0 network calls.
+- **REDEEMING the link is version-dependent, so it tries a LADDER.** The first
+  live attempt died with `Could not complete the session (400)` — and that
+  message carried only a status code, which told nobody anything. Both the
+  generate and the verify step now carry the auth service's own response text
+  into the error. The order is deliberate:
+  1. **The `action_link` itself**, fetched with `redirect: 'manual'` — exactly
+     what clicking the email does, so it is the form least likely to disagree
+     with whatever GoTrue version is deployed. The tokens come back in the URL
+     FRAGMENT, which a browser never sends to a server but which is readable
+     here in the `Location` header.
+  2. `POST /verify { type, token_hash }` (newer GoTrue)
+  3. `POST /verify { type, token: email_otp, email }` (the classic OTP form)
+  4. `POST /verify { type, token: hashed_token, email }` (older)
+  **The action link must go FIRST because a magic-link token is single-use**:
+  a POST attempt that half-consumed it would leave nothing to redeem. If every
+  form fails the error names each one with its status and body, so the next
+  diagnosis starts from evidence instead of a guess.
 
 **Visibility (view scoping, NOT edit) by sales title:**
 - **Deals page SCOPE dropdown (per Keaton, mirrors the Dashboard's team
