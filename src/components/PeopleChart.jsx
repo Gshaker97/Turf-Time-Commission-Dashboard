@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Search, Plus, KeyRound, UserPlus, Pencil, Trash2, UserCheck, UserMinus, ShieldCheck,
-  ChevronDown, GripVertical, MoreHorizontal,
+  ChevronDown, GripVertical, MoreHorizontal, CalendarClock, ArrowRightLeft,
 } from 'lucide-react'
-import { headIdSet, teamLabel } from '../utils/team'
+import { changeDay, headIdSet, teamLabel } from '../utils/team'
+import { fmtDay } from '../utils/teamMove'
 
 // ============================================================
 // The roster as an org chart (Admin → People). Per Keaton, replacing the
@@ -37,8 +38,9 @@ const byName = (a, b) => (a.name || '').localeCompare(b.name || '')
 const initialsOf = (name) => (name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
 
 export default function PeopleChart({
-  users = [], teamChanges = [], hasUserAdmin = false, busyUser = '',
-  onAdd, onEdit, onDelete, onToggleActive, onResetLogin, onCreateLogin, onMove, onRenameTeam,
+  users = [], teamChanges = [], pendingMoves = [], hasUserAdmin = false, busyUser = '',
+  onAdd, onEdit, onDelete, onToggleActive, onResetLogin, onCreateLogin, onMove, onMovePeople,
+  onRenameTeam,
 }) {
   // Inline rename of a team's official name (the column banner). Enter/blur
   // commit, Escape cancels, empty reverts to the default "<Head>'s Team".
@@ -84,13 +86,29 @@ export default function PeopleChart({
     return { leadership, teams, unassigned }
   }, [active, heads])
 
-  // Latest logged move per person → "since <date>" on their card.
+  // Latest logged move per person → "since <date>" on their card. Keyed on
+  // the move's EFFECTIVE day (058), and compared — not just "the first row
+  // the fetch handed us", which is ordered by changed_at and so picks the
+  // wrong one as soon as a move has been backdated or scheduled.
   const sinceByProfile = useMemo(() => {
     const m = {}
-    for (const c of teamChanges) if (!m[c.profile_id]) m[c.profile_id] = c.changed_at
+    for (const c of teamChanges) {
+      const day = changeDay(c)
+      if (!m[c.profile_id] || day > m[c.profile_id]) m[c.profile_id] = day
+    }
     return m
   }, [teamChanges])
-  const fmtSince = (iso) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  // Upcoming moves, so the chart shows BOTH states: where someone is now,
+  // and where they are going. Without this a scheduled reorg is invisible
+  // until the day it lands, which is exactly when it should be no surprise.
+  const upcomingByProfile = useMemo(() => {
+    const m = {}
+    for (const p of pendingMoves) {
+      if (p.applied_at || p.canceled_at) continue
+      if (!m[p.profile_id] || p.effective_date < m[p.profile_id].effective_date) m[p.profile_id] = p
+    }
+    return m
+  }, [pendingMoves])
   const nameOf = (id) => users.find(u => u.id === id)?.name
 
   // ── Collapse state (per browser). Phones open with only the first team
@@ -153,6 +171,7 @@ export default function PeopleChart({
   function Person({ u, inTeam = true }) {
     const isHead = heads.has(u.id)
     const since = sinceByProfile[u.id]
+    const soon = upcomingByProfile[u.id]
     const isDragging = dragging === u.id
     const menuOpen = menuFor === u.id
     return (
@@ -180,8 +199,16 @@ export default function PeopleChart({
               {!u.auth_id && <span className="text-[8.5px] font-bold uppercase tracking-wide px-1 rounded" style={{ color: '#f59e0b', border: '1px solid #f59e0b55' }}>no login</span>}
             </div>
             <p className="text-[10px] text-white/30 truncate mt-0.5">
-              {isHead ? u.email : (since ? `since ${fmtSince(since)}` : u.email)}
+              {isHead ? u.email : (since ? `since ${fmtDay(since)}` : u.email)}
             </p>
+            {/* Where they're GOING, when a move is already scheduled. */}
+            {soon && (
+              <p className="text-[10px] mt-0.5 truncate flex items-center gap-1" style={{ color: '#93c5fd' }}>
+                <CalendarClock size={9} className="flex-shrink-0" />
+                → {soon.new_manager_id ? teamLabel(users.find(x => x.id === soon.new_manager_id)) : 'Unassigned'}
+                <span style={{ color: 'rgba(147,197,253,0.6)' }}>on {fmtDay(soon.effective_date)}</span>
+              </p>
+            )}
           </div>
           {/* Desktop: icons appear on hover as an OVERLAY at the right edge, so
               they reserve no width at rest — three always-present icons were
@@ -326,7 +353,15 @@ export default function PeopleChart({
             Deactivated · {inactive.length}
           </button>
         )}
-        <button onClick={onAdd} className="ml-auto flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-bold text-dark bg-teal transition-colors">
+        {/* "Move people" is the deliberate path for a reorg: several people at
+            once, with an EFFECTIVE DATE and a preview of what changes hands.
+            Dragging a card stays for the one-off fix and still means "today". */}
+        <button onClick={() => onMovePeople?.()}
+          className="ml-auto flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-bold text-teal transition-colors hover:bg-teal/10"
+          style={{ border: '1px solid rgba(0,184,148,0.45)' }}>
+          <ArrowRightLeft size={13} /> Move people
+        </button>
+        <button onClick={onAdd} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-bold text-dark bg-teal transition-colors">
           <Plus size={13} /> Add person
         </button>
       </div>
@@ -352,8 +387,9 @@ export default function PeopleChart({
         <Column colKey="unassigned" title="Unassigned" meta="no team lead — drag them to a team" people={unassigned} tone="amber" />
       </div>
       <p className="text-[10px] text-white/25">
-        Drag a rep onto another team to move them — you'll confirm first, and the move is date-stamped so past sales stay where they were.
-        Team leads move through Edit (that's where the "move their reports too?" question lives).
+        Drag a rep onto another team for a quick one-off move — effective <strong className="text-white/40">today</strong>, so their
+        past sales stay where they were. For a reorg use <strong className="text-white/40">Move people</strong>: several at
+        once, any effective date (including a future one), and it shows you how many deals change hands first.
       </p>
 
       {/* Deactivated drawer */}

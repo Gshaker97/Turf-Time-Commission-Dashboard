@@ -263,7 +263,10 @@ setup + deploy steps.
   rewrites history; deals from a dissolved team follow its old lead's current
   grouping, a dissolved+unabsorbed lead renders as a HISTORICAL team row, and
   a first log entry of "Unassigned → X" is treated as roster setup — pre-log
-  deals follow the first known lead, per Keaton); `030` adds
+  deals follow the first known lead, per Keaton. **The day a move counts from
+  is `changeDay(c)` = `effective_date` (058) falling back to
+  `localDay(changed_at)`, NOT `changed_at` itself** — see "Moving people
+  between teams" below); `030` adds
   `deals.override_exclusions` (jsonb `[{ item, amount }]` — subcontracted items
   that earn no override; see the engine rules above); `031` adds
   `deals.change_alert` (jsonb `{ prev_baseline, prev_job_price, baseline,
@@ -338,6 +341,11 @@ setup + deploy steps.
   `057` adds `payroll_lock_overrides` + the `override_locked_deal()` RPC — the
   ONE path that gets past `guard_locked_payroll()`, admin-only and logged; see
   "Overriding a locked pay run" below;
+  `058` adds `team_changes.effective_date` (+ `note`/`edited_at`/`edited_by`/
+  `prior_effective`), the `pending_team_moves` table, and the five RPCs behind
+  the Move-people flow — `move_team_members` / `apply_due_team_moves` /
+  `cancel_pending_team_move` / `set_team_change_date` / `delete_team_change`;
+  see "Moving people between teams" below;
   `047` adds `competitions.excluded_ids` (jsonb
   array of profile ids) for the **Team Average (per rep)** competition type
   `team_avg` — entrants are TEAM HEADS (any `headIdSet` head, picked in the
@@ -529,6 +537,109 @@ there are none left.
   of throwing, so engine code can import the module safely.
 - Keep using `toast.*` for things that need no answer. Dialogs are for
   questions.
+
+## Moving people between teams (migration 058)
+
+Per Keaton: "I am shifting some teams around. The process we currently have
+for that isnt super clean, and the data needs to follow it correctly…
+anything prior to that date and time stay with the team they were on, but any
+new deals a second after that need to go with the update."
+
+**The ATTRIBUTION rule already worked** — `team_changes` (029) + `managerAsOf`
+replay the log, so a sale belongs to the team its owner was on as of the sale
+date. What was broken was the PROCESS: no effective date (stamped the instant
+you dragged), no scheduling, no way to correct a mistake, one person at a
+time. 058 fixes those four, and nothing about how attribution is computed.
+
+- **THE GRANULARITY IS A CALENDAR DAY, NOT A SECOND, and that is the data.**
+  `deals.sale_date` is a DATE column fed from the ArcSite sheet's approved
+  date, which has never carried a clock time — there is no afternoon to
+  separate from a morning. "A second after" is unreachable and pretending
+  otherwise would be a lie in the UI. What makes the boundary exact instead
+  of "whenever I happened to click" is CHOOSING THE EFFECTIVE DATE. The modal
+  says this in as many words. Do not try to add a time; adding one to
+  `team_changes` without one on `sale_date` would compare against nothing.
+- **`effective_date` IS ITS OWN COLUMN, never `changed_at` rewritten.** The
+  two answer different questions: `changed_at` is when the RECORD was made
+  (audit — a backdated move must not pretend it was recorded last Thursday),
+  `effective_date` is when it COUNTS FROM (attribution). Conflating them would
+  make every correction quietly rewrite the audit trail. Pre-058 rows have
+  no `effective_date`; 058 backfills them from the ARIZONA day of
+  `changed_at`, which is what the frontend already derived for a viewer in
+  Arizona — so no existing attribution moved.
+- **`changeDay(c)` in `utils/team.js` is the ONE rule** = `effective_date ||
+  localDay(changed_at)`. `buildChangesByProfile` sorts by it (tie-break
+  `changed_at`), and `managerAsOf` compares against it. **Sorting by effective
+  day is what lets a correction reorder history** — backdating the second of
+  two moves genuinely makes the first one later, and every reader has to
+  agree. `localDay` is now EXPORTED, because any display of a timestamptz as
+  a calendar day needs it (a first draft of the log row sliced `changed_at`
+  and printed "recorded tomorrow" for every evening move).
+- **Three transaction-local GUCs, set only inside the SECURITY DEFINER
+  functions and only after they have checked the caller is an admin** (same
+  shape as 057's `app.lock_override`, and PostgREST gives a client no way to
+  set one): `app.team_change_effective` (the day to stamp),
+  `app.team_change_by` (so a scheduled move credits whoever SCHEDULED it, not
+  whatever ran the sweep), `app.team_change_silent` (row-scoped to one
+  profile id — suppresses logging when an admin UNDOES a move, because the
+  undo deletes the original entry and a mirror-image one would be noise).
+- **Future-dated moves are SCHEDULED, not applied** (`pending_team_moves`).
+  Until applied they change NOTHING — not the roster, not attribution: a move
+  that has not happened must not retroactively claim deals. On its day
+  `apply_due_team_moves()` performs it with `effective_date` set to the
+  scheduled day, so the log reads as though it had been done then.
+  **TWO callers, deliberately**: `server.js` on a 15-minute timer (the site
+  server is always up, so no cron and no Apps Script paste) AND Admin →
+  People on load. Either alone is a single point of failure and the function
+  is idempotent, so running both costs nothing.
+- **"Today" means ARIZONA's today** (`tt_today()` in SQL, `azToday()` in
+  `utils/teamMove.js`), never the browser's or the server's. The SQL tests
+  caught this live: at 06:00 UTC a `CURRENT_DATE` move was one day AHEAD of
+  Arizona's today, so every "move today" silently became a SCHEDULED move.
+  The UI never infers which happened from the date either — `move_team_members`
+  returns `{applied, scheduled, skipped, effective_date, future}` and the
+  toast reports what the database actually did.
+- **The preview reuses the real engine, it does not reimplement it.**
+  `previewTeamMove` / `previewDateChange` build the `team_changes` log the
+  move WOULD produce and diff `teamOfSale` over both versions. Every rule that
+  engine honours — dissolved teams, historical leads, the pre-log fallback,
+  the closer fallback for a setter-less deal, canceled/hidden excluded — is
+  honoured by the preview for free, with no second definition to keep in step.
+  **Never hand-roll a "which deals move" calculation here.**
+- **The boundary-day line is the point of the preview.** "Closing on <date>
+  itself — N · $X → <new team>" with the deals named. A move is INCLUSIVE of
+  its own date; that is the one thing a date picker cannot tell you and the
+  one thing that surprises people. The card also says "push the date to
+  <tomorrow> and they stay put".
+- **Correctable history** (per Keaton's choice): the log was append-only and
+  read-only to the app, so a mis-dated move was permanent and the only remedy
+  was another move stacked on top, leaving two false entries forever.
+  - **Edit date** (`set_team_change_date`) keeps the FIRST value in
+    `prior_effective` (a second correction must not erase what it originally
+    said) and then calls `tt_resync_profile_manager`, because re-dating can
+    REORDER the log and change which entry is latest — the roster has to
+    follow or it and the log disagree. The confirm states how many deals
+    change hands, from the same preview engine.
+  - **Undo vs Remove are different actions and the UI asks which.** UNDO
+    deletes the entry AND puts their reports-to back ("I moved the wrong
+    person"); REMOVE deletes the entry only and resyncs from whatever is now
+    latest (an edit to attribution history). **Undo is refused on anything but
+    the person's most recent entry** — on an older one `old_manager_id` is not
+    where they are now, so restoring it would move them somewhere nobody asked
+    for. Enforced in the database, not just the UI.
+- **Surfaces.** A **"Move people"** button in the People toolbar opens the
+  three-step modal (who, multi-select · where · when, with quick pills and the
+  preview; a "bring their N reports" toggle appears when a selected person
+  leads). **Dragging a card stays** as the quick one-off and now says
+  "effective today" explicitly — it routes through the SAME
+  `move_team_members` call so there is one write path and one definition of
+  today. A **Scheduled moves** card under the chart lists upcoming moves with
+  Cancel, and each person's card carries a blue "→ <Team> on <date>" line, so
+  the chart shows BOTH where someone is now and where they are going.
+- Verified against real Postgres 16 (63 assertions: admin gating, backdating,
+  scheduling, supersede, cancel, apply-on-the-day, re-date, reorder-resync,
+  undo, non-latest refusal, GUC non-leakage, service-key context), 48 engine
+  assertions across four timezones, and a 23-step browser pass.
 
 ## Overriding a locked pay run (migration 057)
 
@@ -1267,12 +1378,18 @@ min/max; day = `knock_at AT TIME ZONE 'America/Phoenix'`).
   column even when empty; a director/VP head's column is labeled "led by
   their <role>"), reps stacked beneath; **Unassigned is a real column**
   (dashed, amber) and a valid drag source. **Drag a rep onto another column
-  to move them** — the chart only allows non-heads to drag (moving a head
-  triggers the reports cascade, which stays in the Edit form via
-  `saveUser`); the page's `moveUser` confirms ("logged today… past deals stay
-  with <old team>") then writes through `patchUser` → `updateUser` so the
-  `team_changes` trigger stamps the move, and refetches the log so the card's
-  "since" updates. **Deactivated people appear ONLY in a collapsed drawer**
+  to move them** — the QUICK one-off, always effective TODAY, and the confirm
+  says so. The chart only allows non-heads to drag (moving a head triggers
+  the reports cascade, which stays in the Edit form via `saveUser`); the
+  page's `moveUser` goes through the same `move_team_members` RPC the Move-
+  people modal uses (058) rather than writing `manager_id` directly, so there
+  is ONE write path and one definition of "today". **A reorg goes through
+  "Move people"** (toolbar button → `TeamMoveModal`): several people at once,
+  any effective date including a future one, and a preview of what changes
+  hands — see "Moving people between teams". A person with a scheduled move
+  carries a blue "→ <Team> on <date>" line on their card, and a **Scheduled
+  moves** card under the chart lists them with Cancel.
+  **Deactivated people appear ONLY in a collapsed drawer**
   at the bottom (never faded in place), each with the Reactivate button;
   toolbar has a "Deactivated · N" pill that opens it. Phones: columns stack,
   each collapsible (`tt_people_collapsed`; first open by default), row
@@ -2063,7 +2180,14 @@ competition rounds ending today read as over, and a rep moved after 5pm had
 same-day sales attributed to their OLD team (`localDay` in `utils/team.js`,
 used by `managerAsOf`). Derive the local day from `new Date(ts)` with
 `getFullYear/getMonth/getDate`; only plain `date` columns (`sale_date`,
-`pay_date`, `period_start`) are safe to compare as strings.
+`pay_date`, `period_start`, `team_changes.effective_date`) are safe to compare
+as strings. **`localDay` is EXPORTED from `utils/team.js` — use it rather than
+writing a fourth copy.** It bit a fifth time while building 058: the team
+change log's "recorded <date>" sub-line sliced `changed_at` and printed
+tomorrow for every move made after 5pm. Note also that a DATE rendered via
+`new Date('2026-10-20')` parses as UTC midnight and displays as the 19th west
+of Greenwich — `fmtDay` in `utils/teamMove.js` splits the string instead,
+which is why it exists.
 
 ## Known low-severity items (not yet addressed)
 
