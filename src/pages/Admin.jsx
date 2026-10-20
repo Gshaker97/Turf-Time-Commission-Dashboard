@@ -458,7 +458,9 @@ export default function Admin() {
       confirmLabel: 'Move them',
     })) return
     setUsers(us => us.map(x => x.id === u.id ? { ...x, manager_id: destId } : x))   // optimistic
-    const { error } = await moveTeamMembers([u.id], destId, today, null, profile?.id)
+    // No demotion on the drag path: the chart only lets non-leads be dragged,
+    // so there is never a team to dissolve here.
+    const { error } = await moveTeamMembers([u.id], destId, today, { by: profile?.id })
     if (error) { toast.error('Could not move them: ' + (error.message || '')); await loadAll(); return }
     await loadAll()
     // If the new team's lead is a manager, offer to backfill this rep's past
@@ -475,24 +477,47 @@ export default function Admin() {
   const [moveModal, setMoveModal] = useState(false)
   function openMoveModal() { ensureDeals(); setMoveModal(true) }
 
-  // One call per reorg. The RESULT says what happened rather than the date
-  // being re-interpreted here: "today" is Arizona's today in the database,
-  // and a scheduled move and an applied one read very differently.
-  async function submitMove({ profileIds, newManagerId, effectiveDate, note }) {
-    const { data, error } = await moveTeamMembers(profileIds, newManagerId, effectiveDate, note, profile?.id)
-    if (error) { toast.error('Could not move them: ' + (error.message || 'unknown error')); return false }
-    const dest = newManagerId ? teamLabel(users.find(u => u.id === newManagerId)) : 'Unassigned'
-    const n = Number(data?.applied || 0), s = Number(data?.scheduled || 0)
-    if (s) toast.success(`${s} ${s === 1 ? 'person' : 'people'} scheduled to move to ${dest} on ${fmtDay(data.effective_date, { year: true })}.`)
-    else if (n) toast.success(`${n} ${n === 1 ? 'person' : 'people'} moved to ${dest}, effective ${fmtDay(data.effective_date)}.`)
-    else toast.info('Nothing to do — everyone selected is already on that team.')
+  // A reorg is one call per GROUP, because a dissolved team's lead and its
+  // reps can land on different teams. The RESULT of each says what happened
+  // rather than the date being re-interpreted here: "today" is Arizona's
+  // today in the database, and a scheduled move reads very differently from
+  // an applied one.
+  async function submitMove({ groups, effectiveDate, note, destId }) {
+    let applied = 0, scheduled = 0, demoted = 0, eff = effectiveDate
+    const failed = []
+    for (const g of groups) {
+      const { data, error } = await moveTeamMembers(g.profileIds, g.newManagerId, effectiveDate,
+        { note, demote: g.demote, by: profile?.id })
+      if (error) { failed.push(error.message || 'unknown error'); continue }
+      applied   += Number(data?.applied   || 0)
+      scheduled += Number(data?.scheduled || 0)
+      demoted   += Number(data?.demoted   || 0)
+      eff = data?.effective_date || eff
+    }
+    // A reorg that half-landed must never report success — one group through
+    // and another refused leaves reps pointing at a lead who has moved on.
+    if (failed.length) {
+      const done = applied + scheduled
+      toast.error(done
+        ? `Only part of this went through (${done} ${done === 1 ? 'person' : 'people'}). ${failed[0]}`
+        : 'Could not move them: ' + failed[0])
+      await loadAll()
+      return false
+    }
+
+    const dest = destId ? teamLabel(users.find(u => u.id === destId)) : 'Unassigned'
+    const also = demoted ? ` ${demoted === 1 ? 'One team was' : `${demoted} teams were`} dissolved.` : ''
+    if (scheduled) toast.success(`${scheduled} ${scheduled === 1 ? 'person' : 'people'} scheduled to move on ${fmtDay(eff, { year: true })}.`)
+    else if (applied || demoted) toast.success(`${applied} ${applied === 1 ? 'person' : 'people'} moved to ${dest}, effective ${fmtDay(eff)}.${also}`)
+    else toast.info('Nothing to do — everyone selected is already where you sent them.')
     await loadAll()
     // Same offer as a drag: if the new lead is a manager, backfill the rep's
     // past manager-less deals. Only for a single applied move, where "the
     // rep" is unambiguous.
-    const dst = newManagerId ? users.find(u => u.id === newManagerId) : null
-    if (n === 1 && !s && dst?.role === 'manager') {
-      const rep = users.find(u => u.id === profileIds[0])
+    const ids = groups.flatMap(g => g.profileIds)
+    const dst = destId ? users.find(u => u.id === destId) : null
+    if (applied === 1 && !scheduled && ids.length === 1 && dst?.role === 'manager') {
+      const rep = users.find(u => u.id === ids[0])
       if (rep) setBackfill({ rep, manager: dst })
     }
     return true

@@ -860,39 +860,49 @@ export async function fetchPendingTeamMoves() {
 // pending_team_moves when it is future. The result says which happened —
 // never infer it from the date, because "today" is Arizona's today in the
 // database and the browser may disagree by a few hours.
-export async function moveTeamMembers(profileIds, newManagerId, effectiveDate, note, byProfileId) {
+// `opts.demote` also makes them reps, dissolving any team they lead (059) —
+// moving a lead without it changes their reports-to and leaves them heading
+// their own column, which looks on the chart like the move never happened.
+export async function moveTeamMembers(profileIds, newManagerId, effectiveDate, opts = {}) {
+  const { note = null, demote = false, by = null } = opts
   const ids = [...new Set((profileIds || []).filter(Boolean))]
   if (DEMO_MODE) {
     const eff = effectiveDate || _azToday()
     const future = eff > _azToday()
-    let applied = 0, scheduled = 0, skipped = 0
+    let applied = 0, scheduled = 0, skipped = 0, demoted = 0
     for (const pid of ids) {
       const u = _users.find(x => x.id === pid)
       if (!u) continue
+      const needsDemote = demote && u.role !== 'rep'
       if (future) {
         _pendingMoves = _pendingMoves.filter(m => !(m.profile_id === pid && !m.applied_at && !m.canceled_at))
         _pendingMoves = [..._pendingMoves, {
           id: 'pm-' + Math.random().toString(36).slice(2, 9),
           profile_id: pid, new_manager_id: newManagerId ?? null, effective_date: eff,
-          note: note || null, created_by: byProfileId ?? null, created_at: new Date().toISOString(),
-          applied_at: null, canceled_at: null, canceled_by: null,
+          note: note || null, created_by: by ?? null, created_at: new Date().toISOString(),
+          applied_at: null, canceled_at: null, canceled_by: null, demote_to_rep: !!demote,
         }]
         scheduled++
-      } else if ((u.manager_id ?? null) === (newManagerId ?? null)) {
+      } else if ((u.manager_id ?? null) === (newManagerId ?? null) && !needsDemote) {
         skipped++
       } else {
-        _demoLog(pid, u.manager_id, newManagerId, eff, note, byProfileId)
-        _users = _users.map(x => x.id === pid ? { ...x, manager_id: newManagerId ?? null } : x)
-        applied++
+        if ((u.manager_id ?? null) !== (newManagerId ?? null)) {
+          _demoLog(pid, u.manager_id, newManagerId, eff, note, by)
+          applied++
+        }
+        _users = _users.map(x => x.id === pid
+          ? { ...x, manager_id: newManagerId ?? null, ...(demote ? { role: 'rep' } : {}) } : x)
+        if (needsDemote) demoted++
       }
     }
-    return { data: { applied, scheduled, skipped, effective_date: eff, future }, error: null }
+    return { data: { applied, scheduled, skipped, demoted, effective_date: eff, future }, error: null }
   }
   const { data, error } = await supabase.rpc('move_team_members', {
     p_profile_ids: ids,
     p_new_manager_id: newManagerId ?? null,
     p_effective: effectiveDate,
     p_note: note || null,
+    p_demote: !!demote,
   })
   return { data, error }
 }
@@ -907,10 +917,14 @@ export async function applyDueTeamMoves() {
     for (const m of _pendingMoves) {
       if (m.applied_at || m.canceled_at || m.effective_date > today) continue
       const u = _users.find(x => x.id === m.profile_id)
-      if (u && (u.manager_id ?? null) !== (m.new_manager_id ?? null)) {
-        _demoLog(m.profile_id, u.manager_id, m.new_manager_id, m.effective_date, m.note, m.created_by)
-        _users = _users.map(x => x.id === m.profile_id ? { ...x, manager_id: m.new_manager_id ?? null } : x)
-        applied++
+      const needsDemote = m.demote_to_rep && u && u.role !== 'rep'
+      if (u && ((u.manager_id ?? null) !== (m.new_manager_id ?? null) || needsDemote)) {
+        if ((u.manager_id ?? null) !== (m.new_manager_id ?? null)) {
+          _demoLog(m.profile_id, u.manager_id, m.new_manager_id, m.effective_date, m.note, m.created_by)
+          applied++
+        }
+        _users = _users.map(x => x.id === m.profile_id
+          ? { ...x, manager_id: m.new_manager_id ?? null, ...(m.demote_to_rep ? { role: 'rep' } : {}) } : x)
       }
       m.applied_at = new Date().toISOString()
     }
