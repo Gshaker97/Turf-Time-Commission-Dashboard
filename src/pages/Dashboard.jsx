@@ -8,7 +8,7 @@ import { Check, X, TrendingUp, TrendingDown, Minus, ChevronLeft, ChevronRight, C
 import { useAuth } from '../contexts/AuthContext'
 import { useSettings } from '../contexts/SettingsContext'
 import {
-  fetchDeals, fetchUsers, fetchTeamChanges, fetchLeads,
+  fetchCompanyDeals, fetchUsers, fetchTeamChanges, fetchLeads,
   fetchGoalsForMonth, fetchRepGoals, saveGoal as saveGoalDb, deleteGoal as deleteGoalDb,
 } from '../lib/db'
 import { fmt, dealAmounts, activeDeals } from '../utils/commission'
@@ -221,7 +221,10 @@ export default function Dashboard() {
     // Keaton — RepCard's own door count never reconciled with ours and the
     // number was not worth chasing). The feed still records them, so turning
     // it back on is re-adding the fetch and the tiles; see CLAUDE.md.
-    Promise.all([fetchDeals(), fetchUsers(), fetchTeamChanges(), fetchLeads()])
+    // COMPANY-WIDE on purpose: fetchCompanyDeals, never fetchDeals. The
+    // restricted read made a rep's Dashboard report their own two deals as
+    // the company's revenue, goal progress and records.
+    Promise.all([fetchCompanyDeals(), fetchUsers(), fetchTeamChanges(), fetchLeads()])
       .then(([{ data: d }, { data: u }, { data: tc }, { data: l }]) => {
         setDeals(activeDeals(d ?? []))   // canceled AND hidden jobs never count
         setUsers(u ?? [])

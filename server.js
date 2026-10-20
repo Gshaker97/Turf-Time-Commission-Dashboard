@@ -261,6 +261,77 @@ async function handleUserAdmin(rawBody) {
 }
 
 // ── Deals export (feeds the daily Google Sheets backup) ─────────────────────
+// ── Company-wide deals for the Dashboard / Competitions ──────
+// WHY THIS EXISTS. `deals_select` (002_rls) shows a REP only the deals they
+// set, closed, or hold an override on. That is right for the Deals page — but
+// the Dashboard, the Record Book and competition standings are company-wide
+// for everyone (per Keaton), and over that trimmed dataset they silently
+// reported one rep's numbers as the company's. Corbin's phone showed $30,600
+// revenue, 2 deals, and his own name on every record.
+//
+// So this endpoint serves every deal, read-only, to any signed-in user — with
+// the override columns taken OUT. Reps must never see management override
+// figures (a standing rule), and they do not need to: the Dashboard's
+// commission is setter + closer only.
+//
+// THE SUBTLE PART, and the reason this is a server endpoint and not a database
+// view. A rep's OWN commission depends on override data: `dealAmounts` clamps a
+// management-funded rep bonus to what that manager actually earns
+// (`Math.min(manager, bonus_manager)`). Strip the override columns naively and
+// that clamp sees 0, the bonus vanishes, and the rep's commission comes out
+// UNDERSTATED. The clamp cannot be reproduced in SQL either — the override is
+// usually not stored, it is computed from the admin-editable rate eras.
+//
+// The fix: run the REAL engine here, where the full row is available, and emit
+// the already-clamped contribution in place of each override amount. That value
+// is the rep's own bonus money, not the manager's override. The browser's
+// engine then computes an identical setter/closer, while `manager`/`director`/
+// `vp` resolve to 0. One engine, exact figures, nothing sensitive sent.
+const OVERRIDE_COLUMNS = [
+  'manager_override_pct', 'director_override_pct', 'vp_override_pct',
+  'manager_amount', 'director_amount', 'vp_amount',
+]
+
+async function companyDeals() {
+  // Rate eras from settings so the engine here matches the site exactly.
+  try {
+    const cfg = await restGet(`/rest/v1/app_settings?select=value&key=eq.override_rates`)
+    if (Array.isArray(cfg[0]?.value) && cfg[0].value.length) setOverrideRateSchedule(cfg[0].value)
+  } catch { /* no schedule configured — legacy constants apply */ }
+
+  const select = encodeURIComponent('*,setter:setter_id(id,name),closer:closer_id(id,name)')
+  const rows = []
+  for (let offset = 0; ; ) {
+    const page = await restGet(`/rest/v1/deals?select=${select}&order=sale_date.desc&limit=1000&offset=${offset}`)
+    rows.push(...page)
+    if (!page.length) break
+    offset += page.length
+  }
+
+  return rows.map(d => {
+    const { bonusFrom } = dealAmounts(d)
+    const safe = { ...d }
+    for (const c of OVERRIDE_COLUMNS) delete safe[c]
+    // ZERO the rates rather than leaving them absent. `dealAmounts` falls back
+    // to the OFFICE rate when a director/VP pct is null, so simply deleting the
+    // columns let the browser reconstruct the override as baseline x 5% — the
+    // very figure this feed exists to withhold. Caught by the masking test.
+    safe.manager_override_pct = 0
+    safe.director_override_pct = 0
+    safe.vp_override_pct = 0
+    // The clamped contribution, carried in the *_amount slot so the browser's
+    // engine reproduces the bonus exactly. Null when the role contributed
+    // nothing, which keeps `manager`/`director`/`vp` at 0 for the viewer.
+    safe.manager_amount  = d.manager_id  && bonusFrom.manager  > 0 ? bonusFrom.manager  : null
+    safe.director_amount = d.director_id && bonusFrom.director > 0 ? bonusFrom.director : null
+    safe.vp_amount       = d.vp_id       && bonusFrom.vp       > 0 ? bonusFrom.vp       : null
+    // The people on a deal are needed for attribution, but management names
+    // are not shown on these pages — drop the joins we did not request.
+    delete safe.manager; delete safe.director; delete safe.vp
+    return safe
+  })
+}
+
 // GET /api/export/deals?since=YYYY-MM-DD  ·  Authorization: Bearer <service key>
 //
 // Serves deal rows COMPUTED BY THE SAME ENGINE the site/payroll uses (stored
@@ -2153,6 +2224,32 @@ app.get('/api/export/deals', async (req, res) => {
 // Health check — pinged hourly by the Watchdog. Reports whether the
 // user-admin key is configured and which build is running, so a broken deploy
 // or missing SUPABASE_SERVICE_KEY is caught within the hour.
+// POST /api/company/deals — every deal, override columns removed, for the
+// company-wide pages. Any ACTIVE signed-in user; the browser sends only its
+// own session token (same shape as the audit endpoints).
+app.post('/api/company/deals', async (req, res) => {
+  if (!SUPABASE_URL || !SERVICE_KEY) {
+    return res.json({ ok: false, error: 'Not configured — SUPABASE_SERVICE_KEY is missing on the site service.' })
+  }
+  let body
+  try { body = JSON.parse(req.body || '{}') } catch { return res.json({ ok: false, error: 'Bad request body.' }) }
+  if (!body.token) return res.json({ ok: false, error: 'Not signed in' })
+  try {
+    const meResp = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${body.token}` },
+    })
+    if (!meResp.ok) return res.json({ ok: false, error: 'Session invalid — sign in again' })
+    const authId = (await meResp.json()).id
+    // Any ACTIVE roster member may read company figures. A deactivated person
+    // is blocked at login anyway; this stops a live token outliving that.
+    const caller = (await restGet(`/rest/v1/profiles?select=id,active&auth_id=eq.${authId}`))[0]
+    if (!caller || caller.active === false) return res.json({ ok: false, error: 'No active profile' })
+    res.json({ ok: true, deals: await companyDeals() })
+  } catch (e) {
+    res.json({ ok: false, error: e.message || 'Could not load company deals' })
+  }
+})
+
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,

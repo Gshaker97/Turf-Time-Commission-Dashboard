@@ -3,7 +3,7 @@ import { Trophy, Plus, Pencil, Trash2, ChevronDown, Download, Copy, Check, Ban, 
 import { format } from 'date-fns'
 import { toPng, toBlob } from 'html-to-image'
 import { useAuth } from '../contexts/AuthContext'
-import { fetchCompetitions, fetchDeals, fetchUsers, fetchTeamChanges, insertCompetition, updateCompetition, deleteCompetition, updateDeal } from '../lib/db'
+import { fetchCompetitions, fetchCompanyDeals, fetchUsers, fetchTeamChanges, insertCompetition, updateCompetition, deleteCompetition, updateDeal } from '../lib/db'
 import { copyTable } from '../lib/clipboard'
 import {
   competitionStandings, competitionStatus, competitionEntryDeals,
@@ -865,7 +865,10 @@ export default function Competitions() {
   useEffect(() => { load() }, [])
   async function load() {
     const [{ data: c }, { data: d }, { data: u }, { data: tc }] = await Promise.all([
-      fetchCompetitions(), fetchDeals(), fetchUsers(), fetchTeamChanges()])
+      // COMPANY-WIDE on purpose (see Dashboard): standings and the Record
+      // Book are company-wide for every role, so they must not read the
+      // RLS-trimmed deal list or a rep holds every record by default.
+      fetchCompetitions(), fetchCompanyDeals(), fetchUsers(), fetchTeamChanges()])
     setComps(c || []); setDeals(d || []); setUsers(u || []); setTeamChanges(tc || []); setLoading(false)
   }
 
