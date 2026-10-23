@@ -2107,26 +2107,24 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   let oppId = existing ? existing.id : null
 
   // CHANGE ORDER: a committed proposal for a Project ID that ALREADY has an
-  // opportunity whose price differs from the new total = a 2nd (revised)
-  // contract. Move it to the Change Order stage, record the DELTA in Change
-  // Order Price, keep the original Price + value, and APPEND the new PDF.
-  const curPrice = existing ? Math.round(Number(oppFieldVal(existing, GHL_OPP_FIELD_IDS.price)) * 100) / 100 : NaN
+  // opportunity whose value differs from the new total = a 2nd (revised)
+  // contract. Move it to the Change Order stage and KEEP BOTH drawings (append
+  // the new PDF). The VALUE itself updates to the new total just like any other
+  // sync (per Keaton — the opp always shows the current job amount). Compare
+  // against the opp's live monetaryValue, since the Price custom field is often
+  // empty on older opps (an empty field read as $0 made every 2nd proposal look
+  // like a change order and the value never updated).
+  const curVal = existing && existing.monetaryValue != null
+    ? Math.round(Number(existing.monetaryValue) * 100) / 100 : NaN
   const isChangeOrder = !!existing && oppProjectId(existing) === projectId
-    && sellTotal != null && !isNaN(curPrice) && Math.abs(Math.round(sellTotal * 100) / 100 - curPrice) > 0.01
-
-  let oppFields = customFields
-  if (isChangeOrder) {
-    oppFields = customFields.filter(w => w.id !== GHL_OPP_FIELD_IDS.price)   // keep the original price
-    const w = oppFieldWrite(GHL_CHANGE_ORDER_PRICE, Math.round((sellTotal - curPrice) * 100) / 100, defs)
-    if (w) oppFields.push(w)
-  }
+    && sellTotal != null && !isNaN(curVal) && Math.abs(Math.round(sellTotal * 100) / 100 - curVal) > 0.01
 
   const oppBody = {
     pipelineId: pipeline.id,
     pipelineStageId: isChangeOrder ? pipeline.changeOrder : pipeline.closed,
-    name: custName, contactId, status: 'open', customFields: oppFields,
+    name: custName, contactId, status: 'open', customFields,
   }
-  if (sellTotal != null && !isChangeOrder) oppBody.monetaryValue = sellTotal   // keep original value on a change order
+  if (sellTotal != null) oppBody.monetaryValue = sellTotal   // value always reflects the current total
   if (ownerId) oppBody.assignedTo = ownerId
 
   let action, fieldsOk = true
@@ -2138,8 +2136,8 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
     // every field type, so re-apply them so a brand-new opp isn't missing price.
     // If that UPDATE blips (it left Jalyn Robbins' opp blank once), DON'T throw
     // the whole push away — flag it so the sweep re-applies the full set.
-    if (oppFields.length) {
-      try { await ghlUpdateOpp(oppId, { customFields: oppFields }) }
+    if (customFields.length) {
+      try { await ghlUpdateOpp(oppId, { customFields }) }
       catch { fieldsOk = false }
     }
   }
