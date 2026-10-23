@@ -2185,7 +2185,7 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
     // money, and fill install_date/payment_method once the job hits the
     // calendar. Defer the text to the sweep only if it hasn't gone out yet.
     arcEnrichQueue(oppId, projectId, estimator, {
-      baseFields: oppFields, needBase: !fieldsOk,
+      baseFields: customFields, needBase: !fieldsOk,
       alert: (isNewSale && !alert) ? alertData : null,
     })
   }
