@@ -1667,9 +1667,18 @@ function oppFieldWrite(fieldId, rawValue, defs) {
   const opts = (defs[fieldId] || {}).options || []
   if (dt.includes('DATE')) { const d = toYMD(rawValue); return d ? { id: fieldId, field_value: d } : null }
   if (dt.includes('MONET') || dt.includes('NUMER') || dt === 'NUMBER') { const n = Number(rawValue); return isNaN(n) ? null : { id: fieldId, field_value: n } }
-  if (dt === 'SINGLE_OPTIONS' || dt === 'RADIO' || dt === 'MULTIPLE_OPTIONS' || dt === 'CHECKBOX') {
-    const opt = matchGhlOption(rawValue, opts); if (!opt) return null
-    return { id: fieldId, field_value: (dt === 'MULTIPLE_OPTIONS' || dt === 'CHECKBOX') ? [opt] : opt }
+  if (dt === 'MULTIPLE_OPTIONS' || dt === 'CHECKBOX') {
+    // Payment Method combos arrive as "Self Pay + Goodleap" (and the calendar's
+    // order can differ from GHL's), so split on + / , / & and match EACH part to
+    // an option — order-independent, multi-select friendly.
+    const parts = String(rawValue).split(/\s*[+,]\s*/).map(s => s.trim()).filter(Boolean)
+    const matched = []
+    for (const part of parts) { const m = matchGhlOption(part, opts); if (m && !matched.includes(m)) matched.push(m) }
+    if (!matched.length) { const m = matchGhlOption(rawValue, opts); if (m) matched.push(m) }   // whole string as one option
+    return matched.length ? { id: fieldId, field_value: matched } : null
+  }
+  if (dt === 'SINGLE_OPTIONS' || dt === 'RADIO') {
+    const opt = matchGhlOption(rawValue, opts); return opt ? { id: fieldId, field_value: opt } : null
   }
   return { id: fieldId, field_value: String(rawValue) }
 }
@@ -1839,6 +1848,12 @@ async function arcLateValues(projectId, estimator) {
     if (deal.install_date) out.install_date = deal.install_date
     if (deal.payment_method) out.payment_method = deal.payment_method
   }
+  // Setter/closer also live on the dashboard deal and used to be set ONLY at
+  // webhook time — so a deal that landed late lost them. Back-fill them here.
+  if (enriched) {
+    if (enriched.setter) out.setter = enriched.setter
+    if (enriched.closer) out.closer = enriched.closer
+  }
   return out
 }
 
@@ -1907,6 +1922,62 @@ async function arcEnrichSweep() {
     }
   }
   if (!_arcEnrich.size && _arcEnrichTimer) { clearInterval(_arcEnrichTimer); _arcEnrichTimer = null }
+}
+
+// ── Durable reconciliation (survives redeploys + long calendar lag) ─────────
+// The in-memory sweep above only runs ~30 min and is wiped by a redeploy, so
+// install_date / payment_method (put on the install calendar hours or days
+// later) and setter/closer (when the deal lands late) could be missed for good.
+// This persists the still-incomplete opps in app_settings and re-fills them on
+// a 5-minute timer, using the stored oppId so no contact lookup is needed.
+const ARC_PENDING_KEY = 'arcsite_pending'
+const ARC_PENDING_MAX_DAYS = 21
+async function arcPendingRead() {
+  if (!SUPABASE_URL || !SERVICE_KEY) return {}
+  const rows = await restGet(`/rest/v1/app_settings?key=eq.${ARC_PENDING_KEY}&select=value`).catch(() => [])
+  return (Array.isArray(rows) && rows[0] && rows[0].value) || {}
+}
+async function arcPendingWrite(map) {
+  if (!SUPABASE_URL || !SERVICE_KEY) return
+  await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`,
+    { key: ARC_PENDING_KEY, value: map }, 'resolution=merge-duplicates').catch(() => {})
+}
+async function arcPendingAdd(projectId, oppId, estimator) {
+  if (!oppId || !projectId || !SUPABASE_URL || !SERVICE_KEY) return
+  try {
+    const map = await arcPendingRead()
+    const prev = map[projectId] || {}
+    map[projectId] = { oppId, estimator: !!estimator, firstAt: prev.firstAt || Date.now(), wrote: prev.wrote || {} }
+    await arcPendingWrite(map)
+  } catch { /* best-effort */ }
+}
+async function arcPendingReconcile() {
+  let map
+  try { map = await arcPendingRead() } catch { return }
+  if (!map || !Object.keys(map).length) return
+  const now = Date.now()
+  let changed = false, defs = null
+  for (const [projectId, e] of Object.entries(map)) {
+    try {
+      if (!e || !e.oppId) { delete map[projectId]; changed = true; continue }
+      const est = !!e.estimator
+      const wrote = e.wrote || {}
+      const vals = await arcLateValues(projectId, est).catch(() => ({}))
+      const toWrite = []
+      for (const [k, v] of Object.entries(vals)) {
+        if (wrote[k] === v) continue
+        if (!defs) defs = await ghlOppFields()
+        const w = oppFieldWrite(GHL_OPP_FIELD_IDS[k], v, defs)
+        if (w) { toWrite.push(w); wrote[k] = v }
+      }
+      if (toWrite.length) { await ghlUpdateOpp(e.oppId, { customFields: toWrite }); e.wrote = wrote; changed = true }
+      // Done when the money is in and (for outside sales) the install-calendar
+      // fields are too; setter/closer are filled opportunistically above.
+      const complete = wrote.baseline != null && (est || (wrote.install_date != null && wrote.payment_method != null))
+      if (complete || now - (e.firstAt || now) > ARC_PENDING_MAX_DAYS * 864e5) { delete map[projectId]; changed = true }
+    } catch { /* keep for next tick */ }
+  }
+  if (changed) await arcPendingWrite(map)
 }
 
 // ── New-sale text alert ─────────────────────────────────────────────────────
@@ -2188,6 +2259,9 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
       baseFields: customFields, needBase: !fieldsOk,
       alert: (isNewSale && !alert) ? alertData : null,
     })
+    // Also persist it so the durable reconciler keeps filling setter/closer/
+    // payment/install after the in-memory window closes or a redeploy.
+    arcPendingAdd(projectId, oppId, estimator).catch(() => {})
   }
 
   return { ok: true, ...plan, action, change_order: isChangeOrder, opportunity_id: oppId, contact_id: contactId, owner: oppBody.assignedTo ? closerName : null, pdf, fields_ok: fieldsOk, enrich: needEnrich ? 'queued' : undefined, alert: alert ? alert.sent : (needEnrich && isNewSale ? 'deferred' : undefined) }
@@ -2521,6 +2595,11 @@ async function teamMoveSweep() {
 // A short delay at boot so a deploy isn't racing the database coming up.
 setTimeout(teamMoveSweep, 20_000).unref?.()
 setInterval(teamMoveSweep, TEAM_MOVE_SWEEP_MS).unref?.()
+
+// Durable ArcSite→GHL field reconciliation (setter/closer/payment/install/money)
+// for sales whose deal/calendar data landed after the webhook. Every 5 min.
+setTimeout(() => arcPendingReconcile().catch(() => {}), 30_000).unref?.()
+setInterval(() => arcPendingReconcile().catch(() => {}), 5 * 60_000).unref?.()
 
 app.use(express.static(dist))
 // SPA fallback — every non-file route serves the app shell.
