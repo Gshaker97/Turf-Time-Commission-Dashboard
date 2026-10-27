@@ -2063,7 +2063,10 @@ async function arcValueSweep() {
       const r = await arcsiteToGhl(JSON.stringify({ status: 'APPROVED', project_id: pid })).catch(e => ({ ok: false, error: e.message }))
       await arcLog({ ...(r || { ok: false }), via: 'value_sweep' })
       out.reprocessed.push({ project_id: pid, customer: info.customer_name, was: cur, now: want, action: r && r.action, ok: !!(r && r.ok && !r.ignored) })
-      if (r && r.ok && !r.ignored) { seen[pid] = want; changed = true }
+      // Record as confirmed only when the write actually succeeded (fields_ok
+      // false = a value/field write was dropped); otherwise leave it for the
+      // next tick rather than marking a still-stale opp done.
+      if (r && r.ok && !r.ignored && r.fields_ok !== false) { seen[pid] = want; changed = true }
     } catch { /* retry next tick */ }
   }
   if (changed) {
@@ -2302,7 +2305,16 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   if (ownerId) oppBody.assignedTo = ownerId
 
   let action, fieldsOk = true
-  if (oppId) { await ghlUpdateOpp(oppId, oppBody); action = isChangeOrder ? 'change_order' : 'updated' }
+  if (oppId) {
+    await ghlUpdateOpp(oppId, oppBody); action = isChangeOrder ? 'change_order' : 'updated'
+    // GHL drops monetaryValue when the SAME update also moves the pipeline stage
+    // (same class of quirk as CREATE dropping monetary custom fields). On a change
+    // order the stage moves to Change Order, so the new total silently didn't
+    // stick — re-send it alone so it always lands (verified: value-only PUT works).
+    if (isChangeOrder && sellTotal != null) {
+      try { await ghlUpdateOpp(oppId, { monetaryValue: sellTotal }) } catch { fieldsOk = false }
+    }
+  }
   else {
     oppBody.locationId = GHL_LOCATION_ID; oppId = await ghlCreateOpp(oppBody); action = 'created'
     // GHL's opportunity CREATE silently drops MONETARY custom fields (Price,
