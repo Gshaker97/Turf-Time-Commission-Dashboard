@@ -2041,6 +2041,11 @@ const GHL_CONTACT_JOB_PRICE_FIELD = 'gz5Xoix8Sd37hUbrvQuQ'   // contact "Job Pri
 const CALENDAR_SYNC_URL = (process.env.CALENDAR_SYNC_URL || '').replace(/\/+$/, '')
 const CALENDAR_SYNC_SECRET = (process.env.CALENDAR_SYNC_SECRET || '').trim()
 const arcUsd = n => '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+// Money agreement tolerance. The AI sheet's formulas round differently from
+// ArcSite by a cent (first sheet check: Soe Reh $11,262.52 vs $11,262.53), and
+// no real change order is under a dollar — so anything within $1 is "the same".
+const ARC_MONEY_TOL = 1
+const arcSame = (a, b) => a != null && b != null && Math.abs(Number(a) - Number(b)) <= ARC_MONEY_TOL
 
 // The contract files currently on an opp's Contract/PDF field (search and GET
 // shapes differ; contact-style values are keyed objects). Deleted ones excluded.
@@ -2130,12 +2135,12 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
   const arcTotal = newTotal != null ? Math.round(newTotal * 100) / 100 : null
   const sheetPrice = job && job.jobPrice != null ? Math.round(job.jobPrice * 100) / 100 : null
   const want = sheetPrice != null ? sheetPrice : (arcTotal != null ? arcTotal : cur)
-  const totalChanged = want != null && cur != null && Math.abs(want - cur) > 0.01
+  const totalChanged = want != null && cur != null && !arcSame(want, cur)
   const attached = oppContractEntries(opp)
   const r = {
     ok: true, via, action: 'change_order', project_id: projectId, customer: customer.name, opportunity_id: opp.id,
     was: cur, now: want, value_source: sheetPrice != null ? 'ai_sheet' : 'arcsite', sheet_price: sheetPrice, arcsite_total: arcTotal,
-    sheet_lag: sheetPrice == null || (arcTotal != null && Math.abs(sheetPrice - arcTotal) > 0.01),
+    sheet_lag: sheetPrice == null || (arcTotal != null && !arcSame(sheetPrice, arcTotal)),
     stage_moved: false, contracts: `${attached.length} attached / ${signed.length} signed`, pdf: 'kept',
   }
   let contracts = attached
@@ -2281,11 +2286,11 @@ async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, ma
       const job = await jobRowForProject(pid).catch(() => null)
       const sheet = job && job.jobPrice != null ? Math.round(job.jobPrice * 100) / 100 : null
       if (!job) out.sheet_gaps.push({ project_id: pid, customer: op.name, install: inst, reason: 'missing from AI sheet', arcsite_total: want })
-      else if (sheet != null && want != null && Math.abs(sheet - want) > 0.01) out.sheet_gaps.push({ project_id: pid, customer: op.name, install: inst, reason: 'AI sheet differs from ArcSite', sheet_price: sheet, arcsite_total: want })
+      else if (sheet != null && want != null && !arcSame(sheet, want)) out.sheet_gaps.push({ project_id: pid, customer: op.name, install: inst, reason: 'AI sheet differs from ArcSite', sheet_price: sheet, arcsite_total: want })
       const wantValue = sheet != null ? sheet : want
       const stale = o => {
         const cur = o.monetaryValue != null ? Math.round(Number(o.monetaryValue) * 100) / 100 : null
-        return signed.length > oppContractEntries(o).length || (wantValue != null && cur != null && Math.abs(cur - wantValue) > 0.01)
+        return signed.length > oppContractEntries(o).length || (wantValue != null && cur != null && !arcSame(cur, wantValue))
       }
       out.checked++
       if (!stale(op)) { out.ok++; continue }
@@ -2376,7 +2381,7 @@ async function arcValueSweep() {
       const signed = await arcSignedContracts(pid)
       const attached = oppContractEntries(opp).length
       // Value right AND every signed contract on the opp → confirmed.
-      if (cur === want && signed.length <= attached) { seen[pid] = mark; changed = true; out.confirmed++; continue }
+      if (arcSame(cur, want) && signed.length <= attached) { seen[pid] = mark; changed = true; out.confirmed++; continue }
       // Stale value (missed change order) or a signed contract the opp doesn't
       // carry → the targeted change-order path, never the full reprocess.
       const project = await arcGet(`/projects/${pid}`).catch(() => null)
