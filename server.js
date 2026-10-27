@@ -1980,6 +1980,97 @@ async function arcPendingReconcile() {
   if (changed) await arcPendingWrite(map)
 }
 
+// ── Value reconcile sweep ───────────────────────────────────────────────────
+// Safety net for a committed proposal ArcSite never delivered a webhook for (or
+// that failed): a CHANGE ORDER whose new signed total never reached the opp, or
+// a brand-new sale missed entirely. Polls ArcSite's recently-approved proposals
+// and, for any whose signed total doesn't match the GHL opportunity's value — or
+// that has no opp yet — REPROCESSES the project through the same real mapping the
+// webhook runs, so the change-order stage move, the PDF append and the new-sale
+// text all apply exactly as they would have. A persistent "confirmed total" map
+// (app_settings.arcsite_value_seen) keeps steady state nearly free: a project is
+// looked up in GHL only when its ArcSite total changed or was never confirmed.
+const ARC_VALUE_SEEN_KEY = 'arcsite_value_seen'
+const ARC_VALUE_PAGES = Number(process.env.ARC_VALUE_PAGES || 4)         // recent proposal pages to scan (×20)
+const ARC_VALUE_MAX_PROJECTS = Number(process.env.ARC_VALUE_MAX || 40)   // GHL lookups to spend per tick
+const ARC_VALUE_SEEN_CAP = 1000                                          // keep the seen map bounded
+
+async function arcValueSeenRead() {
+  if (!SUPABASE_URL || !SERVICE_KEY) return {}
+  const rows = await restGet(`/rest/v1/app_settings?key=eq.${ARC_VALUE_SEEN_KEY}&select=value`).catch(() => [])
+  return (Array.isArray(rows) && rows[0] && rows[0].value) || {}
+}
+async function arcValueSeenWrite(map) {
+  if (!SUPABASE_URL || !SERVICE_KEY) return
+  await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`,
+    { key: ARC_VALUE_SEEN_KEY, value: map }, 'resolution=merge-duplicates').catch(() => {})
+}
+// The GHL opp (with its monetaryValue) for an ArcSite proposal-list item, found
+// by customer email then name and matched on project_id. Returns the opp or null.
+async function arcOppForProposal(p) {
+  const pid = String(p.project_id || '').trim()
+  const tryQuery = async (q) => {
+    if (!q) return []
+    try { const j = await ghlGet(`/contacts/?locationId=${GHL_LOCATION_ID}&query=${encodeURIComponent(q)}&limit=10`); return j.contacts || [] }
+    catch { return [] }
+  }
+  let contacts = await tryQuery(p.customer_email)
+  if (!contacts.length) contacts = await tryQuery(p.customer_name)
+  for (const c of contacts) {
+    const opps = await ghlContactOpps(c.id).catch(() => [])
+    const hit = opps.find(o => oppProjectId(o) === pid)
+    if (hit) return hit
+  }
+  return null
+}
+async function arcValueSweep() {
+  const out = { scanned: 0, verified: 0, confirmed: 0, reprocessed: [], skipped: null }
+  if (!ARCSITE_API_TOKEN || !GHL_WRITE_TOKEN || !SUPABASE_URL || !SERVICE_KEY) { out.skipped = 'not configured'; return out }
+  // Newest committed total per project across the recent pages (list is
+  // newest-first, so the first APPROVED we see for a project is the current one).
+  const latest = new Map()
+  for (let page = 1; page <= ARC_VALUE_PAGES; page++) {
+    let arr
+    try { arr = await arcGet(`/proposals?per_page=20&page=${page}`) } catch { break }
+    if (!Array.isArray(arr) || !arr.length) break
+    for (const p of arr) {
+      const pid = String(p.project_id || '').trim()
+      if (!pid || latest.has(pid)) continue
+      const total = Number(p.total)
+      if (!arcCommitted(p.status) || !isFinite(total)) continue
+      latest.set(pid, { total, customer_name: p.customer_name, customer_email: p.customer_email })
+    }
+  }
+  out.scanned = latest.size
+  if (!latest.size) return out
+  const seen = await arcValueSeenRead()
+  let changed = false
+  for (const [pid, info] of latest) {
+    if (out.verified >= ARC_VALUE_MAX_PROJECTS) break
+    const want = Math.round(info.total * 100) / 100
+    if (seen[pid] != null && Math.round(Number(seen[pid]) * 100) / 100 === want) continue  // already confirmed at this total
+    out.verified++
+    try {
+      const opp = await arcOppForProposal(info)
+      const cur = opp && opp.monetaryValue != null ? Math.round(Number(opp.monetaryValue) * 100) / 100 : null
+      if (opp && cur === want) { seen[pid] = want; changed = true; out.confirmed++; continue }  // opp already correct
+      // Missing opp (missed sale) or stale value (missed change order) → real mapping.
+      const r = await arcsiteToGhl(JSON.stringify({ status: 'APPROVED', project_id: pid })).catch(e => ({ ok: false, error: e.message }))
+      await arcLog({ ...(r || { ok: false }), via: 'value_sweep' })
+      out.reprocessed.push({ project_id: pid, customer: info.customer_name, was: cur, now: want, action: r && r.action, ok: !!(r && r.ok && !r.ignored) })
+      if (r && r.ok && !r.ignored) { seen[pid] = want; changed = true }
+    } catch { /* retry next tick */ }
+  }
+  if (changed) {
+    const keys = Object.keys(seen)
+    const map = keys.length > ARC_VALUE_SEEN_CAP
+      ? Object.fromEntries(keys.slice(-ARC_VALUE_SEEN_CAP).map(k => [k, seen[k]]))
+      : seen
+    await arcValueSeenWrite(map)
+  }
+  return out
+}
+
 // ── New-sale text alert ─────────────────────────────────────────────────────
 // When a deal comes in, text a fixed set of GHL contacts a one-line summary.
 // Fires once per project; needs GHL_SMS_TOKEN (a key with the Conversations
@@ -2529,6 +2620,14 @@ app.post('/api/arcsite/reprocess', async (req, res) => {
   catch (e) { const r = { ok: false, error: e.message || 'reprocess failed' }; await arcLog(r); res.status(200).json(r) }
 })
 
+// Run the value-reconcile sweep on demand (same auth as the feed). Returns a
+// summary of what it scanned, confirmed and reprocessed — no body needed.
+app.post('/api/arcsite/value-sweep', async (req, res) => {
+  if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
+  try { res.json(await arcValueSweep()) }
+  catch (e) { res.status(200).json({ ok: false, error: e.message }) }
+})
+
 app.post('/api/user-admin', async (req, res) => {
   try { res.json(await handleUserAdmin(req.body)) }
   catch (e) { res.json(err(e.message || 'Server error')) }
@@ -2600,6 +2699,12 @@ setInterval(teamMoveSweep, TEAM_MOVE_SWEEP_MS).unref?.()
 // for sales whose deal/calendar data landed after the webhook. Every 5 min.
 setTimeout(() => arcPendingReconcile().catch(() => {}), 30_000).unref?.()
 setInterval(() => arcPendingReconcile().catch(() => {}), 5 * 60_000).unref?.()
+
+// Catch committed proposals ArcSite never delivered a webhook for — missed
+// change-order totals and missed sales. Every 10 min (cheap: only changed/new
+// approvals hit GHL, the rest skip via the confirmed-total map).
+setTimeout(() => arcValueSweep().catch(() => {}), 90_000).unref?.()
+setInterval(() => arcValueSweep().catch(() => {}), 10 * 60_000).unref?.()
 
 app.use(express.static(dist))
 // SPA fallback — every non-file route serves the app shell.
