@@ -2121,12 +2121,22 @@ async function arcPropagateChangeOrder({ oppId, contactId, projectId, customer, 
 async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed, newTotal, via }) {
   const pipe = opp.pipelineId === GHL_PIPELINES.estimator.id ? GHL_PIPELINES.estimator : GHL_PIPELINES.outside
   const cur = opp.monetaryValue != null ? Math.round(Number(opp.monetaryValue) * 100) / 100 : null
-  const want = newTotal != null ? Math.round(newTotal * 100) / 100 : cur
+  // THE AI SHEET IS THE SOURCE OF TRUTH FOR THE MONEY (per Garrison): the value
+  // is the Jobs row's sale price; ArcSite's signed total only stands in until
+  // that row lands (seconds after a signing). ArcSite stays the truth for the
+  // signed DOCUMENTS — the sheet has none. `sheet_lag` = the sheet doesn't
+  // (yet) agree with ArcSite, so callers must not mark the project settled.
+  const job = await jobRowForProject(projectId).catch(() => null)
+  const arcTotal = newTotal != null ? Math.round(newTotal * 100) / 100 : null
+  const sheetPrice = job && job.jobPrice != null ? Math.round(job.jobPrice * 100) / 100 : null
+  const want = sheetPrice != null ? sheetPrice : (arcTotal != null ? arcTotal : cur)
   const totalChanged = want != null && cur != null && Math.abs(want - cur) > 0.01
   const attached = oppContractEntries(opp)
   const r = {
     ok: true, via, action: 'change_order', project_id: projectId, customer: customer.name, opportunity_id: opp.id,
-    was: cur, now: want, stage_moved: false, contracts: `${attached.length} attached / ${signed.length} signed`, pdf: 'kept',
+    was: cur, now: want, value_source: sheetPrice != null ? 'ai_sheet' : 'arcsite', sheet_price: sheetPrice, arcsite_total: arcTotal,
+    sheet_lag: sheetPrice == null || (arcTotal != null && Math.abs(sheetPrice - arcTotal) > 0.01),
+    stage_moved: false, contracts: `${attached.length} attached / ${signed.length} signed`, pdf: 'kept',
   }
   let contracts = attached
   // 1. Contracts: ArcSite has more signed proposals than the opp carries → rebuild
@@ -2162,7 +2172,6 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
       // for salaried estimators). If the sheet hasn't caught up yet, the durable
       // reconciler keeps re-applying the sheet money for up to 21 days.
       const estimator = pipe === GHL_PIPELINES.estimator
-      const job = await jobRowForProject(projectId).catch(() => null)
       if (job && defs) {
         const money = {
           baseline: job.baseline != null ? job.baseline : null,
@@ -2173,7 +2182,7 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
         if (fields.length) await ghlUpdateOpp(opp.id, { customFields: fields }).catch(() => {})
         r.sheet_money = money
       } else r.sheet_money = job ? 'fields unavailable' : 'no Jobs-sheet row yet (reconciler will fill it)'
-      arcPendingAdd(projectId, opp.id, estimator).catch(() => {})
+      arcPendingAdd(projectId, opp.id, pipe === GHL_PIPELINES.estimator).catch(() => {})
     } catch (e) { r.ok = false; r.error = e.message || 'value update failed' }
   }
   // 3. The calendar + the contact's New Price.
@@ -2234,7 +2243,7 @@ function phoenixNow(dt = new Date()) {
 }
 
 async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, maxFix = ARC_AUDIT_MAX_FIX } = {}) {
-  const out = { at: new Date().toISOString(), day: phoenixNow().day, fix, days_back: daysBack, scanned: 0, candidates: 0, checked: 0, ok: 0, gaps: [], fixed: [], failed: [], skipped: null }
+  const out = { at: new Date().toISOString(), day: phoenixNow().day, fix, days_back: daysBack, scanned: 0, candidates: 0, checked: 0, ok: 0, gaps: [], fixed: [], failed: [], sheet_gaps: [], skipped: null }
   if (!ARCSITE_API_TOKEN || !GHL_WRITE_TOKEN) { out.skipped = 'not configured'; return out }
   const floor = new Date(Date.now() - daysBack * 864e5).toISOString().slice(0, 10)
   const pause = ms => new Promise(res => setTimeout(res, ms))
@@ -2264,16 +2273,26 @@ async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, ma
       if (!signed.length) continue
       const newest = signed[signed.length - 1]
       const want = newest.total != null ? Math.round(newest.total * 100) / 100 : null
+      // The AI sheet is the truth for the value; ArcSite only when there is no
+      // row. And the sheet itself gets checked: a signed proposal with no row,
+      // or a row whose sale price disagrees with ArcSite, is a commission being
+      // computed on the wrong number — listed, never written (the sheet is
+      // read-only, always).
+      const job = await jobRowForProject(pid).catch(() => null)
+      const sheet = job && job.jobPrice != null ? Math.round(job.jobPrice * 100) / 100 : null
+      if (!job) out.sheet_gaps.push({ project_id: pid, customer: op.name, install: inst, reason: 'missing from AI sheet', arcsite_total: want })
+      else if (sheet != null && want != null && Math.abs(sheet - want) > 0.01) out.sheet_gaps.push({ project_id: pid, customer: op.name, install: inst, reason: 'AI sheet differs from ArcSite', sheet_price: sheet, arcsite_total: want })
+      const wantValue = sheet != null ? sheet : want
       const stale = o => {
         const cur = o.monetaryValue != null ? Math.round(Number(o.monetaryValue) * 100) / 100 : null
-        return signed.length > oppContractEntries(o).length || (want != null && cur != null && Math.abs(cur - want) > 0.01)
+        return signed.length > oppContractEntries(o).length || (wantValue != null && cur != null && Math.abs(cur - wantValue) > 0.01)
       }
       out.checked++
       if (!stale(op)) { out.ok++; continue }
       const fresh = (await ghlGet(`/opportunities/${op.id}`).catch(() => null)) || {}
       const opp = fresh.opportunity || fresh
       if (!opp.id || !stale(opp)) { out.ok++; continue }
-      const gap = { project_id: pid, customer: opp.name, install: inst, contracts: `${oppContractEntries(opp).length} attached / ${signed.length} signed`, value: opp.monetaryValue, signed_total: want }
+      const gap = { project_id: pid, customer: opp.name, install: inst, contracts: `${oppContractEntries(opp).length} attached / ${signed.length} signed`, value: opp.monetaryValue, signed_total: want, sheet_price: sheet }
       out.gaps.push(gap)
       if (!fix || out.fixed.length + out.failed.length >= maxFix) continue
       const project = await arcGet(`/projects/${pid}`).catch(() => null)
@@ -2288,7 +2307,7 @@ async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, ma
   }
   if (SUPABASE_URL && SERVICE_KEY) {
     await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`,
-      { key: ARC_AUDIT_KEY, value: { ...out, gaps: out.gaps.slice(0, 100) } }, 'resolution=merge-duplicates').catch(() => {})
+      { key: ARC_AUDIT_KEY, value: { ...out, gaps: out.gaps.slice(0, 100), sheet_gaps: out.sheet_gaps.slice(0, 100) } }, 'resolution=merge-duplicates').catch(() => {})
   }
   return out
 }
@@ -2365,8 +2384,10 @@ async function arcValueSweep() {
       const customer = { name: c.name || info.customer_name || 'Customer', phone: c.phone || null, email: c.email || info.customer_email || null, address1: a.street || null, city: a.city || null, state: a.state || null, postalCode: a.zip_code || null }
       const r = await arcApplyChangeOrder(pid, { opp, contactId: opp.contactId || null, customer, signed, newTotal: want, via: 'value_sweep' }).catch(e => ({ ok: false, error: e.message }))
       await arcLog(r)
-      out.reprocessed.push({ project_id: pid, customer: customer.name, was: cur, now: want, action: 'change_order', contracts: r.contracts, pdf: r.pdf, ok: !!r.ok })
-      if (r.ok) { seen[pid] = mark; changed = true }
+      out.reprocessed.push({ project_id: pid, customer: customer.name, was: cur, now: r.now, value_source: r.value_source, sheet_lag: r.sheet_lag, action: 'change_order', contracts: r.contracts, pdf: r.pdf, ok: !!r.ok })
+      // Settled only once the AI sheet agrees with ArcSite — a lagging sheet row
+      // means the value isn't final yet, so re-verify next tick rather than stamp.
+      if (r.ok && !r.sheet_lag) { seen[pid] = mark; changed = true }
     } catch { /* retry next tick */ }
   }
   if (changed) {
