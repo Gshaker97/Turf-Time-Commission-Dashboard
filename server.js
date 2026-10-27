@@ -2037,6 +2037,7 @@ async function arcOppForProposal(p) {
 // touches only what a change order means: the contracts, the value + stage,
 // the contact's New Price, and the install calendar.
 const GHL_CONTACT_NEW_PRICE_FIELD = 'X6s8Kc6QVEVyzSIISktA'   // contact "New Price" — the install calendar's 6h sync reads it FIRST
+const GHL_CONTACT_JOB_PRICE_FIELD = 'gz5Xoix8Sd37hUbrvQuQ'   // contact "Job Price" — follows the change order too (per Garrison)
 const CALENDAR_SYNC_URL = (process.env.CALENDAR_SYNC_URL || '').replace(/\/+$/, '')
 const CALENDAR_SYNC_SECRET = (process.env.CALENDAR_SYNC_SECRET || '').trim()
 const arcUsd = n => '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -2070,10 +2071,10 @@ async function arcSignedContracts(projectId) {
   return out.reverse()
 }
 
-async function ghlContactSetField(contactId, fieldId, value) {
+async function ghlContactSetFields(contactId, fields) {
   const resp = await fetch(`${GHL_BASE}/contacts/${contactId}`, {
     method: 'PUT', headers: { ...ghlHeaders(GHL_WRITE_TOKEN), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ customFields: [{ id: fieldId, field_value: value }] }),
+    body: JSON.stringify({ customFields: fields.map(f => ({ id: f.id, field_value: f.value })) }),
   })
   if (!resp.ok) throw new Error(`GHL contact update ${resp.status}: ${(await resp.text()).slice(0, 140)}`)
   return true
@@ -2089,8 +2090,12 @@ async function ghlContactSetField(contactId, fieldId, value) {
 async function arcPropagateChangeOrder({ oppId, contactId, projectId, customer, newTotal, previousTotal, contracts, newestContract }) {
   const out = { contact_new_price: null, calendar: null }
   if (contactId && newTotal != null) {
-    try { await ghlContactSetField(contactId, GHL_CONTACT_NEW_PRICE_FIELD, newTotal); out.contact_new_price = 'set' }
-    catch (e) { out.contact_new_price = 'failed: ' + (e.message || 'update failed') }
+    // Both contact price fields follow the change order: New Price (what the
+    // calendar reads first) AND Job Price (per Garrison — the card's price).
+    try {
+      await ghlContactSetFields(contactId, [{ id: GHL_CONTACT_NEW_PRICE_FIELD, value: newTotal }, { id: GHL_CONTACT_JOB_PRICE_FIELD, value: newTotal }])
+      out.contact_new_price = 'set (New Price + Job Price)'
+    } catch (e) { out.contact_new_price = 'failed: ' + (e.message || 'update failed') }
   }
   if (!CALENDAR_SYNC_URL || !CALENDAR_SYNC_SECRET) { out.calendar = 'not configured'; return out }
   try {
@@ -2151,6 +2156,24 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
       const w = defs ? oppFieldWrite(GHL_OPP_FIELD_IDS.price, want, defs) : null
       if (w) await ghlUpdateOpp(opp.id, { customFields: [w] }).catch(() => {})
       r.stage_moved = true
+      // Sheet money follows the change order too (the ArcSite feed updates the
+      // Jobs row's baseline / sale price): re-read the row and re-stamp Baseline,
+      // Markup and Commission exactly as the live webhook does (commission blank
+      // for salaried estimators). If the sheet hasn't caught up yet, the durable
+      // reconciler keeps re-applying the sheet money for up to 21 days.
+      const estimator = pipe === GHL_PIPELINES.estimator
+      const job = await jobRowForProject(projectId).catch(() => null)
+      if (job && defs) {
+        const money = {
+          baseline: job.baseline != null ? job.baseline : null,
+          markup: job.jobPrice != null && job.baseline != null ? Math.round((job.jobPrice - job.baseline) * 100) / 100 : null,
+          commission: estimator ? null : (job.commission != null ? job.commission : null),
+        }
+        const fields = Object.entries(money).map(([k, v]) => oppFieldWrite(GHL_OPP_FIELD_IDS[k], v, defs)).filter(Boolean)
+        if (fields.length) await ghlUpdateOpp(opp.id, { customFields: fields }).catch(() => {})
+        r.sheet_money = money
+      } else r.sheet_money = job ? 'fields unavailable' : 'no Jobs-sheet row yet (reconciler will fill it)'
+      arcPendingAdd(projectId, opp.id, estimator).catch(() => {})
     } catch (e) { r.ok = false; r.error = e.message || 'value update failed' }
   }
   // 3. The calendar + the contact's New Price.
