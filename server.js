@@ -2653,8 +2653,21 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   // like a change order and the value never updated).
   const curVal = existing && existing.monetaryValue != null
     ? Math.round(Number(existing.monetaryValue) * 100) / 100 : NaN
-  const isChangeOrder = !!existing && oppProjectId(existing) === projectId
+  const sameProject = !!existing && oppProjectId(existing) === projectId
+  const priceChanged = sameProject
     && sellTotal != null && !isNaN(curVal) && Math.abs(Math.round(sellTotal * 100) / 100 - curVal) > 0.01
+  // A change order can be a PRODUCT swap at the SAME price (Holland Slate →
+  // Townscape Slate, per Garrison), so a signed proposal the opp doesn't carry
+  // yet counts as one too — those used to take the plain path below, which
+  // CLEARED the field and replaced the original contract with the new one.
+  // (Only consulted when the price didn't move and the opp already has a
+  // contract; a re-fired webhook for the same contract shows signed == attached.)
+  const attachedCount = sameProject ? oppContractEntries(existing).length : 0
+  let signedCount = null
+  if (sameProject && !priceChanged && pdfUrl && attachedCount > 0) {
+    signedCount = (await arcSignedContracts(projectId).catch(() => [])).length
+  }
+  const isChangeOrder = priceChanged || (signedCount != null && signedCount > attachedCount)
 
   const oppBody = {
     pipelineId: pipeline.id,
@@ -2691,16 +2704,20 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   // ── Contract PDF (best-effort; needs the token's medias.write scope). On a
   // change order the new contract is APPENDED so both contracts are kept.
   let pdf = pdfUrl ? 'pending' : 'none', hostedUrl = null
-  if (pdfUrl && oppId) {
+  if (pdfUrl && oppId && sameProject && !isChangeOrder && attachedCount > 0) {
+    // The opp already carries every signed contract ArcSite has — this is a
+    // re-fired webhook for a contract that's on it. Nothing to add, and never
+    // clear: the field is only ever APPENDED to now.
+    pdf = 'already attached'
+  } else if (pdfUrl && oppId) {
     try {
       const hosted = await ghlHostPdf(pdfUrl, `${custName} - contract.pdf`.replace(/[\/\\]/g, '-'))
       if (hosted) {
         hostedUrl = hosted
         // GHL's FILE_UPLOAD field takes a single URL STRING per write and APPENDS
-        // it (an array 400s; "" clears). So a change order APPENDS the new
-        // contract (keeping the original), while a normal set CLEARS first so a
-        // webhook re-fire can't stack duplicate copies of the same contract.
-        if (!isChangeOrder) await ghlUpdateOpp(oppId, { customFields: [{ id: GHL_PDF_FIELD, field_value: '' }] })
+        // it (an array 400s). A change order appends beside the original; a
+        // first contract lands on an empty field. The old "clear first" step is
+        // gone — it was how a same-price change order wiped the original.
         await ghlUpdateOpp(oppId, { customFields: [{ id: GHL_PDF_FIELD, field_value: hosted }] })
         pdf = isChangeOrder ? 'appended' : 'uploaded'
       } else pdf = 'skipped: no url from upload'
