@@ -2028,11 +2028,163 @@ async function arcOppForProposal(p) {
   }
   return null
 }
+// ── Change orders: the targeted path ─────────────────────────────────────────
+// A 2nd/3rd/… signed proposal on a Project ID. The live webhook handles it in
+// arcsiteToGhl; everything below is for the SAFETY NET (a webhook ArcSite never
+// sent) and the manual endpoint, and it deliberately does NOT run the full
+// reprocess: that re-maps every field, re-assigns the owner and sets the stage
+// to Closed — which knocked Jacob Smith's opp back from Ready For Install. This
+// touches only what a change order means: the contracts, the value + stage,
+// the contact's New Price, and the install calendar.
+const GHL_CONTACT_NEW_PRICE_FIELD = 'X6s8Kc6QVEVyzSIISktA'   // contact "New Price" — the install calendar's 6h sync reads it FIRST
+const CALENDAR_SYNC_URL = (process.env.CALENDAR_SYNC_URL || '').replace(/\/+$/, '')
+const CALENDAR_SYNC_SECRET = (process.env.CALENDAR_SYNC_SECRET || '').trim()
+const arcUsd = n => '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+// The contract files currently on an opp's Contract/PDF field (search and GET
+// shapes differ; contact-style values are keyed objects). Deleted ones excluded.
+function oppContractEntries(opp) {
+  for (const c of (opp.customFields || [])) {
+    if (c.id !== GHL_PDF_FIELD) continue
+    let v = c.fieldValueFiles ?? c.fieldValue ?? c.fieldValueArray ?? c.value ?? null
+    if (typeof v === 'string') v = v.trim() ? [{ url: v }] : []
+    if (v && !Array.isArray(v) && typeof v === 'object') v = Object.values(v)
+    return (Array.isArray(v) ? v : [])
+      .filter(x => x && !x.deleted && (x.url || (x.meta && x.meta.url)))
+      .map(x => ({ url: x.url || x.meta.url, name: (x.meta && (x.meta.originalname || x.meta.name)) || 'contract.pdf' }))
+  }
+  return []
+}
+
+// Every SIGNED contract ArcSite holds for a project — committed proposals with
+// a proposal-level (signed) pdf — oldest first, so the newest contract is last.
+async function arcSignedContracts(projectId) {
+  const refs = (await arcGet(`/proposals?project_id=${projectId}&per_page=20`).catch(() => [])) || []
+  const out = []
+  for (const pr of (Array.isArray(refs) ? refs : [])) {
+    const full = pr.proposal_options ? pr : await arcGet(`/proposals/${pr.proposal_id}`).catch(() => null)
+    if (full && arcCommitted(full.status) && full.pdf_url) {
+      out.push({ proposal_id: String(full.proposal_id || ''), document_number: full.document_number || null, pdf_url: full.pdf_url, total: Number(full.total) || null })
+    }
+  }
+  return out.reverse()
+}
+
+async function ghlContactSetField(contactId, fieldId, value) {
+  const resp = await fetch(`${GHL_BASE}/contacts/${contactId}`, {
+    method: 'PUT', headers: { ...ghlHeaders(GHL_WRITE_TOKEN), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ customFields: [{ id: fieldId, field_value: value }] }),
+  })
+  if (!resp.ok) throw new Error(`GHL contact update ${resp.status}: ${(await resp.text()).slice(0, 140)}`)
+  return true
+}
+
+// What the CALENDAR needs from a change order, pushed the moment we have it:
+// the contact's New Price (so the calendar's own 6h GHL sync agrees with the
+// new total instead of reverting it) and the ingest call that sets the job's
+// value, files the contracts, writes the PM note and logs the revenue-dashboard
+// delta. Best-effort — the GHL opp is already right either way. ArcSite exposes
+// no signing timestamp, so the signed date is the day we caught it (same day
+// for the live webhook, minutes for the safety net).
+async function arcPropagateChangeOrder({ oppId, contactId, projectId, customer, newTotal, previousTotal, contracts, newestContract }) {
+  const out = { contact_new_price: null, calendar: null }
+  if (contactId && newTotal != null) {
+    try { await ghlContactSetField(contactId, GHL_CONTACT_NEW_PRICE_FIELD, newTotal); out.contact_new_price = 'set' }
+    catch (e) { out.contact_new_price = 'failed: ' + (e.message || 'update failed') }
+  }
+  if (!CALENDAR_SYNC_URL || !CALENDAR_SYNC_SECRET) { out.calendar = 'not configured'; return out }
+  try {
+    const resp = await fetch(`${CALENDAR_SYNC_URL}/api/change-orders/ingest`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-sync-secret': CALENDAR_SYNC_SECRET },
+      body: JSON.stringify({
+        ghlOpportunityId: oppId, ghlContactId: contactId, projectId,
+        customerName: customer.name || null,
+        customerAddress: [customer.address1, customer.city, customer.state, customer.postalCode].filter(Boolean).join(', ') || null,
+        customerPhone: customer.phone || null,
+        newTotal, previousTotal, newestContract,
+        // GHL's own file-field shape, so the calendar files each contract under
+        // the same key its 6h import would — one attachment, never two.
+        contracts: (contracts || []).map(c => ({ url: c.url, meta: { mimetype: 'application/pdf', name: c.name || 'contract.pdf' } })),
+      }),
+    })
+    const j = await resp.json().catch(() => ({}))
+    out.calendar = resp.ok ? j : { error: `calendar ${resp.status}`, ...j }
+  } catch (e) { out.calendar = { error: e.message || 'calendar push failed' } }
+  return out
+}
+
+async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed, newTotal, via }) {
+  const pipe = opp.pipelineId === GHL_PIPELINES.estimator.id ? GHL_PIPELINES.estimator : GHL_PIPELINES.outside
+  const cur = opp.monetaryValue != null ? Math.round(Number(opp.monetaryValue) * 100) / 100 : null
+  const want = newTotal != null ? Math.round(newTotal * 100) / 100 : cur
+  const totalChanged = want != null && cur != null && Math.abs(want - cur) > 0.01
+  const attached = oppContractEntries(opp)
+  const r = {
+    ok: true, via, action: 'change_order', project_id: projectId, customer: customer.name, opportunity_id: opp.id,
+    was: cur, now: want, stage_moved: false, contracts: `${attached.length} attached / ${signed.length} signed`, pdf: 'kept',
+  }
+  let contracts = attached
+  // 1. Contracts: ArcSite has more signed proposals than the opp carries → rebuild
+  //    the FULL set (host every signed pdf fresh, then clear + set each), so the
+  //    opp ends with exactly today's contracts, oldest → newest. Host everything
+  //    BEFORE clearing: a failed download must never cost the existing document.
+  if (signed.length > attached.length) {
+    try {
+      const hosted = []
+      for (const s of signed) {
+        const name = `${customer.name} - contract ${s.document_number || s.proposal_id}.pdf`.replace(/[\/\\]/g, '-')
+        hosted.push({ url: await ghlHostPdf(s.pdf_url, name), name })
+      }
+      if (hosted.some(h => !h.url)) throw new Error('upload returned no url')
+      await ghlUpdateOpp(opp.id, { customFields: [{ id: GHL_PDF_FIELD, field_value: '' }] })
+      for (const h of hosted) await ghlUpdateOpp(opp.id, { customFields: [{ id: GHL_PDF_FIELD, field_value: h.url }] })
+      contracts = hosted; r.pdf = `rebuilt ${hosted.length}`
+    } catch (e) { r.ok = false; r.pdf = 'skipped: ' + (e.message || 'upload failed') }
+  }
+  // 2. Value + stage — the same rule as the live webhook: a changed total lands
+  //    in Change Order, and the value is re-sent ALONE (GHL drops it on a stage move).
+  if (totalChanged) {
+    try {
+      await ghlUpdateOpp(opp.id, { pipelineId: pipe.id, pipelineStageId: pipe.changeOrder })
+      await ghlUpdateOpp(opp.id, { monetaryValue: want })
+      const defs = await ghlOppFields().catch(() => null)
+      const w = defs ? oppFieldWrite(GHL_OPP_FIELD_IDS.price, want, defs) : null
+      if (w) await ghlUpdateOpp(opp.id, { customFields: [w] }).catch(() => {})
+      r.stage_moved = true
+    } catch (e) { r.ok = false; r.error = e.message || 'value update failed' }
+  }
+  // 3. The calendar + the contact's New Price.
+  const newest = signed[signed.length - 1]
+  Object.assign(r, await arcPropagateChangeOrder({
+    oppId: opp.id, contactId, projectId, customer, newTotal: want, previousTotal: cur, contracts,
+    newestContract: newest ? `Proposal ${newest.document_number || newest.proposal_id}${newest.total ? ` (${arcUsd(newest.total)})` : ''}` : null,
+  }))
+  return r
+}
+
+// Manual entry point (and the backfill tool): run the targeted change-order
+// path for one project. Finds the opp by the project's customer; a project
+// with NO opp yet is a missed sale — that is what /reprocess is for.
+async function arcChangeOrderForProject(projectId, via) {
+  const project = await arcGet(`/projects/${projectId}`)
+  const c = project.customer || {}, a = c.address || {}
+  const customer = { name: c.name || project.name || 'Customer', phone: c.phone || null, email: c.email || null, address1: a.street || null, city: a.city || null, state: a.state || null, postalCode: a.zip_code || null }
+  const signed = await arcSignedContracts(projectId)
+  if (!signed.length) return { ok: false, via, project_id: projectId, customer: customer.name, error: 'no signed proposal in ArcSite' }
+  const opp = await arcOppForProposal({ project_id: projectId, customer_name: customer.name, customer_email: customer.email })
+  if (!opp) return { ok: false, via, project_id: projectId, customer: customer.name, error: 'no GHL opportunity for this project — /api/arcsite/reprocess creates one' }
+  const newest = signed[signed.length - 1]
+  return arcApplyChangeOrder(projectId, { opp, contactId: opp.contactId || null, customer, signed, newTotal: newest.total, via })
+}
+
 async function arcValueSweep() {
   const out = { scanned: 0, verified: 0, confirmed: 0, reprocessed: [], skipped: null }
   if (!ARCSITE_API_TOKEN || !GHL_WRITE_TOKEN || !SUPABASE_URL || !SERVICE_KEY) { out.skipped = 'not configured'; return out }
-  // Newest committed total per project across the recent pages (list is
+  // Newest committed proposal per project across the recent pages (list is
   // newest-first, so the first APPROVED we see for a project is the current one).
+  // Its proposal_id is the change-order signal: a 2nd/3rd/… signing is a NEW
+  // proposal id even when the total didn't move — watching the value alone let
+  // a same-price re-sign (new signed contract, nothing to append) slip by forever.
   const latest = new Map()
   for (let page = 1; page <= ARC_VALUE_PAGES; page++) {
     let arr
@@ -2043,7 +2195,7 @@ async function arcValueSweep() {
       if (!pid || latest.has(pid)) continue
       const total = Number(p.total)
       if (!arcCommitted(p.status) || !isFinite(total)) continue
-      latest.set(pid, { total, project_id: pid, customer_name: p.customer_name, customer_email: p.customer_email })
+      latest.set(pid, { total, proposal_id: String(p.proposal_id || ''), project_id: pid, customer_name: p.customer_name, customer_email: p.customer_email })
     }
   }
   out.scanned = latest.size
@@ -2053,20 +2205,37 @@ async function arcValueSweep() {
   for (const [pid, info] of latest) {
     if (out.verified >= ARC_VALUE_MAX_PROJECTS) break
     const want = Math.round(info.total * 100) / 100
-    if (seen[pid] != null && Math.round(Number(seen[pid]) * 100) / 100 === want) continue  // already confirmed at this total
+    const s = seen[pid]
+    // Confirmed at this total AND this newest proposal → nothing to do. (Entries
+    // written before the proposal id was tracked are a bare number, so they get
+    // one more verification, which also checks their contracts.)
+    if (s && typeof s === 'object' && Math.round(Number(s.t) * 100) / 100 === want && s.p === info.proposal_id) continue
     out.verified++
+    const mark = { t: want, p: info.proposal_id }
     try {
       const opp = await arcOppForProposal(info)
-      const cur = opp && opp.monetaryValue != null ? Math.round(Number(opp.monetaryValue) * 100) / 100 : null
-      if (opp && cur === want) { seen[pid] = want; changed = true; out.confirmed++; continue }  // opp already correct
-      // Missing opp (missed sale) or stale value (missed change order) → real mapping.
-      const r = await arcsiteToGhl(JSON.stringify({ status: 'APPROVED', project_id: pid })).catch(e => ({ ok: false, error: e.message }))
-      await arcLog({ ...(r || { ok: false }), via: 'value_sweep' })
-      out.reprocessed.push({ project_id: pid, customer: info.customer_name, was: cur, now: want, action: r && r.action, ok: !!(r && r.ok && !r.ignored) })
-      // Record as confirmed only when the write actually succeeded (fields_ok
-      // false = a value/field write was dropped); otherwise leave it for the
-      // next tick rather than marking a still-stale opp done.
-      if (r && r.ok && !r.ignored && r.fields_ok !== false) { seen[pid] = want; changed = true }
+      if (!opp) {
+        // Missed sale entirely → the real mapping creates it (contact, opp, fields, text).
+        const r = await arcsiteToGhl(JSON.stringify({ status: 'APPROVED', project_id: pid })).catch(e => ({ ok: false, error: e.message }))
+        await arcLog({ ...(r || { ok: false }), via: 'value_sweep' })
+        out.reprocessed.push({ project_id: pid, customer: info.customer_name, was: null, now: want, action: r && r.action, ok: !!(r && r.ok && !r.ignored) })
+        if (r && r.ok && !r.ignored && r.fields_ok !== false) { seen[pid] = mark; changed = true }
+        continue
+      }
+      const cur = opp.monetaryValue != null ? Math.round(Number(opp.monetaryValue) * 100) / 100 : null
+      const signed = await arcSignedContracts(pid)
+      const attached = oppContractEntries(opp).length
+      // Value right AND every signed contract on the opp → confirmed.
+      if (cur === want && signed.length <= attached) { seen[pid] = mark; changed = true; out.confirmed++; continue }
+      // Stale value (missed change order) or a signed contract the opp doesn't
+      // carry → the targeted change-order path, never the full reprocess.
+      const project = await arcGet(`/projects/${pid}`).catch(() => null)
+      const c = (project && project.customer) || {}, a = c.address || {}
+      const customer = { name: c.name || info.customer_name || 'Customer', phone: c.phone || null, email: c.email || info.customer_email || null, address1: a.street || null, city: a.city || null, state: a.state || null, postalCode: a.zip_code || null }
+      const r = await arcApplyChangeOrder(pid, { opp, contactId: opp.contactId || null, customer, signed, newTotal: want, via: 'value_sweep' }).catch(e => ({ ok: false, error: e.message }))
+      await arcLog(r)
+      out.reprocessed.push({ project_id: pid, customer: customer.name, was: cur, now: want, action: 'change_order', contracts: r.contracts, pdf: r.pdf, ok: !!r.ok })
+      if (r.ok) { seen[pid] = mark; changed = true }
     } catch { /* retry next tick */ }
   }
   if (changed) {
@@ -2224,7 +2393,7 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   // (blank signature lines). Always upload the signed proposal-level pdf; only
   // fall back to the option pdf if a proposal has no top-level pdf at all.
   let sellTotal = Number(evt.total) || (evt.approved_option && Number(evt.approved_option.total)) || null
-  let pdfUrl = null
+  let pdfUrl = null, signedDoc = null
   if (proposalId || projectId) {
     const refs = proposalId
       ? [{ proposal_id: proposalId }]
@@ -2244,7 +2413,9 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
       }
       if (!fallbackOptPdf && opt && opt.pdf_url) fallbackOptPdf = opt.pdf_url
       // Signed proposal-level pdf from the committed/approved proposal wins.
-      if (!pdfUrl && full.pdf_url && (proposalId || arcCommitted(full.status))) pdfUrl = full.pdf_url
+      if (!pdfUrl && full.pdf_url && (proposalId || arcCommitted(full.status))) {
+        pdfUrl = full.pdf_url; signedDoc = full.document_number || full.proposal_id || null
+      }
       if (pdfUrl && sellTotal != null) break
     }
     if (!pdfUrl) pdfUrl = fallbackOptPdf   // keep a document if no signed pdf exists yet
@@ -2362,11 +2533,12 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
 
   // ── Contract PDF (best-effort; needs the token's medias.write scope). On a
   // change order the new contract is APPENDED so both contracts are kept.
-  let pdf = pdfUrl ? 'pending' : 'none'
+  let pdf = pdfUrl ? 'pending' : 'none', hostedUrl = null
   if (pdfUrl && oppId) {
     try {
       const hosted = await ghlHostPdf(pdfUrl, `${custName} - contract.pdf`.replace(/[\/\\]/g, '-'))
       if (hosted) {
+        hostedUrl = hosted
         // GHL's FILE_UPLOAD field takes a single URL STRING per write and APPENDS
         // it (an array 400s; "" clears). So a change order APPENDS the new
         // contract (keeping the original), while a normal set CLEARS first so a
@@ -2376,6 +2548,18 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
         pdf = isChangeOrder ? 'appended' : 'uploaded'
       } else pdf = 'skipped: no url from upload'
     } catch (e) { pdf = 'skipped: ' + (e.message || 'upload failed') }
+  }
+
+  // ── Change order → the install calendar + the contact's "New Price" (so the
+  // calendar's own 6h GHL sync agrees with the new total instead of reverting
+  // it). Best-effort: the opp above is already right either way.
+  let calendar
+  if (isChangeOrder && oppId) {
+    calendar = await arcPropagateChangeOrder({
+      oppId, contactId, projectId, customer: person, newTotal: sellTotal, previousTotal: isNaN(curVal) ? null : curVal,
+      contracts: hostedUrl ? [{ url: hostedUrl, name: `${custName} - contract.pdf` }] : [],
+      newestContract: signedDoc ? `Proposal ${signedDoc}${sellTotal != null ? ` (${arcUsd(sellTotal)})` : ''}` : null,
+    }).catch(e => ({ calendar: { error: e.message } }))
   }
 
   // ── New-sale text alert. A brand-new opportunity = a deal just came in, so
@@ -2411,7 +2595,7 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
     arcPendingAdd(projectId, oppId, estimator).catch(() => {})
   }
 
-  return { ok: true, ...plan, action, change_order: isChangeOrder, opportunity_id: oppId, contact_id: contactId, owner: oppBody.assignedTo ? closerName : null, pdf, fields_ok: fieldsOk, enrich: needEnrich ? 'queued' : undefined, alert: alert ? alert.sent : (needEnrich && isNewSale ? 'deferred' : undefined) }
+  return { ok: true, ...plan, action, change_order: isChangeOrder, opportunity_id: oppId, contact_id: contactId, owner: oppBody.assignedTo ? closerName : null, pdf, calendar, fields_ok: fieldsOk, enrich: needEnrich ? 'queued' : undefined, alert: alert ? alert.sent : (needEnrich && isNewSale ? 'deferred' : undefined) }
 }
 
 const app = express()
@@ -2674,6 +2858,21 @@ app.post('/api/arcsite/reprocess', async (req, res) => {
   const rawBody = JSON.stringify({ status: body.status || 'APPROVED', project_id: projectId })
   try { const r = await arcsiteToGhl(rawBody); await arcLog(r); res.json(r) }
   catch (e) { const r = { ok: false, error: e.message || 'reprocess failed' }; await arcLog(r); res.status(200).json(r) }
+})
+
+// Change order, by hand: the TARGETED path for one project (contracts rebuilt
+// if ArcSite holds more signed proposals than the opp carries, value + Change
+// Order stage if the total moved, the contact's New Price, and the install
+// calendar). Unlike /reprocess it never re-maps fields or moves a job back to
+// Closed. Body = { project_id }. Same guard as the feed.
+app.post('/api/arcsite/change-order', async (req, res) => {
+  if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
+  let body = {}
+  try { body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {}) } catch {}
+  const projectId = String(body.project_id || '').trim()
+  if (!projectId) return res.status(400).json(err('project_id is required'))
+  try { const r = await arcChangeOrderForProject(projectId, 'manual'); await arcLog(r); res.json(r) }
+  catch (e) { const r = { ok: false, error: e.message || 'change order failed' }; await arcLog(r); res.status(200).json(r) }
 })
 
 // Run the value-reconcile sweep on demand (same auth as the feed). Returns a
