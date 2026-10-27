@@ -2014,9 +2014,14 @@ async function arcOppForProposal(p) {
     try { const j = await ghlGet(`/contacts/?locationId=${GHL_LOCATION_ID}&query=${encodeURIComponent(q)}&limit=10`); return j.contacts || [] }
     catch { return [] }
   }
-  let contacts = await tryQuery(p.customer_email)
-  if (!contacts.length) contacts = await tryQuery(p.customer_name)
-  for (const c of contacts) {
+  // Search by email AND name and merge — an email query that returns the wrong
+  // contacts must not suppress the name match (which left healthy sales unable
+  // to take the cheap "already correct" shortcut, so they got reprocessed once).
+  const byId = new Map()
+  for (const c of [...await tryQuery(p.customer_email), ...await tryQuery(p.customer_name)]) {
+    if (c && c.id) byId.set(c.id, c)
+  }
+  for (const c of byId.values()) {
     const opps = await ghlContactOpps(c.id).catch(() => [])
     const hit = opps.find(o => oppProjectId(o) === pid)
     if (hit) return hit
