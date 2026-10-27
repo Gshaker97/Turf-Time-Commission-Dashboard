@@ -2177,6 +2177,114 @@ async function arcChangeOrderForProject(projectId, via) {
   return arcApplyChangeOrder(projectId, { opp, contactId: opp.contactId || null, customer, signed, newTotal: newest.total, via })
 }
 
+// ── Daily contract audit ─────────────────────────────────────────────────────
+// The 10-min sweep only sees the ~80 newest ArcSite proposals. This is the daily
+// FULL pass (per Garrison: "a daily check that will make sure all the change
+// orders are in"): every GHL opp with a Project ID installing in the last
+// ARC_AUDIT_DAYS_BACK days or the future, compared against ArcSite — signed
+// contracts vs attached, newest signed total vs value — and any gap fixed through
+// the targeted change-order path (GHL + the calendar), never the full reprocess.
+// Runs once a day in the ARC_AUDIT_HOUR hour (Phoenix); the result is stored in
+// app_settings.arcsite_contract_audit (GET /api/arcsite/contract-audit) and the
+// stored day stops a redeploy from running it twice. POST the same path to run
+// it by hand ({ fix: false } = report only).
+const ARC_AUDIT_KEY = 'arcsite_contract_audit'
+const ARC_AUDIT_HOUR = Number(process.env.ARC_AUDIT_HOUR || 6)
+const ARC_AUDIT_DAYS_BACK = Number(process.env.ARC_AUDIT_DAYS_BACK || 14)
+const ARC_AUDIT_MAX_FIX = Number(process.env.ARC_AUDIT_MAX_FIX || 60)   // fixes per run; the rest are listed as gaps for tomorrow
+
+// The opp's Install Date as yyyy-mm-dd. The search endpoint returns DATE fields
+// as fieldValueDate (epoch ms); GET-by-id returns the string.
+function oppInstallDay(opp) {
+  for (const c of (opp.customFields || [])) {
+    if (c.id !== GHL_OPP_FIELD_IDS.install_date) continue
+    if (c.fieldValueDate != null) return new Date(Number(c.fieldValueDate)).toISOString().slice(0, 10)
+    const v = c.fieldValueString || c.fieldValue || c.value
+    return v ? String(v).slice(0, 10) : null
+  }
+  return null
+}
+function phoenixNow(dt = new Date()) {
+  const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Phoenix', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit' }).formatToParts(dt)
+  const g = t => (p.find(x => x.type === t) || {}).value || ''
+  return { day: `${g('year')}-${g('month')}-${g('day')}`, hour: Number(g('hour')) % 24 }   // en-CA can report midnight as "24"
+}
+
+async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, maxFix = ARC_AUDIT_MAX_FIX } = {}) {
+  const out = { at: new Date().toISOString(), day: phoenixNow().day, fix, days_back: daysBack, scanned: 0, candidates: 0, checked: 0, ok: 0, gaps: [], fixed: [], failed: [], skipped: null }
+  if (!ARCSITE_API_TOKEN || !GHL_WRITE_TOKEN) { out.skipped = 'not configured'; return out }
+  const floor = new Date(Date.now() - daysBack * 864e5).toISOString().slice(0, 10)
+  const pause = ms => new Promise(res => setTimeout(res, ms))
+  // 1. Every opp installing on/after the floor (whole location, 100 a page).
+  const cands = []
+  let path = `/opportunities/search?location_id=${GHL_LOCATION_ID}&limit=100`, pages = 0
+  while (path && pages < 300) {
+    const j = await ghlGet(path).catch(() => null)
+    if (!j) break
+    for (const op of (j.opportunities || [])) {
+      out.scanned++
+      const pid = oppProjectId(op), inst = oppInstallDay(op)
+      if (pid && inst && inst >= floor) cands.push({ op, pid, inst })
+    }
+    pages++
+    const next = j.meta && j.meta.nextPageUrl
+    path = next && next.startsWith(GHL_BASE) ? next.slice(GHL_BASE.length) : null
+    await pause(150)
+  }
+  out.candidates = cands.length
+  // 2. Compare each against ArcSite. A gap is re-read by id before acting — the
+  //    search index lags writes by minutes, so a fix from an hour ago can still
+  //    look missing there.
+  for (const { op, pid, inst } of cands) {
+    try {
+      const signed = await arcSignedContracts(pid)
+      if (!signed.length) continue
+      const newest = signed[signed.length - 1]
+      const want = newest.total != null ? Math.round(newest.total * 100) / 100 : null
+      const stale = o => {
+        const cur = o.monetaryValue != null ? Math.round(Number(o.monetaryValue) * 100) / 100 : null
+        return signed.length > oppContractEntries(o).length || (want != null && cur != null && Math.abs(cur - want) > 0.01)
+      }
+      out.checked++
+      if (!stale(op)) { out.ok++; continue }
+      const fresh = (await ghlGet(`/opportunities/${op.id}`).catch(() => null)) || {}
+      const opp = fresh.opportunity || fresh
+      if (!opp.id || !stale(opp)) { out.ok++; continue }
+      const gap = { project_id: pid, customer: opp.name, install: inst, contracts: `${oppContractEntries(opp).length} attached / ${signed.length} signed`, value: opp.monetaryValue, signed_total: want }
+      out.gaps.push(gap)
+      if (!fix || out.fixed.length + out.failed.length >= maxFix) continue
+      const project = await arcGet(`/projects/${pid}`).catch(() => null)
+      const c = (project && project.customer) || {}, a = c.address || {}
+      const customer = { name: c.name || opp.name || 'Customer', phone: c.phone || null, email: c.email || null, address1: a.street || null, city: a.city || null, state: a.state || null, postalCode: a.zip_code || null }
+      const r = await arcApplyChangeOrder(pid, { opp, contactId: opp.contactId || null, customer, signed, newTotal: want, via: 'daily_audit' })
+      await arcLog(r)
+      const cal = r.calendar && typeof r.calendar === 'object' ? (r.calendar.job ? r.calendar.job.jobNumber : r.calendar.error || null) : r.calendar
+      ;(r.ok ? out.fixed : out.failed).push({ ...gap, pdf: r.pdf, stage_moved: r.stage_moved, calendar: cal, error: r.error })
+      await pause(500)
+    } catch (e) { out.failed.push({ project_id: pid, install: inst, error: e.message || 'audit failed' }) }
+  }
+  if (SUPABASE_URL && SERVICE_KEY) {
+    await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`,
+      { key: ARC_AUDIT_KEY, value: { ...out, gaps: out.gaps.slice(0, 100) } }, 'resolution=merge-duplicates').catch(() => {})
+  }
+  return out
+}
+async function arcContractAuditLast() {
+  if (!SUPABASE_URL || !SERVICE_KEY) return null
+  const rows = await restGet(`/rest/v1/app_settings?key=eq.${ARC_AUDIT_KEY}&select=value`).catch(() => [])
+  return (Array.isArray(rows) && rows[0] && rows[0].value) || null
+}
+let _arcAuditRunning = false
+async function arcContractAuditTick() {
+  if (_arcAuditRunning) return
+  const { day, hour } = phoenixNow()
+  if (hour !== ARC_AUDIT_HOUR) return
+  const last = await arcContractAuditLast()
+  if (last && last.day === day) return   // already ran today (survives a redeploy)
+  _arcAuditRunning = true
+  try { await arcContractAudit({ fix: true }) } finally { _arcAuditRunning = false }
+}
+
 async function arcValueSweep() {
   const out = { scanned: 0, verified: 0, confirmed: 0, reprocessed: [], skipped: null }
   if (!ARCSITE_API_TOKEN || !GHL_WRITE_TOKEN || !SUPABASE_URL || !SERVICE_KEY) { out.skipped = 'not configured'; return out }
@@ -2875,6 +2983,22 @@ app.post('/api/arcsite/change-order', async (req, res) => {
   catch (e) { const r = { ok: false, error: e.message || 'change order failed' }; await arcLog(r); res.status(200).json(r) }
 })
 
+// The daily contract audit by hand (POST, takes a few minutes; body
+// { fix?: false, days_back?: n }) and its last stored result (GET).
+app.get('/api/arcsite/contract-audit', async (req, res) => {
+  if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
+  res.json((await arcContractAuditLast().catch(() => null)) || { ok: false, error: 'no audit has run yet' })
+})
+app.post('/api/arcsite/contract-audit', async (req, res) => {
+  if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
+  let body = {}
+  try { body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {}) } catch {}
+  const fix = body.fix !== false && body.fix !== 'false'
+  const daysBack = Number(body.days_back) > 0 ? Number(body.days_back) : undefined
+  try { res.json(await arcContractAudit({ fix, daysBack })) }
+  catch (e) { res.status(200).json({ ok: false, error: e.message || 'audit failed' }) }
+})
+
 // Run the value-reconcile sweep on demand (same auth as the feed). Returns a
 // summary of what it scanned, confirmed and reprocessed — no body needed.
 app.post('/api/arcsite/value-sweep', async (req, res) => {
@@ -2966,6 +3090,11 @@ setInterval(() => arcPendingReconcile().catch(() => {}), 5 * 60_000).unref?.()
 // approvals hit GHL, the rest skip via the confirmed-total map).
 setTimeout(() => arcValueSweep().catch(() => {}), 90_000).unref?.()
 setInterval(() => arcValueSweep().catch(() => {}), 10 * 60_000).unref?.()
+
+// The daily FULL contract audit — every opp installing recently or in the
+// future, checked against ArcSite's signed contracts. The tick runs every 15
+// min and does the work once, in the ARC_AUDIT_HOUR hour (Phoenix).
+setInterval(() => arcContractAuditTick().catch(() => {}), 15 * 60_000).unref?.()
 
 app.use(express.static(dist))
 // SPA fallback — every non-file route serves the app shell.
