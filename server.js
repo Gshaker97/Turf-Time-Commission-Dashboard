@@ -2043,7 +2043,7 @@ async function arcValueSweep() {
       if (!pid || latest.has(pid)) continue
       const total = Number(p.total)
       if (!arcCommitted(p.status) || !isFinite(total)) continue
-      latest.set(pid, { total, customer_name: p.customer_name, customer_email: p.customer_email })
+      latest.set(pid, { total, project_id: pid, customer_name: p.customer_name, customer_email: p.customer_email })
     }
   }
   out.scanned = latest.size
@@ -2199,7 +2199,14 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
       const full = pr.proposal_options ? pr : await arcGet(`/proposals/${pr.proposal_id}`).catch(() => null)
       if (!full) continue
       const opt = (full.proposal_options || [])[0]
-      if (sellTotal == null) sellTotal = Number(full.total) || (opt && Number(opt.total)) || null
+      // Take the total ONLY from a committed proposal. With an explicit
+      // proposalId (the real webhook) that one IS the committed one; without it
+      // (reprocess / value sweep) the list is newest-first, so the newest
+      // APPROVED wins — never a later PENDING/DRAFT edit's option total, which
+      // used to overwrite the signed amount with an unsigned estimate.
+      if (sellTotal == null && (proposalId || arcCommitted(full.status))) {
+        sellTotal = Number(full.total) || (opt && Number(opt.total)) || null
+      }
       if (!fallbackOptPdf && opt && opt.pdf_url) fallbackOptPdf = opt.pdf_url
       // Signed proposal-level pdf from the committed/approved proposal wins.
       if (!pdfUrl && full.pdf_url && (proposalId || arcCommitted(full.status))) pdfUrl = full.pdf_url
