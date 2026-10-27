@@ -2079,6 +2079,38 @@ async function arcValueSweep() {
   return out
 }
 
+// ── Duplicate-opportunity audit ─────────────────────────────────────────────
+// One Project ID should map to exactly ONE opportunity; two usually means a job
+// landed in BOTH the outside and estimator pipelines (a routing slip) or was
+// created twice. Pages the whole location, groups by Project ID, returns every
+// group with 2+ opps. READ-ONLY: fixing a duplicate (deleting the stray) is a
+// per-case human call — the keeper is normally the one in the correct pipeline.
+async function arcDuplicateOppScan({ max = 20000 } = {}) {
+  const PIPE = { [GHL_PIPELINES.outside.id]: 'outside', [GHL_PIPELINES.estimator.id]: 'estimator' }
+  const byProj = new Map()
+  let path = `/opportunities/search?location_id=${GHL_LOCATION_ID}&limit=100`
+  let pages = 0, seen = 0
+  while (path && seen < max && pages < 300) {
+    const j = await ghlGet(path).catch(() => null)
+    if (!j) break
+    for (const op of (j.opportunities || [])) {
+      seen++
+      const pid = oppProjectId(op)
+      if (!pid) continue
+      if (!byProj.has(pid)) byProj.set(pid, [])
+      byProj.get(pid).push({ id: op.id, name: op.name, value: op.monetaryValue, pipeline: PIPE[op.pipelineId] || op.pipelineId, status: op.status, created: op.createdAt })
+    }
+    pages++
+    const next = j.meta && j.meta.nextPageUrl
+    path = next && next.startsWith(GHL_BASE) ? next.slice(GHL_BASE.length) : null
+  }
+  const duplicates = [...byProj.entries()]
+    .filter(([, v]) => v.length > 1)
+    .map(([project_id, opps]) => ({ project_id, name: opps[0].name, count: opps.length, opps }))
+    .sort((a, b) => b.count - a.count)
+  return { scanned: seen, pages, distinct_projects: byProj.size, duplicate_count: duplicates.length, duplicates }
+}
+
 // ── New-sale text alert ─────────────────────────────────────────────────────
 // When a deal comes in, text a fixed set of GHL contacts a one-line summary.
 // Fires once per project; needs GHL_SMS_TOKEN (a key with the Conversations
@@ -2649,6 +2681,12 @@ app.post('/api/arcsite/reprocess', async (req, res) => {
 app.post('/api/arcsite/value-sweep', async (req, res) => {
   if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
   try { res.json(await arcValueSweep()) }
+  catch (e) { res.status(200).json({ ok: false, error: e.message }) }
+})
+// Read-only audit of opportunities sharing a Project ID (same auth as the feed).
+app.post('/api/arcsite/duplicate-opps', async (req, res) => {
+  if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
+  try { res.json(await arcDuplicateOppScan()) }
   catch (e) { res.status(200).json({ ok: false, error: e.message }) }
 })
 
