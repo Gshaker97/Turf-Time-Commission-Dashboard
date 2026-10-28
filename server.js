@@ -3317,9 +3317,19 @@ async function ghlFullSnapshot() {
   const oppField = {}, conField = {}
   for (const f of (oppDefs.customFields || [])) oppField[f.id] = { name: f.name, type: f.dataType }
   for (const f of (conDefs.customFields || [])) conField[f.id] = { name: f.name, type: f.dataType }
+  // Field names are kept exactly as GHL has them — several carry a trailing
+  // space ("Commission ", "Job Price ", "New Price ") — so lookups go through
+  // ghlFld(), which ignores spacing and case. DATE fields arrive as epoch ms on
+  // contacts and are rendered as yyyy-mm-dd.
   const resolve = (fields, defs) => {
     const out = {}
-    for (const c of (fields || [])) { const def = defs[c.id]; if (!def) continue; if (def.type === 'FILE_UPLOAD') continue; out[def.name] = ghlFieldValue(c) }
+    for (const c of (fields || [])) {
+      const def = defs[c.id]; if (!def || def.type === 'FILE_UPLOAD') continue
+      let v = ghlFieldValue(c)
+      if (def.type === 'DATE' && typeof v === 'number') v = new Date(v).toISOString().slice(0, 10)
+      if (def.type === 'DATE' && typeof v === 'string' && /^\d{12,}$/.test(v)) v = new Date(Number(v)).toISOString().slice(0, 10)
+      out[def.name] = v
+    }
     return out
   }
   // 1. Every opportunity.
@@ -3374,6 +3384,14 @@ async function ghlFullSnapshot() {
   return { generatedAt: new Date().toISOString(), pipelines, fields: { opportunity: Object.values(oppField).map(f => f.name), contact: Object.values(conField).map(f => f.name) }, opportunities, contacts, meta: { opportunity_pages: pages, contact_pages: cpages, contacts_kept: Object.keys(contacts).length, partial, errors } }
 }
 const ghlOf = d => d.ghl || { pipelines: [], fields: {}, opportunities: [], contacts: {}, meta: {} }
+// A resolved field by name, ignoring case and stray spaces ("Baseline Price",
+// "Commission " and "commission" all match).
+const ghlFld = (fields, name) => {
+  if (!fields) return null
+  const want = String(name).toLowerCase().replace(/\s+/g, '')
+  for (const k of Object.keys(fields)) if (k.toLowerCase().replace(/\s+/g, '') === want) return fields[k]
+  return null
+}
 const ghlErr = d => (d.sources.ghl || {}).status === 'ok' ? undefined : (d.sources.ghl || {}).status
 const numOf = v => { if (v == null || v === '') return null; const n = Number(String(v).replace(/[^0-9.-]/g, '')); return Number.isFinite(n) ? n : null }
 analystRoute('/api/analyst/ghl/opportunities', 'ghl', (d, req) => {
@@ -3406,39 +3424,48 @@ analystRoute('/api/analyst/ghl/reconcile', 'ghl', (d, req) => {
   const dealByPid = {}; for (const x of (d.site && d.site.deals) || []) if (x.project_id) dealByPid[x.project_id] = x
   const days = clampInt(req.query.days, 0, 2000), floor = days ? dayFloor(days) : '', limit = clampInt(req.query.limit, 300, 3000)
   const onlyIssues = String(req.query.issues_only || '') === '1', q = String(req.query.q || '').toLowerCase()
+  // Scope by INSTALL date. The sync/backfill work covered installs from
+  // 2026-10-13 on; older jobs predate it (most carry no contract in GHL by
+  // history, not by fault). Default = in-scope only; install_since=2020-01-01
+  // for everything. Opps with no install date are always included.
+  const installSince = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.install_since || '')) ? String(req.query.install_since) : '2026-10-13'
   const counts = {}, rows = []
+  let checked = 0, skippedHistorical = 0
   for (const o of g.opportunities) {
     if (!o.project_id) continue
     if (floor && String(o.updated || '').slice(0, 10) < floor) continue
     if (o.status === 'lost' || o.status === 'abandoned') continue
+    if (o.install_date && o.install_date < installSince) { skippedHistorical++; continue }
+    checked++
     const sheet = byPid[o.project_id] || null, contact = g.contacts[o.contact_id] || null, cal = calByOpp[o.id] || null, deal = dealByPid[o.project_id] || null
     const issues = []
-    const value = numOf(o.value), price = numOf(o.fields.Price ?? o.fields['Price ']), sheetPrice = sheet ? numOf(sheet[priceH]) : null
+    const value = numOf(o.value), price = numOf(ghlFld(o.fields, 'Price')), sheetPrice = sheet ? numOf(sheet[priceH]) : null
+    const ob = numOf(ghlFld(o.fields, 'Baseline Price')), oc = numOf(ghlFld(o.fields, 'Commission'))
     if (!sheet) issues.push('no AI-sheet Jobs row for this Project ID')
     else {
       if (sheetPrice != null && value != null && !arcSame(sheetPrice, value)) issues.push(`value $${value} ≠ AI-sheet sale price $${sheetPrice}`)
-      const sb = numOf(sheet[baseH]), ob = numOf(o.fields.Baseline ?? o.fields['Baseline '])
-      if (sb != null && ob != null && !arcSame(sb, ob)) issues.push(`Baseline field $${ob} ≠ AI-sheet baseline $${sb}`)
-      if (sb != null && ob == null) issues.push('Baseline field empty (AI sheet has one)')
-      const sc = numOf(sheet[commH]), oc = numOf(o.fields.Commission ?? o.fields['Commission '])
+      const sb = numOf(sheet[baseH])
+      if (sb != null && ob != null && !arcSame(sb, ob)) issues.push(`Baseline Price field $${ob} ≠ AI-sheet baseline $${sb}`)
+      if (sb != null && ob == null) issues.push('Baseline Price field empty (AI sheet has one)')
+      const sc = numOf(sheet[commH])
       if (/outside|knock/i.test(o.pipeline) && sc != null && oc != null && !arcSame(sc, oc)) issues.push(`Commission field $${oc} ≠ AI-sheet commission $${sc}`)
     }
     if (price != null && value != null && !arcSame(price, value)) issues.push(`Price field $${price} ≠ value $${value}`)
     if (o.contracts === 0 && !/new lead/i.test(o.stage)) issues.push('no contract attached')
+    const np = contact ? numOf(ghlFld(contact.fields, 'New Price')) : null, jp = contact ? numOf(ghlFld(contact.fields, 'Job Price')) : null
     if (contact) {
-      const np = numOf(contact.fields['New Price'] ?? contact.fields['New Price ']), jp = numOf(contact.fields['Job Price'] ?? contact.fields['Job Price '])
       if (np != null && value != null && !arcSame(np, value)) issues.push(`contact New Price $${np} ≠ value $${value}`)
       if (np == null && jp != null && value != null && !arcSame(jp, value)) issues.push(`contact Job Price $${jp} ≠ value $${value} (no New Price)`)
     } else if (o.contact_id) issues.push('contact not found in GHL snapshot')
     if (cal && cal.installDate && o.install_date && cal.installDate !== o.install_date) issues.push(`install date ${o.install_date} ≠ calendar ${cal.installDate}`)
     if (cal && cal.value != null && value != null && !arcSame(cal.value, value)) issues.push(`calendar job value $${cal.value} ≠ value $${value}`)
     if (deal && deal.engine && value != null && !arcSame(deal.engine.job_price, value) && !deal.canceled) issues.push(`commission-site job price $${deal.engine.job_price} ≠ value $${value}`)
-    for (const i of issues) { const k = i.replace(/\$[\d.,-]+/g, '$').slice(0, 48); counts[k] = (counts[k] || 0) + 1 }
-    const row = { opportunity_id: o.id, customer: o.name, project_id: o.project_id, pipeline: o.pipeline, stage: o.stage, status: o.status, value, price_field: price, sheet_price: sheetPrice, contracts: o.contracts, install_date: o.install_date, calendar_job: cal ? cal.jobNumber : null, calendar_install: cal ? cal.installDate : null, site_deal_price: deal && deal.engine ? deal.engine.job_price : null, contact_new_price: contact ? numOf(contact.fields['New Price'] ?? contact.fields['New Price ']) : null, updated: o.updated, issues }
+    for (const i of issues) { const k = i.replace(/\$[\d.,-]+/g, '$').replace(/\d{4}-\d{2}-\d{2}/g, 'date'); counts[k] = (counts[k] || 0) + 1 }
+    const row = { opportunity_id: o.id, customer: o.name, project_id: o.project_id, pipeline: o.pipeline, stage: o.stage, status: o.status, value, price_field: price, baseline_field: ob, commission_field: oc, sheet_price: sheetPrice, contracts: o.contracts, install_date: o.install_date, calendar_job: cal ? cal.jobNumber : null, calendar_install: cal ? cal.installDate : null, calendar_value: cal ? cal.value : null, site_deal_price: deal && deal.engine ? deal.engine.job_price : null, contact_new_price: np, contact_job_price: jp, updated: o.updated, issues }
     if ((!onlyIssues || issues.length) && matchesQ(row, q)) rows.push(row)
   }
   rows.sort((a, b) => b.issues.length - a.issues.length || String(b.updated || '').localeCompare(String(a.updated || '')))
-  return { checked: g.opportunities.filter(o => o.project_id && o.status !== 'lost').length, with_issues: rows.filter(r => r.issues.length).length, issue_counts: counts, sheet_rows: sheetJobs.rows.length, error: ghlErr(d) || (d.sources.sheet && d.sources.sheet.status !== 'ok' ? 'sheet: ' + d.sources.sheet.status : undefined), returned: Math.min(rows.length, limit), rows: rows.slice(0, limit) }
+  return { install_since: installSince, checked, skipped_historical: skippedHistorical, with_issues: rows.filter(r => r.issues.length).length, issue_counts: counts, sheet_rows: sheetJobs.rows.length, error: ghlErr(d) || (d.sources.sheet && d.sources.sheet.status !== 'ok' ? 'sheet: ' + d.sources.sheet.status : undefined), returned: Math.min(rows.length, limit), rows: rows.slice(0, limit) }
 }, J)
 
 // ── The fuller calendar feeds (all read from calendar_full) ──────────────────
@@ -3538,7 +3565,7 @@ app.get('/api/analyst/openapi.json', (req, res) => {
       '/api/analyst/ghl/opportunities': op('getGhlOpportunities', 'GHL opportunities with every custom field and contract file', 'JARVIS KEY ONLY. Every opportunity in both pipelines as GHL holds it: pipeline/stage names, status, value, assigned user, Project ID, install date, ALL custom fields by name (Price, Baseline, Markup, Commission, Setter, Closer, Project Manager, Payment Method …), the attached contract files (count + urls), created/updated. contact=1 embeds the contact. Hourly copy (a full GHL crawl).', [days(0, 2000), limit(200), q, qp('stage', 'Stage name contains', { type: 'string' }), qp('pipeline', 'Pipeline name contains', { type: 'string' }), qp('project_id', 'Exact ArcSite Project ID', { type: 'string' }), qp('contracts', '0 = none attached, N = at least N', { type: 'string' }), qp('contact', '1 = embed the contact record')]),
       '/api/analyst/ghl/contacts': op('getGhlContacts', 'GHL contacts behind the opportunities', 'JARVIS KEY ONLY. The contacts on those opportunities: name, phone, email, address, all contact custom fields by name (Job Price, New Price, Install Date, Project Manager, Sales Rep, Baseline Price …) and files in their file fields.', [qp('id', 'Exact contact id', { type: 'string' }), limit(200), q]),
       '/api/analyst/ghl/fields': op('getGhlFields', 'GHL pipelines, stages and field names', 'JARVIS KEY ONLY. Pipeline and stage names/ids and the opportunity + contact custom-field names, plus the crawl meta (pages, partial, errors).'),
-      '/api/analyst/ghl/reconcile': op('getGhlReconcile', 'Double-check: GHL vs AI sheet vs contact vs calendar', 'JARVIS KEY ONLY. For every open opportunity with a Project ID, the money and dates compared across GHL (value, Price/Baseline/Commission fields, contracts attached), the AI sheet (sale price, baseline, commission — the source of truth), the GHL contact (New Price / Job Price), the install calendar (job value, install date) and the commission site (job price). Each row lists its `issues` in plain words; `issue_counts` totals them. issues_only=1 returns only rows with a problem. Sorted worst first.', [qp('issues_only', '1 = only opportunities with at least one issue'), days(0, 2000), limit(300), q]),
+      '/api/analyst/ghl/reconcile': op('getGhlReconcile', 'Double-check: GHL vs AI sheet vs contact vs calendar', 'JARVIS KEY ONLY. For every open opportunity with a Project ID installing on/after install_since (default 2026-10-13, the start of the sync/backfill work; set install_since=2020-01-01 for everything), the money and dates compared across GHL (value, Price / Baseline Price / Commission fields, contracts attached), the AI sheet (sale price, baseline, commission — the source of truth), the GHL contact (New Price / Job Price), the install calendar (job value, install date) and the commission site (job price). Each row lists its `issues` in plain words; `issue_counts` totals them; `skipped_historical` says how many older jobs were left out. issues_only=1 returns only rows with a problem. Sorted worst first.', [qp('install_since', 'Only installs on/after this date (YYYY-MM-DD); default 2026-10-13', { type: 'string' }), qp('issues_only', '1 = only opportunities with at least one issue'), days(0, 2000), limit(300), q]),
       // ── The commission site, read-only, Jarvis key only ──
       '/api/analyst/site/roster': op('getSiteRoster', 'Commission-site roster', 'Every profile on the commission site (JARVIS KEY ONLY): name, email, title/role, admin flag, active, who they report to, director, VP, team name, ghost flag. The login link is withheld. Supports live=1.', [qp('active', 'true or false', { type: 'string' }), q, live]),
       '/api/analyst/site/deals': op('getSiteDeals', 'Every deal with the engine\'s commission math', 'JARVIS KEY ONLY. Every deal row as stored (people, prices, overrides, deductions, financing, bonus fields, status, pay date, gold-check, change alert, hidden/canceled) PLUS `engine`: the commission engine\'s result for that deal — baseline, job price, setter/closer pay, rep commission + %, manager/director/VP overrides, deductions, bonuses, override exclusions. `counts_in_totals` is the site\'s one rule for aggregates. Supports live=1.', [days(120, 2000), limit(300), q, qp('status', 'Status contains', { type: 'string' }), qp('rep', 'Setter or closer name contains', { type: 'string' }), live]),
