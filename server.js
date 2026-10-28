@@ -2134,13 +2134,23 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
   const job = await jobRowForProject(projectId).catch(() => null)
   const arcTotal = newTotal != null ? Math.round(newTotal * 100) / 100 : null
   const sheetPrice = job && job.jobPrice != null ? Math.round(job.jobPrice * 100) / 100 : null
-  const want = sheetPrice != null ? sheetPrice : (arcTotal != null ? arcTotal : cur)
-  const totalChanged = want != null && cur != null && !arcSame(want, cur)
+  // CONSENSUS RULE. The sheet is the truth for the money, but the first GHL
+  // reconcile (Oct 28) showed the sheet does NOT always carry a change order:
+  // Patrick Vogel's row still said $16,947.83 against a signed $16,012.92, and
+  // Ariel / Daryl / Rocio / Spencer likewise. Writing the sheet's number then
+  // would UNDO a correct signed total. So the value is written only when the
+  // sheet and ArcSite agree (or the sheet has no row yet, in which case
+  // ArcSite stands in); when they DISAGREE nothing is written — the dispute is
+  // reported (daily audit `sheet_gaps`, reconcile view) for a human to settle.
+  const disputed = sheetPrice != null && arcTotal != null && !arcSame(sheetPrice, arcTotal)
+  const want = disputed ? cur : (sheetPrice != null ? sheetPrice : (arcTotal != null ? arcTotal : cur))
+  const totalChanged = !disputed && want != null && cur != null && !arcSame(want, cur)
   const attached = oppContractEntries(opp)
   const r = {
     ok: true, via, action: 'change_order', project_id: projectId, customer: customer.name, opportunity_id: opp.id,
-    was: cur, now: want, value_source: sheetPrice != null ? 'ai_sheet' : 'arcsite', sheet_price: sheetPrice, arcsite_total: arcTotal,
-    sheet_lag: sheetPrice == null || (arcTotal != null && !arcSame(sheetPrice, arcTotal)),
+    was: cur, now: want, value_source: disputed ? 'DISPUTED — sheet ≠ ArcSite, value left unchanged' : (sheetPrice != null ? 'ai_sheet' : 'arcsite'),
+    sheet_price: sheetPrice, arcsite_total: arcTotal, disputed,
+    sheet_lag: sheetPrice == null,
     stage_moved: false, contracts: `${attached.length} attached / ${signed.length} signed`, pdf: 'kept',
   }
   let contracts = attached
@@ -2261,7 +2271,10 @@ async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, ma
     for (const op of (j.opportunities || [])) {
       out.scanned++
       const pid = oppProjectId(op), inst = oppInstallDay(op)
-      if (pid && inst && inst >= floor) cands.push({ op, pid, inst })
+      // No Install Date on the opp (common — Ron Little, Rocio Encinas…) used to
+      // mean "never audited"; such opps now qualify by their created date.
+      const key = inst || String(op.createdAt || '').slice(0, 10)
+      if (pid && key && key >= floor) cands.push({ op, pid, inst: inst || null })
     }
     pages++
     const next = j.meta && j.meta.nextPageUrl
@@ -2285,9 +2298,12 @@ async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, ma
       // read-only, always).
       const job = await jobRowForProject(pid).catch(() => null)
       const sheet = job && job.jobPrice != null ? Math.round(job.jobPrice * 100) / 100 : null
+      const disputed = sheet != null && want != null && !arcSame(sheet, want)
       if (!job) out.sheet_gaps.push({ project_id: pid, customer: op.name, install: inst, reason: 'missing from AI sheet', arcsite_total: want })
-      else if (sheet != null && want != null && !arcSame(sheet, want)) out.sheet_gaps.push({ project_id: pid, customer: op.name, install: inst, reason: 'AI sheet differs from ArcSite', sheet_price: sheet, arcsite_total: want })
-      const wantValue = sheet != null ? sheet : want
+      else if (disputed) out.sheet_gaps.push({ project_id: pid, customer: op.name, install: inst, reason: 'AI sheet differs from ArcSite — value NOT changed, needs a human', sheet_price: sheet, arcsite_total: want, ghl_value: op.monetaryValue })
+      // Consensus rule (see arcApplyChangeOrder): a disputed value is never
+      // "fixed" to either side — only contracts are checked for that job.
+      const wantValue = disputed ? null : (sheet != null ? sheet : want)
       const stale = o => {
         const cur = o.monetaryValue != null ? Math.round(Number(o.monetaryValue) * 100) / 100 : null
         return signed.length > oppContractEntries(o).length || (wantValue != null && cur != null && !arcSame(cur, wantValue))
@@ -3435,9 +3451,13 @@ analystRoute('/api/analyst/ghl/reconcile', 'ghl', (d, req) => {
     if (!o.project_id) continue
     if (floor && String(o.updated || '').slice(0, 10) < floor) continue
     if (o.status === 'lost' || o.status === 'abandoned') continue
-    if (o.install_date && o.install_date < installSince) { skippedHistorical++; continue }
-    checked++
     const sheet = byPid[o.project_id] || null, contact = g.contacts[o.contact_id] || null, cal = calByOpp[o.id] || null, deal = dealByPid[o.project_id] || null
+    // Scope date: the opp's Install Date, else the calendar's, else the contact's
+    // Install Date, else when the opp was created — so an opp with an empty
+    // Install Date field is placed in time rather than treated as current.
+    const scopeDate = o.install_date || (cal && cal.installDate) || (contact && ghlFld(contact.fields, 'Install Date')) || String(o.created || '').slice(0, 10)
+    if (scopeDate && String(scopeDate).slice(0, 10) < installSince) { skippedHistorical++; continue }
+    checked++
     const issues = []
     const value = numOf(o.value), price = numOf(ghlFld(o.fields, 'Price')), sheetPrice = sheet ? numOf(sheet[priceH]) : null
     const ob = numOf(ghlFld(o.fields, 'Baseline Price')), oc = numOf(ghlFld(o.fields, 'Commission'))
@@ -3461,7 +3481,7 @@ analystRoute('/api/analyst/ghl/reconcile', 'ghl', (d, req) => {
     if (cal && cal.value != null && value != null && !arcSame(cal.value, value)) issues.push(`calendar job value $${cal.value} ≠ value $${value}`)
     if (deal && deal.engine && value != null && !arcSame(deal.engine.job_price, value) && !deal.canceled) issues.push(`commission-site job price $${deal.engine.job_price} ≠ value $${value}`)
     for (const i of issues) { const k = i.replace(/\$[\d.,-]+/g, '$').replace(/\d{4}-\d{2}-\d{2}/g, 'date'); counts[k] = (counts[k] || 0) + 1 }
-    const row = { opportunity_id: o.id, customer: o.name, project_id: o.project_id, pipeline: o.pipeline, stage: o.stage, status: o.status, value, price_field: price, baseline_field: ob, commission_field: oc, sheet_price: sheetPrice, contracts: o.contracts, install_date: o.install_date, calendar_job: cal ? cal.jobNumber : null, calendar_install: cal ? cal.installDate : null, calendar_value: cal ? cal.value : null, site_deal_price: deal && deal.engine ? deal.engine.job_price : null, contact_new_price: np, contact_job_price: jp, updated: o.updated, issues }
+    const row = { opportunity_id: o.id, customer: o.name, project_id: o.project_id, pipeline: o.pipeline, stage: o.stage, status: o.status, value, price_field: price, baseline_field: ob, commission_field: oc, sheet_price: sheetPrice, contracts: o.contracts, install_date: o.install_date, scope_date: String(scopeDate || '').slice(0, 10) || null, calendar_job: cal ? cal.jobNumber : null, calendar_install: cal ? cal.installDate : null, calendar_value: cal ? cal.value : null, site_deal_price: deal && deal.engine ? deal.engine.job_price : null, contact_new_price: np, contact_job_price: jp, updated: o.updated, issues }
     if ((!onlyIssues || issues.length) && matchesQ(row, q)) rows.push(row)
   }
   rows.sort((a, b) => b.issues.length - a.issues.length || String(b.updated || '').localeCompare(String(a.updated || '')))
