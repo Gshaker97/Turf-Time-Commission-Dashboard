@@ -2936,6 +2936,8 @@ function analystTasks(since) {
     // Built for Jarvis after its review: jobs WITH checklists/to-dos, appointments
     // past AND upcoming, change orders, rep + weekly bonuses, commission fields.
     calendar_full: () => calendarExport('/api/export/analyst?months=6&ahead=120'),
+    // The whole commission site, read-only, for Jarvis alone (see siteSnapshot).
+    site: () => siteSnapshot(),
     pipeline: () => ghlPipelineSnapshot(),
     change_order_audit: async () => ({
       daily_audit: await arcContractAuditLast(),
@@ -2946,8 +2948,9 @@ function analystTasks(since) {
 // Sources quick enough to fetch LIVE inside a bot's ~45s call budget. The other
 // two are copies by nature: the calendar caches its GHL sales crawl for 6 h and
 // the estimates export can take minutes.
-const ANALYST_LIVE = { deals: true, sheet: true, pipeline: true, calendar_jobs: true, calendar_full: true, change_order_audit: true }
+const ANALYST_LIVE = { deals: true, sheet: true, pipeline: true, calendar_jobs: true, calendar_full: true, change_order_audit: true, site: true }
 const ANALYST_SOURCE_NOTE = {
+  site: 'the commission site database (Supabase, service role, READ ONLY): roster, every deal with the commission engine\'s math, payroll runs, adjustments + deductions ledger, locks, payments, notes, edit history, goals, competitions, leads, teams, settings',
   calendar_full: "the install calendar's database via its /api/export/analyst feed: jobs + checklists, appointments past and upcoming, change orders, bonuses",
   deals: 'commission database, computed by the commission engine',
   sheet: 'Google Sheet "AI Commissions" (Jobs + Schedule tabs); the server keeps a 60 s cache',
@@ -3004,10 +3007,13 @@ function analystData(req) {
 // stale or incomplete data can never look current. `?live=1` fetches the
 // route's source fresh (sources that support it; 30 s budget) and also
 // refreshes that slot of the cache.
-function analystRoute(path, sourceKey, pick) {
+function analystRoute(path, sourceKey, pick, { jarvisOnly = false } = {}) {
   app.get(path, async (req, res) => {
     const caller = analystAuthorized(req)
     if (!caller) return res.status(401).json(err('Unauthorized'))
+    // The commission-site views are for Jarvis's key alone (per Garrison: full
+    // view for Jarvis only) — the dashboard key never sees payroll or the roster.
+    if (jarvisOnly && caller !== 'jarvis') return res.status(403).json(err('This view is available to Jarvis only'))
     let data = analystData(req)
     let liveNote, servedLive = false
     if (String(req.query.live) === '1' && sourceKey) {
@@ -3086,6 +3092,193 @@ for (const [name, key] of [['jobs', 'calendar_jobs'], ['estimates', 'calendar_es
     return { total: all.length, matched: rows.length, returned: Math.min(rows.length, limit), error: st === 'ok' ? undefined : st, rows: rows.slice(0, limit) }
   })
 }
+// ── The commission site itself, read-only, for Jarvis ────────────────────────
+// Everything the site holds, through the SAME engine the Payroll and Deals
+// pages use (src/utils/commission.js — stored amounts, override exclusions,
+// bonuses, splits, rate eras all respected), so Jarvis never sees a number the
+// site would not. Reads only: the service key is used for SELECTs and nothing
+// here can write. Served to the Jarvis key alone.
+async function restAll(path) {
+  const rows = []
+  for (let offset = 0; ; ) {
+    const page = await restGet(`${path}${path.includes('?') ? '&' : '?'}limit=1000&offset=${offset}`)
+    if (!Array.isArray(page)) break
+    rows.push(...page)
+    if (page.length < 1000) break
+    offset += page.length
+  }
+  return rows
+}
+const SITE_SETTINGS_KEYS = ['deal_statuses', 'statuses', 'payment_methods', 'offices', 'override_rates', 'pay_date_rule', 'data_start_date', 'weekly_goal', 'override_exclusion_items', 'sync_excluded_reps', 'sync_skip_names', 'estimates_from_leads_date', 'feed_non_reps', 'perf_default_team', 'perf_floors', 'note_notify', 'payroll_unlocks', 'sync_heartbeat', 'watchdog_heartbeat', 'arcsite_contract_audit', 'arcsite_last_result']
+const SITE_FINALIZED = /pay finalized|^paid$/i
+const siteCanceled = d => /cancel/i.test(String(d.status || ''))
+
+async function siteSnapshot() {
+  if (!SUPABASE_URL || !SERVICE_KEY) throw new Error('site database not configured')
+  // Rate eras from settings so engine defaults match the site (as exportDeals does).
+  try {
+    const cfg = await restGet(`/rest/v1/app_settings?select=value&key=eq.override_rates`)
+    if (Array.isArray(cfg[0]?.value) && cfg[0].value.length) setOverrideRateSchedule(cfg[0].value)
+  } catch { /* legacy constants apply */ }
+  const d90 = dayFloor(90), d180 = dayFloor(180)
+  const tables = {
+    profiles: `/rest/v1/profiles?select=*&order=name.asc`,
+    deals: `/rest/v1/deals?select=${encodeURIComponent('*,setter:setter_id(name),closer:closer_id(name),manager:manager_id(name),director:director_id(name),vp:vp_id(name)')}&order=sale_date.desc`,
+    payments: `/rest/v1/payments?select=*`,
+    payroll_adjustments: `/rest/v1/payroll_adjustments?select=*`,
+    payroll_locks: `/rest/v1/payroll_locks?select=*`,
+    payroll_lock_overrides: `/rest/v1/payroll_lock_overrides?select=*`,
+    deal_notes: `/rest/v1/deal_notes?select=*&created_at=gte.${d180}&order=created_at.desc`,
+    deal_history: `/rest/v1/deal_history?select=*&limit=3000`,
+    monthly_goals: `/rest/v1/monthly_goals?select=*`,
+    rep_goals: `/rest/v1/rep_goals?select=*`,
+    personal_goals: `/rest/v1/personal_goals?select=*`,
+    competitions: `/rest/v1/competitions?select=*`,
+    leads: `/rest/v1/leads?select=*&appointment_at=gte.${d180}&order=appointment_at.desc`,
+    weekly_stats: `/rest/v1/weekly_stats?select=*`,
+    field_activity: `/rest/v1/field_activity?select=*&activity_date=gte.${d90}`,
+    team_changes: `/rest/v1/team_changes?select=*`,
+    pending_team_moves: `/rest/v1/pending_team_moves?select=*`,
+    sales_teams: `/rest/v1/sales_teams?select=*`,
+    team_members: `/rest/v1/team_members?select=*`,
+    bonus_tiers: `/rest/v1/bonus_tiers?select=*`,
+    app_settings: `/rest/v1/app_settings?select=key,value&key=in.(${SITE_SETTINGS_KEYS.join(',')})`,
+  }
+  const out = { generatedAt: new Date().toISOString(), tables: {}, errors: {} }
+  await Promise.all(Object.entries(tables).map(async ([name, path]) => {
+    try { out.tables[name] = await restAll(path) }
+    catch (e) { out.tables[name] = []; out.errors[name] = e.message || 'read failed' }   // one missing table never hides the rest
+  }))
+  const T = out.tables
+  // Roster: the login link and nothing else is withheld.
+  const byId = {}
+  for (const p of T.profiles) byId[p.id] = p
+  const nameOf = id => (id && byId[id] && byId[id].name) || null
+  out.roster = T.profiles.map(p => { const { auth_id, ...rest } = p; return { ...rest, reports_to: nameOf(p.manager_id), director: nameOf(p.director_id), vp: nameOf(p.vp_id) } })
+  // Deals with the engine's math on each row.
+  out.deals = T.deals.filter(d => d.sale_date).map(d => {
+    const a = dealAmounts(d)
+    const solo = !d.closer_id || d.setter_id === d.closer_id
+    return {
+      ...d,
+      setter: d.setter?.name || null, closer: d.closer?.name || null, manager: d.manager?.name || null, director: d.director?.name || null, vp: d.vp?.name || null,
+      counts_in_totals: !siteCanceled(d) && d.hidden !== true, canceled: siteCanceled(d), finalized: SITE_FINALIZED.test(String(d.status || '')),
+      engine: {
+        baseline: money(a.baseline), job_price: money(a.job), setter: money(a.setter), closer: solo ? 0 : money(a.closer), solo,
+        rep_commission: money(a.repCommission), commission_pct: pctOf(a.repCommission, a.baseline),
+        manager: d.manager_id ? money(a.manager) : 0, director: d.director_id ? money(a.director) : 0, vp: d.vp_id ? money(a.vp) : 0,
+        overrides: money(a.overrides), total_commission: money(a.totalCommission),
+        deduction: money(a.deduction), manual_deduction: money(a.manualDeduction), dealer_fee: money(a.dealerFee), financed: money(a.financed),
+        bonus: money(a.bonus), bonus_setter: money(a.bonusSetter), bonus_closer: money(a.bonusCloser), bonus_from: a.bonusFrom,
+        exclusions_total: money(a.exclusionsTotal), override_base: money(a.overrideBase),
+      },
+    }
+  })
+  // Payroll runs, the way the Payroll page counts them: one run per pay_date;
+  // the headline counts FINALIZED deals (Pay Finalized / Paid) + the dated
+  // adjustments; other deals on the run are listed as not-yet-finalized.
+  const runs = {}
+  for (const d of out.deals) {
+    if (!d.pay_date || d.hidden === true) continue
+    const r = (runs[d.pay_date] ||= { pay_date: d.pay_date, deals: [], payees: {}, finalized_deals: 0, pending_deals: 0, payout_finalized: 0, pending_payout: 0, adjustments: 0, unassigned: 0 })
+    const e = d.engine
+    const lines = [
+      { role: 'setter', id: d.setter_id, name: d.setter, amount: e.setter },
+      ...(e.solo ? [] : [{ role: 'closer', id: d.closer_id, name: d.closer, amount: e.closer }]),
+      { role: 'manager', id: d.manager_id, name: d.manager, amount: e.manager },
+      { role: 'director', id: d.director_id, name: d.director, amount: e.director },
+      { role: 'vp', id: d.vp_id, name: d.vp, amount: e.vp },
+    ].filter(l => l.amount)
+    const total = money(lines.reduce((s, l) => s + l.amount, 0))
+    r.deals.push({ id: d.id, deal: d.deal_name, status: d.status, finalized: d.finalized, canceled: d.canceled, install_date: d.install_date, sale_date: d.sale_date, baseline: e.baseline, job_price: e.job_price, commission_verified: d.commission_verified, lines, total })
+    if (d.canceled) continue
+    if (d.finalized) {
+      r.finalized_deals++; r.payout_finalized = money(r.payout_finalized + total)
+      for (const l of lines) {
+        if (!l.id) { r.unassigned = money(r.unassigned + l.amount); continue }
+        const p = (r.payees[l.id] ||= { id: l.id, name: l.name || nameOf(l.id), deal_pay: 0, adjustments: 0, net: 0, deals: 0 })
+        p.deal_pay = money(p.deal_pay + l.amount); p.deals++
+      }
+    } else { r.pending_deals++; r.pending_payout = money(r.pending_payout + total) }
+  }
+  for (const adj of T.payroll_adjustments) {
+    if (!adj.pay_date) continue
+    const r = (runs[adj.pay_date] ||= { pay_date: adj.pay_date, deals: [], payees: {}, finalized_deals: 0, pending_deals: 0, payout_finalized: 0, pending_payout: 0, adjustments: 0, unassigned: 0 })
+    const pid = adj.profile_id || adj.payee_id || adj.user_id
+    const p = (r.payees[pid] ||= { id: pid, name: nameOf(pid), deal_pay: 0, adjustments: 0, net: 0, deals: 0 })
+    p.adjustments = money(p.adjustments + (Number(adj.amount) || 0)); r.adjustments = money(r.adjustments + (Number(adj.amount) || 0))
+  }
+  const lockByDate = {}
+  for (const l of T.payroll_locks) lockByDate[l.pay_date] = l
+  out.payroll = Object.values(runs).sort((a, b) => String(b.pay_date).localeCompare(String(a.pay_date))).map(r => {
+    const payees = Object.values(r.payees).map(p => ({ ...p, net: money(p.deal_pay + p.adjustments) })).sort((a, b) => b.net - a.net)
+    const lock = lockByDate[r.pay_date]
+    return { ...r, payees, total_net: money(payees.reduce((s, p) => s + p.net, 0)), locked: !!lock, lock: lock || null, deals: r.deals.sort((a, b) => String(a.install_date || '9').localeCompare(String(b.install_date || '9'))) }
+  })
+  // Deductions ledger (migration 050): pay_date NULL = a debt; parent_id = a recovery of it.
+  const adjs = T.payroll_adjustments
+  out.ledger = adjs.filter(a => !a.pay_date).map(debt => {
+    const recoveries = adjs.filter(a => a.parent_id === debt.id)
+    const recovered = money(recoveries.reduce((s, a) => s + Math.abs(Number(a.amount) || 0), 0))
+    const owed = Math.abs(Number(debt.amount) || 0)
+    const remaining = money(Math.max(0, owed - recovered))
+    const pid = debt.profile_id || debt.payee_id || debt.user_id
+    return { ...debt, payee: nameOf(pid), owed, recovered, remaining, status: debt.written_off_at ? 'written_off' : remaining === 0 ? 'settled' : recovered > 0 ? 'partial' : 'open', recoveries }
+  })
+  out.settings = Object.fromEntries(T.app_settings.map(s => [s.key, s.value]))
+  out.summary = {
+    profiles: T.profiles.length, deals: out.deals.length, payroll_runs: out.payroll.length, ledger_open: out.ledger.filter(l => l.status === 'open' || l.status === 'partial').length,
+    payments: T.payments.length, adjustments: adjs.length, notes: T.deal_notes.length, history_rows: T.deal_history.length, leads: T.leads.length, competitions: T.competitions.length,
+    table_errors: Object.keys(out.errors).length ? out.errors : undefined,
+  }
+  return out
+}
+const siteOf = d => d.site || { tables: {}, roster: [], deals: [], payroll: [], ledger: [], settings: {}, errors: {} }
+const siteErr = d => (d.sources.site || {}).status === 'ok' ? undefined : (d.sources.site || {}).status
+const J = { jarvisOnly: true }
+analystRoute('/api/analyst/site/roster', 'site', (d, req) => {
+  const q = String(req.query.q || '').toLowerCase(), active = String(req.query.active || '')
+  const rows = siteOf(d).roster.filter(p => matchesQ(p, q) && (active === '' || String(p.active !== false) === active))
+  return { total: siteOf(d).roster.length, returned: rows.length, error: siteErr(d), rows }
+}, J)
+analystRoute('/api/analyst/site/deals', 'site', (d, req) => {
+  const all = siteOf(d).deals
+  const days = clampInt(req.query.days, 120, 2000), limit = clampInt(req.query.limit, 300, 3000), floor = dayFloor(days)
+  const q = String(req.query.q || '').toLowerCase(), status = String(req.query.status || '').toLowerCase(), rep = String(req.query.rep || '').toLowerCase()
+  const rows = all.filter(x => String(x.sale_date || '') >= floor && matchesQ(x, q) && (!status || String(x.status || '').toLowerCase().includes(status)) && (!rep || [x.setter, x.closer].some(n => n && n.toLowerCase().includes(rep))))
+  return { days, since: floor, total: all.length, matched: rows.length, returned: Math.min(rows.length, limit), error: siteErr(d), rows: rows.slice(0, limit) }
+}, J)
+analystRoute('/api/analyst/site/payroll', 'site', (d, req) => {
+  const all = siteOf(d).payroll
+  const payDate = String(req.query.pay_date || ''), days = clampInt(req.query.days, 120, 2000), limit = clampInt(req.query.limit, 12, 200), floor = dayFloor(days)
+  const runs = all.filter(r => payDate ? r.pay_date === payDate : String(r.pay_date) >= floor)
+  const summary = runs.map(r => ({ pay_date: r.pay_date, finalized_deals: r.finalized_deals, pending_deals: r.pending_deals, payout_finalized: r.payout_finalized, adjustments: r.adjustments, total_net: r.total_net, unassigned: r.unassigned, locked: r.locked }))
+  return { runs_total: all.length, returned: Math.min(runs.length, limit), error: siteErr(d), summary, runs: String(req.query.detail || '1') === '0' ? undefined : runs.slice(0, limit) }
+}, J)
+analystRoute('/api/analyst/site/ledger', 'site', (d, req) => {
+  const q = String(req.query.q || '').toLowerCase(), status = String(req.query.status || '').toLowerCase()
+  const rows = siteOf(d).ledger.filter(l => matchesQ(l, q) && (!status || l.status === status))
+  return { total: siteOf(d).ledger.length, returned: rows.length, error: siteErr(d), rows }
+}, J)
+for (const [name, table, dateKey] of [['adjustments', 'payroll_adjustments', 'pay_date'], ['locks', 'payroll_locks', 'pay_date'], ['lock-overrides', 'payroll_lock_overrides', null], ['payments', 'payments', null], ['notes', 'deal_notes', 'created_at'], ['history', 'deal_history', null], ['leads', 'leads', 'appointment_at'], ['competitions', 'competitions', null], ['team-changes', 'team_changes', null], ['pending-team-moves', 'pending_team_moves', null], ['weekly-stats', 'weekly_stats', null], ['field-activity', 'field_activity', 'activity_date']]) {
+  analystRoute(`/api/analyst/site/${name}`, 'site', (d, req) => {
+    const all = (siteOf(d).tables || {})[table] || []
+    const q = String(req.query.q || '').toLowerCase(), limit = clampInt(req.query.limit, 300, 3000)
+    const days = dateKey ? clampInt(req.query.days, 0, 2000) : 0, floor = days ? dayFloor(days) : ''
+    const rows = all.filter(r => matchesQ(r, q) && (!floor || String(r[dateKey] || '').slice(0, 10) >= floor))
+    return { table, total: all.length, matched: rows.length, returned: Math.min(rows.length, limit), error: siteErr(d) || (siteOf(d).errors || {})[table], rows: rows.slice(0, limit) }
+  }, J)
+}
+analystRoute('/api/analyst/site/goals', 'site', d => {
+  const t = siteOf(d).tables || {}
+  return { error: siteErr(d), monthly_goals: t.monthly_goals || [], rep_goals: t.rep_goals || [], personal_goals: t.personal_goals || [] }
+}, J)
+analystRoute('/api/analyst/site/teams', 'site', d => {
+  const t = siteOf(d).tables || {}
+  return { error: siteErr(d), sales_teams: t.sales_teams || [], team_members: t.team_members || [], bonus_tiers: t.bonus_tiers || [], team_changes: t.team_changes || [], pending_team_moves: t.pending_team_moves || [] }
+}, J)
+analystRoute('/api/analyst/site/settings', 'site', d => ({ error: siteErr(d), settings: siteOf(d).settings, summary: siteOf(d).summary }), J)
+
 // ── The fuller calendar feeds (all read from calendar_full) ──────────────────
 const fullOf = d => d.calendar_full || {}
 const calErr = d => (d.sources.calendar_full || {}).status === 'ok' ? undefined : (d.sources.calendar_full || {}).status
@@ -3179,6 +3372,24 @@ app.get('/api/analyst/openapi.json', (req, res) => {
       '/api/analyst/calendar/sales': op('getSales', 'Sales as GHL sees them', 'Sales from the GHL crawl for the last 6 months, each with its pipeline and stage. Hourly copy of a 6-hour cache — the least fresh feed; prefer getPipeline for current GHL state.', [days(0, 400), limit(300), q]),
       '/api/analyst/pipeline': op('getPipeline', 'GHL pipeline snapshot', 'Per-stage counts and dollar totals for both pipelines, plus every opportunity (stage, value, price/baseline/commission, setter/closer, PM, install date, number of contracts attached), newest-updated first. Supports live=1.', [days(90, 400), limit(400), q, qp('stage', 'Only stages whose name contains this text', { type: 'string' }), live]),
       '/api/analyst/audit': op('getChangeOrderAudit', 'ArcSite change-order audit', 'The latest daily audit result (gaps found/fixed, sheet mismatches) and the last ArcSite event the server processed. Supports live=1.', [live]),
+      // ── The commission site, read-only, Jarvis key only ──
+      '/api/analyst/site/roster': op('getSiteRoster', 'Commission-site roster', 'Every profile on the commission site (JARVIS KEY ONLY): name, email, title/role, admin flag, active, who they report to, director, VP, team name, ghost flag. The login link is withheld. Supports live=1.', [qp('active', 'true or false', { type: 'string' }), q, live]),
+      '/api/analyst/site/deals': op('getSiteDeals', 'Every deal with the engine\'s commission math', 'JARVIS KEY ONLY. Every deal row as stored (people, prices, overrides, deductions, financing, bonus fields, status, pay date, gold-check, change alert, hidden/canceled) PLUS `engine`: the commission engine\'s result for that deal — baseline, job price, setter/closer pay, rep commission + %, manager/director/VP overrides, deductions, bonuses, override exclusions. `counts_in_totals` is the site\'s one rule for aggregates. Supports live=1.', [days(120, 2000), limit(300), q, qp('status', 'Status contains', { type: 'string' }), qp('rep', 'Setter or closer name contains', { type: 'string' }), live]),
+      '/api/analyst/site/payroll': op('getSitePayroll', 'Payroll runs with payee lines', 'JARVIS KEY ONLY. One run per pay date, computed the way the Payroll page does: finalized deals (Pay Finalized/Paid) make the payout, with every payee\'s deal pay, dated adjustments and net; not-yet-finalized deals listed separately; unassigned money; lock state. `summary` is the compact list; `runs` carries each deal\'s per-role lines. Supports live=1.', [qp('pay_date', 'One run, YYYY-MM-DD', { type: 'string' }), days(120, 2000), limit(12), qp('detail', '0 = summary only'), live]),
+      '/api/analyst/site/ledger': op('getSiteLedger', 'Deductions owed (ledger)', 'JARVIS KEY ONLY. Debts logged after payout (adjustments with no pay date), each with owed / recovered / remaining, status open | partial | settled | written_off, and its recoveries. Supports live=1.', [qp('status', 'open | partial | settled | written_off', { type: 'string' }), q, live]),
+      '/api/analyst/site/adjustments': op('getSiteAdjustments', 'Payroll adjustments (raw)', 'JARVIS KEY ONLY. Every payroll_adjustments row. Supports live=1.', [days(0, 2000), limit(300), q, live]),
+      '/api/analyst/site/locks': op('getSiteLocks', 'Payroll locks', 'JARVIS KEY ONLY. Locked pay runs with their payee snapshots.', [days(0, 2000), limit(300), q, live]),
+      '/api/analyst/site/lock-overrides': op('getSiteLockOverrides', 'Locked-run overrides', 'JARVIS KEY ONLY. Every admin edit that was pushed through a locked pay run (who, deal, reason, patch).', [limit(300), q, live]),
+      '/api/analyst/site/payments': op('getSitePayments', 'Payments recorded', 'JARVIS KEY ONLY. The payments table.', [limit(300), q, live]),
+      '/api/analyst/site/notes': op('getSiteNotes', 'Deal note threads', 'JARVIS KEY ONLY. Per-deal comment threads from the last 180 days.', [days(0, 2000), limit(300), q, live]),
+      '/api/analyst/site/history': op('getSiteHistory', 'Deal edit history', 'JARVIS KEY ONLY. The deal_history audit log (every insert/update diff, any path; editor null = the sync); latest 3000 rows.', [limit(300), q, live]),
+      '/api/analyst/site/leads': op('getSiteLeads', 'Appointments fed from RepCard', 'JARVIS KEY ONLY. The leads table (one row per appointment, last 180 days): setter, closer, status, disposition, times, pinned/ignored flags.', [days(0, 2000), limit(300), q, live]),
+      '/api/analyst/site/competitions': op('getSiteCompetitions', 'Sales competitions', 'JARVIS KEY ONLY. Competition definitions (type, dates, goal, credit mode, rounds, sides, exclusions).', [limit(300), q, live]),
+      '/api/analyst/site/goals': op('getSiteGoals', 'Goals', 'JARVIS KEY ONLY. Company/office monthly revenue goals, team/rep goals and personal weekly/monthly goals.', [live]),
+      '/api/analyst/site/teams': op('getSiteTeams', 'Teams and bonus pods', 'JARVIS KEY ONLY. Bonus pods (sales_teams, members, tiers) and the reports-to change log + scheduled moves.', [live]),
+      '/api/analyst/site/field-activity': op('getSiteFieldActivity', 'Door-knock activity', 'JARVIS KEY ONLY. field_activity rows (doors per rep per Arizona day), last 90 days.', [days(0, 2000), limit(300), q, live]),
+      '/api/analyst/site/weekly-stats': op('getSiteWeeklyStats', 'Legacy weekly stats', 'JARVIS KEY ONLY. Hand-entered weekly estimate stats kept for pre-cutover history.', [limit(300), q, live]),
+      '/api/analyst/site/settings': op('getSiteSettings', 'Site settings + snapshot summary', 'JARVIS KEY ONLY. Admin-configured settings (statuses, payment methods, offices, override rate eras, pay-date rule, data start date, weekly goal, exclusion items, feed lists) and the snapshot\'s row counts and any table that failed to read.', [live]),
     },
   })
 })
