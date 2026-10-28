@@ -2798,6 +2798,199 @@ app.get('/api/export/deals', async (req, res) => {
   catch (e) { res.status(500).json(err(e.message || 'Export failed')) }
 })
 
+// ── Analyst feed — Garrison's daily-analysis Custom GPT ──────────────────────
+// ONE door, ONE key for the bot: everything it analyzes comes from here, and no
+// database password, GHL token, sheet credential or the calendar's own export
+// key ever leaves our servers (the calendar is proxied with a dedicated key the
+// bot never sees). The bundle is PRE-BUILT — at boot and every ANALYST_TTL_MIN —
+// because a GPT Action gives up after ~45s and the calendar's sales crawl can
+// take minutes; every endpoint serves the cache instantly and `?refresh=1`
+// kicks a rebuild in the background. Full customer details are included by
+// Garrison's choice. The schema the GPT needs is at /api/analyst/openapi.json.
+const ANALYST_API_KEY = (process.env.ANALYST_API_KEY || '').trim()
+const CALENDAR_EXPORT_KEY = (process.env.CALENDAR_EXPORT_KEY || '').trim()
+const ANALYST_TTL_MS = Math.max(10, Number(process.env.ANALYST_TTL_MIN || 60)) * 60_000
+const ANALYST_DEAL_DAYS = Number(process.env.ANALYST_DEAL_DAYS || 180)
+const GHL_OPP_PM_FIELD = 'AhZIAHEvjwpCdNadOhpO'   // opportunity "Project Manager" dropdown
+let _analyst = { at: 0, data: null, building: null }
+
+function analystAuthorized(req) {
+  if (!ANALYST_API_KEY) return false
+  const supplied = String(req.headers['x-api-key'] || '').trim()
+    || String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim()
+  return !!supplied && supplied === ANALYST_API_KEY
+}
+async function calendarExport(path) {
+  if (!CALENDAR_SYNC_URL || !CALENDAR_EXPORT_KEY) throw new Error('calendar export not configured')
+  const resp = await fetch(`${CALENDAR_SYNC_URL}${path}`, { headers: { Authorization: `Bearer ${CALENDAR_EXPORT_KEY}`, Accept: 'application/json' } })
+  if (!resp.ok) throw new Error(`calendar ${path} → ${resp.status}`)
+  return resp.json()
+}
+// The first array inside an export payload, whatever it is called.
+const listOf = x => Array.isArray(x) ? x : ((x && typeof x === 'object' && Object.values(x).find(Array.isArray)) || [])
+const rowDate = r => String(r.installDate || r.install_date || r.closing_date || r.startAt || r.soldAt || r.sale_date || r.createdAt || r.updated || r.updatedAt || '').slice(0, 10)
+const clampInt = (v, d, max) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), max) : d }
+const dayFloor = days => new Date(Date.now() - days * 864e5).toISOString().slice(0, 10)
+const matchesQ = (r, q) => !q || JSON.stringify(r).toLowerCase().includes(q)
+
+// Every opp in both pipelines with its stage NAME, plus per-stage counts/value.
+async function ghlPipelineSnapshot() {
+  const pj = await ghlGet(`/opportunities/pipelines?locationId=${GHL_LOCATION_ID}`)
+  const stageName = {}, pipeName = {}
+  for (const p of (pj.pipelines || [])) { pipeName[p.id] = p.name; for (const s of (p.stages || [])) stageName[s.id] = s.name }
+  const opps = [], stages = {}
+  let path = `/opportunities/search?location_id=${GHL_LOCATION_ID}&limit=100`, pages = 0
+  while (path && pages < 300) {
+    const j = await ghlGet(path)
+    for (const op of (j.opportunities || [])) {
+      const pipeline = pipeName[op.pipelineId] || op.pipelineId, stage = stageName[op.pipelineStageId] || op.pipelineStageId
+      const k = `${pipeline} › ${stage}`
+      stages[k] = stages[k] || { pipeline, stage, count: 0, value: 0 }
+      stages[k].count++; stages[k].value = Math.round((stages[k].value + (Number(op.monetaryValue) || 0)) * 100) / 100
+      opps.push({
+        id: op.id, name: op.name, pipeline, stage, status: op.status, value: op.monetaryValue ?? null,
+        project_id: oppProjectId(op) || null, install_date: oppInstallDay(op),
+        price: oppFieldVal(op, GHL_OPP_FIELD_IDS.price), baseline: oppFieldVal(op, GHL_OPP_FIELD_IDS.baseline),
+        markup: oppFieldVal(op, GHL_OPP_FIELD_IDS.markup), commission: oppFieldVal(op, GHL_OPP_FIELD_IDS.commission),
+        setter: oppFieldVal(op, GHL_OPP_FIELD_IDS.setter), closer: oppFieldVal(op, GHL_OPP_FIELD_IDS.closer),
+        project_manager: oppFieldVal(op, GHL_OPP_PM_FIELD), payment_method: oppFieldVal(op, GHL_OPP_FIELD_IDS.payment_method),
+        contracts: oppContractEntries(op).length, contact_id: op.contactId || null, created: op.createdAt, updated: op.updatedAt,
+      })
+    }
+    pages++
+    const next = j.meta && j.meta.nextPageUrl
+    path = next && next.startsWith(GHL_BASE) ? next.slice(GHL_BASE.length) : null
+    await new Promise(r => setTimeout(r, 150))
+  }
+  opps.sort((a, b) => String(b.updated || '').localeCompare(String(a.updated || '')))
+  return { stages: Object.values(stages), opportunities: opps }
+}
+
+async function analystBuild() {
+  if (_analyst.building) return _analyst.building
+  _analyst.building = (async () => {
+    const started = Date.now()
+    const since = dayFloor(ANALYST_DEAL_DAYS)
+    const tasks = {
+      deals: () => exportDeals(since),
+      sheet: () => readInstallSheet(),
+      calendar_jobs: () => calendarExport('/api/export/jobs'),
+      calendar_estimates: () => calendarExport('/api/export/estimates?months=6'),
+      calendar_sales: () => calendarExport('/api/export/sales?months=6'),
+      pipeline: () => ghlPipelineSnapshot(),
+      change_order_audit: async () => ({
+        daily_audit: await arcContractAuditLast(),
+        last_event: ((await restGet(`/rest/v1/app_settings?key=eq.arcsite_last_result&select=value`).catch(() => []))[0] || {}).value || null,
+      }),
+    }
+    const data = { built_at: new Date().toISOString(), deals_since: since, sources: {} }
+    await Promise.all(Object.entries(tasks).map(async ([k, fn]) => {
+      try { data[k] = await fn(); data.sources[k] = 'ok' }
+      catch (e) { data[k] = null; data.sources[k] = 'failed: ' + (e.message || 'error') }
+    }))
+    data.build_ms = Date.now() - started
+    _analyst = { at: Date.now(), data, building: null }
+    return data
+  })()
+  _analyst.building.catch(() => { _analyst.building = null })
+  return _analyst.building
+}
+// Serve the cache; rebuild in the background when it is past its TTL (or on
+// ?refresh=1) rather than making the GPT wait.
+function analystData(req) {
+  const stale = !_analyst.data || Date.now() - _analyst.at > ANALYST_TTL_MS
+  if ((stale || String(req.query.refresh) === '1') && !_analyst.building) analystBuild().catch(() => {})
+  return _analyst.data
+}
+function analystRoute(path, pick) {
+  app.get(path, (req, res) => {
+    if (!analystAuthorized(req)) return res.status(401).json(err('Unauthorized'))
+    const data = analystData(req)
+    if (!data) return res.status(503).json({ ok: false, error: 'The analyst feed is still building its first bundle — try again in about a minute.', building: !!_analyst.building })
+    try { res.json({ ok: true, built_at: data.built_at, ...pick(data, req) }) }
+    catch (e) { res.status(500).json(err(e.message || 'feed failed')) }
+  })
+}
+
+analystRoute('/api/analyst/summary', d => {
+  const audit = d.change_order_audit && d.change_order_audit.daily_audit
+  return {
+    sources: d.sources, build_ms: d.build_ms,
+    deals: d.deals ? { since: d.deals_since, months: (d.deals.months || []).map(m => ({ month: m.key, label: m.label, deals: m.rows.length })) } : null,
+    sheet: d.sheet ? {
+      jobs: { rows: d.sheet.jobs ? d.sheet.jobs.rows.length : 0, columns: d.sheet.jobs ? d.sheet.jobs.headers : [] },
+      schedule: { rows: d.sheet.schedule ? d.sheet.schedule.rows.length : 0, columns: d.sheet.schedule ? d.sheet.schedule.headers : [] },
+    } : null,
+    calendar: { jobs: listOf(d.calendar_jobs).length, estimates: listOf(d.calendar_estimates).length, sales: listOf(d.calendar_sales).length },
+    pipeline: d.pipeline ? { stages: d.pipeline.stages, opportunities: d.pipeline.opportunities.length } : null,
+    change_order_audit: audit ? { day: audit.day, checked: audit.checked, ok: audit.ok, gaps: (audit.gaps || []).length, fixed: (audit.fixed || []).length, failed: (audit.failed || []).length, sheet_gaps: (audit.sheet_gaps || []).length } : null,
+  }
+})
+analystRoute('/api/analyst/deals', (d, req) => {
+  const days = clampInt(req.query.days, 30, 400), limit = clampInt(req.query.limit, 300, 2000), floor = dayFloor(days)
+  const q = String(req.query.q || '').toLowerCase()
+  const months = (d.deals && d.deals.months || [])
+    .map(m => ({ month: m.key, label: m.label, rows: m.rows.filter(r => String(r.closing_date || '') >= floor && matchesQ(r, q)) }))
+    .filter(m => m.rows.length)
+  let n = 0
+  for (const m of months) { m.rows = m.rows.slice(0, Math.max(0, limit - n)); n += m.rows.length }
+  return { days, since: floor, returned: n, months }
+})
+analystRoute('/api/analyst/sheet', (d, req) => {
+  const tab = String(req.query.tab || 'jobs').toLowerCase() === 'schedule' ? 'schedule' : 'jobs'
+  const t = d.sheet && d.sheet[tab]
+  if (!t) return { tab, columns: [], total: 0, returned: 0, rows: [], error: d.sources.sheet }
+  const q = String(req.query.q || '').toLowerCase(), limit = clampInt(req.query.limit, 300, 3000)
+  const rows = t.rows.filter(r => matchesQ(r, q))
+  return { tab, columns: t.headers, total: t.rows.length, matched: rows.length, returned: Math.min(rows.length, limit), rows: rows.slice(-limit) }
+})
+for (const [name, key] of [['jobs', 'calendar_jobs'], ['estimates', 'calendar_estimates'], ['sales', 'calendar_sales']]) {
+  analystRoute(`/api/analyst/calendar/${name}`, (d, req) => {
+    const all = listOf(d[key])
+    const days = clampInt(req.query.days, 0, 400), limit = clampInt(req.query.limit, 300, 2000), q = String(req.query.q || '').toLowerCase()
+    const floor = days ? dayFloor(days) : ''
+    const rows = all.filter(r => matchesQ(r, q) && (!floor || rowDate(r) >= floor))
+    return { total: all.length, matched: rows.length, returned: Math.min(rows.length, limit), error: d.sources[key] === 'ok' ? undefined : d.sources[key], rows: rows.slice(0, limit) }
+  })
+}
+analystRoute('/api/analyst/pipeline', (d, req) => {
+  if (!d.pipeline) return { stages: [], opportunities: [], error: d.sources.pipeline }
+  const days = clampInt(req.query.days, 90, 400), limit = clampInt(req.query.limit, 400, 2000), floor = dayFloor(days)
+  const q = String(req.query.q || '').toLowerCase(), stage = String(req.query.stage || '').toLowerCase()
+  const rows = d.pipeline.opportunities.filter(o => String(o.updated || '').slice(0, 10) >= floor && matchesQ(o, q) && (!stage || String(o.stage).toLowerCase().includes(stage)))
+  return { days, stages: d.pipeline.stages, matched: rows.length, returned: Math.min(rows.length, limit), opportunities: rows.slice(0, limit) }
+})
+analystRoute('/api/analyst/audit', d => d.change_order_audit || { daily_audit: null, last_event: null })
+
+// The schema a Custom GPT "Action" imports (no secret inside — the key is
+// configured in the GPT as an API-key header named x-api-key).
+app.get('/api/analyst/openapi.json', (req, res) => {
+  const base = (process.env.PUBLIC_SITE_URL || `https://${req.get('host')}`).replace(/\/+$/, '')
+  const qp = (name, description, schema = { type: 'integer' }) => ({ name, in: 'query', required: false, description, schema })
+  const op = (operationId, summary, description, params = []) => ({ get: { operationId, summary, description, parameters: params, responses: { 200: { description: 'OK' }, 401: { description: 'Bad or missing key' }, 503: { description: 'Feed still building — retry in a minute' } } } })
+  const days = (d, m) => qp('days', `Only rows dated in the last N days (default ${d}, max ${m}).`)
+  const limit = d => qp('limit', `Max rows to return (default ${d}).`)
+  const q = qp('q', 'Case-insensitive text filter across every field (customer, rep, PM, city…).', { type: 'string' })
+  const refresh = qp('refresh', 'Set to 1 to rebuild the bundle from live sources in the background (the current one is returned now).')
+  res.json({
+    openapi: '3.1.0',
+    info: { title: 'Turf Time analyst feed', version: '1.0.0', description: 'Read-only daily-analysis data: commission-site deals, the AI Commissions Sheet (Jobs + Schedule), the install / estimator / PM calendar, the GHL pipeline, and the ArcSite change-order audit. Everything is a pre-built bundle refreshed hourly; built_at says how fresh it is.' },
+    servers: [{ url: base }],
+    components: { securitySchemes: { apiKey: { type: 'apiKey', in: 'header', name: 'x-api-key' } } },
+    security: [{ apiKey: [] }],
+    paths: {
+      '/api/analyst/summary': op('getSummary', 'Counts and freshness for every source', 'Start here: which sources loaded, deal counts per month, sheet sizes and columns, calendar counts, pipeline stage totals, and the latest change-order audit summary.', [refresh]),
+      '/api/analyst/deals': op('getDeals', 'Deals with commission math (commission site)', 'Rows computed by the commission engine, grouped by closing month: job price, baseline, markup, setter/closer, overrides, status, pay date, deductions. Canceled deals included and marked.', [days(30, 400), limit(300), q]),
+      '/api/analyst/sheet': op('getSheet', 'AI Commissions Sheet rows', 'Raw rows from the Google Sheet — tab=jobs (every ArcSite sale: project id, customer, rep, baseline, sale price, commission) or tab=schedule (booked installs: date, customer, payment, BOOKED flag). Newest rows are last.', [qp('tab', 'jobs (default) or schedule', { type: 'string', enum: ['jobs', 'schedule'] }), limit(300), q]),
+      '/api/analyst/calendar/jobs': op('getCalendarJobs', 'Install calendar jobs (PM calendar)', 'Every active install job: customer, PM, install date, value, subcontractor, contract line items/sqft, setter/closer, GHL ids.', [days(0, 400), limit(300), q]),
+      '/api/analyst/calendar/estimates': op('getEstimates', 'Estimator appointments', 'Estimate appointments from the reps\' calendars for the last 6 months, each with whether it sold and why (soldBy signals).', [days(0, 400), limit(300), q]),
+      '/api/analyst/calendar/sales': op('getSales', 'Sales as GHL sees them', 'Sales from the GHL crawl for the last 6 months, each with its pipeline and stage.', [days(0, 400), limit(300), q]),
+      '/api/analyst/pipeline': op('getPipeline', 'GHL pipeline snapshot', 'Per-stage counts and dollar totals for both pipelines, plus every opportunity (stage, value, price/baseline/commission, setter/closer, PM, install date, number of contracts attached), newest-updated first.', [days(90, 400), limit(400), q, qp('stage', 'Only stages whose name contains this text', { type: 'string' })]),
+      '/api/analyst/audit': op('getChangeOrderAudit', 'ArcSite change-order audit', 'The latest daily audit result (gaps found/fixed, sheet mismatches) and the last ArcSite event the server processed.'),
+    },
+  })
+})
+
 // Health check — pinged hourly by the Watchdog. Reports whether the
 // user-admin key is configured and which build is running, so a broken deploy
 // or missing SUPABASE_SERVICE_KEY is caught within the hour.
@@ -3161,6 +3354,13 @@ setInterval(() => arcValueSweep().catch(() => {}), 10 * 60_000).unref?.()
 // future, checked against ArcSite's signed contracts. The tick runs every 15
 // min and does the work once, in the ARC_AUDIT_HOUR hour (Phoenix).
 setInterval(() => arcContractAuditTick().catch(() => {}), 15 * 60_000).unref?.()
+
+// The analyst feed's pre-built bundle: first build 3 min after boot, then
+// every ANALYST_TTL_MIN. Only when the bot's key is configured.
+if (ANALYST_API_KEY) {
+  setTimeout(() => analystBuild().catch(() => {}), 3 * 60_000).unref?.()
+  setInterval(() => analystBuild().catch(() => {}), ANALYST_TTL_MS).unref?.()
+}
 
 app.use(express.static(dist))
 // SPA fallback — every non-file route serves the app shell.
