@@ -2831,8 +2831,31 @@ function analystAuthorized(req) {
 async function calendarExport(path) {
   if (!CALENDAR_SYNC_URL || !CALENDAR_EXPORT_KEY) throw new Error('calendar export not configured')
   const resp = await fetch(`${CALENDAR_SYNC_URL}${path}`, { headers: { Authorization: `Bearer ${CALENDAR_EXPORT_KEY}`, Accept: 'application/json' } })
-  if (!resp.ok) throw new Error(`calendar ${path} → ${resp.status}`)
+  if (!resp.ok) {
+    // Keep the upstream's own words — a bare status code hides the cause.
+    const text = (await resp.text().catch(() => '')).replace(/\s+/g, ' ').trim()
+    let detail = text.slice(0, 200)
+    try { const j = JSON.parse(text); detail = j.error || j.message || detail } catch { /* not json */ }
+    throw new Error(`calendar ${path} → ${resp.status}${detail ? `: ${detail}` : ''}`)
+  }
   return resp.json()
+}
+// The upstream's OWN timestamp for a source, when it has one — the moment the
+// data was true, as opposed to fetched_at (when we copied it). Calendar exports
+// stamp generatedAt; the sheet is served from a 60 s server cache; the audit
+// records when it ran. Deals and the pipeline are computed at fetch time.
+function upstreamStamp(name, value) {
+  if (!value) return null
+  if (name === 'sheet') return _sheetCache.at ? new Date(_sheetCache.at).toISOString() : null
+  if (name === 'change_order_audit') return (value.daily_audit && value.daily_audit.at) || null
+  if (name.startsWith('calendar_')) return value.generatedAt || value.builtAt || value.cachedAt || value.indexBuiltAt || (value.meta && value.meta.generatedAt) || null
+  return null
+}
+const withAge = meta => {
+  if (!meta) return meta
+  const asOf = meta.data_as_of || meta.fetched_at
+  const t = asOf ? Date.parse(asOf) : NaN
+  return { ...meta, data_as_of: asOf, age_seconds: Number.isFinite(t) ? Math.max(0, Math.round((Date.now() - t) / 1000)) : null }
 }
 // The first array inside an export payload, whatever it is called.
 const listOf = x => Array.isArray(x) ? x : ((x && typeof x === 'object' && Object.values(x).find(Array.isArray)) || [])
@@ -2910,8 +2933,13 @@ const ANALYST_SOURCE_NOTE = {
 }
 async function fetchSource(name, fn) {
   const t0 = Date.now()
-  try { return { value: await fn(), meta: { status: 'ok', fetched_at: new Date().toISOString(), ms: Date.now() - t0 } } }
-  catch (e) { return { value: null, meta: { status: 'failed: ' + (e.message || 'error'), fetched_at: new Date().toISOString(), ms: Date.now() - t0 } } }
+  try {
+    const value = await fn()
+    const up = upstreamStamp(name, value)
+    return { value, meta: { status: 'ok', fetched_at: new Date().toISOString(), ...(up ? { upstream_generated_at: up, data_as_of: up } : {}), ms: Date.now() - t0 } }
+  } catch (e) {
+    return { value: null, meta: { status: 'failed: ' + (e.message || 'error'), error: e.message || 'error', fetched_at: new Date().toISOString(), ms: Date.now() - t0 } }
+  }
 }
 const withTimeout = (p, ms) => Promise.race([p, new Promise(res => setTimeout(() => res(null), ms))])
 
@@ -2964,7 +2992,7 @@ function analystRoute(path, sourceKey, pick) {
       }
     }
     if (!data) return res.status(503).json({ ok: false, error: 'The analyst feed is still building its first bundle — try again in about a minute.', building: !!_analyst.building })
-    const meta = sourceKey ? (data.sources[sourceKey] || { status: 'missing' }) : undefined
+    const meta = sourceKey ? withAge(data.sources[sourceKey] || { status: 'missing' }) : undefined
     try {
       res.json({
         ok: true, caller, bundle_built_at: data.built_at,
@@ -2978,8 +3006,8 @@ function analystRoute(path, sourceKey, pick) {
 analystRoute('/api/analyst/summary', null, d => {
   const audit = d.change_order_audit && d.change_order_audit.daily_audit
   return {
-    sources: d.sources, build_ms: d.build_ms,
-    freshness: 'Every figure here comes from the hourly bundle; see sources[*].fetched_at. Ask a feed with live=1 for a fresh read where live_supported is true.',
+    sources: Object.fromEntries(Object.entries(d.sources).map(([k, m]) => [k, withAge(m)])), build_ms: d.build_ms,
+    freshness: 'Every figure here comes from the hourly bundle. Per source: fetched_at = when we copied it, data_as_of = when the upstream says it was true (falls back to fetched_at), age_seconds = how old that is right now, error = the upstream\'s own message when it failed. Ask a feed with live=1 for a fresh read where live_supported is true.',
     deals: d.deals ? { since: d.deals_since, months: (d.deals.months || []).map(m => ({ month: m.key, label: m.label, deals: m.rows.length })) } : null,
     sheet: d.sheet ? {
       jobs: { rows: d.sheet.jobs ? d.sheet.jobs.rows.length : 0, columns: d.sheet.jobs ? d.sheet.jobs.headers : [] },
@@ -3038,19 +3066,27 @@ analystRoute('/api/analyst/calendar/tasks', 'calendar_full', (d, req) => {
   const jobs = fullOf(d).jobs || []
   const limit = clampInt(req.query.limit, 400, 3000), q = String(req.query.q || '').toLowerCase(), pm = String(req.query.pm || '').toLowerCase()
   const overdue = String(req.query.overdue || '') === '1', open = String(req.query.open || '') === '1'
+  const kind = String(req.query.kind || '').toLowerCase()   // '' = both, 'task' = checklist steps, 'todo' = custom to-dos
   const days = clampInt(req.query.days, 0, 400), floor = days ? dayFloor(days) : ''
   const rows = []
+  let todos = 0
   for (const j of jobs) {
     if (pm && !(j.pm && String(j.pm.name).toLowerCase().includes(pm))) continue
     if (floor && String(j.installDate || '') < floor) continue
-    for (const t of (j.tasks || [])) {
+    const base = { jobNumber: j.jobNumber, customer: j.customer && j.customer.name, pm: j.pm && j.pm.name, installDate: j.installDate, value: j.value }
+    // Checklist steps AND the job's custom to-dos — one list, told apart by kind.
+    const items = [
+      ...(kind === 'todo' ? [] : (j.tasks || []).map(t => ({ kind: 'task', ...base, ...t }))),
+      ...(kind === 'task' ? [] : (j.todos || []).map(t => ({ kind: 'todo', ...base, key: null, label: t.title, dueAt: t.dueAt, optional: false, requiresFile: false, decision: null, completedAt: t.completedAt, completedBy: null, overdue: !!t.overdue, createdAt: t.createdAt }))),
+    ]
+    todos += (j.todos || []).length
+    for (const t of items) {
       if (overdue && !t.overdue) continue
       if (open && t.completedAt) continue
-      const row = { jobNumber: j.jobNumber, customer: j.customer && j.customer.name, pm: j.pm && j.pm.name, installDate: j.installDate, value: j.value, ...t }
-      if (matchesQ(row, q)) rows.push(row)
+      if (matchesQ(t, q)) rows.push(t)
     }
   }
-  return { jobs: jobs.length, jobs_with_overdue: jobs.filter(j => j.checklist && j.checklist.overdue > 0).length, matched: rows.length, returned: Math.min(rows.length, limit), error: calErr(d), rows: rows.slice(0, limit) }
+  return { jobs: jobs.length, jobs_with_overdue: jobs.filter(j => j.checklist && j.checklist.overdue > 0).length, todos_total: todos, matched: rows.length, returned: Math.min(rows.length, limit), error: calErr(d), rows: rows.slice(0, limit) }
 })
 analystRoute('/api/analyst/calendar/change-orders', 'calendar_full', (d, req) => {
   const all = fullOf(d).change_orders || []
@@ -3086,7 +3122,7 @@ app.get('/api/analyst/openapi.json', (req, res) => {
   const live = qp('live', 'Set to 1 to read this source fresh from its system of record instead of the hourly copy (30 s budget; the response says which you got).')
   res.json({
     openapi: '3.1.0',
-    info: { title: 'Turf Time analyst feed', version: '1.1.0', description: 'Read-only daily-analysis data: commission-site deals, the AI Commissions Sheet (Jobs + Schedule), the install / estimator / PM calendar, the GHL pipeline, and the ArcSite change-order audit. By default each feed serves an hourly COPY; every response carries `source.fetched_at`, `source.mode` (cached copy | live) and `source.status` (ok | failed: …). Treat a failed status or an old fetched_at as missing data, never as current. Feeds whose source.live_supported is true accept live=1 for a fresh read.' },
+    info: { title: 'Turf Time analyst feed', version: '1.2.0', description: 'Read-only daily-analysis data: commission-site deals, the AI Commissions Sheet (Jobs + Schedule), the install / estimator / PM calendar, the GHL pipeline, and the ArcSite change-order audit. By default each feed serves an hourly COPY; every response carries `source.fetched_at` (when we copied it), `source.data_as_of` (when the upstream says the data was true), `source.age_seconds` (how old that is right now), `source.mode` (cached copy | live), `source.status` (ok | failed: …) and, on failure, `source.error` with the upstream\'s own message. Treat a failed status or a large age as missing data, never as current. Feeds whose source.live_supported is true accept live=1 for a fresh read.' },
     servers: [{ url: base }],
     components: { securitySchemes: { apiKey: { type: 'apiKey', in: 'header', name: 'x-api-key' } } },
     security: [{ apiKey: [] }],
@@ -3097,7 +3133,7 @@ app.get('/api/analyst/openapi.json', (req, res) => {
       '/api/analyst/calendar/jobs': op('getCalendarJobs', 'Install calendar jobs (PM calendar)', 'Every active install job: customer, PM, install date, value, subcontractor, contract line items/sqft, setter/closer, GHL ids. Supports live=1.', [days(0, 400), limit(300), q, live]),
       '/api/analyst/calendar/estimates': op('getEstimates', 'Estimator appointments', 'Estimate appointments from the reps\' calendars for the last 6 months, each with whether it sold and why (soldBy signals). Hourly copy only — its export can take minutes.', [days(0, 400), limit(300), q]),
       '/api/analyst/calendar/appointments': op('getAppointments', 'Estimate appointments — past AND upcoming', 'Every estimate appointment from 6 months back to 120 days ahead (isUpcoming flags the future ones): rep/setter/closer, customer, status, notes, follow-up state, and for closed deals the money — dealValue (current total), baseValue, change-order deltas with signed dates, commission bonus, rate override, deduction. Supports live=1.', [qp('upcoming', '1 = only future appointments'), qp('past', '1 = only past appointments'), qp('status', 'Exact status, e.g. CLOSED, FOLLOW_UP, CANCELED', { type: 'string' }), qp('rep', 'Rep / setter / closer name contains', { type: 'string' }), days(0, 400), limit(300), q, live]),
-      '/api/analyst/calendar/tasks': op('getPmTasks', 'PM checklist tasks per install job', 'Every checklist task on every active install job (one row per task): job, customer, PM, install date, task label, due date, completed when/by, decision for yes/no steps, and an overdue flag. Use overdue=1 or open=1 to narrow. Supports live=1.', [qp('overdue', '1 = only overdue tasks'), qp('open', '1 = only incomplete tasks'), qp('pm', 'PM name contains', { type: 'string' }), days(0, 400), limit(400), q, live]),
+      '/api/analyst/calendar/tasks': op('getPmTasks', 'PM checklist tasks and custom to-dos per install job', 'One row per checklist step AND per custom to-do (kind = task | todo) on every active install job — including older jobs whose checklist is still open: job, customer, PM, install date, label, due date, completed when/by, decision for yes/no steps, overdue flag. Use overdue=1, open=1 or kind to narrow. Supports live=1.', [qp('kind', 'task = checklist steps only, todo = custom to-dos only (default both)', { type: 'string', enum: ['task', 'todo'] }), qp('overdue', '1 = only overdue items'), qp('open', '1 = only incomplete items'), qp('pm', 'PM name contains', { type: 'string' }), days(0, 400), limit(400), q, live]),
       '/api/analyst/calendar/change-orders': op('getCalendarChangeOrders', 'Change orders logged on closed deals', 'Each change order with its dollar delta, the date it was signed (credited to that sales week), note, the deal it belongs to, rep and current deal value. Supports live=1.', [days(0, 400), limit(300), q, live]),
       '/api/analyst/calendar/bonuses': op('getBonuses', 'Rep bonuses and the weekly bonus', 'The sales-rep roster, per-rep weekly incentive bonuses (amount, week, note) and the admin-set weekly high-revenue bonus per sales week. Supports live=1.', [q, live]),
       '/api/analyst/calendar/sales': op('getSales', 'Sales as GHL sees them', 'Sales from the GHL crawl for the last 6 months, each with its pipeline and stage. Hourly copy of a 6-hour cache — the least fresh feed; prefer getPipeline for current GHL state.', [days(0, 400), limit(300), q]),
