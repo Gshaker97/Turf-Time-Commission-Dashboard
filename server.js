@@ -2814,11 +2814,19 @@ const ANALYST_DEAL_DAYS = Number(process.env.ANALYST_DEAL_DAYS || 180)
 const GHL_OPP_PM_FIELD = 'AhZIAHEvjwpCdNadOhpO'   // opportunity "Project Manager" dropdown
 let _analyst = { at: 0, data: null, building: null }
 
+// Two READ-ONLY keys, one per consumer, so neither can be confused for the
+// other and either can be rotated alone: ANALYST_API_KEY for Jarvis (the daily
+// analysis bot) and DASHBOARD_READ_KEY for a server-side dashboard. Returns the
+// caller's name or false. Keys live only in Railway env — never in chat, never
+// in browser code.
+const DASHBOARD_READ_KEY = (process.env.DASHBOARD_READ_KEY || '').trim()
 function analystAuthorized(req) {
-  if (!ANALYST_API_KEY) return false
   const supplied = String(req.headers['x-api-key'] || '').trim()
     || String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim()
-  return !!supplied && supplied === ANALYST_API_KEY
+  if (!supplied) return false
+  if (ANALYST_API_KEY && supplied === ANALYST_API_KEY) return 'jarvis'
+  if (DASHBOARD_READ_KEY && supplied === DASHBOARD_READ_KEY) return 'dashboard'
+  return false
 }
 async function calendarExport(path) {
   if (!CALENDAR_SYNC_URL || !CALENDAR_EXPORT_KEY) throw new Error('calendar export not configured')
@@ -2866,27 +2874,53 @@ async function ghlPipelineSnapshot() {
   return { stages: Object.values(stages), opportunities: opps }
 }
 
+// The sources. Each is fetched straight from its system of record — the
+// commission database (through the real commission engine), the Google Sheet,
+// the calendar's database (via its export API), GHL's API — never a screen.
+function analystTasks(since) {
+  return {
+    deals: () => exportDeals(since),
+    sheet: () => readInstallSheet(),
+    calendar_jobs: () => calendarExport('/api/export/jobs'),
+    calendar_estimates: () => calendarExport('/api/export/estimates?months=6'),
+    calendar_sales: () => calendarExport('/api/export/sales?months=6'),
+    pipeline: () => ghlPipelineSnapshot(),
+    change_order_audit: async () => ({
+      daily_audit: await arcContractAuditLast(),
+      last_event: ((await restGet(`/rest/v1/app_settings?key=eq.arcsite_last_result&select=value`).catch(() => []))[0] || {}).value || null,
+    }),
+  }
+}
+// Sources quick enough to fetch LIVE inside a bot's ~45s call budget. The other
+// two are copies by nature: the calendar caches its GHL sales crawl for 6 h and
+// the estimates export can take minutes.
+const ANALYST_LIVE = { deals: true, sheet: true, pipeline: true, calendar_jobs: true, change_order_audit: true }
+const ANALYST_SOURCE_NOTE = {
+  deals: 'commission database, computed by the commission engine',
+  sheet: 'Google Sheet "AI Commissions" (Jobs + Schedule tabs); the server keeps a 60 s cache',
+  calendar_jobs: "the install calendar's database, via its export API",
+  calendar_estimates: "the install calendar's database; its export can take minutes, so this is always the hourly copy",
+  calendar_sales: "GHL, crawled by the install calendar and cached there for 6 h; always the hourly copy",
+  pipeline: 'GHL opportunities API (every opportunity in both pipelines)',
+  change_order_audit: "the ArcSite change-order audit's stored result",
+}
+async function fetchSource(name, fn) {
+  const t0 = Date.now()
+  try { return { value: await fn(), meta: { status: 'ok', fetched_at: new Date().toISOString(), ms: Date.now() - t0 } } }
+  catch (e) { return { value: null, meta: { status: 'failed: ' + (e.message || 'error'), fetched_at: new Date().toISOString(), ms: Date.now() - t0 } } }
+}
+const withTimeout = (p, ms) => Promise.race([p, new Promise(res => setTimeout(() => res(null), ms))])
+
 async function analystBuild() {
   if (_analyst.building) return _analyst.building
   _analyst.building = (async () => {
     const started = Date.now()
     const since = dayFloor(ANALYST_DEAL_DAYS)
-    const tasks = {
-      deals: () => exportDeals(since),
-      sheet: () => readInstallSheet(),
-      calendar_jobs: () => calendarExport('/api/export/jobs'),
-      calendar_estimates: () => calendarExport('/api/export/estimates?months=6'),
-      calendar_sales: () => calendarExport('/api/export/sales?months=6'),
-      pipeline: () => ghlPipelineSnapshot(),
-      change_order_audit: async () => ({
-        daily_audit: await arcContractAuditLast(),
-        last_event: ((await restGet(`/rest/v1/app_settings?key=eq.arcsite_last_result&select=value`).catch(() => []))[0] || {}).value || null,
-      }),
-    }
     const data = { built_at: new Date().toISOString(), deals_since: since, sources: {} }
-    await Promise.all(Object.entries(tasks).map(async ([k, fn]) => {
-      try { data[k] = await fn(); data.sources[k] = 'ok' }
-      catch (e) { data[k] = null; data.sources[k] = 'failed: ' + (e.message || 'error') }
+    await Promise.all(Object.entries(analystTasks(since)).map(async ([k, fn]) => {
+      const r = await fetchSource(k, fn)
+      data[k] = r.value
+      data.sources[k] = { ...r.meta, mode: 'cached copy', refreshed: `every ${Math.round(ANALYST_TTL_MS / 60_000)} min`, live_supported: !!ANALYST_LIVE[k], origin: ANALYST_SOURCE_NOTE[k] }
     }))
     data.build_ms = Date.now() - started
     _analyst = { at: Date.now(), data, building: null }
@@ -2896,26 +2930,52 @@ async function analystBuild() {
   return _analyst.building
 }
 // Serve the cache; rebuild in the background when it is past its TTL (or on
-// ?refresh=1) rather than making the GPT wait.
+// ?refresh=1) rather than making the caller wait.
 function analystData(req) {
   const stale = !_analyst.data || Date.now() - _analyst.at > ANALYST_TTL_MS
   if ((stale || String(req.query.refresh) === '1') && !_analyst.building) analystBuild().catch(() => {})
   return _analyst.data
 }
-function analystRoute(path, pick) {
-  app.get(path, (req, res) => {
-    if (!analystAuthorized(req)) return res.status(401).json(err('Unauthorized'))
-    const data = analystData(req)
+// Every response says, per source, WHEN it was fetched and whether it is the
+// hourly copy or a live read, and carries the source's error if it failed — so
+// stale or incomplete data can never look current. `?live=1` fetches the
+// route's source fresh (sources that support it; 30 s budget) and also
+// refreshes that slot of the cache.
+function analystRoute(path, sourceKey, pick) {
+  app.get(path, async (req, res) => {
+    const caller = analystAuthorized(req)
+    if (!caller) return res.status(401).json(err('Unauthorized'))
+    let data = analystData(req)
+    let liveNote
+    if (String(req.query.live) === '1' && sourceKey) {
+      if (!ANALYST_LIVE[sourceKey]) liveNote = `live not supported for ${sourceKey} — served the copy (${ANALYST_SOURCE_NOTE[sourceKey]})`
+      else {
+        const since = data ? data.deals_since : dayFloor(ANALYST_DEAL_DAYS)
+        const r = await withTimeout(fetchSource(sourceKey, analystTasks(since)[sourceKey]), 30_000)
+        if (r && r.meta.status === 'ok') {
+          const meta = { ...r.meta, mode: 'live', live_supported: true, origin: ANALYST_SOURCE_NOTE[sourceKey] }
+          data = { ...(data || { built_at: null, deals_since: since, sources: {} }), [sourceKey]: r.value, sources: { ...(data ? data.sources : {}), [sourceKey]: meta } }
+          if (_analyst.data) { _analyst.data[sourceKey] = r.value; _analyst.data.sources[sourceKey] = meta }
+        } else liveNote = r ? `live fetch ${r.meta.status} — served the copy` : 'live fetch exceeded 30 s — served the copy'
+      }
+    }
     if (!data) return res.status(503).json({ ok: false, error: 'The analyst feed is still building its first bundle — try again in about a minute.', building: !!_analyst.building })
-    try { res.json({ ok: true, built_at: data.built_at, ...pick(data, req) }) }
-    catch (e) { res.status(500).json(err(e.message || 'feed failed')) }
+    const meta = sourceKey ? (data.sources[sourceKey] || { status: 'missing' }) : undefined
+    try {
+      res.json({
+        ok: true, caller, bundle_built_at: data.built_at,
+        ...(sourceKey ? { source: { name: sourceKey, ...meta, ...(liveNote ? { note: liveNote } : {}) } } : {}),
+        ...pick(data, req),
+      })
+    } catch (e) { res.status(500).json(err(e.message || 'feed failed')) }
   })
 }
 
-analystRoute('/api/analyst/summary', d => {
+analystRoute('/api/analyst/summary', null, d => {
   const audit = d.change_order_audit && d.change_order_audit.daily_audit
   return {
     sources: d.sources, build_ms: d.build_ms,
+    freshness: 'Every figure here comes from the hourly bundle; see sources[*].fetched_at. Ask a feed with live=1 for a fresh read where live_supported is true.',
     deals: d.deals ? { since: d.deals_since, months: (d.deals.months || []).map(m => ({ month: m.key, label: m.label, deals: m.rows.length })) } : null,
     sheet: d.sheet ? {
       jobs: { rows: d.sheet.jobs ? d.sheet.jobs.rows.length : 0, columns: d.sheet.jobs ? d.sheet.jobs.headers : [] },
@@ -2926,7 +2986,7 @@ analystRoute('/api/analyst/summary', d => {
     change_order_audit: audit ? { day: audit.day, checked: audit.checked, ok: audit.ok, gaps: (audit.gaps || []).length, fixed: (audit.fixed || []).length, failed: (audit.failed || []).length, sheet_gaps: (audit.sheet_gaps || []).length } : null,
   }
 })
-analystRoute('/api/analyst/deals', (d, req) => {
+analystRoute('/api/analyst/deals', 'deals', (d, req) => {
   const days = clampInt(req.query.days, 30, 400), limit = clampInt(req.query.limit, 300, 2000), floor = dayFloor(days)
   const q = String(req.query.q || '').toLowerCase()
   const months = (d.deals && d.deals.months || [])
@@ -2936,31 +2996,32 @@ analystRoute('/api/analyst/deals', (d, req) => {
   for (const m of months) { m.rows = m.rows.slice(0, Math.max(0, limit - n)); n += m.rows.length }
   return { days, since: floor, returned: n, months }
 })
-analystRoute('/api/analyst/sheet', (d, req) => {
+analystRoute('/api/analyst/sheet', 'sheet', (d, req) => {
   const tab = String(req.query.tab || 'jobs').toLowerCase() === 'schedule' ? 'schedule' : 'jobs'
   const t = d.sheet && d.sheet[tab]
-  if (!t) return { tab, columns: [], total: 0, returned: 0, rows: [], error: d.sources.sheet }
+  if (!t) return { tab, columns: [], total: 0, returned: 0, rows: [], error: (d.sources.sheet || {}).status }
   const q = String(req.query.q || '').toLowerCase(), limit = clampInt(req.query.limit, 300, 3000)
   const rows = t.rows.filter(r => matchesQ(r, q))
   return { tab, columns: t.headers, total: t.rows.length, matched: rows.length, returned: Math.min(rows.length, limit), rows: rows.slice(-limit) }
 })
 for (const [name, key] of [['jobs', 'calendar_jobs'], ['estimates', 'calendar_estimates'], ['sales', 'calendar_sales']]) {
-  analystRoute(`/api/analyst/calendar/${name}`, (d, req) => {
+  analystRoute(`/api/analyst/calendar/${name}`, key, (d, req) => {
     const all = listOf(d[key])
     const days = clampInt(req.query.days, 0, 400), limit = clampInt(req.query.limit, 300, 2000), q = String(req.query.q || '').toLowerCase()
     const floor = days ? dayFloor(days) : ''
     const rows = all.filter(r => matchesQ(r, q) && (!floor || rowDate(r) >= floor))
-    return { total: all.length, matched: rows.length, returned: Math.min(rows.length, limit), error: d.sources[key] === 'ok' ? undefined : d.sources[key], rows: rows.slice(0, limit) }
+    const st = (d.sources[key] || {}).status
+    return { total: all.length, matched: rows.length, returned: Math.min(rows.length, limit), error: st === 'ok' ? undefined : st, rows: rows.slice(0, limit) }
   })
 }
-analystRoute('/api/analyst/pipeline', (d, req) => {
-  if (!d.pipeline) return { stages: [], opportunities: [], error: d.sources.pipeline }
+analystRoute('/api/analyst/pipeline', 'pipeline', (d, req) => {
+  if (!d.pipeline) return { stages: [], opportunities: [], error: (d.sources.pipeline || {}).status }
   const days = clampInt(req.query.days, 90, 400), limit = clampInt(req.query.limit, 400, 2000), floor = dayFloor(days)
   const q = String(req.query.q || '').toLowerCase(), stage = String(req.query.stage || '').toLowerCase()
   const rows = d.pipeline.opportunities.filter(o => String(o.updated || '').slice(0, 10) >= floor && matchesQ(o, q) && (!stage || String(o.stage).toLowerCase().includes(stage)))
   return { days, stages: d.pipeline.stages, matched: rows.length, returned: Math.min(rows.length, limit), opportunities: rows.slice(0, limit) }
 })
-analystRoute('/api/analyst/audit', d => d.change_order_audit || { daily_audit: null, last_event: null })
+analystRoute('/api/analyst/audit', 'change_order_audit', d => d.change_order_audit || { daily_audit: null, last_event: null })
 
 // The schema a Custom GPT "Action" imports (no secret inside — the key is
 // configured in the GPT as an API-key header named x-api-key).
@@ -2972,21 +3033,22 @@ app.get('/api/analyst/openapi.json', (req, res) => {
   const limit = d => qp('limit', `Max rows to return (default ${d}).`)
   const q = qp('q', 'Case-insensitive text filter across every field (customer, rep, PM, city…).', { type: 'string' })
   const refresh = qp('refresh', 'Set to 1 to rebuild the bundle from live sources in the background (the current one is returned now).')
+  const live = qp('live', 'Set to 1 to read this source fresh from its system of record instead of the hourly copy (30 s budget; the response says which you got).')
   res.json({
     openapi: '3.1.0',
-    info: { title: 'Turf Time analyst feed', version: '1.0.0', description: 'Read-only daily-analysis data: commission-site deals, the AI Commissions Sheet (Jobs + Schedule), the install / estimator / PM calendar, the GHL pipeline, and the ArcSite change-order audit. Everything is a pre-built bundle refreshed hourly; built_at says how fresh it is.' },
+    info: { title: 'Turf Time analyst feed', version: '1.1.0', description: 'Read-only daily-analysis data: commission-site deals, the AI Commissions Sheet (Jobs + Schedule), the install / estimator / PM calendar, the GHL pipeline, and the ArcSite change-order audit. By default each feed serves an hourly COPY; every response carries `source.fetched_at`, `source.mode` (cached copy | live) and `source.status` (ok | failed: …). Treat a failed status or an old fetched_at as missing data, never as current. Feeds whose source.live_supported is true accept live=1 for a fresh read.' },
     servers: [{ url: base }],
     components: { securitySchemes: { apiKey: { type: 'apiKey', in: 'header', name: 'x-api-key' } } },
     security: [{ apiKey: [] }],
     paths: {
       '/api/analyst/summary': op('getSummary', 'Counts and freshness for every source', 'Start here: which sources loaded, deal counts per month, sheet sizes and columns, calendar counts, pipeline stage totals, and the latest change-order audit summary.', [refresh]),
-      '/api/analyst/deals': op('getDeals', 'Deals with commission math (commission site)', 'Rows computed by the commission engine, grouped by closing month: job price, baseline, markup, setter/closer, overrides, status, pay date, deductions. Canceled deals included and marked.', [days(30, 400), limit(300), q]),
-      '/api/analyst/sheet': op('getSheet', 'AI Commissions Sheet rows', 'Raw rows from the Google Sheet — tab=jobs (every ArcSite sale: project id, customer, rep, baseline, sale price, commission) or tab=schedule (booked installs: date, customer, payment, BOOKED flag). Newest rows are last.', [qp('tab', 'jobs (default) or schedule', { type: 'string', enum: ['jobs', 'schedule'] }), limit(300), q]),
-      '/api/analyst/calendar/jobs': op('getCalendarJobs', 'Install calendar jobs (PM calendar)', 'Every active install job: customer, PM, install date, value, subcontractor, contract line items/sqft, setter/closer, GHL ids.', [days(0, 400), limit(300), q]),
-      '/api/analyst/calendar/estimates': op('getEstimates', 'Estimator appointments', 'Estimate appointments from the reps\' calendars for the last 6 months, each with whether it sold and why (soldBy signals).', [days(0, 400), limit(300), q]),
-      '/api/analyst/calendar/sales': op('getSales', 'Sales as GHL sees them', 'Sales from the GHL crawl for the last 6 months, each with its pipeline and stage.', [days(0, 400), limit(300), q]),
-      '/api/analyst/pipeline': op('getPipeline', 'GHL pipeline snapshot', 'Per-stage counts and dollar totals for both pipelines, plus every opportunity (stage, value, price/baseline/commission, setter/closer, PM, install date, number of contracts attached), newest-updated first.', [days(90, 400), limit(400), q, qp('stage', 'Only stages whose name contains this text', { type: 'string' })]),
-      '/api/analyst/audit': op('getChangeOrderAudit', 'ArcSite change-order audit', 'The latest daily audit result (gaps found/fixed, sheet mismatches) and the last ArcSite event the server processed.'),
+      '/api/analyst/deals': op('getDeals', 'Deals with commission math (commission site)', 'Rows computed by the commission engine, grouped by closing month: job price, baseline, markup, setter/closer, overrides, status, pay date, deductions. Canceled deals included and marked. Supports live=1.', [days(30, 400), limit(300), q, live]),
+      '/api/analyst/sheet': op('getSheet', 'AI Commissions Sheet rows', 'Raw rows from the Google Sheet — tab=jobs (every ArcSite sale: project id, customer, rep, baseline, sale price, commission) or tab=schedule (booked installs: date, customer, payment, BOOKED flag). Newest rows are last. Supports live=1.', [qp('tab', 'jobs (default) or schedule', { type: 'string', enum: ['jobs', 'schedule'] }), limit(300), q, live]),
+      '/api/analyst/calendar/jobs': op('getCalendarJobs', 'Install calendar jobs (PM calendar)', 'Every active install job: customer, PM, install date, value, subcontractor, contract line items/sqft, setter/closer, GHL ids. Supports live=1.', [days(0, 400), limit(300), q, live]),
+      '/api/analyst/calendar/estimates': op('getEstimates', 'Estimator appointments', 'Estimate appointments from the reps\' calendars for the last 6 months, each with whether it sold and why (soldBy signals). Hourly copy only — its export can take minutes.', [days(0, 400), limit(300), q]),
+      '/api/analyst/calendar/sales': op('getSales', 'Sales as GHL sees them', 'Sales from the GHL crawl for the last 6 months, each with its pipeline and stage. Hourly copy of a 6-hour cache — the least fresh feed; prefer getPipeline for current GHL state.', [days(0, 400), limit(300), q]),
+      '/api/analyst/pipeline': op('getPipeline', 'GHL pipeline snapshot', 'Per-stage counts and dollar totals for both pipelines, plus every opportunity (stage, value, price/baseline/commission, setter/closer, PM, install date, number of contracts attached), newest-updated first. Supports live=1.', [days(90, 400), limit(400), q, qp('stage', 'Only stages whose name contains this text', { type: 'string' }), live]),
+      '/api/analyst/audit': op('getChangeOrderAudit', 'ArcSite change-order audit', 'The latest daily audit result (gaps found/fixed, sheet mismatches) and the last ArcSite event the server processed. Supports live=1.', [live]),
     },
   })
 })
