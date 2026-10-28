@@ -2840,16 +2840,36 @@ async function calendarExport(path) {
   }
   return resp.json()
 }
-// The upstream's OWN timestamp for a source, when it has one — the moment the
-// data was true, as opposed to fetched_at (when we copied it). Calendar exports
-// stamp generatedAt; the sheet is served from a 60 s server cache; the audit
-// records when it ran. Deals and the pipeline are computed at fetch time.
-function upstreamStamp(name, value) {
-  if (!value) return null
-  if (name === 'sheet') return _sheetCache.at ? new Date(_sheetCache.at).toISOString() : null
-  if (name === 'change_order_audit') return (value.daily_audit && value.daily_audit.at) || null
-  if (name.startsWith('calendar_')) return value.generatedAt || value.builtAt || value.cachedAt || value.indexBuiltAt || (value.meta && value.meta.generatedAt) || null
-  return null
+// What the UPSTREAM says about its own data, kept even when our HTTP call
+// succeeded — a 200 from the calendar can still carry a 6-hour-old GHL crawl
+// or a crawl that FAILED (its rows then under-report sales by ~45%). Returns
+// the upstream's generated/cache timestamps and error, and data_as_of = the
+// OLDEST of them (the moment the data was last true), as opposed to
+// fetched_at (when we copied it).
+function upstreamMeta(name, value) {
+  const m = {}
+  if (!value) return m
+  const meta = value.meta || {}
+  if (name === 'sheet') m.upstream_generated_at = _sheetCache.at ? new Date(_sheetCache.at).toISOString() : null
+  else if (name === 'change_order_audit') m.upstream_generated_at = (value.daily_audit && value.daily_audit.at) || null
+  else if (name === 'calendar_sales') {            // a 6 h GHL crawl cache on the calendar
+    m.upstream_cache_built_at = meta.builtAt || null
+    m.upstream_error = meta.error || null
+  } else if (name === 'calendar_estimates') {      // export time + the GHL "won index" cache behind it
+    m.upstream_generated_at = meta.generatedAt || null
+    m.upstream_cache_built_at = (meta.ghl && meta.ghl.builtAt) || null
+    m.upstream_error = (meta.ghl && meta.ghl.error) || null
+  } else if (name === 'pipeline') {                // our own GHL paging — partial pages are an error
+    m.upstream_generated_at = (value.meta && value.meta.generatedAt) || null
+    if (value.meta && value.meta.partial) m.upstream_error = `partial: ${(value.meta.errors || []).join('; ')}`
+  } else if (name.startsWith('calendar_')) {
+    m.upstream_generated_at = value.generatedAt || meta.generatedAt || meta.builtAt || null
+    m.upstream_error = meta.error || null
+  }
+  const stamps = [m.upstream_generated_at, m.upstream_cache_built_at].filter(Boolean).map(s => Date.parse(s)).filter(Number.isFinite)
+  if (stamps.length) m.data_as_of = new Date(Math.min(...stamps)).toISOString()
+  for (const k of Object.keys(m)) if (m[k] == null) delete m[k]
+  return m
 }
 const withAge = meta => {
   if (!meta) return meta
@@ -2869,10 +2889,16 @@ async function ghlPipelineSnapshot() {
   const pj = await ghlGet(`/opportunities/pipelines?locationId=${GHL_LOCATION_ID}`)
   const stageName = {}, pipeName = {}
   for (const p of (pj.pipelines || [])) { pipeName[p.id] = p.name; for (const s of (p.stages || [])) stageName[s.id] = s.name }
-  const opps = [], stages = {}
-  let path = `/opportunities/search?location_id=${GHL_LOCATION_ID}&limit=100`, pages = 0
+  const opps = [], stages = {}, errors = []
+  let path = `/opportunities/search?location_id=${GHL_LOCATION_ID}&limit=100`, pages = 0, partial = false
   while (path && pages < 300) {
-    const j = await ghlGet(path)
+    let j = null
+    // A page that fails (GHL rate limit / blip) is retried once; if it still
+    // fails the snapshot is marked PARTIAL rather than silently short.
+    for (let attempt = 0; attempt < 2 && !j; attempt++) {
+      try { j = await ghlGet(path) } catch (e) { if (attempt) errors.push(`page ${pages + 1}: ${e.message || 'fetch failed'}`); else await new Promise(r => setTimeout(r, 1500)) }
+    }
+    if (!j) { partial = true; break }
     for (const op of (j.opportunities || [])) {
       const pipeline = pipeName[op.pipelineId] || op.pipelineId, stage = stageName[op.pipelineStageId] || op.pipelineStageId
       const k = `${pipeline} › ${stage}`
@@ -2894,7 +2920,7 @@ async function ghlPipelineSnapshot() {
     await new Promise(r => setTimeout(r, 150))
   }
   opps.sort((a, b) => String(b.updated || '').localeCompare(String(a.updated || '')))
-  return { stages: Object.values(stages), opportunities: opps }
+  return { stages: Object.values(stages), opportunities: opps, meta: { generatedAt: new Date().toISOString(), pages, partial, errors } }
 }
 
 // The sources. Each is fetched straight from its system of record — the
@@ -2935,8 +2961,11 @@ async function fetchSource(name, fn) {
   const t0 = Date.now()
   try {
     const value = await fn()
-    const up = upstreamStamp(name, value)
-    return { value, meta: { status: 'ok', fetched_at: new Date().toISOString(), ...(up ? { upstream_generated_at: up, data_as_of: up } : {}), ms: Date.now() - t0 } }
+    const up = upstreamMeta(name, value)
+    // An upstream error inside a successful call = DEGRADED, never 'ok': the
+    // rows arrived, but the source itself says they are incomplete.
+    const status = up.upstream_error ? `degraded: ${up.upstream_error}` : 'ok'
+    return { value, meta: { status, ...(up.upstream_error ? { error: up.upstream_error } : {}), fetched_at: new Date().toISOString(), ...up, ms: Date.now() - t0 } }
   } catch (e) {
     return { value: null, meta: { status: 'failed: ' + (e.message || 'error'), error: e.message || 'error', fetched_at: new Date().toISOString(), ms: Date.now() - t0 } }
   }
@@ -2952,7 +2981,9 @@ async function analystBuild() {
     await Promise.all(Object.entries(analystTasks(since)).map(async ([k, fn]) => {
       const r = await fetchSource(k, fn)
       data[k] = r.value
-      data.sources[k] = { ...r.meta, mode: 'cached copy', refreshed: `every ${Math.round(ANALYST_TTL_MS / 60_000)} min`, live_supported: !!ANALYST_LIVE[k], origin: ANALYST_SOURCE_NOTE[k] }
+      // No `mode` is stored here: whether a RESPONSE is live or a copy is decided
+      // per request in analystRoute, never inherited from how the slot was filled.
+      data.sources[k] = { ...r.meta, last_fetch_mode: 'bundle', refreshed: `every ${Math.round(ANALYST_TTL_MS / 60_000)} min`, live_supported: !!ANALYST_LIVE[k], origin: ANALYST_SOURCE_NOTE[k] }
     }))
     data.build_ms = Date.now() - started
     _analyst = { at: Date.now(), data, building: null }
@@ -2978,25 +3009,33 @@ function analystRoute(path, sourceKey, pick) {
     const caller = analystAuthorized(req)
     if (!caller) return res.status(401).json(err('Unauthorized'))
     let data = analystData(req)
-    let liveNote
+    let liveNote, servedLive = false
     if (String(req.query.live) === '1' && sourceKey) {
       if (!ANALYST_LIVE[sourceKey]) liveNote = `live not supported for ${sourceKey} — served the copy (${ANALYST_SOURCE_NOTE[sourceKey]})`
       else {
         const since = data ? data.deals_since : dayFloor(ANALYST_DEAL_DAYS)
         const r = await withTimeout(fetchSource(sourceKey, analystTasks(since)[sourceKey]), 30_000)
-        if (r && r.meta.status === 'ok') {
-          const meta = { ...r.meta, mode: 'live', live_supported: true, origin: ANALYST_SOURCE_NOTE[sourceKey] }
+        if (r && r.value != null) {
+          // The slot remembers that a live read filled it (last_fetch_mode) and
+          // when (fetched_at) — but NOT that it is "live": the next cached
+          // request is a copy of this read and will say so.
+          const meta = { ...r.meta, last_fetch_mode: 'live', live_supported: true, origin: ANALYST_SOURCE_NOTE[sourceKey], refreshed: `every ${Math.round(ANALYST_TTL_MS / 60_000)} min` }
           data = { ...(data || { built_at: null, deals_since: since, sources: {} }), [sourceKey]: r.value, sources: { ...(data ? data.sources : {}), [sourceKey]: meta } }
           if (_analyst.data) { _analyst.data[sourceKey] = r.value; _analyst.data.sources[sourceKey] = meta }
+          servedLive = true
+          if (r.meta.status !== 'ok') liveNote = `live read is ${r.meta.status}`
         } else liveNote = r ? `live fetch ${r.meta.status} — served the copy` : 'live fetch exceeded 30 s — served the copy'
       }
     }
     if (!data) return res.status(503).json({ ok: false, error: 'The analyst feed is still building its first bundle — try again in about a minute.', building: !!_analyst.building })
     const meta = sourceKey ? withAge(data.sources[sourceKey] || { status: 'missing' }) : undefined
+    const served = servedLive ? 'live' : 'cached copy'
     try {
       res.json({
         ok: true, caller, bundle_built_at: data.built_at,
-        ...(sourceKey ? { source: { name: sourceKey, ...meta, ...(liveNote ? { note: liveNote } : {}) } } : {}),
+        // served / served_at describe THIS response; fetched_at / data_as_of /
+        // last_fetch_mode describe the data itself.
+        ...(sourceKey ? { source: { name: sourceKey, served, mode: served, served_at: new Date().toISOString(), ...meta, ...(liveNote ? { note: liveNote } : {}) } } : {}),
         ...pick(data, req),
       })
     } catch (e) { res.status(500).json(err(e.message || 'feed failed')) }
@@ -3006,8 +3045,9 @@ function analystRoute(path, sourceKey, pick) {
 analystRoute('/api/analyst/summary', null, d => {
   const audit = d.change_order_audit && d.change_order_audit.daily_audit
   return {
-    sources: Object.fromEntries(Object.entries(d.sources).map(([k, m]) => [k, withAge(m)])), build_ms: d.build_ms,
-    freshness: 'Every figure here comes from the hourly bundle. Per source: fetched_at = when we copied it, data_as_of = when the upstream says it was true (falls back to fetched_at), age_seconds = how old that is right now, error = the upstream\'s own message when it failed. Ask a feed with live=1 for a fresh read where live_supported is true.',
+    sources: Object.fromEntries(Object.entries(d.sources).map(([k, m]) => [k, { served: 'cached copy', ...withAge(m) }])), build_ms: d.build_ms,
+    served_at: new Date().toISOString(),
+    freshness: 'Every figure here is served from the bundle (served = cached copy). Per source: fetched_at = when we last read it (last_fetch_mode says whether that read was the hourly bundle or a live=1 call), data_as_of = the oldest timestamp the upstream itself reports (e.g. the GHL crawl behind calendar_sales), age_seconds = how old that is right now, status = ok | degraded: <upstream error inside a successful call> | failed: <our call failed>. Treat degraded or failed as incomplete. Ask a feed with live=1 for a fresh read where live_supported is true.',
     deals: d.deals ? { since: d.deals_since, months: (d.deals.months || []).map(m => ({ month: m.key, label: m.label, deals: m.rows.length })) } : null,
     sheet: d.sheet ? {
       jobs: { rows: d.sheet.jobs ? d.sheet.jobs.rows.length : 0, columns: d.sheet.jobs ? d.sheet.jobs.headers : [] },
@@ -3122,7 +3162,7 @@ app.get('/api/analyst/openapi.json', (req, res) => {
   const live = qp('live', 'Set to 1 to read this source fresh from its system of record instead of the hourly copy (30 s budget; the response says which you got).')
   res.json({
     openapi: '3.1.0',
-    info: { title: 'Turf Time analyst feed', version: '1.2.0', description: 'Read-only daily-analysis data: commission-site deals, the AI Commissions Sheet (Jobs + Schedule), the install / estimator / PM calendar, the GHL pipeline, and the ArcSite change-order audit. By default each feed serves an hourly COPY; every response carries `source.fetched_at` (when we copied it), `source.data_as_of` (when the upstream says the data was true), `source.age_seconds` (how old that is right now), `source.mode` (cached copy | live), `source.status` (ok | failed: …) and, on failure, `source.error` with the upstream\'s own message. Treat a failed status or a large age as missing data, never as current. Feeds whose source.live_supported is true accept live=1 for a fresh read.' },
+    info: { title: 'Turf Time analyst feed', version: '1.2.1', description: 'Read-only daily-analysis data: commission-site deals, the AI Commissions Sheet (Jobs + Schedule), the install / estimator / PM calendar, the GHL pipeline, and the ArcSite change-order audit. By default each feed serves an hourly COPY. Every response carries a `source` block with two kinds of fields. About THIS response: `served` (live | cached copy) and `served_at`. About the DATA: `fetched_at` (when we last read it) and `last_fetch_mode` (bundle | live), `data_as_of` (the OLDEST timestamp the upstream itself reports — e.g. the 6-hour GHL crawl behind calendar_sales, or the "won index" behind calendar_estimates — falling back to fetched_at), `age_seconds` (how old that is right now), `upstream_generated_at` / `upstream_cache_built_at` / `upstream_error` as reported by the upstream, and `status`: ok | degraded: <the upstream reported an error inside a successful call> | failed: <our call failed>. Treat degraded, failed, or a large age as incomplete data, never as current. Feeds whose source.live_supported is true accept live=1 for a fresh read.' },
     servers: [{ url: base }],
     components: { securitySchemes: { apiKey: { type: 'apiKey', in: 'header', name: 'x-api-key' } } },
     security: [{ apiKey: [] }],
