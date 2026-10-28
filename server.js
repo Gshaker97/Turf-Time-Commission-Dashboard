@@ -2884,6 +2884,9 @@ function analystTasks(since) {
     calendar_jobs: () => calendarExport('/api/export/jobs'),
     calendar_estimates: () => calendarExport('/api/export/estimates?months=6'),
     calendar_sales: () => calendarExport('/api/export/sales?months=6'),
+    // Built for Jarvis after its review: jobs WITH checklists/to-dos, appointments
+    // past AND upcoming, change orders, rep + weekly bonuses, commission fields.
+    calendar_full: () => calendarExport('/api/export/analyst?months=6&ahead=120'),
     pipeline: () => ghlPipelineSnapshot(),
     change_order_audit: async () => ({
       daily_audit: await arcContractAuditLast(),
@@ -2894,8 +2897,9 @@ function analystTasks(since) {
 // Sources quick enough to fetch LIVE inside a bot's ~45s call budget. The other
 // two are copies by nature: the calendar caches its GHL sales crawl for 6 h and
 // the estimates export can take minutes.
-const ANALYST_LIVE = { deals: true, sheet: true, pipeline: true, calendar_jobs: true, change_order_audit: true }
+const ANALYST_LIVE = { deals: true, sheet: true, pipeline: true, calendar_jobs: true, calendar_full: true, change_order_audit: true }
 const ANALYST_SOURCE_NOTE = {
+  calendar_full: "the install calendar's database via its /api/export/analyst feed: jobs + checklists, appointments past and upcoming, change orders, bonuses",
   deals: 'commission database, computed by the commission engine',
   sheet: 'Google Sheet "AI Commissions" (Jobs + Schedule tabs); the server keeps a 60 s cache',
   calendar_jobs: "the install calendar's database, via its export API",
@@ -3014,6 +3018,52 @@ for (const [name, key] of [['jobs', 'calendar_jobs'], ['estimates', 'calendar_es
     return { total: all.length, matched: rows.length, returned: Math.min(rows.length, limit), error: st === 'ok' ? undefined : st, rows: rows.slice(0, limit) }
   })
 }
+// ── The fuller calendar feeds (all read from calendar_full) ──────────────────
+const fullOf = d => d.calendar_full || {}
+const calErr = d => (d.sources.calendar_full || {}).status === 'ok' ? undefined : (d.sources.calendar_full || {}).status
+analystRoute('/api/analyst/calendar/appointments', 'calendar_full', (d, req) => {
+  const all = fullOf(d).appointments || []
+  const limit = clampInt(req.query.limit, 300, 2000), q = String(req.query.q || '').toLowerCase()
+  const status = String(req.query.status || '').toUpperCase(), rep = String(req.query.rep || '').toLowerCase()
+  const upcoming = String(req.query.upcoming || '') === '1', past = String(req.query.past || '') === '1'
+  const days = clampInt(req.query.days, 0, 400), floor = days ? dayFloor(days) : ''
+  const rows = all.filter(a => matchesQ(a, q)
+    && (!status || String(a.status || '').toUpperCase() === status)
+    && (!rep || [a.rep, a.setter, a.closer].some(p => p && String(p.name).toLowerCase().includes(rep)))
+    && (!upcoming || a.isUpcoming) && (!past || !a.isUpcoming)
+    && (!floor || String(a.startAt || '').slice(0, 10) >= floor))
+  return { window: fullOf(d).window, total: all.length, upcoming_total: all.filter(a => a.isUpcoming).length, matched: rows.length, returned: Math.min(rows.length, limit), error: calErr(d), rows: rows.slice(0, limit) }
+})
+analystRoute('/api/analyst/calendar/tasks', 'calendar_full', (d, req) => {
+  const jobs = fullOf(d).jobs || []
+  const limit = clampInt(req.query.limit, 400, 3000), q = String(req.query.q || '').toLowerCase(), pm = String(req.query.pm || '').toLowerCase()
+  const overdue = String(req.query.overdue || '') === '1', open = String(req.query.open || '') === '1'
+  const days = clampInt(req.query.days, 0, 400), floor = days ? dayFloor(days) : ''
+  const rows = []
+  for (const j of jobs) {
+    if (pm && !(j.pm && String(j.pm.name).toLowerCase().includes(pm))) continue
+    if (floor && String(j.installDate || '') < floor) continue
+    for (const t of (j.tasks || [])) {
+      if (overdue && !t.overdue) continue
+      if (open && t.completedAt) continue
+      const row = { jobNumber: j.jobNumber, customer: j.customer && j.customer.name, pm: j.pm && j.pm.name, installDate: j.installDate, value: j.value, ...t }
+      if (matchesQ(row, q)) rows.push(row)
+    }
+  }
+  return { jobs: jobs.length, jobs_with_overdue: jobs.filter(j => j.checklist && j.checklist.overdue > 0).length, matched: rows.length, returned: Math.min(rows.length, limit), error: calErr(d), rows: rows.slice(0, limit) }
+})
+analystRoute('/api/analyst/calendar/change-orders', 'calendar_full', (d, req) => {
+  const all = fullOf(d).change_orders || []
+  const limit = clampInt(req.query.limit, 300, 2000), q = String(req.query.q || '').toLowerCase()
+  const days = clampInt(req.query.days, 0, 400), floor = days ? dayFloor(days) : ''
+  const rows = all.filter(c => matchesQ(c, q) && (!floor || String(c.signedDate || '') >= floor))
+  return { total: all.length, matched: rows.length, returned: Math.min(rows.length, limit), error: calErr(d), rows: rows.slice(0, limit) }
+})
+analystRoute('/api/analyst/calendar/bonuses', 'calendar_full', (d, req) => {
+  const f = fullOf(d), q = String(req.query.q || '').toLowerCase()
+  return { error: calErr(d), reps: f.reps || [], rep_bonuses: (f.rep_bonuses || []).filter(b => matchesQ(b, q)), weekly_bonuses: f.weekly_bonuses || [] }
+})
+
 analystRoute('/api/analyst/pipeline', 'pipeline', (d, req) => {
   if (!d.pipeline) return { stages: [], opportunities: [], error: (d.sources.pipeline || {}).status }
   const days = clampInt(req.query.days, 90, 400), limit = clampInt(req.query.limit, 400, 2000), floor = dayFloor(days)
@@ -3046,6 +3096,10 @@ app.get('/api/analyst/openapi.json', (req, res) => {
       '/api/analyst/sheet': op('getSheet', 'AI Commissions Sheet rows', 'Raw rows from the Google Sheet — tab=jobs (every ArcSite sale: project id, customer, rep, baseline, sale price, commission) or tab=schedule (booked installs: date, customer, payment, BOOKED flag). Newest rows are last. Supports live=1.', [qp('tab', 'jobs (default) or schedule', { type: 'string', enum: ['jobs', 'schedule'] }), limit(300), q, live]),
       '/api/analyst/calendar/jobs': op('getCalendarJobs', 'Install calendar jobs (PM calendar)', 'Every active install job: customer, PM, install date, value, subcontractor, contract line items/sqft, setter/closer, GHL ids. Supports live=1.', [days(0, 400), limit(300), q, live]),
       '/api/analyst/calendar/estimates': op('getEstimates', 'Estimator appointments', 'Estimate appointments from the reps\' calendars for the last 6 months, each with whether it sold and why (soldBy signals). Hourly copy only — its export can take minutes.', [days(0, 400), limit(300), q]),
+      '/api/analyst/calendar/appointments': op('getAppointments', 'Estimate appointments — past AND upcoming', 'Every estimate appointment from 6 months back to 120 days ahead (isUpcoming flags the future ones): rep/setter/closer, customer, status, notes, follow-up state, and for closed deals the money — dealValue (current total), baseValue, change-order deltas with signed dates, commission bonus, rate override, deduction. Supports live=1.', [qp('upcoming', '1 = only future appointments'), qp('past', '1 = only past appointments'), qp('status', 'Exact status, e.g. CLOSED, FOLLOW_UP, CANCELED', { type: 'string' }), qp('rep', 'Rep / setter / closer name contains', { type: 'string' }), days(0, 400), limit(300), q, live]),
+      '/api/analyst/calendar/tasks': op('getPmTasks', 'PM checklist tasks per install job', 'Every checklist task on every active install job (one row per task): job, customer, PM, install date, task label, due date, completed when/by, decision for yes/no steps, and an overdue flag. Use overdue=1 or open=1 to narrow. Supports live=1.', [qp('overdue', '1 = only overdue tasks'), qp('open', '1 = only incomplete tasks'), qp('pm', 'PM name contains', { type: 'string' }), days(0, 400), limit(400), q, live]),
+      '/api/analyst/calendar/change-orders': op('getCalendarChangeOrders', 'Change orders logged on closed deals', 'Each change order with its dollar delta, the date it was signed (credited to that sales week), note, the deal it belongs to, rep and current deal value. Supports live=1.', [days(0, 400), limit(300), q, live]),
+      '/api/analyst/calendar/bonuses': op('getBonuses', 'Rep bonuses and the weekly bonus', 'The sales-rep roster, per-rep weekly incentive bonuses (amount, week, note) and the admin-set weekly high-revenue bonus per sales week. Supports live=1.', [q, live]),
       '/api/analyst/calendar/sales': op('getSales', 'Sales as GHL sees them', 'Sales from the GHL crawl for the last 6 months, each with its pipeline and stage. Hourly copy of a 6-hour cache — the least fresh feed; prefer getPipeline for current GHL state.', [days(0, 400), limit(300), q]),
       '/api/analyst/pipeline': op('getPipeline', 'GHL pipeline snapshot', 'Per-stage counts and dollar totals for both pipelines, plus every opportunity (stage, value, price/baseline/commission, setter/closer, PM, install date, number of contracts attached), newest-updated first. Supports live=1.', [days(90, 400), limit(400), q, qp('stage', 'Only stages whose name contains this text', { type: 'string' }), live]),
       '/api/analyst/audit': op('getChangeOrderAudit', 'ArcSite change-order audit', 'The latest daily audit result (gaps found/fixed, sheet mismatches) and the last ArcSite event the server processed. Supports live=1.', [live]),
