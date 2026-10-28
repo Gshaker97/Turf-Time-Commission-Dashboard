@@ -3100,7 +3100,9 @@ analystRoute('/api/analyst/sheet', 'sheet', (d, req) => {
   if (!t) return { tab, columns: [], total: 0, returned: 0, rows: [], error: (d.sources.sheet || {}).status }
   const q = String(req.query.q || '').toLowerCase(), limit = clampInt(req.query.limit, 300, 3000)
   const rows = t.rows.filter(r => matchesQ(r, q))
-  return { tab, columns: t.headers, total: t.rows.length, matched: rows.length, returned: Math.min(rows.length, limit), rows: rows.slice(-limit) }
+  // Both tabs are NEWEST FIRST (the Jobs tab adds a row per signed proposal, so
+  // a change order is a new row above the original) — return the first n.
+  return { tab, columns: t.headers, order: 'newest first; the Jobs tab has one row per signed proposal, so a change order appears as a newer row under the same Project ID', total: t.rows.length, matched: rows.length, returned: Math.min(rows.length, limit), rows: rows.slice(0, limit) }
 })
 for (const [name, key] of [['jobs', 'calendar_jobs'], ['estimates', 'calendar_estimates'], ['sales', 'calendar_sales']]) {
   analystRoute(`/api/analyst/calendar/${name}`, key, (d, req) => {
@@ -3434,7 +3436,14 @@ analystRoute('/api/analyst/ghl/reconcile', 'ghl', (d, req) => {
   const h = (t, re) => t.headers.find(x => re.test(String(x).toLowerCase()))
   const pidH = h(sheetJobs, /project\s*id/), priceH = h(sheetJobs, /pre.?tax\s*sale/) || h(sheetJobs, /approved\s*total/), baseH = h(sheetJobs, /baseline/), commH = sheetJobs.headers.find(x => /commission/.test(String(x).toLowerCase()) && !String(x).includes('%'))
   const sPidH = h(sheetSched, /proposal\s*id|project\s*id/), sInstH = h(sheetSched, /install\s*date/), sDocH = h(sheetSched, /doc\s*#/), jDocH = h(sheetJobs, /doc\s*#/)
-  const byPid = {}; if (pidH) for (const r of sheetJobs.rows) { const k = String(r[pidH] || '').trim(); if (k) byPid[k] = r }
+  // The Jobs tab holds ONE ROW PER SIGNED PROPOSAL, newest first — a change
+  // order is a new row under the same Project ID. The first row seen is the
+  // current contract (the same row jobRowForProject uses); keeping the last
+  // one instead compared every change order against its ORIGINAL price and
+  // produced false disputes on Oct 28.
+  const byPid = {}, rowsPerPid = {}
+  if (pidH) for (const r of sheetJobs.rows) { const k = String(r[pidH] || '').trim(); if (!k) continue; rowsPerPid[k] = (rowsPerPid[k] || 0) + 1; if (!byPid[k]) byPid[k] = r }
+  const apprH = h(sheetJobs, /approved\s*date/)
   const schedByDoc = {}; if (sDocH) for (const r of sheetSched.rows) { const k = String(r[sDocH] || '').trim(); if (k) schedByDoc[k] = r }
   const calByOpp = {}; for (const j of ((d.calendar_full && d.calendar_full.jobs) || [])) if (j.ghlOpportunityId) calByOpp[j.ghlOpportunityId] = j
   const dealByPid = {}; for (const x of (d.site && d.site.deals) || []) if (x.project_id) dealByPid[x.project_id] = x
@@ -3481,7 +3490,7 @@ analystRoute('/api/analyst/ghl/reconcile', 'ghl', (d, req) => {
     if (cal && cal.value != null && value != null && !arcSame(cal.value, value)) issues.push(`calendar job value $${cal.value} ≠ value $${value}`)
     if (deal && deal.engine && value != null && !arcSame(deal.engine.job_price, value) && !deal.canceled) issues.push(`commission-site job price $${deal.engine.job_price} ≠ value $${value}`)
     for (const i of issues) { const k = i.replace(/\$[\d.,-]+/g, '$').replace(/\d{4}-\d{2}-\d{2}/g, 'date'); counts[k] = (counts[k] || 0) + 1 }
-    const row = { opportunity_id: o.id, customer: o.name, project_id: o.project_id, pipeline: o.pipeline, stage: o.stage, status: o.status, value, price_field: price, baseline_field: ob, commission_field: oc, sheet_price: sheetPrice, contracts: o.contracts, install_date: o.install_date, scope_date: String(scopeDate || '').slice(0, 10) || null, calendar_job: cal ? cal.jobNumber : null, calendar_install: cal ? cal.installDate : null, calendar_value: cal ? cal.value : null, site_deal_price: deal && deal.engine ? deal.engine.job_price : null, contact_new_price: np, contact_job_price: jp, updated: o.updated, issues }
+    const row = { opportunity_id: o.id, customer: o.name, project_id: o.project_id, pipeline: o.pipeline, stage: o.stage, status: o.status, value, price_field: price, baseline_field: ob, commission_field: oc, sheet_price: sheetPrice, sheet_approved: sheet && apprH ? sheet[apprH] : null, sheet_signed_rows: rowsPerPid[o.project_id] || 0, contracts: o.contracts, install_date: o.install_date, scope_date: String(scopeDate || '').slice(0, 10) || null, calendar_job: cal ? cal.jobNumber : null, calendar_install: cal ? cal.installDate : null, calendar_value: cal ? cal.value : null, site_deal_price: deal && deal.engine ? deal.engine.job_price : null, contact_new_price: np, contact_job_price: jp, updated: o.updated, issues }
     if ((!onlyIssues || issues.length) && matchesQ(row, q)) rows.push(row)
   }
   rows.sort((a, b) => b.issues.length - a.issues.length || String(b.updated || '').localeCompare(String(a.updated || '')))
@@ -3571,7 +3580,7 @@ app.get('/api/analyst/openapi.json', (req, res) => {
     paths: {
       '/api/analyst/summary': op('getSummary', 'Counts and freshness for every source', 'Start here: which sources loaded, deal counts per month, sheet sizes and columns, calendar counts, pipeline stage totals, and the latest change-order audit summary.', [refresh]),
       '/api/analyst/deals': op('getDeals', 'Deals with commission math (commission site)', 'Rows computed by the commission engine, grouped by closing month: job price, baseline, markup, setter/closer, overrides, status, pay date, deductions. Canceled deals included and marked. Supports live=1.', [days(30, 400), limit(300), q, live]),
-      '/api/analyst/sheet': op('getSheet', 'AI Commissions Sheet rows', 'Raw rows from the Google Sheet — tab=jobs (every ArcSite sale: project id, customer, rep, baseline, sale price, commission) or tab=schedule (booked installs: date, customer, payment, BOOKED flag). Newest rows are last. Supports live=1.', [qp('tab', 'jobs (default) or schedule', { type: 'string', enum: ['jobs', 'schedule'] }), limit(300), q, live]),
+      '/api/analyst/sheet': op('getSheet', 'AI Commissions Sheet rows', 'Raw rows from the Google Sheet — tab=jobs (every ArcSite signed proposal: approved date, project id, customer, rep, baseline, sale price, commission; ONE ROW PER SIGNED PROPOSAL, so a change order is a newer row under the same Project ID — the first row for a Project ID is the current contract) or tab=schedule (booked installs: date, customer, payment, BOOKED flag). Rows are newest first. Supports live=1.', [qp('tab', 'jobs (default) or schedule', { type: 'string', enum: ['jobs', 'schedule'] }), limit(300), q, live]),
       '/api/analyst/calendar/jobs': op('getCalendarJobs', 'Install calendar jobs (PM calendar)', 'Every active install job: customer, PM, install date, value, subcontractor, contract line items/sqft, setter/closer, GHL ids. Supports live=1.', [days(0, 400), limit(300), q, live]),
       '/api/analyst/calendar/estimates': op('getEstimates', 'Estimator appointments', 'Estimate appointments from the reps\' calendars for the last 6 months, each with whether it sold and why (soldBy signals). Hourly copy only — its export can take minutes.', [days(0, 400), limit(300), q]),
       '/api/analyst/calendar/appointments': op('getAppointments', 'Estimate appointments — past AND upcoming', 'Every estimate appointment from 6 months back to 120 days ahead (isUpcoming flags the future ones): rep/setter/closer, customer, status, notes, follow-up state, and for closed deals the money — dealValue (current total), baseValue, change-order deltas with signed dates, commission bonus, rate override, deduction. Supports live=1.', [qp('upcoming', '1 = only future appointments'), qp('past', '1 = only past appointments'), qp('status', 'Exact status, e.g. CLOSED, FOLLOW_UP, CANCELED', { type: 'string' }), qp('rep', 'Rep / setter / closer name contains', { type: 'string' }), days(0, 400), limit(300), q, live]),
