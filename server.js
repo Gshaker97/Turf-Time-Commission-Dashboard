@@ -1818,11 +1818,20 @@ async function jobRowForProject(projectId, { fresh = false } = {}) {
     return isNaN(n) ? null : (neg ? -n : n)
   }
   const baseH = h(/baseline/)
-  const priceH = h(/pre.?tax\s*sale/) || h(/approved\s*total/)
+  // jobPrice = Approved Total: the customer's FULL job price, the figure the
+  // signed contract, GHL value/Price and the PM calendar all carry. Pre-Tax Sale
+  // is kept separately — it is the base Mark Up is derived from (Pre-Tax −
+  // Baseline, never the tax-inclusive total). Commission is the sheet's own
+  // Commission column, never recalculated here. (Oct 29: reading Pre-Tax as the
+  // price held every change order on a taxed job as "disputed".)
+  const priceH = h(/approved\s*total/) || h(/pre.?tax\s*sale/)
+  const pretaxH = h(/pre.?tax\s*sale/)
   const commH = jobs.headers.find(x => /commission/.test(String(x).toLowerCase()) && !String(x).includes('%'))
+  const baseline = baseH ? num(row[baseH]) : null, jobPrice = priceH ? num(row[priceH]) : null
+  const pretax = pretaxH ? num(row[pretaxH]) : jobPrice
   return {
-    baseline:   baseH  ? num(row[baseH])  : null,
-    jobPrice:   priceH ? num(row[priceH]) : null,
+    baseline, jobPrice, pretax,
+    markup:     pretax != null && baseline != null ? Math.round((pretax - baseline) * 100) / 100 : null,
     commission: commH  ? num(row[commH])  : null,
   }
 }
@@ -1841,7 +1850,7 @@ async function arcLateValues(projectId, estimator) {
   const out = {}
   if (job) {
     if (job.baseline != null) out.baseline = job.baseline
-    if (job.jobPrice != null && job.baseline != null) out.markup = Math.round((job.jobPrice - job.baseline) * 100) / 100
+    if (job.markup != null) out.markup = job.markup
     if (!estimator && job.commission != null) out.commission = job.commission
   }
   if (deal) {
@@ -2123,7 +2132,7 @@ async function arcPropagateChangeOrder({ oppId, contactId, projectId, customer, 
   return out
 }
 
-async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed, newTotal, via }) {
+async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed, newTotal, via, dry = false }) {
   const pipe = opp.pipelineId === GHL_PIPELINES.estimator.id ? GHL_PIPELINES.estimator : GHL_PIPELINES.outside
   const cur = opp.monetaryValue != null ? Math.round(Number(opp.monetaryValue) * 100) / 100 : null
   // THE AI SHEET IS THE SOURCE OF TRUTH FOR THE MONEY (per Garrison): the value
@@ -2152,9 +2161,27 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
   const r = {
     ok: true, via, action: 'change_order', project_id: projectId, customer: customer.name, opportunity_id: opp.id,
     was: cur, now: want, value_source: disputed ? 'DISPUTED — sheet ≠ ArcSite, value left unchanged' : (sheetPrice != null ? 'ai_sheet' : 'arcsite'),
-    sheet_price: sheetPrice, arcsite_total: arcTotal, disputed,
+    sheet_price: sheetPrice, sheet_pretax: job ? job.pretax : null, arcsite_total: arcTotal, disputed,
     sheet_lag: sheetPrice == null,
     stage_moved: false, contracts: `${attached.length} attached / ${signed.length} signed`, pdf: 'kept',
+  }
+  const estimator = pipe === GHL_PIPELINES.estimator
+  // Sheet money, each from its OWN column: Baseline = Baseline Cost, Mark Up =
+  // Pre-Tax Sale − Baseline (never the tax-inclusive total), Commission = the
+  // sheet's Commission column (blank for salaried estimators).
+  const money = job ? { baseline: job.baseline != null ? job.baseline : null, markup: job.markup != null ? job.markup : null, commission: estimator ? null : (job.commission != null ? job.commission : null) } : null
+  // Baseline-only change: the signed total did not move, but the sheet's
+  // Baseline/Mark Up/Commission did — re-stamp those without touching the
+  // value, the stage, the contact or the calendar.
+  const moneyChanged = !!money && !disputed && !totalChanged && ['baseline', 'markup', 'commission'].some(k => money[k] != null && !arcSame(money[k], numOf(ghlFld(opp.customFields || [], k === 'markup' ? 'Mark Up' : k === 'baseline' ? 'Baseline Price' : 'Commission'))))
+  if (dry) {
+    return { ...r, dry: true, plan: {
+      contracts: signed.length > attached.length ? `rebuild ${signed.length} (currently ${attached.length})` : 'kept',
+      stage: totalChanged ? 'move to Change Order' : 'unchanged',
+      value: totalChanged ? `${arcUsd(cur)} → ${arcUsd(want)}` : 'unchanged', price_field: totalChanged ? arcUsd(want) : 'unchanged',
+      sheet_money: (totalChanged || moneyChanged) ? money : 'unchanged',
+      contact_new_price_and_job_price: totalChanged ? arcUsd(want) : 'unchanged', calendar_value: totalChanged ? arcUsd(want) : 'unchanged',
+    } }
   }
   let contracts = attached
   // 1. Contracts: ArcSite has more signed proposals than the opp carries → rebuild
@@ -2189,19 +2216,21 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
       // Markup and Commission exactly as the live webhook does (commission blank
       // for salaried estimators). If the sheet hasn't caught up yet, the durable
       // reconciler keeps re-applying the sheet money for up to 21 days.
-      const estimator = pipe === GHL_PIPELINES.estimator
-      if (job && defs) {
-        const money = {
-          baseline: job.baseline != null ? job.baseline : null,
-          markup: job.jobPrice != null && job.baseline != null ? Math.round((job.jobPrice - job.baseline) * 100) / 100 : null,
-          commission: estimator ? null : (job.commission != null ? job.commission : null),
-        }
+      if (money && defs) {
         const fields = Object.entries(money).map(([k, v]) => oppFieldWrite(GHL_OPP_FIELD_IDS[k], v, defs)).filter(Boolean)
         if (fields.length) await ghlUpdateOpp(opp.id, { customFields: fields }).catch(() => {})
         r.sheet_money = money
       } else r.sheet_money = job ? 'fields unavailable' : 'no Jobs-sheet row yet (reconciler will fill it)'
-      arcPendingAdd(projectId, opp.id, pipe === GHL_PIPELINES.estimator).catch(() => {})
+      arcPendingAdd(projectId, opp.id, estimator).catch(() => {})
     } catch (e) { r.ok = false; r.error = e.message || 'value update failed' }
+  } else if (moneyChanged) {
+    // Same total, new Baseline / Mark Up / Commission on the sheet.
+    try {
+      const defs = await ghlOppFields().catch(() => null)
+      const fields = defs ? Object.entries(money).map(([k, v]) => oppFieldWrite(GHL_OPP_FIELD_IDS[k], v, defs)).filter(Boolean) : []
+      if (fields.length) await ghlUpdateOpp(opp.id, { customFields: fields })
+      r.sheet_money = money; r.money_only = true
+    } catch (e) { r.ok = false; r.error = e.message || 'sheet money update failed' }
   }
   // 3. The calendar + the contact's New Price.
   const newest = signed[signed.length - 1]
@@ -2215,7 +2244,7 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
 // Manual entry point (and the backfill tool): run the targeted change-order
 // path for one project. Finds the opp by the project's customer; a project
 // with NO opp yet is a missed sale — that is what /reprocess is for.
-async function arcChangeOrderForProject(projectId, via) {
+async function arcChangeOrderForProject(projectId, via, { dry = false } = {}) {
   const project = await arcGet(`/projects/${projectId}`)
   const c = project.customer || {}, a = c.address || {}
   const customer = { name: c.name || project.name || 'Customer', phone: c.phone || null, email: c.email || null, address1: a.street || null, city: a.city || null, state: a.state || null, postalCode: a.zip_code || null }
@@ -2224,7 +2253,7 @@ async function arcChangeOrderForProject(projectId, via) {
   const opp = await arcOppForProposal({ project_id: projectId, customer_name: customer.name, customer_email: customer.email })
   if (!opp) return { ok: false, via, project_id: projectId, customer: customer.name, error: 'no GHL opportunity for this project — /api/arcsite/reprocess creates one' }
   const newest = signed[signed.length - 1]
-  return arcApplyChangeOrder(projectId, { opp, contactId: opp.contactId || null, customer, signed, newTotal: newest.total, via })
+  return arcApplyChangeOrder(projectId, { opp, contactId: opp.contactId || null, customer, signed, newTotal: newest.total, via, dry })
 }
 
 // ── Daily contract audit ─────────────────────────────────────────────────────
@@ -2609,8 +2638,7 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
 
   const baseline = job && job.baseline != null ? job.baseline : null
   // Markup = job price − baseline (per Keaton). Both from the sheet so they agree.
-  const markup = job && job.jobPrice != null && job.baseline != null
-    ? Math.round((job.jobPrice - job.baseline) * 100) / 100 : null
+  const markup = job && job.markup != null ? job.markup : null
   // Commission = the sheet's Commission column (a formula, source of truth);
   // BLANK for salaried estimators.
   const commission = estimator ? null : (job && job.commission != null ? job.commission : null)
@@ -3547,7 +3575,7 @@ async function arcFieldAudit({ maxArc = 2000 } = {}) {
   // Mark Up on the opportunity is sale price − baseline (how the sync stamps
   // it); the sheet's "Whole-Proj Markup" column is a different thing and must
   // not be compared to it (the first run produced 97 false mismatches that way).
-  const rowVals = r => { const price = numOf(r[H.price]), baseline = numOf(r[H.baseline]); return { approved: r[H.approved] || null, proposal_id: H.proposal ? String(r[H.proposal] || '').trim() : '', price, pretax: H.pretax ? numOf(r[H.pretax]) : null, baseline, markup: price != null && baseline != null ? Math.round((price - baseline) * 100) / 100 : null, commission: numOf(r[H.commission]) } }
+  const rowVals = r => { const price = numOf(r[H.price]), baseline = numOf(r[H.baseline]), pretax = H.pretax ? numOf(r[H.pretax]) : price; return { approved: r[H.approved] || null, proposal_id: H.proposal ? String(r[H.proposal] || '').trim() : '', price, pretax, baseline, markup: pretax != null && baseline != null ? Math.round((pretax - baseline) * 100) / 100 : null, commission: numOf(r[H.commission]) } }
   const count = k => { out.issue_counts[k] = (out.issue_counts[k] || 0) + 1 }
   // An EMPTY destination field is a different finding from a WRONG one —
   // "never stamped" versus "stamped with the wrong revision". Both reported,
@@ -4013,7 +4041,9 @@ app.post('/api/arcsite/change-order', async (req, res) => {
   try { body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {}) } catch {}
   const projectId = String(body.project_id || '').trim()
   if (!projectId) return res.status(400).json(err('project_id is required'))
-  try { const r = await arcChangeOrderForProject(projectId, 'manual'); await arcLog(r); res.json(r) }
+  // { dry: true } = plan only: every figure the change order WOULD write, no writes, no log.
+  const dry = body.dry === true || body.dry === 'true'
+  try { const r = await arcChangeOrderForProject(projectId, dry ? 'dry-run' : 'manual', { dry }); if (!dry) await arcLog(r); res.json(r) }
   catch (e) { const r = { ok: false, error: e.message || 'change order failed' }; await arcLog(r); res.status(200).json(r) }
 })
 
