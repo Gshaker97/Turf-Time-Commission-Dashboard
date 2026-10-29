@@ -3530,7 +3530,11 @@ async function arcFieldAudit({ maxArc = 2000 } = {}) {
   const [ghl, sheet, calJobs] = await Promise.all([ghlFullSnapshot(), readInstallSheet(), calendarExport('/api/export/jobs').catch(e => { out.errors.push('calendar: ' + e.message); return null })])
   const jobsTab = sheet.jobs || { headers: [], rows: [] }
   const H = {
-    pid: sheetHeader(jobsTab, /project\s*id/), price: sheetHeader(jobsTab, /pre.?tax\s*sale/) || sheetHeader(jobsTab, /approved\s*total/),
+    // Approved Total is what the customer signed and what GHL/calendar carry;
+    // Pre-Tax Sale differs on taxed/fee'd jobs and produced 10 false "sheet has
+    // no row at the signed total" flags (Oct 29) plus Kym's one-cent gap.
+    pid: sheetHeader(jobsTab, /project\s*id/), price: sheetHeader(jobsTab, /approved\s*total/) || sheetHeader(jobsTab, /pre.?tax\s*sale/),
+    pretax: sheetHeader(jobsTab, /pre.?tax\s*sale/), proposal: sheetHeader(jobsTab, /proposal\s*id/),
     baseline: sheetHeader(jobsTab, /baseline/), approved: sheetHeader(jobsTab, /approved\s*date/),
     commission: jobsTab.headers.find(x => /commission/.test(String(x).toLowerCase()) && !String(x).includes('%')),
   }
@@ -3543,7 +3547,7 @@ async function arcFieldAudit({ maxArc = 2000 } = {}) {
   // Mark Up on the opportunity is sale price − baseline (how the sync stamps
   // it); the sheet's "Whole-Proj Markup" column is a different thing and must
   // not be compared to it (the first run produced 97 false mismatches that way).
-  const rowVals = r => { const price = numOf(r[H.price]), baseline = numOf(r[H.baseline]); return { approved: r[H.approved] || null, price, baseline, markup: price != null && baseline != null ? Math.round((price - baseline) * 100) / 100 : null, commission: numOf(r[H.commission]) } }
+  const rowVals = r => { const price = numOf(r[H.price]), baseline = numOf(r[H.baseline]); return { approved: r[H.approved] || null, proposal_id: H.proposal ? String(r[H.proposal] || '').trim() : '', price, pretax: H.pretax ? numOf(r[H.pretax]) : null, baseline, markup: price != null && baseline != null ? Math.round((price - baseline) * 100) / 100 : null, commission: numOf(r[H.commission]) } }
   const count = k => { out.issue_counts[k] = (out.issue_counts[k] || 0) + 1 }
   // An EMPTY destination field is a different finding from a WRONG one —
   // "never stamped" versus "stamped with the wrong revision". Both reported,
@@ -3572,7 +3576,9 @@ async function arcFieldAudit({ maxArc = 2000 } = {}) {
         const newest = signed[signed.length - 1] || null
         if (!newest) amb.push('ArcSite shows no valid signed revision (void/unsigned only)')
         else {
-          const matches = rows.filter(r => arcSame(r.price, newest.total))
+          // Match the sheet row by Proposal ID first (exact), then by signed total.
+          const byId = rows.filter(r => r.proposal_id && String(r.proposal_id) === String(newest.proposal_id))
+          const matches = byId.length ? byId : rows.filter(r => arcSame(r.price, newest.total))
           if (!matches.length) amb.push(`sheet has no row at the newest signed total ${arcUsd(newest.total)} (proposal ${newest.proposal_id}) — sheet lag or mismatch`)
           else { basisRow = matches[0]; basis = `arcsite-verified: proposal ${newest.proposal_id} ${arcUsd(newest.total)} ↔ sheet row ${basisRow.approved}` }
           if (rows.length > 1 && rows[0].approved && rows[1] && rows[1].approved === rows[0].approved && !arcSame(rows[0].price, rows[1].price)) amb.push(`two sheet rows on ${rows[0].approved} with different totals (${arcUsd(rows[0].price)} / ${arcUsd(rows[1].price)}) — resolved by proposal id where the signed total matched`)
