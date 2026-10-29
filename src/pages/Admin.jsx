@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { RefreshCw, Activity, CalendarClock, X, Pencil, Undo2, Trash2, AlertTriangle } from 'lucide-react'
 import {
   fetchUsers, insertUser, updateUser, deleteUser, fetchDeals,
@@ -173,7 +173,11 @@ function LogRow({ c, users, teamChanges, editing, onStartEdit, onCancelEdit, onP
           <span className="text-[9.5px] text-amber-300/70"> · re-dated from {fmtDay(c.prior_effective)}</span>
         )}
       </span>
-      <div className="flex items-center gap-0.5 flex-shrink-0 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+      {/* ALWAYS VISIBLE. These were hover-only, which hid the one control
+          that re-dates a move — the thing you need after a reports-to edit
+          stamped today instead of the day it really happened. A control
+          nobody can find is a control that does not exist. */}
+      <div className="flex items-center gap-0.5 flex-shrink-0">
         <button onClick={onStartEdit} title="Change the date this move counts from"
           className="p-1.5 rounded-lg text-white/35 hover:text-teal hover:bg-teal/10 transition-colors"><Pencil size={12} /></button>
         <button onClick={() => onRemove(isLatest)}
@@ -434,6 +438,14 @@ export default function Admin() {
 
   const card  = { background: '#242424', border: '1px solid #2e2e2e' }
   const [showLog, setShowLog] = useState(false)
+  const logRef = useRef(null)
+  // Expand the change log and bring it on screen. The move modal hands off
+  // to this when the move you asked for is a no-op and re-dating is what you
+  // actually wanted.
+  function openChangeLog() {
+    ensureDeals(); setShowLog(true)
+    setTimeout(() => logRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60)
+  }
   const [editDate, setEditDate] = useState(null)   // log entry id whose date is being re-picked
 
   // Drag-to-move from the People chart — the quick one-off, always effective
@@ -703,7 +715,7 @@ export default function Admin() {
               The dates here ARE the attribution rule, so being able to fix
               one is the difference between a log and a liability. */}
           {teamChanges.length > 0 && (
-            <div className="rounded-xl overflow-hidden" style={card}>
+            <div ref={logRef} className="rounded-xl overflow-hidden" style={card}>
               <button onClick={() => { setShowLog(v => !v); ensureDeals() }}
                 className="w-full px-3 md:px-4 py-2.5 flex items-center justify-between gap-3 hover:bg-white/[0.02] transition-colors"
                 style={{ background: '#1e1e1e' }}>
@@ -736,6 +748,7 @@ export default function Admin() {
           users={users} deals={deals ?? []} teamChanges={teamChanges}
           loadingDeals={dealsLoading || deals == null}
           onSubmit={submitMove}
+          onOpenLog={openChangeLog}
           onClose={() => setMoveModal(false)}
         />
       )}

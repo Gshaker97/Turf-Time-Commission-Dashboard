@@ -58,7 +58,7 @@ const Step = ({ n, label, hint, children }) => (
 
 export default function TeamMoveModal({
   users = [], deals = [], teamChanges = [], loadingDeals = false,
-  initialIds = [], onSubmit, onClose,
+  initialIds = [], onSubmit, onClose, onOpenLog,
 }) {
   const heads = useMemo(() => headIdSet(users), [users])
   const active = useMemo(() => users.filter(u => u.active !== false), [users])
@@ -151,6 +151,26 @@ export default function TeamMoveModal({
   const toggle = (id) => setPicked(p => (p.includes(id) ? p.filter(x => x !== id) : [...p, id]))
 
   const canSubmit = !saving && movingIds.length > 0 && dest !== '' && !!when && willMove > 0
+
+  // WHY the button is disabled. A greyed-out control that explains nothing is
+  // a dead end — the "already on that team" case especially, because the
+  // thing you actually want then is to re-date the move that already
+  // happened, which lives in the change log and not in this modal at all.
+  const blocked = (() => {
+    if (saving || canSubmit) return null
+    if (!movingIds.length) return { text: 'Pick who’s moving.' }
+    if (dest === '')       return { text: 'Choose a team to move them to.' }
+    if (!when)             return { text: 'Pick the day it takes effect.' }
+    if (willMove === 0) return {
+      tone: 'amber',
+      text: movingIds.length === 1
+        ? `They are already on ${destLabel}, so there is nothing to move.`
+        : `All ${movingIds.length} are already on ${destLabel}, so there is nothing to move.`,
+      hint: 'To change WHEN that move counted from, edit it in the Team change log instead.',
+      action: onOpenLog ? 'Open the change log' : null,
+    }
+    return null
+  })()
 
   async function submit() {
     if (!canSubmit) return
@@ -421,14 +441,40 @@ export default function TeamMoveModal({
             <p className="text-[10.5px] text-white/25 mt-1">Shows on the change log beside the dates.</p>
           </div>
 
-          {alreadyThere > 0 && (
+          {/* Only worth saying when SOME of them still move; when none do,
+              `blocked` below says it properly and offers the way out. */}
+          {alreadyThere > 0 && willMove > 0 && (
             <p className="text-[11.5px] text-amber-300/80">
               {alreadyThere} of the {movingIds.length} selected {alreadyThere === 1 ? 'is' : 'are'} already
-              on {destLabel} — {alreadyThere === 1 ? 'they' : 'they'} will be left alone rather than given a
-              no-op entry in the log.
+              on {destLabel} — they will be left alone rather than given a no-op entry in the log.
             </p>
           )}
         </div>
+
+        {/* Why the button is off. Sits directly above it, where the eye
+            goes after finding the control greyed out. */}
+        {blocked && (
+          <div className="px-5 pb-1 pt-0 sticky bottom-[57px]" style={{ background: '#242424' }}>
+            <div className="px-3 py-2 rounded-lg" style={blocked.tone === 'amber'
+              ? { background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)' }
+              : { background: '#1e1e1e', border: '1px solid #2e2e2e' }}>
+              <p className={`text-[11.5px] ${blocked.tone === 'amber' ? 'text-amber-200' : 'text-white/45'}`}>
+                {blocked.text}
+              </p>
+              {blocked.hint && (
+                <p className="text-[11px] mt-1 leading-snug" style={{ color: 'rgba(245,197,114,0.72)' }}>
+                  {blocked.hint}
+                </p>
+              )}
+              {blocked.action && (
+                <button onClick={() => { onClose?.(); onOpenLog?.() }}
+                  className="mt-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold text-dark bg-amber-400">
+                  {blocked.action}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="flex items-center gap-2 px-5 py-3.5 sticky bottom-0"
           style={{ background: '#242424', borderTop: '1px solid #2e2e2e' }}>
