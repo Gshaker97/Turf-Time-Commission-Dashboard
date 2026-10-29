@@ -3561,10 +3561,11 @@ async function arcFieldAudit({ maxArc = 2000 } = {}) {
     const value = numOf(o.value), price = numOf(ghlFld(o.fields, 'Price')), base = numOf(ghlFld(o.fields, 'Baseline Price')), markup = numOf(ghlFld(o.fields, 'Mark Up')), comm = numOf(ghlFld(o.fields, 'Commission'))
     const newPrice = contact ? numOf(ghlFld(contact.fields, 'New Price')) : null, jobPrice = contact ? numOf(ghlFld(contact.fields, 'Job Price')) : null
     const quickMismatch = rows.length && (!arcSame(value, rows[0].price) || (base != null && rows[0].baseline != null && !arcSame(base, rows[0].baseline)) || (comm != null && rows[0].commission != null && !arcSame(comm, rows[0].commission)))
-    // Resolve the latest VALID signed revision through ArcSite when it matters:
-    // more than one revision on the sheet, or any field disagreeing with the
-    // newest row. A single-row project with every field agreeing needs no call.
-    if (rows.length && (rows.length > 1 || quickMismatch) && out.arcsite_lookups < maxArc) {
+    // The sheet's intake is APPROVED-only (verified by Jarvis), so its newest
+    // row is the routine mapping signal. ArcSite/PDF resolution is reserved for
+    // an actual CONFLICT — a field disagreeing with that newest row — where it
+    // decides which revision is operative and excludes void/unsigned ones.
+    if (rows.length && quickMismatch && out.arcsite_lookups < maxArc) {
       out.arcsite_lookups++
       try {
         const signed = await arcSignedContracts(o.project_id)   // oldest → newest, void/unsigned excluded
@@ -3577,7 +3578,7 @@ async function arcFieldAudit({ maxArc = 2000 } = {}) {
           if (rows.length > 1 && rows[0].approved && rows[1] && rows[1].approved === rows[0].approved && !arcSame(rows[0].price, rows[1].price)) amb.push(`two sheet rows on ${rows[0].approved} with different totals (${arcUsd(rows[0].price)} / ${arcUsd(rows[1].price)}) — resolved by proposal id where the signed total matched`)
         }
       } catch (e) { amb.push('ArcSite lookup failed: ' + (e.message || 'error')) }
-    } else if (rows.length) { basisRow = rows[0]; basis = 'single-sheet-row (the only signed revision on the sheet)' }
+    } else if (rows.length) { basisRow = rows[0]; basis = rows.length > 1 ? `sheet-newest-approved-row (${rows.length} revisions, fields agree with the newest)` : 'single-sheet-row (the only approved revision on the sheet)' }
     if ((oppsByPid[o.project_id] || []).length > 1) amb.push(`${oppsByPid[o.project_id].length} non-lost opportunities share this Project ID`)
     if (value == null || value === 0) amb.push('opportunity value empty or $0')
     if (basisRow && !amb.length) {
@@ -3590,7 +3591,14 @@ async function arcFieldAudit({ maxArc = 2000 } = {}) {
       if (cal && cal.value != null && !arcSame(cal.value, R.price)) issues.push(`PM calendar ${cal.jobNumber} ${arcUsd(cal.value)} ≠ sheet ${arcUsd(R.price)}`)
     }
     out.checked++
-    if (basis) out.basis_counts[basis.split(':')[0]] = (out.basis_counts[basis.split(':')[0]] || 0) + 1
+    // Unique jobs vs flags — a job can carry several flags (Jarvis: 86 flags
+    // across 81 jobs in run 1), so both are reported and never conflated.
+    out.jobs_wrong = (out.jobs_wrong || 0) + (issues.some(i => / ≠ /.test(i)) ? 1 : 0)
+    out.jobs_empty = (out.jobs_empty || 0) + (issues.some(i => / EMPTY /.test(i)) ? 1 : 0)
+    out.flags_wrong = (out.flags_wrong || 0) + issues.filter(i => / ≠ /.test(i)).length
+    out.flags_empty = (out.flags_empty || 0) + issues.filter(i => / EMPTY /.test(i)).length
+    out.flags_ambiguous = (out.flags_ambiguous || 0) + amb.length
+    if (basis) out.basis_counts[basis.split(':')[0].split(' (')[0]] = (out.basis_counts[basis.split(':')[0].split(' (')[0]] || 0) + 1
     for (const i of issues) count(i.replace(/\$[\d.,-]+/g, '$').replace(/J-\d+/g, 'J-n'))
     for (const a of amb) count('AMBIGUOUS: ' + a.replace(/\$[\d.,-]+/g, '$').replace(/\d{4}-\d{2}-\d{2}/g, 'date').replace(/proposal \d+/g, 'proposal n').replace(/^\d+ non-lost/, 'N non-lost'))
     if (amb.length) out.ambiguous++
