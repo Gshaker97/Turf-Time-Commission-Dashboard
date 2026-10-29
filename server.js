@@ -3531,7 +3531,7 @@ async function arcFieldAudit({ maxArc = 2000 } = {}) {
   const jobsTab = sheet.jobs || { headers: [], rows: [] }
   const H = {
     pid: sheetHeader(jobsTab, /project\s*id/), price: sheetHeader(jobsTab, /pre.?tax\s*sale/) || sheetHeader(jobsTab, /approved\s*total/),
-    baseline: sheetHeader(jobsTab, /baseline/), markup: sheetHeader(jobsTab, /markup/), approved: sheetHeader(jobsTab, /approved\s*date/),
+    baseline: sheetHeader(jobsTab, /baseline/), approved: sheetHeader(jobsTab, /approved\s*date/),
     commission: jobsTab.headers.find(x => /commission/.test(String(x).toLowerCase()) && !String(x).includes('%')),
   }
   const sheetByPid = {}
@@ -3540,8 +3540,15 @@ async function arcFieldAudit({ maxArc = 2000 } = {}) {
   for (const j of listOf(calJobs)) if (j.ghlOpportunityId) calByOpp[j.ghlOpportunityId] = j
   const oppsByPid = {}
   for (const o of ghl.opportunities) if (o.project_id && !/lost|abandon/i.test(o.status || '')) (oppsByPid[o.project_id] ||= []).push(o)
-  const rowVals = r => ({ approved: r[H.approved] || null, price: numOf(r[H.price]), baseline: numOf(r[H.baseline]), markup: numOf(r[H.markup]), commission: numOf(r[H.commission]) })
+  // Mark Up on the opportunity is sale price − baseline (how the sync stamps
+  // it); the sheet's "Whole-Proj Markup" column is a different thing and must
+  // not be compared to it (the first run produced 97 false mismatches that way).
+  const rowVals = r => { const price = numOf(r[H.price]), baseline = numOf(r[H.baseline]); return { approved: r[H.approved] || null, price, baseline, markup: price != null && baseline != null ? Math.round((price - baseline) * 100) / 100 : null, commission: numOf(r[H.commission]) } }
   const count = k => { out.issue_counts[k] = (out.issue_counts[k] || 0) + 1 }
+  // An EMPTY destination field is a different finding from a WRONG one —
+  // "never stamped" versus "stamped with the wrong revision". Both reported,
+  // never blurred (the first run printed empties as "$0.00 ≠ …").
+  const cmp = (label, cur, want) => { if (want == null) return null; if (cur == null) return `${label} EMPTY (sheet ${arcUsd(want)})`; if (!arcSame(cur, want)) return `${label} ${arcUsd(cur)} ≠ sheet ${arcUsd(want)}`; return null }
 
   for (const o of ghl.opportunities) {
     if (!o.project_id) continue
@@ -3570,16 +3577,12 @@ async function arcFieldAudit({ maxArc = 2000 } = {}) {
           if (rows.length > 1 && rows[0].approved && rows[1] && rows[1].approved === rows[0].approved && !arcSame(rows[0].price, rows[1].price)) amb.push(`two sheet rows on ${rows[0].approved} with different totals (${arcUsd(rows[0].price)} / ${arcUsd(rows[1].price)}) — resolved by proposal id where the signed total matched`)
         }
       } catch (e) { amb.push('ArcSite lookup failed: ' + (e.message || 'error')) }
-    } else if (rows.length) { basisRow = rows[0]; basis = 'single-sheet-row (no revisions, fields agree)'; if (rows.length === 1 && quickMismatch) basis = 'single-sheet-row' }
+    } else if (rows.length) { basisRow = rows[0]; basis = 'single-sheet-row (the only signed revision on the sheet)' }
     if ((oppsByPid[o.project_id] || []).length > 1) amb.push(`${oppsByPid[o.project_id].length} non-lost opportunities share this Project ID`)
     if (value == null || value === 0) amb.push('opportunity value empty or $0')
     if (basisRow && !amb.length) {
       const R = basisRow
-      if (!arcSame(value, R.price)) issues.push(`value ${arcUsd(value)} ≠ sheet ${arcUsd(R.price)}`)
-      if (!arcSame(price, R.price)) issues.push(`Price field ${arcUsd(price)} ≠ sheet ${arcUsd(R.price)}`)
-      if (R.baseline != null && !arcSame(base, R.baseline)) issues.push(`Baseline Price field ${arcUsd(base)} ≠ sheet ${arcUsd(R.baseline)}`)
-      if (R.markup != null && markup != null && !arcSame(markup, R.markup)) issues.push(`Mark Up field ${arcUsd(markup)} ≠ sheet ${arcUsd(R.markup)}`)
-      if (/outside|knock/i.test(o.pipeline) && R.commission != null && !arcSame(comm, R.commission)) issues.push(`Commission field ${arcUsd(comm)} ≠ sheet ${arcUsd(R.commission)}`)
+      for (const m of [cmp('value', value, R.price), cmp('Price field', price, R.price), cmp('Baseline Price field', base, R.baseline), cmp('Mark Up field', markup, R.markup), /outside|knock/i.test(o.pipeline) ? cmp('Commission field', comm, R.commission) : null]) if (m) issues.push(m)
       if (contact) {
         if (newPrice != null && !arcSame(newPrice, R.price)) issues.push(`contact New Price ${arcUsd(newPrice)} ≠ sheet ${arcUsd(R.price)}`)
         if (newPrice == null && jobPrice != null && !arcSame(jobPrice, R.price)) issues.push(`contact Job Price ${arcUsd(jobPrice)} ≠ sheet ${arcUsd(R.price)} (no New Price)`)
