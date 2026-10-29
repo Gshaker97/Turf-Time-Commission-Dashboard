@@ -2143,7 +2143,10 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
   // ArcSite stands in); when they DISAGREE nothing is written — the dispute is
   // reported (daily audit `sheet_gaps`, reconcile view) for a human to settle.
   const disputed = sheetPrice != null && arcTotal != null && !arcSame(sheetPrice, arcTotal)
-  const want = disputed ? cur : (sheetPrice != null ? sheetPrice : (arcTotal != null ? arcTotal : cur))
+  // Rounding rule (Kipperlee: sheet $6,711.17 vs signed $6,711.16): when the
+  // two agree within $1 the SIGNED total is the figure written everywhere, so
+  // GHL, the contact and the calendar never differ by a cent of sheet tax math.
+  const want = disputed ? cur : (arcTotal != null && (sheetPrice == null || arcSame(sheetPrice, arcTotal)) ? arcTotal : (sheetPrice != null ? sheetPrice : cur))
   const totalChanged = !disputed && want != null && cur != null && !arcSame(want, cur)
   const attached = oppContractEntries(opp)
   const r = {
@@ -3411,7 +3414,14 @@ const ghlFld = (fields, name) => {
   return null
 }
 const ghlErr = d => (d.sources.ghl || {}).status === 'ok' ? undefined : (d.sources.ghl || {}).status
-const numOf = v => { if (v == null || v === '') return null; const n = Number(String(v).replace(/[^0-9.-]/g, '')); return Number.isFinite(n) ? n : null }
+// Sheet money can be a parenthesised negative — "($743.99)" — which a plain
+// digit-strip reads as +743.99 (Jarvis caught three lost minus signs).
+const numOf = v => {
+  if (v == null || v === '') return null
+  const s = String(v).trim(), neg = /^\(.*\)$/.test(s) || /^-/.test(s)
+  const n = Number(s.replace(/[^0-9.]/g, ''))
+  return Number.isFinite(n) ? (neg ? -n : n) : null
+}
 analystRoute('/api/analyst/ghl/opportunities', 'ghl', (d, req) => {
   const g = ghlOf(d), all = g.opportunities
   const days = clampInt(req.query.days, 0, 2000), floor = days ? dayFloor(days) : '', limit = clampInt(req.query.limit, 200, 2000)
