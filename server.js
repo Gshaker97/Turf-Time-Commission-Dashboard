@@ -4165,6 +4165,81 @@ app.post('/api/arcsite/change-order', async (req, res) => {
   catch (e) { const r = { ok: false, error: e.message || 'change order failed' }; await arcLog(r); res.status(200).json(r) }
 })
 
+// ── Install Date sync (per Garrison, Oct 29): keep the GHL opp "Install Date"
+// field equal to the AUTHORITATIVE scheduling date — the AI sheet's Schedule
+// tab (the install calendar follows the same tab) — after reschedules,
+// regardless of how old the opp is. Before this the field was stamped once
+// from the dashboard deal and never followed a move. EXACT JOB MATCH, never
+// the customer name: Schedule row → Proposal ID → Jobs tab → Project ID → the
+// GHL opp carrying that Project ID. Writes ONE field (Install Date) and nothing
+// else: no value, stage, contact, calendar, dashboard deal or payroll — a
+// gold-checked deal's own frozen install_date is untouched. A job whose
+// non-cancelled Schedule rows disagree is HELD. `dry` lists every change.
+const ARC_IDS_KEY = 'arcsite_install_date_sync'
+const ARC_INSTALL_SYNC_AUTO = process.env.ARC_INSTALL_SYNC_AUTO === '1'
+async function arcInstallDateSync({ dry = true } = {}) {
+  const out = { at: new Date().toISOString(), dry, checked: 0, in_sync: 0, changes: [], holds: [], skipped: {}, errors: [] }
+  const skip = k => { out.skipped[k] = (out.skipped[k] || 0) + 1 }
+  let d; try { d = await readInstallSheet() } catch (e) { out.errors.push('sheet: ' + (e.message || 'unavailable')); return out }
+  const jobs = d && d.jobs, sched = d && d.schedule
+  if (!jobs || !jobs.headers || !sched || !sched.headers) { out.errors.push('sheet tabs unavailable'); return out }
+  const hj = re => jobs.headers.find(x => re.test(String(x).toLowerCase())), hs = re => sched.headers.find(x => re.test(String(x).toLowerCase()))
+  const jPropH = hj(/proposal\s*id/), jPidH = hj(/project\s*id/), sPropH = hs(/proposal\s*id/), sDateH = hs(/^install\s*date/), sStatH = hs(/^status/), sNoteH = hs(/^notes?/), sCustH = hs(/^customer/)
+  if (!jPropH || !jPidH || !sPropH || !sDateH) { out.errors.push('sheet headers missing (need Proposal ID + Project ID on Jobs, Proposal ID + Install Date on Schedule)'); return out }
+  const pidByProposal = {}
+  for (const r of jobs.rows) { const p = String(r[jPropH] || '').trim(), pid = String(r[jPidH] || '').trim(); if (p && pid) pidByProposal[p] = pid }
+  const schedByPid = {}
+  for (const r of sched.rows) {
+    const p = String(r[sPropH] || '').trim(), date = toYMD(r[sDateH]), status = String(sStatH ? r[sStatH] : '').toUpperCase()
+    if (!p) { skip('schedule row without Proposal ID'); continue }
+    const pid = pidByProposal[p]
+    if (!pid) { skip('schedule row whose Proposal ID is not on the Jobs tab'); continue }
+    if (!date) { skip('schedule row without an Install Date'); continue }
+    if (/cancel/.test(status)) { skip('cancelled schedule row'); continue }
+    ;(schedByPid[pid] ||= []).push({ proposal: p, date, status, note: String(sNoteH ? r[sNoteH] || '' : '').trim(), customer: sCustH ? r[sCustH] : null })
+  }
+  let g; try { g = await ghlFullSnapshot() } catch (e) { out.errors.push('ghl: ' + (e.message || 'unavailable')); return out }
+  const defs = dry ? null : await ghlOppFields().catch(() => null)
+  if (!dry && !defs) { out.errors.push('GHL field definitions unavailable — nothing written'); return out }
+  for (const o of listOf(g.opportunities)) {
+    if (!o.project_id || o.status === 'lost' || o.status === 'abandoned') continue
+    const rows = schedByPid[o.project_id]
+    if (!rows) { skip('opportunity with no live schedule row'); continue }
+    out.checked++
+    const dates = [...new Set(rows.map(r => r.date))]
+    const cur = o.install_date ? String(o.install_date).slice(0, 10) : null
+    if (dates.length > 1) { out.holds.push({ customer: o.name, opportunity_id: o.id, project_id: o.project_id, pipeline: o.pipeline, stage: o.stage, ghl: cur, schedule_rows: rows, reason: 'non-cancelled schedule rows for this job disagree' }); continue }
+    const want = dates[0]
+    if (cur === want) { out.in_sync++; continue }
+    const ch = { customer: o.name, opportunity_id: o.id, project_id: o.project_id, pipeline: o.pipeline, stage: o.stage, from: cur, to: want, source: `Schedule tab · proposal ${rows[0].proposal} · ${rows[0].status}${rows[0].note ? ' · ' + rows[0].note : ''}` }
+    if (!dry) {
+      try {
+        const w = oppFieldWrite(GHL_OPP_FIELD_IDS.install_date, want, defs)
+        if (!w) throw new Error('date would not serialise')
+        await ghlUpdateOpp(o.id, { customFields: [w] })
+        const back = await ghlGetRetry(`/opportunities/${o.id}`).catch(() => null)
+        const now = back && oppInstallDay((back.opportunity || back))
+        ch.written = true; ch.read_back = now; ch.verified = now === want
+      } catch (e) { ch.written = false; ch.error = e.message || 'write failed' }
+    }
+    out.changes.push(ch)
+  }
+  if (SUPABASE_URL && SERVICE_KEY) await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`, { key: ARC_IDS_KEY, value: { ...out, changes: out.changes.slice(0, 500) } }, 'resolution=merge-duplicates').catch(() => {})
+  return out
+}
+app.get('/api/arcsite/install-date-sync', async (req, res) => {
+  if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
+  const rows = await restGet(`/rest/v1/app_settings?key=eq.${ARC_IDS_KEY}&select=value`).catch(() => [])
+  res.json((rows && rows[0] && rows[0].value) || { ok: false, error: 'no run yet' })
+})
+app.post('/api/arcsite/install-date-sync', async (req, res) => {
+  if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
+  let body = {}; try { body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {}) } catch {}
+  const dry = !(body.dry === false || body.dry === 'false')   // default = dry run
+  try { res.json(await arcInstallDateSync({ dry })) } catch (e) { res.status(200).json({ ok: false, error: e.message || 'install date sync failed' }) }
+})
+if (ARC_INSTALL_SYNC_AUTO) setInterval(() => arcInstallDateSync({ dry: false }).catch(() => {}), 60 * 60_000).unref?.()
+
 // Signed-PDF retry queue + the visible failure list (document-only path).
 app.get('/api/arcsite/pdf-pending', async (req, res) => {
   if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
