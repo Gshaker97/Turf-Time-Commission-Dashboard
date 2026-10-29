@@ -1756,10 +1756,34 @@ const GHL_PDF_FIELD = 'uluDL3vxcRVmeHSqpaj4'   // "Contract / PDF" (FILE_UPLOAD)
 // Download the ArcSite PDF (its CDN link expires) and re-host it in GHL so the
 // Contract/PDF field holds a permanent file. Needs the token's medias.write
 // scope; a 401 here means that scope is missing. Returns the hosted URL.
-async function ghlHostPdf(pdfUrl, name) {
+// ── Is this ArcSite PDF the SIGNED render? SignNow stamps a signing timestamp
+// ("2026-10-14 09:52 PM UTC") beside the signature line on every signed render
+// (147/147 checked Oct 29); the pre-signature render has none. Oct 29 finding:
+// 26 live-webhook uploads from Oct 10–16 were the UNSIGNED render even though
+// the webhook ran 1–8 min AFTER the stamp time — ArcSite's pdf_url lags the
+// signing. So a contract is hosted only once the stamp is present; otherwise it
+// is queued and re-fetched by arcPdfPendingTick until it is, with a timeout and
+// a visible failure list. `null` = text could not be read (never assumed
+// unsigned — a signature could be an image), reported as unverified.
+const ARC_SIGN_STAMP = /\d{4}-\d{2}-\d{2} \d{2}:\d{2} (AM|PM) UTC/
+async function pdfSigned(buf) {
+  try {
+    const pdfParse = require('pdf-parse')
+    const { text } = await pdfParse(buf, { max: 4 })
+    if (!text || text.trim().length < 50) return null
+    return ARC_SIGN_STAMP.test(text)
+  } catch { return null }
+}
+const PDF_UNSIGNED = 'PDF_UNSIGNED'
+async function ghlHostPdf(pdfUrl, name, { requireSigned = true } = {}) {
   const dl = await fetch(pdfUrl)
   if (!dl.ok) throw new Error(`pdf download ${dl.status}`)
   const buf = Buffer.from(await dl.arrayBuffer())
+  if (requireSigned) {
+    const signed = await pdfSigned(buf)
+    if (signed === false) { const e = new Error(PDF_UNSIGNED); e.code = PDF_UNSIGNED; throw e }
+    if (signed === null) console.warn(`[arcsite] ${name}: PDF text unreadable — hosted without signature verification`)
+  }
   const form = new FormData()
   form.append('file', new Blob([buf], { type: 'application/pdf' }), name)
   form.append('hosted', 'false')
@@ -1769,6 +1793,62 @@ async function ghlHostPdf(pdfUrl, name) {
   if (!resp.ok) throw new Error(`medias upload ${resp.status}: ${(await resp.text()).slice(0, 120)}`)
   const j = await resp.json()
   return j.url || j.fileUrl || (j.file && j.file.url) || j.link || null
+}
+
+// ── Signed-PDF retry queue (app_settings.arcsite_pdf_pending). A contract whose
+// ArcSite render is not yet signed is parked here; every 10 min it is re-fetched
+// and, once the signing stamp is present, hosted and APPENDED to the opp's
+// Contract/PDF field (never clearing). After ARC_PDF_RETRY_HOURS it moves to
+// arcsite_pdf_failures — the visible flag (GET /api/arcsite/pdf-pending, the
+// daily contract audit, arcLog). Document only: no value/stage/contact/calendar.
+const ARC_PDF_PENDING_KEY = 'arcsite_pdf_pending', ARC_PDF_FAIL_KEY = 'arcsite_pdf_failures'
+const ARC_PDF_RETRY_HOURS = Number(process.env.ARC_PDF_RETRY_HOURS || 24)
+async function arcPdfPendingRead(key = ARC_PDF_PENDING_KEY) {
+  const rows = await restGet(`/rest/v1/app_settings?key=eq.${key}&select=value`).catch(() => [])
+  const v = rows && rows[0] && rows[0].value
+  return Array.isArray(v) ? v : []
+}
+async function arcPdfPendingWrite(list, key = ARC_PDF_PENDING_KEY) {
+  await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`, { key, value: list.slice(-500) }, 'resolution=merge-duplicates')
+}
+async function arcPdfPendingAdd(entry) {
+  if (!SUPABASE_URL || !SERVICE_KEY || !entry || !entry.oppId || !entry.pdfUrl) return
+  try {
+    const list = await arcPdfPendingRead()
+    const k = `${entry.oppId}|${entry.proposalId || entry.pdfUrl}`
+    if (list.some(x => `${x.oppId}|${x.proposalId || x.pdfUrl}` === k)) return
+    list.push({ ...entry, since: new Date().toISOString(), tries: 0 })
+    await arcPdfPendingWrite(list)
+  } catch { /* best-effort */ }
+}
+let _arcPdfTickRunning = false
+async function arcPdfPendingTick() {
+  if (_arcPdfTickRunning || !SUPABASE_URL || !SERVICE_KEY) return
+  _arcPdfTickRunning = true
+  try {
+    const list = await arcPdfPendingRead()
+    if (!list.length) return
+    const keep = [], failures = []
+    for (const e of list) {
+      try {
+        const url = await ghlHostPdf(e.pdfUrl, e.name)   // throws PDF_UNSIGNED while the render is still unsigned
+        if (!url) throw new Error('upload returned no url')
+        await ghlUpdateOpp(e.oppId, { customFields: [{ id: GHL_PDF_FIELD, field_value: url }] })
+        await arcLog({ ok: true, via: 'pdf_retry', action: 'signed_pdf_attached', project_id: e.projectId, opportunity_id: e.oppId, customer: e.customer, proposal: e.proposalId, tries: (e.tries || 0) + 1, waited_min: Math.round((Date.now() - new Date(e.since)) / 60000) })
+      } catch (err) {
+        const ageH = (Date.now() - new Date(e.since)) / 36e5
+        const unsigned = err && (err.code === PDF_UNSIGNED || err.message === PDF_UNSIGNED)
+        if (ageH >= ARC_PDF_RETRY_HOURS) failures.push({ ...e, tries: (e.tries || 0) + 1, failed_at: new Date().toISOString(), reason: unsigned ? `signed render never became available in ${ARC_PDF_RETRY_HOURS}h` : (err.message || 'error') })
+        else keep.push({ ...e, tries: (e.tries || 0) + 1, last_error: unsigned ? 'still unsigned' : (err.message || 'error') })
+      }
+    }
+    await arcPdfPendingWrite(keep)
+    if (failures.length) {
+      const prev = await arcPdfPendingRead(ARC_PDF_FAIL_KEY)
+      await arcPdfPendingWrite([...prev, ...failures].slice(-200), ARC_PDF_FAIL_KEY)
+      await arcLog({ ok: false, via: 'pdf_retry', action: 'signed_pdf_timeout', failures: failures.map(f => ({ customer: f.customer, project_id: f.projectId, proposal: f.proposalId, reason: f.reason })) })
+    }
+  } finally { _arcPdfTickRunning = false }
 }
 
 // Pull the dashboard deal (sheet-synced) + rep names for the money/people fields
@@ -2199,7 +2279,15 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
       await ghlUpdateOpp(opp.id, { customFields: [{ id: GHL_PDF_FIELD, field_value: '' }] })
       for (const h of hosted) await ghlUpdateOpp(opp.id, { customFields: [{ id: GHL_PDF_FIELD, field_value: h.url }] })
       contracts = hosted; r.pdf = `rebuilt ${hosted.length}`
-    } catch (e) { r.ok = false; r.pdf = 'skipped: ' + (e.message || 'upload failed') }
+    } catch (e) {
+      if (e && (e.code === PDF_UNSIGNED || e.message === PDF_UNSIGNED)) {
+        // Newest render not signed yet: nothing is cleared or replaced; the
+        // signed copy is appended by the retry queue when it appears.
+        const s = signed[signed.length - 1]
+        await arcPdfPendingAdd({ projectId, oppId: opp.id, contactId, customer: customer.name, proposalId: s.document_number || s.proposal_id, pdfUrl: s.pdf_url, name: `${customer.name} - contract ${s.document_number || s.proposal_id}.pdf`.replace(/[\/\\]/g, '-') })
+        r.pdf = 'pending: newest render not signed yet — queued for retry, existing attachments untouched'
+      } else { r.ok = false; r.pdf = 'skipped: ' + (e.message || 'upload failed') }
+    }
   }
   // 2. Value + stage — the same rule as the live webhook: a changed total lands
   //    in Change Order, and the value is re-sent ALONE (GHL drops it on a stage move).
@@ -2768,7 +2856,15 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
         await ghlUpdateOpp(oppId, { customFields: [{ id: GHL_PDF_FIELD, field_value: hosted }] })
         pdf = isChangeOrder ? 'appended' : 'uploaded'
       } else pdf = 'skipped: no url from upload'
-    } catch (e) { pdf = 'skipped: ' + (e.message || 'upload failed') }
+    } catch (e) {
+      if (e && (e.code === PDF_UNSIGNED || e.message === PDF_UNSIGNED)) {
+        // ArcSite's render is not signed yet (its pdf_url lags the signing by
+        // minutes or more). Park it; arcPdfPendingTick appends the signed copy
+        // once the stamp appears, or flags a timeout after ARC_PDF_RETRY_HOURS.
+        await arcPdfPendingAdd({ projectId, oppId, contactId, customer: custName, proposalId: signedDoc, pdfUrl, name: `${custName} - contract${signedDoc ? ' ' + signedDoc : ''}.pdf`.replace(/[\/\\]/g, '-') })
+        pdf = 'pending: render not signed yet — queued for retry'
+      } else pdf = 'skipped: ' + (e.message || 'upload failed')
+    }
   }
 
   // ── Change order → the install calendar + the contact's "New Price" (so the
@@ -4047,6 +4143,17 @@ app.post('/api/arcsite/change-order', async (req, res) => {
   catch (e) { const r = { ok: false, error: e.message || 'change order failed' }; await arcLog(r); res.status(200).json(r) }
 })
 
+// Signed-PDF retry queue + the visible failure list (document-only path).
+app.get('/api/arcsite/pdf-pending', async (req, res) => {
+  if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
+  res.json({ ok: true, retry_hours: ARC_PDF_RETRY_HOURS, pending: await arcPdfPendingRead(), failures: await arcPdfPendingRead(ARC_PDF_FAIL_KEY) })
+})
+app.post('/api/arcsite/pdf-pending', async (req, res) => {
+  if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
+  try { await arcPdfPendingTick(); res.json({ ok: true, pending: await arcPdfPendingRead(), failures: await arcPdfPendingRead(ARC_PDF_FAIL_KEY) }) }
+  catch (e) { res.status(200).json({ ok: false, error: e.message }) }
+})
+
 // The daily contract audit by hand (POST, takes a few minutes; body
 // { fix?: false, days_back?: n }) and its last stored result (GET).
 app.get('/api/arcsite/contract-audit', async (req, res) => {
@@ -4168,6 +4275,8 @@ setInterval(() => arcPendingReconcile().catch(() => {}), 5 * 60_000).unref?.()
 // approvals hit GHL, the rest skip via the confirmed-total map).
 setTimeout(() => arcValueSweep().catch(() => {}), 90_000).unref?.()
 setInterval(() => arcValueSweep().catch(() => {}), 10 * 60_000).unref?.()
+setTimeout(() => arcPdfPendingTick().catch(() => {}), 120_000).unref?.()
+setInterval(() => arcPdfPendingTick().catch(() => {}), 10 * 60_000).unref?.()
 
 // The daily FULL contract audit — every opp installing recently or in the
 // future, checked against ArcSite's signed contracts. The tick runs every 15
