@@ -3608,7 +3608,11 @@ async function arcFieldAudit({ maxArc = 2000 } = {}) {
   // Calendar jobs linked to an opportunity the GHL snapshot doesn't carry.
   const oppIds = new Set(ghl.opportunities.map(o => o.id))
   for (const j of listOf(calJobs)) if (j.ghlOpportunityId && !String(j.ghlOpportunityId).startsWith('sheet:') && !oppIds.has(j.ghlOpportunityId)) { out.ambiguous++; count('AMBIGUOUS: calendar job linked to an opportunity not found in GHL'); out.jobs.push({ customer: j.customer && j.customer.name || j.customer, calendar_job: j.jobNumber, opportunity_id: j.ghlOpportunityId, issues: [], ambiguous: ['calendar job linked to an opportunity not found in GHL'] }) }
-  out.jobs.sort((a, b) => (b.issues.length + b.ambiguous.length) - (a.issues.length + a.ambiguous.length))
+  // Stored list is capped at 600, so order by what needs a human: ambiguous
+  // first, then wrong values, then EMPTY-only. Sorting by raw flag count let
+  // four-EMPTY jobs push every ambiguous job past the cap (run 2 stored none).
+  const rank = j => (j.ambiguous.length ? 2e6 : 0) + j.issues.filter(i => / ≠ /.test(i)).length * 1e3 + j.issues.length + j.ambiguous.length
+  out.jobs.sort((a, b) => rank(b) - rank(a))
   out.ms = Date.now() - started
   if (SUPABASE_URL && SERVICE_KEY) await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`, { key: ARC_FIELD_AUDIT_KEY, value: { ...out, jobs: out.jobs.slice(0, 600) } }, 'resolution=merge-duplicates').catch(() => {})
   return out
