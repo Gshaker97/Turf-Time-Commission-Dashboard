@@ -1774,15 +1774,21 @@ async function pdfSigned(buf) {
     return ARC_SIGN_STAMP.test(text)
   } catch { return null }
 }
-const PDF_UNSIGNED = 'PDF_UNSIGNED'
+const PDF_UNSIGNED = 'PDF_UNSIGNED', PDF_UNVERIFIABLE = 'PDF_UNVERIFIABLE'
+const pdfErr = code => { const e = new Error(code); e.code = code; return e }
+const isPdfErr = (e, code) => !!e && (e.code === code || e.message === code)
+// requireSigned: 'strict' (default) throws PDF_UNSIGNED for an unsigned render and
+// PDF_UNVERIFIABLE when the text cannot be read — the caller must then decide, and
+// an unverifiable copy is NEVER reported as verified signed (Jarvis, Oct 29).
+// false = host whatever was fetched (callers use it only to label 'unverified').
 async function ghlHostPdf(pdfUrl, name, { requireSigned = true } = {}) {
   const dl = await fetch(pdfUrl)
   if (!dl.ok) throw new Error(`pdf download ${dl.status}`)
   const buf = Buffer.from(await dl.arrayBuffer())
   if (requireSigned) {
     const signed = await pdfSigned(buf)
-    if (signed === false) { const e = new Error(PDF_UNSIGNED); e.code = PDF_UNSIGNED; throw e }
-    if (signed === null) console.warn(`[arcsite] ${name}: PDF text unreadable — hosted without signature verification`)
+    if (signed === false) throw pdfErr(PDF_UNSIGNED)
+    if (signed === null) throw pdfErr(PDF_UNVERIFIABLE)
   }
   const form = new FormData()
   form.append('file', new Blob([buf], { type: 'application/pdf' }), name)
@@ -1837,8 +1843,12 @@ async function arcPdfPendingTick() {
         await arcLog({ ok: true, via: 'pdf_retry', action: 'signed_pdf_attached', project_id: e.projectId, opportunity_id: e.oppId, customer: e.customer, proposal: e.proposalId, tries: (e.tries || 0) + 1, waited_min: Math.round((Date.now() - new Date(e.since)) / 60000) })
       } catch (err) {
         const ageH = (Date.now() - new Date(e.since)) / 36e5
-        const unsigned = err && (err.code === PDF_UNSIGNED || err.message === PDF_UNSIGNED)
-        if (ageH >= ARC_PDF_RETRY_HOURS) failures.push({ ...e, tries: (e.tries || 0) + 1, failed_at: new Date().toISOString(), reason: unsigned ? `signed render never became available in ${ARC_PDF_RETRY_HOURS}h` : (err.message || 'error') })
+        const unsigned = isPdfErr(err, PDF_UNSIGNED)
+        if (isPdfErr(err, PDF_UNVERIFIABLE)) {
+          // Unreadable text is not "signed": park it in the failure list as
+          // UNVERIFIED so a human looks, instead of hosting it as verified.
+          failures.push({ ...e, tries: (e.tries || 0) + 1, failed_at: new Date().toISOString(), reason: 'PDF text unreadable — signature could not be verified (not hosted)' })
+        } else if (ageH >= ARC_PDF_RETRY_HOURS) failures.push({ ...e, tries: (e.tries || 0) + 1, failed_at: new Date().toISOString(), reason: unsigned ? `signed render never became available in ${ARC_PDF_RETRY_HOURS}h` : (err.message || 'error') })
         else keep.push({ ...e, tries: (e.tries || 0) + 1, last_error: unsigned ? 'still unsigned' : (err.message || 'error') })
       }
     }
@@ -2280,7 +2290,11 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
       for (const h of hosted) await ghlUpdateOpp(opp.id, { customFields: [{ id: GHL_PDF_FIELD, field_value: h.url }] })
       contracts = hosted; r.pdf = `rebuilt ${hosted.length}`
     } catch (e) {
-      if (e && (e.code === PDF_UNSIGNED || e.message === PDF_UNSIGNED)) {
+      if (isPdfErr(e, PDF_UNVERIFIABLE)) {
+        // A render whose text cannot be read: nothing is cleared or replaced,
+        // and it is reported — never counted as a verified signed copy.
+        r.ok = false; r.pdf = 'skipped: a signed render could not be verified (PDF text unreadable) — existing attachments untouched'
+      } else if (isPdfErr(e, PDF_UNSIGNED)) {
         // Newest render not signed yet: nothing is cleared or replaced; the
         // signed copy is appended by the retry queue when it appears.
         const s = signed[signed.length - 1]
@@ -2857,12 +2871,20 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
         pdf = isChangeOrder ? 'appended' : 'uploaded'
       } else pdf = 'skipped: no url from upload'
     } catch (e) {
-      if (e && (e.code === PDF_UNSIGNED || e.message === PDF_UNSIGNED)) {
+      if (isPdfErr(e, PDF_UNSIGNED)) {
         // ArcSite's render is not signed yet (its pdf_url lags the signing by
         // minutes or more). Park it; arcPdfPendingTick appends the signed copy
         // once the stamp appears, or flags a timeout after ARC_PDF_RETRY_HOURS.
         await arcPdfPendingAdd({ projectId, oppId, contactId, customer: custName, proposalId: signedDoc, pdfUrl, name: `${custName} - contract${signedDoc ? ' ' + signedDoc : ''}.pdf`.replace(/[\/\\]/g, '-') })
         pdf = 'pending: render not signed yet — queued for retry'
+      } else if (isPdfErr(e, PDF_UNVERIFIABLE)) {
+        // Text unreadable: keep the document (a signature may be an image) but
+        // say so — this is NOT a verified signed copy.
+        try {
+          const hosted = await ghlHostPdf(pdfUrl, `${custName} - contract (signature unverified).pdf`.replace(/[\/\\]/g, '-'), { requireSigned: false })
+          if (hosted) { hostedUrl = hosted; await ghlUpdateOpp(oppId, { customFields: [{ id: GHL_PDF_FIELD, field_value: hosted }] }) }
+          pdf = 'uploaded — SIGNATURE UNVERIFIED (PDF text unreadable)'
+        } catch (e2) { pdf = 'skipped: ' + (e2.message || 'upload failed') }
       } else pdf = 'skipped: ' + (e.message || 'upload failed')
     }
   }
