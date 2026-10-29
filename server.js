@@ -4177,8 +4177,11 @@ app.post('/api/arcsite/change-order', async (req, res) => {
 // non-cancelled Schedule rows disagree is HELD. `dry` lists every change.
 const ARC_IDS_KEY = 'arcsite_install_date_sync'
 const ARC_INSTALL_SYNC_AUTO = process.env.ARC_INSTALL_SYNC_AUTO === '1'
-async function arcInstallDateSync({ dry = true } = {}) {
-  const out = { at: new Date().toISOString(), dry, checked: 0, in_sync: 0, changes: [], holds: [], skipped: {}, errors: [] }
+async function arcInstallDateSync({ dry = true, excludeOpps = [], fillEmpty = true } = {}) {
+  // fillEmpty=false limits the run to MOVES (a GHL date that differs) and leaves
+  // an EMPTY GHL field alone; excludeOpps = opp ids under an identity hold.
+  const out = { at: new Date().toISOString(), dry, fill_empty: fillEmpty, excluded: excludeOpps.length, checked: 0, in_sync: 0, moves: 0, fills: 0, changes: [], holds: [], skipped: {}, errors: [] }
+  const excluded = new Set(excludeOpps.map(String))
   const skip = k => { out.skipped[k] = (out.skipped[k] || 0) + 1 }
   let d; try { d = await readInstallSheet() } catch (e) { out.errors.push('sheet: ' + (e.message || 'unavailable')); return out }
   const jobs = d && d.jobs, sched = d && d.schedule
@@ -4195,7 +4198,7 @@ async function arcInstallDateSync({ dry = true } = {}) {
     const pid = pidByProposal[p]
     if (!pid) { skip('schedule row whose Proposal ID is not on the Jobs tab'); continue }
     if (!date) { skip('schedule row without an Install Date'); continue }
-    if (/cancel/.test(status)) { skip('cancelled schedule row'); continue }
+    if (/cancel/i.test(status)) { skip('cancelled schedule row'); continue }   // Schedule tab writes CANCELLED in caps
     ;(schedByPid[pid] ||= []).push({ proposal: p, date, status, note: String(sNoteH ? r[sNoteH] || '' : '').trim(), customer: sCustH ? r[sCustH] : null })
   }
   let g; try { g = await ghlFullSnapshot() } catch (e) { out.errors.push('ghl: ' + (e.message || 'unavailable')); return out }
@@ -4205,13 +4208,16 @@ async function arcInstallDateSync({ dry = true } = {}) {
     if (!o.project_id || o.status === 'lost' || o.status === 'abandoned') continue
     const rows = schedByPid[o.project_id]
     if (!rows) { skip('opportunity with no live schedule row'); continue }
+    if (excluded.has(String(o.id))) { skip('excluded (identity hold)'); continue }
     out.checked++
     const dates = [...new Set(rows.map(r => r.date))]
     const cur = o.install_date ? String(o.install_date).slice(0, 10) : null
     if (dates.length > 1) { out.holds.push({ customer: o.name, opportunity_id: o.id, project_id: o.project_id, pipeline: o.pipeline, stage: o.stage, ghl: cur, schedule_rows: rows, reason: 'non-cancelled schedule rows for this job disagree' }); continue }
     const want = dates[0]
     if (cur === want) { out.in_sync++; continue }
-    const ch = { customer: o.name, opportunity_id: o.id, project_id: o.project_id, pipeline: o.pipeline, stage: o.stage, from: cur, to: want, source: `Schedule tab · proposal ${rows[0].proposal} · ${rows[0].status}${rows[0].note ? ' · ' + rows[0].note : ''}` }
+    if (!cur && !fillEmpty) { skip('empty GHL Install Date left alone (fill_empty=false)'); continue }
+    if (cur) out.moves++; else out.fills++
+    const ch = { kind: cur ? 'move' : 'fill', customer: o.name, opportunity_id: o.id, project_id: o.project_id, pipeline: o.pipeline, stage: o.stage, from: cur, to: want, source: `Schedule tab · proposal ${rows[0].proposal} · ${rows[0].status}${rows[0].note ? ' · ' + rows[0].note : ''}` }
     if (!dry) {
       try {
         const w = oppFieldWrite(GHL_OPP_FIELD_IDS.install_date, want, defs)
@@ -4236,7 +4242,9 @@ app.post('/api/arcsite/install-date-sync', async (req, res) => {
   if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
   let body = {}; try { body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {}) } catch {}
   const dry = !(body.dry === false || body.dry === 'false')   // default = dry run
-  try { res.json(await arcInstallDateSync({ dry })) } catch (e) { res.status(200).json({ ok: false, error: e.message || 'install date sync failed' }) }
+  const excludeOpps = Array.isArray(body.exclude_opps) ? body.exclude_opps : []
+  const fillEmpty = !(body.fill_empty === false || body.fill_empty === 'false')
+  try { res.json(await arcInstallDateSync({ dry, excludeOpps, fillEmpty })) } catch (e) { res.status(200).json({ ok: false, error: e.message || 'install date sync failed' }) }
 })
 if (ARC_INSTALL_SYNC_AUTO) setInterval(() => arcInstallDateSync({ dry: false }).catch(() => {}), 60 * 60_000).unref?.()
 
