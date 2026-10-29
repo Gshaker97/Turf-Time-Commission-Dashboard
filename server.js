@@ -3065,7 +3065,7 @@ function analystRoute(path, sourceKey, pick, { jarvisOnly = false } = {}) {
         // served / served_at describe THIS response; fetched_at / data_as_of /
         // last_fetch_mode describe the data itself.
         ...(sourceKey ? { source: { name: sourceKey, served, mode: served, served_at: new Date().toISOString(), ...meta, ...(liveNote ? { note: liveNote } : {}) } } : {}),
-        ...pick(data, req),
+        ...(await pick(data, req)),   // a view may be async (the field audit reads its stored result)
       })
     } catch (e) { res.status(500).json(err(e.message || 'feed failed')) }
   })
@@ -3507,6 +3507,124 @@ analystRoute('/api/analyst/ghl/reconcile', 'ghl', (d, req) => {
   return { install_since: installSince, checked, skipped_historical: skippedHistorical, with_issues: rows.filter(r => r.issues.length).length, issue_counts: counts, sheet_rows: sheetJobs.rows.length, error: ghlErr(d) || (d.sources.sheet && d.sources.sheet.status !== 'ok' ? 'sheet: ' + d.sources.sheet.status : undefined), returned: Math.min(rows.length, limit), rows: rows.slice(0, limit) }
 }, J)
 
+// ── Field audit — READ-ONLY, every mapped field, every job ──────────────────
+// Approved by Jarvis's review (Oct 29). Checks that the AI sheet's calculated
+// values for the latest VALID SIGNED revision of each job carried through to
+// every destination field — opportunity value, Price, Baseline Price, Mark Up,
+// Commission, the contact's New Price / Job Price, the PM calendar's value —
+// for EVERY opportunity with a Project ID, whatever its stage or status, plus
+// every calendar job linked to an opportunity. "Latest valid signed revision"
+// is resolved through ArcSite (approved + signed PDF; void and unsigned never
+// count) and matched to the sheet row carrying that revision's total; same-day
+// ties resolve by proposal id; anything that doesn't resolve cleanly is HELD as
+// ambiguous, never guessed. Strictly read-only: the only write is storing the
+// result in app_settings. It authorizes nothing — the narrow repair pass
+// (arcContractAudit) is untouched.
+const ARC_FIELD_AUDIT_KEY = 'arcsite_field_audit'
+const GHL_CONTACT_NEW_PRICE = 'X6s8Kc6QVEVyzSIISktA', GHL_CONTACT_JOB_PRICE = 'gz5Xoix8Sd37hUbrvQuQ'
+const sheetHeader = (t, re) => t.headers.find(x => re.test(String(x).toLowerCase()))
+
+async function arcFieldAudit({ maxArc = 2000 } = {}) {
+  const started = Date.now()
+  const out = { at: new Date().toISOString(), day: phoenixNow().day, read_only: true, checked: 0, ok: 0, with_issues: 0, ambiguous: 0, arcsite_lookups: 0, issue_counts: {}, basis_counts: {}, jobs: [], errors: [] }
+  const [ghl, sheet, calJobs] = await Promise.all([ghlFullSnapshot(), readInstallSheet(), calendarExport('/api/export/jobs').catch(e => { out.errors.push('calendar: ' + e.message); return null })])
+  const jobsTab = sheet.jobs || { headers: [], rows: [] }
+  const H = {
+    pid: sheetHeader(jobsTab, /project\s*id/), price: sheetHeader(jobsTab, /pre.?tax\s*sale/) || sheetHeader(jobsTab, /approved\s*total/),
+    baseline: sheetHeader(jobsTab, /baseline/), markup: sheetHeader(jobsTab, /markup/), approved: sheetHeader(jobsTab, /approved\s*date/),
+    commission: jobsTab.headers.find(x => /commission/.test(String(x).toLowerCase()) && !String(x).includes('%')),
+  }
+  const sheetByPid = {}
+  for (const r of jobsTab.rows) { const k = String(r[H.pid] || '').trim(); if (k) (sheetByPid[k] ||= []).push(r) }   // sheet order = newest first
+  const calByOpp = {}
+  for (const j of listOf(calJobs)) if (j.ghlOpportunityId) calByOpp[j.ghlOpportunityId] = j
+  const oppsByPid = {}
+  for (const o of ghl.opportunities) if (o.project_id && !/lost|abandon/i.test(o.status || '')) (oppsByPid[o.project_id] ||= []).push(o)
+  const rowVals = r => ({ approved: r[H.approved] || null, price: numOf(r[H.price]), baseline: numOf(r[H.baseline]), markup: numOf(r[H.markup]), commission: numOf(r[H.commission]) })
+  const count = k => { out.issue_counts[k] = (out.issue_counts[k] || 0) + 1 }
+
+  for (const o of ghl.opportunities) {
+    if (!o.project_id) continue
+    const rows = (sheetByPid[o.project_id] || []).map(rowVals)
+    const cal = calByOpp[o.id] || null
+    const contact = ghl.contacts[o.contact_id] || null
+    const issues = [], amb = []
+    let basis = null, basisRow = null
+    if (!rows.length) { amb.push('no AI-sheet row for this Project ID') }
+    const value = numOf(o.value), price = numOf(ghlFld(o.fields, 'Price')), base = numOf(ghlFld(o.fields, 'Baseline Price')), markup = numOf(ghlFld(o.fields, 'Mark Up')), comm = numOf(ghlFld(o.fields, 'Commission'))
+    const newPrice = contact ? numOf(ghlFld(contact.fields, 'New Price')) : null, jobPrice = contact ? numOf(ghlFld(contact.fields, 'Job Price')) : null
+    const quickMismatch = rows.length && (!arcSame(value, rows[0].price) || (base != null && rows[0].baseline != null && !arcSame(base, rows[0].baseline)) || (comm != null && rows[0].commission != null && !arcSame(comm, rows[0].commission)))
+    // Resolve the latest VALID signed revision through ArcSite when it matters:
+    // more than one revision on the sheet, or any field disagreeing with the
+    // newest row. A single-row project with every field agreeing needs no call.
+    if (rows.length && (rows.length > 1 || quickMismatch) && out.arcsite_lookups < maxArc) {
+      out.arcsite_lookups++
+      try {
+        const signed = await arcSignedContracts(o.project_id)   // oldest → newest, void/unsigned excluded
+        const newest = signed[signed.length - 1] || null
+        if (!newest) amb.push('ArcSite shows no valid signed revision (void/unsigned only)')
+        else {
+          const matches = rows.filter(r => arcSame(r.price, newest.total))
+          if (!matches.length) amb.push(`sheet has no row at the newest signed total ${arcUsd(newest.total)} (proposal ${newest.proposal_id}) — sheet lag or mismatch`)
+          else { basisRow = matches[0]; basis = `arcsite-verified: proposal ${newest.proposal_id} ${arcUsd(newest.total)} ↔ sheet row ${basisRow.approved}` }
+          if (rows.length > 1 && rows[0].approved && rows[1] && rows[1].approved === rows[0].approved && !arcSame(rows[0].price, rows[1].price)) amb.push(`two sheet rows on ${rows[0].approved} with different totals (${arcUsd(rows[0].price)} / ${arcUsd(rows[1].price)}) — resolved by proposal id where the signed total matched`)
+        }
+      } catch (e) { amb.push('ArcSite lookup failed: ' + (e.message || 'error')) }
+    } else if (rows.length) { basisRow = rows[0]; basis = 'single-sheet-row (no revisions, fields agree)'; if (rows.length === 1 && quickMismatch) basis = 'single-sheet-row' }
+    if ((oppsByPid[o.project_id] || []).length > 1) amb.push(`${oppsByPid[o.project_id].length} non-lost opportunities share this Project ID`)
+    if (value == null || value === 0) amb.push('opportunity value empty or $0')
+    if (basisRow && !amb.length) {
+      const R = basisRow
+      if (!arcSame(value, R.price)) issues.push(`value ${arcUsd(value)} ≠ sheet ${arcUsd(R.price)}`)
+      if (!arcSame(price, R.price)) issues.push(`Price field ${arcUsd(price)} ≠ sheet ${arcUsd(R.price)}`)
+      if (R.baseline != null && !arcSame(base, R.baseline)) issues.push(`Baseline Price field ${arcUsd(base)} ≠ sheet ${arcUsd(R.baseline)}`)
+      if (R.markup != null && markup != null && !arcSame(markup, R.markup)) issues.push(`Mark Up field ${arcUsd(markup)} ≠ sheet ${arcUsd(R.markup)}`)
+      if (/outside|knock/i.test(o.pipeline) && R.commission != null && !arcSame(comm, R.commission)) issues.push(`Commission field ${arcUsd(comm)} ≠ sheet ${arcUsd(R.commission)}`)
+      if (contact) {
+        if (newPrice != null && !arcSame(newPrice, R.price)) issues.push(`contact New Price ${arcUsd(newPrice)} ≠ sheet ${arcUsd(R.price)}`)
+        if (newPrice == null && jobPrice != null && !arcSame(jobPrice, R.price)) issues.push(`contact Job Price ${arcUsd(jobPrice)} ≠ sheet ${arcUsd(R.price)} (no New Price)`)
+      }
+      if (cal && cal.value != null && !arcSame(cal.value, R.price)) issues.push(`PM calendar ${cal.jobNumber} ${arcUsd(cal.value)} ≠ sheet ${arcUsd(R.price)}`)
+    }
+    out.checked++
+    if (basis) out.basis_counts[basis.split(':')[0]] = (out.basis_counts[basis.split(':')[0]] || 0) + 1
+    for (const i of issues) count(i.replace(/\$[\d.,-]+/g, '$').replace(/J-\d+/g, 'J-n'))
+    for (const a of amb) count('AMBIGUOUS: ' + a.replace(/\$[\d.,-]+/g, '$').replace(/\d{4}-\d{2}-\d{2}/g, 'date').replace(/proposal \d+/g, 'proposal n').replace(/^\d+ non-lost/, 'N non-lost'))
+    if (amb.length) out.ambiguous++
+    if (issues.length || amb.length) { out.with_issues += issues.length ? 1 : 0; out.jobs.push({ customer: o.name, opportunity_id: o.id, contact_id: o.contact_id, project_id: o.project_id, pipeline: o.pipeline, stage: o.stage, status: o.status, install_date: o.install_date, calendar_job: cal ? cal.jobNumber : null, basis, current: { value, price_field: price, baseline_field: base, markup_field: markup, commission_field: comm, contact_new_price: newPrice, contact_job_price: jobPrice, calendar_value: cal ? cal.value : null }, sheet_row: basisRow, sheet_revisions: rows.length, issues, ambiguous: amb }) }
+    else out.ok++
+  }
+  // Calendar jobs linked to an opportunity the GHL snapshot doesn't carry.
+  const oppIds = new Set(ghl.opportunities.map(o => o.id))
+  for (const j of listOf(calJobs)) if (j.ghlOpportunityId && !String(j.ghlOpportunityId).startsWith('sheet:') && !oppIds.has(j.ghlOpportunityId)) { out.ambiguous++; count('AMBIGUOUS: calendar job linked to an opportunity not found in GHL'); out.jobs.push({ customer: j.customer && j.customer.name || j.customer, calendar_job: j.jobNumber, opportunity_id: j.ghlOpportunityId, issues: [], ambiguous: ['calendar job linked to an opportunity not found in GHL'] }) }
+  out.jobs.sort((a, b) => (b.issues.length + b.ambiguous.length) - (a.issues.length + a.ambiguous.length))
+  out.ms = Date.now() - started
+  if (SUPABASE_URL && SERVICE_KEY) await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`, { key: ARC_FIELD_AUDIT_KEY, value: { ...out, jobs: out.jobs.slice(0, 600) } }, 'resolution=merge-duplicates').catch(() => {})
+  return out
+}
+async function arcFieldAuditLast() {
+  if (!SUPABASE_URL || !SERVICE_KEY) return null
+  const rows = await restGet(`/rest/v1/app_settings?key=eq.${ARC_FIELD_AUDIT_KEY}&select=value`).catch(() => [])
+  return (Array.isArray(rows) && rows[0] && rows[0].value) || null
+}
+let _fieldAuditRunning = false
+async function arcFieldAuditTick() {
+  if (_fieldAuditRunning || _arcAuditRunning) return
+  const { day, hour } = phoenixNow()
+  if (hour !== ARC_AUDIT_HOUR) return
+  const last = await arcFieldAuditLast()
+  if (last && last.day === day) return
+  _fieldAuditRunning = true
+  try { await arcFieldAudit() } finally { _fieldAuditRunning = false }
+}
+analystRoute('/api/analyst/ghl/field-audit', null, async (d, req) => {
+  const last = await arcFieldAuditLast()
+  if (!last) return { error: 'no field audit has run yet' }
+  const q = String(req.query.q || '').toLowerCase(), type = String(req.query.type || '').toLowerCase(), limit = clampInt(req.query.limit, 300, 2000)
+  const rows = (last.jobs || []).filter(j => matchesQ(j, q) && (!type || [...j.issues, ...j.ambiguous].some(i => i.toLowerCase().includes(type))))
+  return { read_only: true, day: last.day, at: last.at, checked: last.checked, ok: last.ok, with_issues: last.with_issues, ambiguous: last.ambiguous, arcsite_lookups: last.arcsite_lookups, basis_counts: last.basis_counts, issue_counts: last.issue_counts, errors: last.errors, matched: rows.length, returned: Math.min(rows.length, limit), rows: rows.slice(0, limit) }
+}, J)
+
 // ── The fuller calendar feeds (all read from calendar_full) ──────────────────
 const fullOf = d => d.calendar_full || {}
 const calErr = d => (d.sources.calendar_full || {}).status === 'ok' ? undefined : (d.sources.calendar_full || {}).status
@@ -3884,6 +4002,20 @@ app.get('/api/arcsite/contract-audit', async (req, res) => {
   if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
   res.json((await arcContractAuditLast().catch(() => null)) || { ok: false, error: 'no audit has run yet' })
 })
+// The read-only field audit by hand (POST runs it, GET returns the last result).
+app.get('/api/arcsite/field-audit', async (req, res) => {
+  if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
+  res.json((await arcFieldAuditLast().catch(() => null)) || { ok: false, error: 'no field audit has run yet' })
+})
+app.post('/api/arcsite/field-audit', (req, res) => {
+  if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
+  if (_fieldAuditRunning) return res.status(409).json(err('field audit already running'))
+  // Runs in the background (hundreds of ArcSite lookups outlive a request);
+  // GET the same path for the stored result.
+  _fieldAuditRunning = true
+  arcFieldAudit().catch(() => {}).finally(() => { _fieldAuditRunning = false })
+  res.status(202).json({ ok: true, started: true, result: 'GET /api/arcsite/field-audit when finished' })
+})
 app.post('/api/arcsite/contract-audit', async (req, res) => {
   if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
   let body = {}
@@ -3990,6 +4122,9 @@ setInterval(() => arcValueSweep().catch(() => {}), 10 * 60_000).unref?.()
 // future, checked against ArcSite's signed contracts. The tick runs every 15
 // min and does the work once, in the ARC_AUDIT_HOUR hour (Phoenix).
 setInterval(() => arcContractAuditTick().catch(() => {}), 15 * 60_000).unref?.()
+// The READ-ONLY field audit (every mapped field, every job) runs once a day in
+// the same hour, after the repair pass, and stores its findings. It never writes.
+setInterval(() => arcFieldAuditTick().catch(() => {}), 15 * 60_000).unref?.()
 
 // The analyst feed's pre-built bundle: first build 3 min after boot, then
 // every ANALYST_TTL_MIN. Only when the bot's key is configured.
