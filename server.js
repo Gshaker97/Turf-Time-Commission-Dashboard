@@ -1944,9 +1944,16 @@ async function arcLateValues(projectId, estimator) {
     if (!estimator && job.commission != null) out.commission = job.commission
   }
   if (deal) {
-    if (deal.install_date) out.install_date = deal.install_date
     if (deal.payment_method) out.payment_method = deal.payment_method
   }
+  // Install date: the SCHEDULE TAB (authoritative, exact by Project ID) wins;
+  // the dashboard deal's date is only the fallback — it may be gold-check
+  // frozen and must never overwrite a reschedule (Oct 29).
+  if (ARC_INSTALL_SYNC_WRITES) {
+    const sched = await arcScheduleDateForProject(projectId)
+    if (sched.state === 'live') out.install_date = sched.date
+    else out.install_date_hold = `schedule ${sched.state}${sched.error ? ': ' + sched.error : ''} — Install Date not written (no fallback to the dashboard deal)`
+  } else if (deal && deal.install_date) out.install_date = deal.install_date   // pre-switch behaviour, unchanged
   // Setter/closer also live on the dashboard deal and used to be set ONLY at
   // webhook time — so a deal that landed late lost them. Back-fill them here.
   if (enriched) {
@@ -2763,7 +2770,7 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
     project_id: projectId,
     price: sellTotal,
     baseline, markup, commission,
-    install_date: deal && deal.install_date || null,
+    install_date: ARC_INSTALL_SYNC_WRITES ? await arcScheduleDateForProject(projectId).then(x => x.state === 'live' ? x.date : null) : (deal && deal.install_date || null),   // after the switch: schedule only; before: unchanged
     payment_method: deal && deal.payment_method || null,
     setter: setterName, closer: closerName, sales_rep: closerName,
   }
@@ -4165,77 +4172,247 @@ app.post('/api/arcsite/change-order', async (req, res) => {
   catch (e) { const r = { ok: false, error: e.message || 'change order failed' }; await arcLog(r); res.status(200).json(r) }
 })
 
-// ── Install Date sync (per Garrison, Oct 29): keep the GHL opp "Install Date"
-// field equal to the AUTHORITATIVE scheduling date — the AI sheet's Schedule
-// tab (the install calendar follows the same tab) — after reschedules,
-// regardless of how old the opp is. Before this the field was stamped once
-// from the dashboard deal and never followed a move. EXACT JOB MATCH, never
-// the customer name: Schedule row → Proposal ID → Jobs tab → Project ID → the
-// GHL opp carrying that Project ID. Writes ONE field (Install Date) and nothing
-// else: no value, stage, contact, calendar, dashboard deal or payroll — a
-// gold-checked deal's own frozen install_date is untouched. A job whose
-// non-cancelled Schedule rows disagree is HELD. `dry` lists every change.
-const ARC_IDS_KEY = 'arcsite_install_date_sync'
+// ── Install Date sync (per Garrison, Oct 29): the GHL opp "Install Date" field
+// AND the PM calendar job follow the AUTHORITATIVE scheduling date — the AI
+// Sheet's Schedule tab, which is the output of the install scheduling calendar
+// (its booking page writes BOOKED rows, rewrites the same row on a reschedule
+// with a NEW Calendar Event ID and "[rescheduled]", marks CANCELLED in place
+// on a cancel, and appends a NEW BOOKED row on a rebook). EXACT JOB MATCH only:
+// Schedule row → Proposal ID → Jobs tab → Project ID → the GHL opp carrying
+// that Project ID → the PM job linked to that opp id. Never a customer name.
+// Writes ONLY the Install Date field + the PM job date (+ its open task dates):
+// no value, stage, contact, dashboard deal or payroll; the gold-check lock on
+// the dashboard deal is untouched because this path never reads the deal.
+// Pull model: every run reads the tab as it is NOW, so there are no stale or
+// out-of-order events; the row revision recorded is eventId|date|status.
+// Cancellation: a project's live BOOKED row always wins; only when ALL its
+// rows are CANCELLED is the PM job cancelled, and only if the job sits on the
+// cancelled booking's date. A missing row or an unreadable sheet changes
+// nothing. Holds: >1 non-lost opp on the Project ID, disagreeing live rows,
+// and any opp id in `exclude_opps` (identity / manual-review holds) — applied
+// to MOVES and FILLS alike. Every job's outcome is logged (old/new, source,
+// GHL read-back, PM read-back); a GHL-ok/PM-failed job is retried next run
+// because the PM side is re-compared every time (idempotent).
+const ARC_IDS_KEY = 'arcsite_install_date_sync', ARC_IDS_LOG_KEY = 'arcsite_install_date_log'
 const ARC_INSTALL_SYNC_AUTO = process.env.ARC_INSTALL_SYNC_AUTO === '1'
-async function arcInstallDateSync({ dry = true, excludeOpps = [], fillEmpty = true } = {}) {
-  // fillEmpty=false limits the run to MOVES (a GHL date that differs) and leaves
-  // an EMPTY GHL field alone; excludeOpps = opp ids under an identity hold.
-  const out = { at: new Date().toISOString(), dry, fill_empty: fillEmpty, excluded: excludeOpps.length, checked: 0, in_sync: 0, moves: 0, fills: 0, changes: [], holds: [], skipped: {}, errors: [] }
-  const excluded = new Set(excludeOpps.map(String))
-  const skip = k => { out.skipped[k] = (out.skipped[k] || 0) + 1 }
-  let d; try { d = await readInstallSheet() } catch (e) { out.errors.push('sheet: ' + (e.message || 'unavailable')); return out }
+// Controlled writer switch: deployed with writes OFF. Until ARC_INSTALL_SYNC_WRITES=1 a
+// live run is refused (dry runs always work; synthetic test_rows may write), and the
+// reconciler / live sale path keep their old behaviour (dashboard deal date).
+const ARC_INSTALL_SYNC_WRITES = process.env.ARC_INSTALL_SYNC_WRITES === '1'
+
+// Live schedule per Project ID from the Schedule tab (or injected test rows).
+// Returns { [pid]: { live:[rows], cancelled:[rows] } }; row = { proposal, date, status, eventId, note, revision }.
+async function arcScheduleByProject({ testRows = null } = {}) {
+  const d = await readInstallSheet()
   const jobs = d && d.jobs, sched = d && d.schedule
-  if (!jobs || !jobs.headers || !sched || !sched.headers) { out.errors.push('sheet tabs unavailable'); return out }
+  if (!jobs || !jobs.headers || !sched || !sched.headers) throw new Error('sheet tabs unavailable')
   const hj = re => jobs.headers.find(x => re.test(String(x).toLowerCase())), hs = re => sched.headers.find(x => re.test(String(x).toLowerCase()))
-  const jPropH = hj(/proposal\s*id/), jPidH = hj(/project\s*id/), sPropH = hs(/proposal\s*id/), sDateH = hs(/^install\s*date/), sStatH = hs(/^status/), sNoteH = hs(/^notes?/), sCustH = hs(/^customer/)
-  if (!jPropH || !jPidH || !sPropH || !sDateH) { out.errors.push('sheet headers missing (need Proposal ID + Project ID on Jobs, Proposal ID + Install Date on Schedule)'); return out }
+  const jPropH = hj(/proposal\s*id/), jPidH = hj(/project\s*id/), sPropH = hs(/proposal\s*id/), sDateH = hs(/^install\s*date/), sStatH = hs(/^status/), sNoteH = hs(/^notes?/), sEvtH = hs(/calendar\s*event/)
+  if (!jPropH || !jPidH || !sPropH || !sDateH) throw new Error('sheet headers missing (need Proposal ID + Project ID on Jobs, Proposal ID + Install Date on Schedule)')
   const pidByProposal = {}
   for (const r of jobs.rows) { const p = String(r[jPropH] || '').trim(), pid = String(r[jPidH] || '').trim(); if (p && pid) pidByProposal[p] = pid }
-  const schedByPid = {}
-  for (const r of sched.rows) {
-    const p = String(r[sPropH] || '').trim(), date = toYMD(r[sDateH]), status = String(sStatH ? r[sStatH] : '').toUpperCase()
+  const out = {}, skipped = {}
+  const skip = k => { skipped[k] = (skipped[k] || 0) + 1 }
+  const src = testRows ? testRows.map(t => ({ [sPropH]: t.proposal_id, [sDateH]: t.install_date, [sStatH]: t.status || 'BOOKED', [sNoteH]: t.note || '', [sEvtH]: t.event_id || 'test-event', __pid: t.project_id })) : sched.rows
+  for (const r of src) {
+    const p = String(r[sPropH] || '').trim(), date = toYMD(r[sDateH]), status = String(sStatH ? r[sStatH] : '').trim().toUpperCase()
     if (!p) { skip('schedule row without Proposal ID'); continue }
-    const pid = pidByProposal[p]
-    if (!pid) { skip('schedule row whose Proposal ID is not on the Jobs tab'); continue }
+    const pid = r.__pid || pidByProposal[p]
+    if (!pid) { skip(/^CAL-/.test(p) ? 'calendar-imported row (CAL-…), no proposal on the Jobs tab' : 'schedule row whose Proposal ID is not on the Jobs tab'); continue }
     if (!date) { skip('schedule row without an Install Date'); continue }
-    if (/cancel/i.test(status)) { skip('cancelled schedule row'); continue }   // Schedule tab writes CANCELLED in caps
-    ;(schedByPid[pid] ||= []).push({ proposal: p, date, status, note: String(sNoteH ? r[sNoteH] || '' : '').trim(), customer: sCustH ? r[sCustH] : null })
+    const row = { proposal: p, date, status: status || 'BOOKED', eventId: String(sEvtH ? r[sEvtH] || '' : ''), note: String(sNoteH ? r[sNoteH] || '' : '').trim() }
+    row.revision = `${row.eventId || 'no-event'}|${date}|${row.status}`
+    const e = (out[pid] ||= { live: [], cancelled: [] })
+    if (/cancel/i.test(row.status)) e.cancelled.push(row); else e.live.push(row)
   }
+  return { byPid: out, skipped, snapshotAt: testRows ? Date.now() : (_sheetCache.at || Date.now()) }
+}
+// The one live date for a project (null = no live row; cancelled = all rows cancelled).
+function arcScheduleLive(entry) {
+  if (!entry) return null
+  if (entry.live.length) { const dates = [...new Set(entry.live.map(r => r.date))]; return { dates, row: entry.live[entry.live.length - 1], cancelled: false } }
+  if (entry.cancelled.length) { const last = entry.cancelled[entry.cancelled.length - 1]; return { dates: [last.date], row: last, cancelled: true } }
+  return null
+}
+// Used by the late-value reconciler and the live sale path. Returns
+// { state: 'live'|'cancelled'|'none'|'ambiguous'|'error', date, snapshotAt }.
+// Only 'live' may be written. There is deliberately NO fallback to the
+// dashboard deal's date (it can be gold-check-frozen): a missing, failed,
+// cancelled or ambiguous lookup is HELD and reported, never guessed (Jarvis,
+// Oct 29).
+async function arcScheduleDateForProject(projectId) {
+  try {
+    const { byPid, snapshotAt } = await arcScheduleByProject()
+    const l = arcScheduleLive(byPid[String(projectId)])
+    if (!l) return { state: 'none', date: null, snapshotAt }
+    if (l.cancelled) return { state: 'cancelled', date: null, snapshotAt }
+    if (l.dates.length !== 1) return { state: 'ambiguous', date: null, snapshotAt }
+    return { state: 'live', date: l.dates[0], snapshotAt, revision: l.row.revision }
+  } catch (e) { return { state: 'error', date: null, error: e.message || 'sheet unavailable' } }
+}
+// Per-opp "last applied" state for ordering: { [oppId]: { snapshotAt, date, revision, at } }.
+// A run whose sheet snapshot is OLDER than what was last applied for that opp
+// must not write — an overlapping or retried run can never roll a date back.
+const ARC_IDS_STATE_KEY = 'arcsite_install_date_state'
+async function arcIdsStateRead() { const rows = await restGet(`/rest/v1/app_settings?key=eq.${ARC_IDS_STATE_KEY}&select=value`).catch(() => []); const v = rows && rows[0] && rows[0].value; return v && typeof v === 'object' ? v : {} }
+async function arcIdsStateWrite(st) { await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`, { key: ARC_IDS_STATE_KEY, value: st }, 'resolution=merge-duplicates').catch(() => {}) }
+let _idsRunning = false
+
+async function arcInstallDateSync({ dry = true, excludeOpps = [], fillEmpty = true, testRows = null, onlyOpps = null, snapshotAtOverride = null } = {}) {
+  const out = { at: new Date().toISOString(), dry, fill_empty: fillEmpty, test: !!testRows, excluded: excludeOpps.length, checked: 0, in_sync: 0, moves: 0, fills: 0, cancels: 0, pm_only: 0, stale_skipped: 0, changes: [], holds: [], flags: [], skipped: {}, errors: [] }
+  // One writer at a time: overlapping runs (hourly + manual + retry) wait their turn.
+  if (!dry && !ARC_INSTALL_SYNC_WRITES && !testRows) { out.errors.push('writes disabled (ARC_INSTALL_SYNC_WRITES is not 1) — nothing written; run reported as dry'); dry = true; out.dry = true; out.writes_disabled = true }
+  if (!dry) { if (_idsRunning) { out.errors.push('another install-date run is in progress — nothing written'); return out } _idsRunning = true }
+  try { return await arcInstallDateSyncInner(out, { dry, excludeOpps, fillEmpty, testRows, onlyOpps, snapshotAtOverride }) } finally { if (!dry) _idsRunning = false }
+}
+async function arcInstallDateSyncInner(out, { dry, excludeOpps, fillEmpty, testRows, onlyOpps, snapshotAtOverride }) {
+  const excluded = new Set(excludeOpps.map(String)), only = onlyOpps ? new Set(onlyOpps.map(String)) : null
+  let sched; try { sched = await arcScheduleByProject({ testRows }) } catch (e) { out.errors.push('sheet: ' + (e.message || 'unavailable') + ' — nothing compared, nothing cancelled'); return out }
+  out.skipped = sched.skipped
+  const snapshotAt = snapshotAtOverride || sched.snapshotAt; out.snapshot_at = new Date(snapshotAt).toISOString()
+  const state = dry ? {} : await arcIdsStateRead()
   let g; try { g = await ghlFullSnapshot() } catch (e) { out.errors.push('ghl: ' + (e.message || 'unavailable')); return out }
+  // Cancelled PM jobs are included so a rebooking can RESTORE the same job.
+  let calJobs = [], calUnreachable = false; try { calJobs = listOf(await calendarExport('/api/export/jobs?canceled=include')) } catch (e) { calUnreachable = true; out.errors.push('calendar export: ' + (e.message || 'unavailable') + ' — PM side not compared this run; re-compared next run') }
+  const calByOpp = {}; for (const j of calJobs) if (j.ghlOpportunityId) calByOpp[j.ghlOpportunityId] = j
+  const oppsByPid = {}; for (const o of listOf(g.opportunities)) if (o.project_id && o.status !== 'lost' && o.status !== 'abandoned') (oppsByPid[o.project_id] ||= []).push(o)
   const defs = dry ? null : await ghlOppFields().catch(() => null)
   if (!dry && !defs) { out.errors.push('GHL field definitions unavailable — nothing written'); return out }
+  const pmRows = []   // pushed to the calendar after the GHL pass
   for (const o of listOf(g.opportunities)) {
     if (!o.project_id || o.status === 'lost' || o.status === 'abandoned') continue
-    const rows = schedByPid[o.project_id]
-    if (!rows) { skip('opportunity with no live schedule row'); continue }
-    if (excluded.has(String(o.id))) { skip('excluded (identity hold)'); continue }
+    if (only && !only.has(String(o.id))) continue
+    const live = arcScheduleLive(sched.byPid[o.project_id])
+    if (!live) { out.skipped['opportunity with no schedule row'] = (out.skipped['opportunity with no schedule row'] || 0) + 1; continue }
     out.checked++
-    const dates = [...new Set(rows.map(r => r.date))]
     const cur = o.install_date ? String(o.install_date).slice(0, 10) : null
-    if (dates.length > 1) { out.holds.push({ customer: o.name, opportunity_id: o.id, project_id: o.project_id, pipeline: o.pipeline, stage: o.stage, ghl: cur, schedule_rows: rows, reason: 'non-cancelled schedule rows for this job disagree' }); continue }
-    const want = dates[0]
-    if (cur === want) { out.in_sync++; continue }
-    if (!cur && !fillEmpty) { skip('empty GHL Install Date left alone (fill_empty=false)'); continue }
-    if (cur) out.moves++; else out.fills++
-    const ch = { kind: cur ? 'move' : 'fill', customer: o.name, opportunity_id: o.id, project_id: o.project_id, pipeline: o.pipeline, stage: o.stage, from: cur, to: want, source: `Schedule tab · proposal ${rows[0].proposal} · ${rows[0].status}${rows[0].note ? ' · ' + rows[0].note : ''}` }
-    if (!dry) {
+    const cal = calByOpp[o.id] || null, calDate = cal ? String(cal.installDate || '').slice(0, 10) : null, calCanceled = !!(cal && cal.canceledAt)
+    const base = { customer: o.name, opportunity_id: o.id, project_id: o.project_id, pipeline: o.pipeline, stage: o.stage, ghl: cur, pm_job: cal ? cal.jobNumber : null, pm: calDate, pm_canceled: calCanceled, source: `Schedule tab · proposal ${live.row.proposal} · ${live.row.status}${live.row.note ? ' · ' + live.row.note : ''}`, revision: live.row.revision }
+    const holdReasons = []
+    if (excluded.has(String(o.id))) holdReasons.push('excluded: identity / manual-review hold')
+    if ((oppsByPid[o.project_id] || []).length > 1) holdReasons.push(`${oppsByPid[o.project_id].length} non-lost opportunities share this Project ID`)
+    if (live.dates.length > 1) holdReasons.push(`live schedule rows disagree: ${live.dates.join(' / ')}`)
+    if (holdReasons.length) { out.holds.push({ ...base, reason: holdReasons.join('; ') }); continue }
+    const want = live.dates[0]
+    if (live.cancelled) {
+      // GHL has no "cancelled" date — the field is left alone and the stage is
+      // never touched here. Only the PM booking on that date is cancelled.
+      if (cal && calCanceled) { /* already cancelled on the PM calendar — nothing to do */ }
+      else if (cal && calDate === want) { out.cancels++; const ch = { ...base, kind: 'cancel', from: calDate, to: null }; out.changes.push(ch); pmRows.push({ ch, row: { ghlOpportunityId: o.id, installDate: want, cancelled: true, proposalId: live.row.proposal, eventId: live.row.eventId, revision: live.row.revision } }) }
+      else if (cal) out.flags.push({ ...base, flag: `all schedule rows cancelled (last ${want}) but the PM job sits on ${calDate} — review, not cancelled` })
+      continue
+    }
+    const ghlNeeds = cur !== want, pmNeeds = !!cal && (calDate !== want || calCanceled)   // a cancelled PM job on a live booking is RESTORED
+    if (!cal) out.flags.push({ ...base, flag: 'no PM calendar job linked to this opportunity' })
+    if (!ghlNeeds && !pmNeeds) { out.in_sync++; continue }
+    if (!cur && !fillEmpty && !pmNeeds) { out.skipped['empty GHL Install Date left alone (fill_empty=false)'] = (out.skipped['empty GHL Install Date left alone (fill_empty=false)'] || 0) + 1; continue }
+    const kind = ghlNeeds ? (cur ? 'move' : 'fill') : 'pm_only'
+    if (kind === 'move') out.moves++; else if (kind === 'fill') out.fills++; else out.pm_only++
+    const ch = { ...base, kind, from: cur, to: want }
+    // Ordering guard: never let an older sheet snapshot overwrite a newer applied date.
+    const prevState = state[o.id]
+    if (!dry && prevState && Number(prevState.snapshotAt) > Number(snapshotAt)) { out.stale_skipped++; ch.outcome = `skipped: this run read the sheet at ${out.snapshot_at}, but ${prevState.date} was already applied from a newer snapshot (${new Date(prevState.snapshotAt).toISOString()})`; ch.stale = true; out.changes.push(ch); continue }
+    if (ghlNeeds && !dry) {
       try {
+        // Read the opp LIVE before writing: the hourly snapshot can be stale, and the
+        // logged "from" must be the value actually replaced (it is the rollback target).
+        const liveBefore = await ghlGetRetry(`/opportunities/${o.id}`).catch(() => null)
+        const curLive = liveBefore ? oppInstallDay(liveBefore.opportunity || liveBefore) : cur
+        ch.from = curLive
+        if (curLive === want) { ch.ghl_written = false; ch.ghl_read_back = curLive; ch.ghl_verified = true; ch.ghl_note = 'already correct on live read (snapshot was stale)' }
+        else {
         const w = oppFieldWrite(GHL_OPP_FIELD_IDS.install_date, want, defs)
         if (!w) throw new Error('date would not serialise')
         await ghlUpdateOpp(o.id, { customFields: [w] })
         const back = await ghlGetRetry(`/opportunities/${o.id}`).catch(() => null)
         const now = back && oppInstallDay((back.opportunity || back))
-        ch.written = true; ch.read_back = now; ch.verified = now === want
-      } catch (e) { ch.written = false; ch.error = e.message || 'write failed' }
+        ch.ghl_written = true; ch.ghl_read_back = now; ch.ghl_verified = now === want
+        }
+      } catch (e) { ch.ghl_written = false; ch.ghl_error = e.message || 'write failed' }
     }
+    if (pmNeeds) pmRows.push({ ch, row: { ghlOpportunityId: o.id, installDate: want, cancelled: false, proposalId: live.row.proposal, eventId: live.row.eventId, revision: live.row.revision } })
+    if (!dry) state[o.id] = { snapshotAt, date: want, revision: live.row.revision, at: out.at }
     out.changes.push(ch)
   }
-  if (SUPABASE_URL && SERVICE_KEY) await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`, { key: ARC_IDS_KEY, value: { ...out, changes: out.changes.slice(0, 500) } }, 'resolution=merge-duplicates').catch(() => {})
+  if (!dry && out.changes.some(c => !c.stale)) await arcIdsStateWrite(state)
+  // PM calendar push (exact by opportunity id), one request, dry or live.
+  if (pmRows.length) {
+    if (!CALENDAR_SYNC_URL || !CALENDAR_SYNC_SECRET) { for (const p of pmRows) p.ch.pm_outcome = 'calendar push not configured' }
+    else {
+      try {
+        const resp = await fetch(`${CALENDAR_SYNC_URL}/api/install-dates/ingest`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-sync-secret': CALENDAR_SYNC_SECRET }, body: JSON.stringify({ dry, rows: pmRows.map(p => p.row) }) })
+        const j = await resp.json().catch(() => ({}))
+        const byOpp = {}; for (const r of (j.results || [])) byOpp[r.ghlOpportunityId] = r
+        for (const p of pmRows) { const r = byOpp[p.ch.opportunity_id]; p.ch.pm_outcome = r ? r.outcome : `no result (HTTP ${resp.status})`; if (r) { p.ch.pm_after = r.after ?? null; p.ch.pm_verified = !dry && (p.row.cancelled ? r.afterCanceled === true : r.after === p.row.installDate) } }
+      } catch (e) { for (const p of pmRows) p.ch.pm_outcome = 'calendar push failed: ' + (e.message || 'error') }
+    }
+  }
+  if (calUnreachable) for (const ch of out.changes) if (!ch.pm_outcome) ch.pm_outcome = 'PM calendar unreachable — not compared, retried next run'
+  for (const ch of out.changes) ch.outcome = dry ? 'dry' : [ch.ghl_error ? 'GHL FAILED' : (ch.ghl_written || ch.ghl_note) ? (ch.ghl_verified ? 'GHL ok' : 'GHL unverified') : null, ch.pm_outcome ? (ch.pm_verified ? 'PM ok' : /would|in sync|canceled|moved|restored/.test(ch.pm_outcome) && ch.pm_verified !== false ? 'PM ' + ch.pm_outcome : 'PM: ' + ch.pm_outcome) : null].filter(Boolean).join(' · ')
+  if (SUPABASE_URL && SERVICE_KEY) {
+    await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`, { key: ARC_IDS_KEY, value: { ...out, changes: out.changes.slice(0, 500) } }, 'resolution=merge-duplicates').catch(() => {})
+    if (!dry && out.changes.length) {
+      const prev = ((await restGet(`/rest/v1/app_settings?key=eq.${ARC_IDS_LOG_KEY}&select=value`).catch(() => []))[0] || {}).value
+      const log = Array.isArray(prev) ? prev : []
+      for (const ch of out.changes) log.push({ at: out.at, opp: ch.opportunity_id, project: ch.project_id, customer: ch.customer, kind: ch.kind, from: ch.from, to: ch.to, pm_job: ch.pm_job, pm_from: ch.pm, source: ch.source, revision: ch.revision, outcome: ch.outcome, test: out.test })
+      await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`, { key: ARC_IDS_LOG_KEY, value: log.slice(-2000) }, 'resolution=merge-duplicates').catch(() => {})
+    }
+  }
   return out
 }
+// Guarded ROLLBACK of install-date writes made by THIS sync only. For each logged write
+// (optionally one run `at`, or a list of opps) the previous date is restored ONLY IF the
+// GHL field still holds exactly what we wrote, the PM job still sits on it (checked by the
+// calendar via expectCurrent), AND no newer snapshot was applied for that opp since.
+// Anything else is skipped and reported — a legitimate later change is never overwritten.
+// It does NOT restore the world to a point in time, and it cannot undo changes made by
+// other writers. A PARTIAL result (one side restored, the other skipped) is flagged
+// `review` because GHL and PM then disagree. Dry by default; live needs the write switch.
+async function arcInstallDateRollback({ dry = true, at = null, opps = null } = {}) {
+  const out = { at: new Date().toISOString(), dry, restored: 0, skipped: [], results: [] }
+  const log = (((await restGet(`/rest/v1/app_settings?key=eq.${ARC_IDS_LOG_KEY}&select=value`).catch(() => []))[0] || {}).value) || []
+  const state = await arcIdsStateRead()
+  const only = opps ? new Set(opps.map(String)) : null
+  const entries = log.filter(e => e.kind !== 'cancel' && (!at || e.at === at) && (!only || only.has(String(e.opp))) && /GHL ok|PM ok/.test(e.outcome || ''))
+  const latest = {}; for (const e of entries) if (!latest[e.opp] || e.at > latest[e.opp].at) latest[e.opp] = e
+  const defs = dry ? null : await ghlOppFields().catch(() => null)
+  for (const e of Object.values(latest)) {
+    const r = { opp: e.opp, customer: e.customer, wrote: e.to, restore_to: e.from, pm_job: e.pm_job, pm_restore_to: e.pm_from, test: !!e.test }
+    try {
+      const st = state[e.opp]
+      if (st && st.at && st.at > e.at) { r.skipped = `a newer snapshot was applied at ${st.at} — not rolled back`; out.skipped.push(r); continue }
+      const live = await ghlGetRetry(`/opportunities/${e.opp}`).catch(() => null); const cur = live ? oppInstallDay(live.opportunity || live) : null
+      if (/GHL ok/.test(e.outcome) && cur !== e.to) { r.skipped = `GHL now ${cur}, not the ${e.to} we wrote — changed since, not rolled back`; out.skipped.push(r); continue }
+      if (!dry) {
+        if (/GHL ok/.test(e.outcome) && e.from) { const w = oppFieldWrite(GHL_OPP_FIELD_IDS.install_date, e.from, defs); if (w) await ghlUpdateOpp(e.opp, { customFields: [w] }); r.ghl_restored = true }
+        if (/PM ok/.test(e.outcome) && e.pm_job && e.pm_from && CALENDAR_SYNC_URL && CALENDAR_SYNC_SECRET) {
+          const resp = await fetch(`${CALENDAR_SYNC_URL}/api/install-dates/ingest`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-sync-secret': CALENDAR_SYNC_SECRET }, body: JSON.stringify({ dry: false, test: !!e.test, rows: [{ ghlOpportunityId: e.opp, installDate: e.pm_from, expectCurrent: e.to, proposalId: 'rollback', eventId: 'rollback of ' + e.at }] }) })
+          const j = await resp.json().catch(() => ({})); r.pm_outcome = (j.results && j.results[0] && j.results[0].outcome) || `HTTP ${resp.status}`
+          r.pm_restored = /^(moved|restored)/.test(r.pm_outcome)
+        }
+        // PARTIAL rollback (one side restored, the other skipped because it changed since,
+        // or was unreachable) is flagged for human review — the two systems now disagree.
+        const wantedPm = /PM ok/.test(e.outcome) && !!e.pm_job && !!e.pm_from
+        r.partial = !!(r.ghl_restored && wantedPm && !r.pm_restored) || (!r.ghl_restored && /GHL ok/.test(e.outcome) && r.pm_restored)
+        if (r.partial) { r.review = 'PARTIAL ROLLBACK — GHL and PM now differ; review before anything else touches this job'; out.partial = (out.partial || 0) + 1 }
+        out.restored++
+      } else r.would = 'restore'
+      out.results.push(r)
+    } catch (err) { r.error = err.message || 'error'; out.skipped.push(r) }
+  }
+  return out
+}
+app.post('/api/arcsite/install-date-sync/rollback', async (req, res) => {
+  if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
+  let body = {}; try { body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {}) } catch {}
+  const dry = !(body.dry === false || body.dry === 'false')
+  if (!dry && !ARC_INSTALL_SYNC_WRITES && !body.test) return res.status(200).json({ ok: false, error: 'writes disabled (ARC_INSTALL_SYNC_WRITES is not 1)' })
+  try { res.json(await arcInstallDateRollback({ dry, at: body.at || null, opps: Array.isArray(body.opps) ? body.opps : null })) } catch (e) { res.status(200).json({ ok: false, error: e.message || 'rollback failed' }) }
+})
 app.get('/api/arcsite/install-date-sync', async (req, res) => {
   if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
-  const rows = await restGet(`/rest/v1/app_settings?key=eq.${ARC_IDS_KEY}&select=value`).catch(() => [])
+  const key = req.query.log === '1' ? ARC_IDS_LOG_KEY : ARC_IDS_KEY
+  const rows = await restGet(`/rest/v1/app_settings?key=eq.${key}&select=value`).catch(() => [])
   res.json((rows && rows[0] && rows[0].value) || { ok: false, error: 'no run yet' })
 })
 app.post('/api/arcsite/install-date-sync', async (req, res) => {
@@ -4243,10 +4420,16 @@ app.post('/api/arcsite/install-date-sync', async (req, res) => {
   let body = {}; try { body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {}) } catch {}
   const dry = !(body.dry === false || body.dry === 'false')   // default = dry run
   const excludeOpps = Array.isArray(body.exclude_opps) ? body.exclude_opps : []
+  const onlyOpps = Array.isArray(body.only_opps) ? body.only_opps : null
   const fillEmpty = !(body.fill_empty === false || body.fill_empty === 'false')
-  try { res.json(await arcInstallDateSync({ dry, excludeOpps, fillEmpty })) } catch (e) { res.status(200).json({ ok: false, error: e.message || 'install date sync failed' }) }
+  // test_rows replace the Schedule tab and may only touch opps named "ZZ TEST…"
+  const testRows = Array.isArray(body.test_rows) ? body.test_rows : null
+  if (testRows && !onlyOpps) return res.status(400).json(err('test_rows requires only_opps (ZZ TEST opportunities)'))
+  // snapshot_at (ms) may only be forced in test mode — it simulates an older, overlapping run.
+  const snapshotAtOverride = testRows && body.snapshot_at ? Number(body.snapshot_at) : null
+  try { res.json(await arcInstallDateSync({ dry, excludeOpps, fillEmpty, testRows, onlyOpps, snapshotAtOverride })) } catch (e) { res.status(200).json({ ok: false, error: e.message || 'install date sync failed' }) }
 })
-if (ARC_INSTALL_SYNC_AUTO) setInterval(() => arcInstallDateSync({ dry: false }).catch(() => {}), 60 * 60_000).unref?.()
+if (ARC_INSTALL_SYNC_AUTO && process.env.ARC_DISABLE_TIMERS !== '1') setInterval(() => arcInstallDateSync({ dry: false }).catch(() => {}), 60 * 60_000).unref?.()
 
 // Signed-PDF retry queue + the visible failure list (document-only path).
 app.get('/api/arcsite/pdf-pending', async (req, res) => {
@@ -4367,29 +4550,31 @@ async function teamMoveSweep() {
   }
 }
 // A short delay at boot so a deploy isn't racing the database coming up.
-setTimeout(teamMoveSweep, 20_000).unref?.()
-setInterval(teamMoveSweep, TEAM_MOVE_SWEEP_MS).unref?.()
+// ARC_DISABLE_TIMERS=1 runs the API without any background automation (local test instance).
+const TIMERS_ON = process.env.ARC_DISABLE_TIMERS !== '1'
+if (TIMERS_ON) setTimeout(teamMoveSweep, 20_000).unref?.()
+if (TIMERS_ON) setInterval(teamMoveSweep, TEAM_MOVE_SWEEP_MS).unref?.()
 
 // Durable ArcSite→GHL field reconciliation (setter/closer/payment/install/money)
 // for sales whose deal/calendar data landed after the webhook. Every 5 min.
-setTimeout(() => arcPendingReconcile().catch(() => {}), 30_000).unref?.()
-setInterval(() => arcPendingReconcile().catch(() => {}), 5 * 60_000).unref?.()
+if (TIMERS_ON) setTimeout(() => arcPendingReconcile().catch(() => {}), 30_000).unref?.()
+if (TIMERS_ON) setInterval(() => arcPendingReconcile().catch(() => {}), 5 * 60_000).unref?.()
 
 // Catch committed proposals ArcSite never delivered a webhook for — missed
 // change-order totals and missed sales. Every 10 min (cheap: only changed/new
 // approvals hit GHL, the rest skip via the confirmed-total map).
-setTimeout(() => arcValueSweep().catch(() => {}), 90_000).unref?.()
-setInterval(() => arcValueSweep().catch(() => {}), 10 * 60_000).unref?.()
-setTimeout(() => arcPdfPendingTick().catch(() => {}), 120_000).unref?.()
-setInterval(() => arcPdfPendingTick().catch(() => {}), 10 * 60_000).unref?.()
+if (TIMERS_ON) setTimeout(() => arcValueSweep().catch(() => {}), 90_000).unref?.()
+if (TIMERS_ON) setInterval(() => arcValueSweep().catch(() => {}), 10 * 60_000).unref?.()
+if (TIMERS_ON) setTimeout(() => arcPdfPendingTick().catch(() => {}), 120_000).unref?.()
+if (TIMERS_ON) setInterval(() => arcPdfPendingTick().catch(() => {}), 10 * 60_000).unref?.()
 
 // The daily FULL contract audit — every opp installing recently or in the
 // future, checked against ArcSite's signed contracts. The tick runs every 15
 // min and does the work once, in the ARC_AUDIT_HOUR hour (Phoenix).
-setInterval(() => arcContractAuditTick().catch(() => {}), 15 * 60_000).unref?.()
+if (TIMERS_ON) setInterval(() => arcContractAuditTick().catch(() => {}), 15 * 60_000).unref?.()
 // The READ-ONLY field audit (every mapped field, every job) runs once a day in
 // the same hour, after the repair pass, and stores its findings. It never writes.
-setInterval(() => arcFieldAuditTick().catch(() => {}), 15 * 60_000).unref?.()
+if (TIMERS_ON) setInterval(() => arcFieldAuditTick().catch(() => {}), 15 * 60_000).unref?.()
 
 // The analyst feed's pre-built bundle: first build 3 min after boot, then
 // every ANALYST_TTL_MIN. Only when the bot's key is configured.
