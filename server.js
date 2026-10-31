@@ -18,6 +18,7 @@
 import express from 'express'
 import { createVerifiedSheetRuntime } from './lib/verified-sheet-runtime.mjs'
 import { validatePrivatePolicy } from './lib/verified-sheet-policy.mjs'
+import { parseSignedPdfText } from './lib/parse-signed-pdf.mjs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
@@ -4490,7 +4491,7 @@ const verifiedSheetRuntime = createVerifiedSheetRuntime({
       for(;;){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>32*1024*1024){await reader.cancel();throw Error('PDF too large')}chunks.push(value)}
       return {status:200,url:response.url,bytes:Buffer.concat(chunks)}
     },
-    parsePdfText:async bytes=>(await (await import('pdf-parse')).default(bytes)).text,
+    parsePdfText:parseSignedPdfText,
   },
   writeGhlField:async(opportunityId,field,value)=>{
     if(process.env.ARC_VERIFIED_SHEET_WRITES!=='1' || process.env.ARC_VERIFIED_SHEET_SINGLE_WRITER!=='1') throw Error('verified writer disabled')
