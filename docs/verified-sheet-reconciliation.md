@@ -25,7 +25,7 @@ Sheet Approved Total and signed total must agree within the previously approved 
 Each field gets fresh source/revision and destination checks, including complete GHL identity refresh. Source hash, policy/hold state and expected old value must still match. Write only that GHL field, independently read it back; HTTP200 alone is not proof. Timeout-after-write gets read-back before any retry. Uncertain read-back stops the job. Successful fields are idempotent on subsequent runs. GHL lacks atomic compare-and-swap; a final external-writer race remains a deployment coordination risk and must be accepted/controlled before activation.
 
 ## Review / activation checklist — not completed
-1. Review draft PR and focused test results. Full repository lint/build has not yet run in a full checkout.
+1. Review draft PR and focused test results. Confirm full repository lint/build and the actual PDF parser fixture pass in hosted CI for the exact head; dependency-free tests alone are insufficient.
 2. Merge/deploy only after PR-specific approval. All new guards remain OFF, approvals empty.
 3. Run production read-only dry run. Review all eligible exact-ID/revision/field changes and holds; resolve signed replacement evidence individually.
 4. After explicit owner approval to populate the private configuration, add reviewed exact scope, all existing holds, plan hashes and resolutions to that private server setting—not GitHub. Verify host allowlist and single-writer deployment. No secret values belong in commits.
@@ -34,7 +34,7 @@ Each field gets fresh source/revision and destination checks, including complete
 7. For continuously automatic future revisions, obtain a separate reviewed activation policy; the initial exact-hash gate deliberately does not authorize unseen plans.
 
 ## Local checks
-`node --test test/*.test.mjs`
+`RUN_PDF_PARSE_INTEGRATION=1 node --test test/*.test.mjs` (after lockfile dependencies are installed)
 `node --check server.js`
 
 No production dry run, live write, record repair, deployment, or activation has been performed as part of this draft.
