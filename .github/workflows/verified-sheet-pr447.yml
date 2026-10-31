@@ -1,15 +1,15 @@
-name: Verify guarded Sheet reconciliation (Sheet source regression)
+name: Verify guarded Sheet reconciliation (Sheet snapshot regression)
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 permissions:
   contents: read
 concurrency:
-  group: verified-sheet-source-${{ github.event.pull_request.number }}
+  group: verified-sheet-snapshot-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
   validate:
-    if: github.head_ref == 'jarvis/verified-sheet-financial-source'
+    if: github.head_ref == 'jarvis/verified-sheet-run-snapshot'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
