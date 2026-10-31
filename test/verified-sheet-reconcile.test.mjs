@@ -27,3 +27,25 @@ test('HTTP success but unchanged value stops remaining fields',async()=>{const a
 test('timeout after applied write verified without retry',async()=>{const a=adapter(),p=plan();const w=a.writeGhlField;a.writeGhlField=async(...args)=>{await w(...args);throw Error('timeout')};const r=await executePlan(p,policy(),a,{enabled:true,approvedPlanHashes:[p.planHash],now:()=>now});assert.equal(r.ok,true);assert.equal(a.writes.length,2)})
 test('uncertain readback stops',async()=>{const a=adapter(),p=plan();a.readGhlField=async()=>{throw Error('offline')};const r=await executePlan(p,policy(),a,{enabled:true,approvedPlanHashes:[p.planHash],now:()=>now});assert.match(r.reason,/no retry/);assert.equal(a.writes.length,1)})
 test('scope dry run never calls writer',async()=>{const a=adapter();await reconcileScope(policy(),a,{now:()=>now});assert.equal(a.writes.length,0)})
+test('incomplete source retains only allowlisted diagnostic codes and remains held',()=>{
+  const x=fixture();x.complete=false;x.holds=['PDF body Total absent or disagrees with proposal metadata','PDF body Total absent or disagrees with proposal metadata','PDF body signature evidence absent']
+  const p=plan(x)
+  assert.equal(p.changes.length,0);assert.equal(p.planHash,undefined);assert.equal(p.sourceHash,undefined)
+  assert.deepEqual(p.sourceIssues,[{code:'ARCSITE_PDF_TOTAL_UNVERIFIED',message:'PDF body Total absent or disagrees with proposal metadata'},{code:'ARCSITE_PDF_SIGNATURE_ABSENT',message:'PDF body signature evidence absent'}])
+  assert.equal(p.holds[0],'source unavailable or incomplete; retry without writes');assert.equal(p.holds.length,3)
+})
+test('untrusted source diagnostic text and objects never enter a plan report',()=>{
+  const x=fixture();x.complete=false;x.holds=['Bearer secret123','https://private.invalid/signed?token=secret123','PDF body signature evidence absent secret123','constructor',{toString(){throw Error('must not stringify')}}]
+  const p=plan(x)
+  assert.deepEqual(p.holds,['source unavailable or incomplete; retry without writes']);assert.equal(p.sourceIssues,undefined)
+  assert.doesNotMatch(JSON.stringify(p),/secret123|private.invalid/)
+})
+test('named exclusion remains first and suppresses lower-priority source diagnostics',()=>{
+  const x=fixture(),policyValue=policy();x.complete=false;x.holds=['PDF body signature evidence absent'];policyValue.scope[0].hold='named exclusion'
+  const p=plan(x,policyValue);assert.deepEqual(p.holds,['named exclusion']);assert.equal(p.sourceIssues,undefined);assert.equal(p.changes.length,0)
+})
+test('source diagnostics never bypass unhealthy state or affect a healthy plan',()=>{
+  const x=fixture();x.sourceHealthy=false;x.holds=['ArcSite evidence read failed; no writes']
+  assert.equal(plan(x).sourceIssues[0].code,'ARCSITE_READ_FAILED');assert.equal(plan(x).changes.length,0)
+  x.sourceHealthy=true;assert.equal(plan(x).sourceIssues,undefined);assert.equal(plan(x).changes.length,2)
+})
