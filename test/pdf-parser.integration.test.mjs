@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
-import { createRequire } from 'node:module'
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { parseSignedPdfText } from '../lib/parse-signed-pdf.mjs'
 import { readArcsiteEvidence } from '../lib/arcsite-revision-evidence.mjs'
@@ -16,11 +16,12 @@ test('real locked pdf-parse imports and validates a synthetic signed-body fixtur
   const bytes=syntheticPdf()
   let text
   try { text=await parseSignedPdfText(bytes) } catch (error) {
-    const require=createRequire(import.meta.url),direct=require('pdf-parse')
     const versions=readdirSync(new URL('../node_modules/pdf-parse/lib/pdf.js/',import.meta.url)).filter(v=>/^v[0-9.]+$/.test(v))
+    const diagnostic=`const fs=require('fs'),parse=require('pdf-parse');const b=Buffer.from(fs.readFileSync('test/fixtures/synthetic-signed-body.pdf.base64','utf8').trim(),'base64');parse(process.argv[2]==='buffer'?b:new Uint8Array(b),{version:process.argv[1]}).then(r=>console.log('ok',r.text.length)).catch(e=>console.log(String(e.message)))`
+    // pdf-parse caches its PDFJS version globally: isolate each matrix entry.
     for(const version of versions)for(const type of ['buffer','uint8array']){
-      try{const r=await direct(type==='buffer'?Buffer.from(bytes):new Uint8Array(bytes),{version});console.log('synthetic parser diagnostic',version,type,'ok',r.text.length)}
-      catch(e){console.log('synthetic parser diagnostic',version,type,String(e.message))}
+      const r=spawnSync(process.execPath,['-e',diagnostic,version,type],{encoding:'utf8',timeout:10000,maxBuffer:8192})
+      console.log('synthetic parser diagnostic',version,type,r.status,String(r.stdout).trim(),String(r.stderr).trim())
     }
     throw error
   }
