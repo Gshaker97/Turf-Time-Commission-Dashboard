@@ -1,15 +1,15 @@
-name: Verify guarded Sheet reconciliation (PDF regression)
+name: Verify guarded Sheet reconciliation (Sheet source regression)
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 permissions:
   contents: read
 concurrency:
-  group: verified-sheet-pdf-${{ github.event.pull_request.number }}
+  group: verified-sheet-source-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
   validate:
-    if: github.head_ref == 'jarvis/verified-sheet-pdf-format'
+    if: github.head_ref == 'jarvis/verified-sheet-source-format'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
