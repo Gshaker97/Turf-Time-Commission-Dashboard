@@ -32,10 +32,11 @@ test('schedule OFF by default and hooks only queue nonblocking hints',()=>{
   assert.match(server,/if \(isChangeOrder\) verifiedSheetQueue\(projectId\)/)
   assert.doesNotMatch(server,/await verifiedSheetQueue/)
 })
-test('frozen scope contains 228 unique IDs and no write approvals',()=>{
-  const policy=JSON.parse(readFileSync(new URL('../lib/verified-sheet-scope.json',import.meta.url),'utf8'))
-  assert.equal(policy.scope.length,228)
-  assert.equal(new Set(policy.scope.map(s=>s.projectId+':'+s.opportunityId)).size,228)
-  const approvals=JSON.parse(readFileSync(new URL('../lib/verified-sheet-approvals.json',import.meta.url),'utf8'))
-  assert.deepEqual(approvals.approvedPlanHashes,[])
+test('scope is owner-private and unconfigured by default; no business IDs committed',()=>{
+  const example=JSON.parse(readFileSync(new URL('../docs/verified-sheet-policy.example.json',import.meta.url),'utf8'))
+  assert.deepEqual(example.scope,[]);assert.deepEqual(example.approvedPlanHashes,[])
+  assert.equal(example.policyApproved,false)
+  assert.match(block,/verified_sheet_reconcile_policy&select=value/)
+  assert.match(block,/validatePrivatePolicy/)
+  assert.doesNotMatch(block,/verified-sheet-scope\.json/)
 })
