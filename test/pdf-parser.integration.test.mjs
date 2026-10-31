@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { createHash } from 'node:crypto'
 import { parseSignedPdfText } from '../lib/parse-signed-pdf.mjs'
 import { readArcsiteEvidence } from '../lib/arcsite-revision-evidence.mjs'
@@ -12,7 +13,17 @@ function syntheticPdf() {
 
 test('real locked pdf-parse imports and validates a synthetic signed-body fixture', {skip:process.env.RUN_PDF_PARSE_INTEGRATION!=='1'}, async()=>{
   // Exercise the exact production parser adapter; never import/start server.js.
-  const bytes=syntheticPdf(), text=await parseSignedPdfText(bytes)
+  const bytes=syntheticPdf()
+  let text
+  try { text=await parseSignedPdfText(bytes) } catch (error) {
+    const require=createRequire(import.meta.url),direct=require('pdf-parse')
+    const versions=readdirSync(new URL('../node_modules/pdf-parse/lib/pdf.js/',import.meta.url)).filter(v=>/^v[0-9.]+$/.test(v))
+    for(const version of versions)for(const type of ['buffer','uint8array']){
+      try{const r=await direct(type==='buffer'?Buffer.from(bytes):new Uint8Array(bytes),{version});console.log('synthetic parser diagnostic',version,type,'ok',r.text.length)}
+      catch(e){console.log('synthetic parser diagnostic',version,type,String(e.message))}
+    }
+    throw error
+  }
   assert.match(text,/Total\s+\$100\.00/)
   const proof=await readArcsiteEvidence('1',{
     arcGet:async path=>path.includes('?')?[{proposal_id:'10',project_id:'1'}]:{proposal_id:'10',project_id:'1',status:'APPROVED',total:100,pdf_url:'https://synthetic.invalid/10.pdf'},
