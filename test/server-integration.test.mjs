@@ -42,3 +42,9 @@ test('scope is owner-private and unconfigured by default; no business IDs commit
   assert.match(block,/validatePrivatePolicy/)
   assert.doesNotMatch(block,/verified-sheet-scope\.json/)
 })
+test('verified Sheet reader is isolated and abortable without clearing shared dashboard cache',()=>{
+  assert.match(block,/readFreshSheet:\(\)=>readVerifiedSheetSnapshot\(\{sheetId:INSTALL_SHEET_ID,getToken:googleAccessToken,parseTab\}\)/)
+  assert.doesNotMatch(block,/_sheetCache\s*=/)
+  assert.match(server,/async function googleAccessToken\(signal\)/)
+  assert.match(server,/\.\.\.\(signal \? \{signal\} : \{\}\)/)
+})
