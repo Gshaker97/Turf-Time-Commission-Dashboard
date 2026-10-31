@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { parseSignedPdfText } from '../lib/parse-signed-pdf.mjs'
 import { readArcsiteEvidence } from '../lib/arcsite-revision-evidence.mjs'
 
 // Synthetic PDF only: no customer records, identifiers or actual signed PDFs.
@@ -22,15 +23,13 @@ function syntheticPdf() {
   return Buffer.from(pdf)
 }
 test('real locked pdf-parse imports and validates a synthetic signed-body fixture', {skip:process.env.RUN_PDF_PARSE_INTEGRATION!=='1'}, async()=>{
-  // Same ESM import expression as server adapter; never import/start server.js.
-  const parse=(await import('pdf-parse')).default
-  assert.equal(typeof parse,'function')
-  const bytes=syntheticPdf(), parsed=await parse(bytes)
-  assert.match(parsed.text,/Total\s+\$100\.00/)
+  // Exercise the exact production parser adapter; never import/start server.js.
+  const bytes=syntheticPdf(), text=await parseSignedPdfText(bytes)
+  assert.match(text,/Total\s+\$100\.00/)
   const proof=await readArcsiteEvidence('1',{
     arcGet:async path=>path.includes('?')?[{proposal_id:'10',project_id:'1'}]:{proposal_id:'10',project_id:'1',status:'APPROVED',total:100,pdf_url:'https://synthetic.invalid/10.pdf'},
     fetchPdfBytes:async url=>({status:200,url,bytes}),
-    parsePdfText:async input=>(await parse(input)).text,
+    parsePdfText:parseSignedPdfText,
     now:()=>Date.parse('2026-10-31T20:00:00Z'),
   })
   assert.equal(proof.complete,true,proof.holds.join('; '))
