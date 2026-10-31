@@ -19,6 +19,7 @@ import express from 'express'
 import { createVerifiedSheetRuntime } from './lib/verified-sheet-runtime.mjs'
 import { validatePrivatePolicy } from './lib/verified-sheet-policy.mjs'
 import { parseSignedPdfText } from './lib/parse-signed-pdf.mjs'
+import { readVerifiedSheetSnapshot } from './lib/verified-sheet-snapshot.mjs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
@@ -946,7 +947,7 @@ const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/=+$/, '').r
 
 // Service-account access token (RS256 JWT → oauth2), cached until ~1m before
 // expiry. No google client library needed — Node's crypto signs the assertion.
-async function googleAccessToken() {
+async function googleAccessToken(signal) {
   if (_googleToken.token && Date.now() < _googleToken.exp - 60000) return _googleToken.token
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON
   if (!raw) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is not set on the site service')
@@ -965,6 +966,7 @@ async function googleAccessToken() {
   signer.update(`${header}.${claim}`)
   const assertion = `${header}.${claim}.${b64url(signer.sign(sa.private_key))}`
   const resp = await fetch('https://oauth2.googleapis.com/token', {
+    ...(signal ? {signal} : {}),
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion }),
@@ -4476,7 +4478,7 @@ async function verifiedWriteOpportunity(opportunityId,payload){
 }
 const verifiedSheetRuntime = createVerifiedSheetRuntime({
   readGhlSnapshot:()=>verifiedBoundedRead(ghlFullSnapshot,180000),
-  readFreshSheet:async()=>{_sheetCache={at:0,data:null};return verifiedBoundedRead(readInstallSheet)},
+  readFreshSheet:()=>readVerifiedSheetSnapshot({sheetId:INSTALL_SHEET_ID,getToken:googleAccessToken,parseTab}),
   readOpportunity:verifiedReadOpportunity,
   arcsite:{arcGet:path=>verifiedBoundedRead(()=>arcGet(path)),
     fetchPdfBytes:async url=>{
