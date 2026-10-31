@@ -64,3 +64,36 @@ test('runtime refreshes identity before write, catching newly created duplicate'
   const r=await f.runtime.run({enabled:true,approvedPlanHashes:[dry.plans[0].planHash]})
   assert.equal(reads,2);assert.equal(r.results[0].ok,false);assert.equal(f.writes.length,0)
 })
+test('runtime source stages retain only fixed safe diagnostic codes',async()=>{
+  const secret='https://private.invalid/?token=DO_NOT_LEAK'
+  for(const [code,mutate] of [
+    ['VERIFIED_SHEET_READ_FAILED',f=>{f.deps.readFreshSheet=async()=>{throw Error(secret)}}],
+    ['VERIFIED_SHEET_SCHEMA_INVALID',f=>{f.sheet.jobs.headers=[]}],
+    ['VERIFIED_GHL_READ_FAILED',f=>{f.deps.readOpportunity=async()=>{throw Error(secret)}}],
+    ['VERIFIED_GHL_READ_FAILED',f=>{f.deps.readOpportunity=async()=>null}],
+    ['VERIFIED_GHL_IDENTITY_MISMATCH',f=>{const read=f.deps.readOpportunity;f.deps.readOpportunity=async()=>({...await read(),projectId:'other'})}],
+  ]) {
+    const f=setup();mutate(f)
+    const r=await f.runtime.run({enabled:true,approvedPlanHashes:['unrelated']})
+    assert.equal(r.plans[0].sourceIssues[0].code,code)
+    assert.equal(r.plans[0].changes.length,0)
+    assert.equal(f.writes.length,0)
+    assert.doesNotMatch(JSON.stringify(r),/DO_NOT_LEAK|private\.invalid/)
+  }
+})
+test('runtime snapshot failures sanitize exceptions and stored reports',async()=>{
+  for(const read of [async()=>{throw Error('secret-token')},async()=>null,async()=>({opportunities:[],meta:{opportunity_pages:300}})]) {
+    const f=setup();f.deps.readGhlSnapshot=read
+    await assert.rejects(f.runtime.run({enabled:true}),e=>e.code==='VERIFIED_GHL_SNAPSHOT_FAILED' && !e.message.includes('secret-token'))
+    assert.equal(f.reports.at(-1).sourceCode,'VERIFIED_GHL_SNAPSHOT_FAILED')
+    assert.equal(f.writes.length,0)
+    assert.doesNotMatch(JSON.stringify(f.reports),/secret-token/)
+  }
+})
+test('runtime preserves safe ArcSite failed-read hold without raw exception',async()=>{
+  const f=setup();f.deps.arcsite.arcGet=async()=>{throw Error('secret-token')}
+  const r=await f.runtime.run()
+  assert.equal(r.plans[0].sourceIssues[0].code,'ARCSITE_READ_FAILED')
+  assert.equal(r.plans[0].changes.length,0)
+  assert.doesNotMatch(JSON.stringify(r),/secret-token/)
+})

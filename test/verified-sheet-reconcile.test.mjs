@@ -16,7 +16,9 @@ test('reviewed replacement set exact',()=>{const x=fixture(),p=policy();x.validS
 test('whole job holds win',()=>{const p=policy();p.scope[0].hold='named';assert.equal(plan(fixture(),p).changes.length,0)})
 test('negative and blank fields held separately',()=>{const x=fixture();x.sheetRows[0].commission='($743.99)';x.current.baseline=' ';assert.equal(plan(x).changes.length,0)})
 test('field hold preserves other changes',()=>{const p=policy();p.scope[0].fieldHolds.commission='Rebecca';assert.deepEqual(plan(fixture(),p).changes.map(x=>x.field),['baseline'])})
-test('signed cent wins source tolerance, exact cents compared',()=>{const x=fixture();x.revision.total=7399.99;assert.equal(plan(x).changes.find(c=>c.field==='price').wantCents,739999)})
+test('Sheet Approved Total wins a signed-PDF rounding gap; never write PDF-derived amount',()=>{const x=fixture();x.revision.total=7399.99;x.current.value=7399.99;x.current.price=7399.99;const changes=plan(x).changes.filter(c=>['value','price'].includes(c.field));assert.deepEqual(changes.map(c=>c.wantCents),[740000,740000]);assert.ok(changes.every(c=>c.wantCents!==739999))})
+test('already Sheet-matching values are unchanged despite PDF cent difference',()=>{const x=fixture();x.revision.total=7399.99;assert.ok(plan(x).changes.every(c=>!['value','price'].includes(c.field)))})
+test('nonpositive Sheet total remains held even inside PDF tolerance',()=>{const x=fixture();x.revision.total=0.5;x.sheetRows[0].approvedTotal=0;assert.equal(plan(x).changes.length,0);assert.match(plan(x).holds[0],/disagree/)})
 test('unverified markup and contacts never in plan',()=>{const x=fixture();x.current.markup=1;x.current.contact=1;assert.ok(plan(x).changes.every(c=>['value','price','baseline','commission'].includes(c.field)))})
 function adapter(x=fixture()){const writes=[];return {x,writes,readEvidence:async()=>structuredClone(x),writeGhlField:async(o,f,v)=>{writes.push({o,f,v});x.current[f]=v},readGhlField:async(o,f)=>x.current[f]}}
 test('default OFF and missing approval cause zero writes',async()=>{const a=adapter(),p=plan();await executePlan(p,policy(),a);await executePlan(p,policy(),a,{enabled:true});assert.equal(a.writes.length,0)})
@@ -49,3 +51,11 @@ test('source diagnostics never bypass unhealthy state or affect a healthy plan',
   assert.equal(plan(x).sourceIssues[0].code,'ARCSITE_READ_FAILED');assert.equal(plan(x).changes.length,0)
   x.sourceHealthy=true;assert.equal(plan(x).sourceIssues,undefined);assert.equal(plan(x).changes.length,2)
 })
+
+test('reviewed commission cent hold remains protected despite Sheet difference',()=>{const x=fixture(),p=policy();x.current.commission=2000;x.sheetRows[0].commission=1999.99;p.scope[0].fieldHolds.commission='manual review cent hold';const r=plan(x,p);assert.ok(r.changes.every(c=>c.field!=='commission'));assert.ok(r.holds.includes('commission: manual review cent hold'))})
+test('scope report preserves only fixed exception codes, never error text',async()=>{
+  const a=adapter();a.readEvidence=async()=>{const e=Error('secret URL token');e.code='VERIFIED_SHEET_SCHEMA_INVALID';throw e}
+  const r=await reconcileScope(policy(),a);assert.equal(r.plans[0].sourceIssues[0].code,'VERIFIED_SHEET_SCHEMA_INVALID');assert.doesNotMatch(JSON.stringify(r),/secret|token/);assert.equal(r.plans[0].changes.length,0)
+  a.readEvidence=async()=>{const e=Error('secret');e.code='untrusted-secret-code';throw e};const unknown=await reconcileScope(policy(),a);assert.equal(unknown.plans[0].sourceIssues,undefined);assert.doesNotMatch(JSON.stringify(unknown),/secret/)
+})
+test('Approved Total already includes commission; never add commission to revenue',()=>{const x=fixture();x.current.value=7000;x.current.price=7000;const r=plan(x);assert.deepEqual(r.changes.filter(c=>['value','price'].includes(c.field)).map(c=>c.wantCents),[740000,740000]);assert.ok(r.changes.filter(c=>['value','price'].includes(c.field)).every(c=>c.wantCents!==941081));assert.equal(r.changes.find(c=>c.field==='commission').wantCents,201081)})
