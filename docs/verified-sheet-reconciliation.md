@@ -38,3 +38,8 @@ Each field gets fresh source/revision and destination checks, including complete
 `node --check server.js`
 
 No production dry run, live write, record repair, deployment, or activation has been performed as part of this draft.
+
+## Consistent Sheet snapshot per planning run
+The verified reconciler uses a dedicated read-only Jobs+Schedule batch reader; it does not clear or replace the dashboard's existing Sheet cache. One complete validated immutable snapshot is shared by every planning job in a run and identified by its actual fetched timestamp and content hash. Missing tabs, invalid schema, or an unavailable initial read fail the whole run without plans. A snapshot that expires during planning holds remaining jobs; it is never relabeled as freshly fetched or silently replaced mid-plan.
+
+Before each authorized field write, fresh Sheet and GHL evidence is read separately and compared with the approved exact row/source fingerprint. These prewrite snapshots cannot change the run's planning generation. The isolated Sheet read aborts token acquisition/fetch/body processing at its deadline, does not retry auth/schema failures, and has no stale-cache fallback. Existing dashboard cache behavior is unchanged.
