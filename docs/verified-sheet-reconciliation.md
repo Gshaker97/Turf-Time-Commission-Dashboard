@@ -1,7 +1,7 @@
 # Verified AI Sheet → GHL reconciliation (draft; not activated)
 
 ## Authorized boundary
-October/November 2026 active booked jobs from the reviewed 228-project population. Exact Project/opportunity IDs are frozen in `lib/verified-sheet-scope.json`; no name matching or automatic scope growth. Existing named exclusions and field holds remain. GHL **value, Price, Baseline and informational Commission** only. Commission-site financials, gold checks, finalized/paid payroll, adjustments, overrides and history are never written. No contact, markup, setter, closer, finance method, stage, install-date, contract attachment or direct PM writes. PM value follows the existing normal GHL sync only.
+October/November 2026 active booked jobs from the reviewed 228-project population. Exact Project/opportunity IDs must be frozen in owner-private `app_settings.verified_sheet_reconcile_policy`; no name matching or automatic scope growth. This setting is NOT populated by the PR. No customer/project/opportunity identifiers are committed. `docs/verified-sheet-policy.example.json` is intentionally empty and fail-closed. Existing named exclusions and field holds remain. GHL **value, Price, Baseline and informational Commission** only. Commission-site financials, gold checks, finalized/paid payroll, adjustments, overrides and history are never written. No contact, markup, setter, closer, finance method, stage, install-date, contract attachment or direct PM writes. PM value follows the existing normal GHL sync only.
 
 The new path does not reuse the legacy change-order endpoint, which can move stages and update contacts. Existing automation remains unchanged until separately reviewed. The old webhook now provides a nonblocking hint to the guarded field-aware reconciliation; the old total/document-count sweep also enqueues this check before its short circuit. This closes the secondary-field retry gap **when the new path is explicitly activated**, without granting old paths new write authority.
 
@@ -11,7 +11,7 @@ The new path does not reuse the legacy change-order endpoint, which can move sta
 - `ARC_VERIFIED_SHEET_AUTO` absent/default: no new timer or scheduler.
 - `ARC_VERIFIED_SHEET_WRITES` absent/default: zero writes.
 - `ARC_VERIFIED_SHEET_SINGLE_WRITER` absent/default: zero writes. Before enabling, verify deployment is single-instance or supply a reviewed durable lock; local serialization is not a multi-instance lease.
-- `lib/verified-sheet-approvals.json` initially has **no approved plan hashes**. A plan can write only with both writer guards and its exact reviewed hash. Future changed plans require new review; this draft does not silently authorize all future money changes.
+- The private policy initially does not exist and has **no approved plan hashes**. A plan can write only with both writer guards and its exact reviewed hash. Future changed plans require new review; this draft does not silently authorize all future money changes.
 - Five-minute retry hints plus daily pass use the existing audit hour only when AUTO explicitly enabled. A source failure never marks a job settled.
 
 ## Evidence gate
@@ -28,13 +28,13 @@ Each field gets fresh source/revision and destination checks, including complete
 1. Review draft PR and focused test results. Full repository lint/build has not yet run in a full checkout.
 2. Merge/deploy only after PR-specific approval. All new guards remain OFF, approvals empty.
 3. Run production read-only dry run. Review all eligible exact-ID/revision/field changes and holds; resolve signed replacement evidence individually.
-4. Add reviewed plan hashes/resolutions through a reviewed change. Verify host allowlist and single-writer deployment. No secret values belong in commits.
+4. After explicit owner approval to populate the private configuration, add reviewed exact scope, all existing holds, plan hashes and resolutions to that private server setting—not GitHub. Verify host allowlist and single-writer deployment. No secret values belong in commits.
 5. Explicitly activate the writer/schedule only after dry-run approval. No existing guards are changed by this PR.
 6. Verify per-field GHL read-backs, then PM value after its normal six-hour sync; do not trigger PM sync or alter dates.
 7. For continuously automatic future revisions, obtain a separate reviewed activation policy; the initial exact-hash gate deliberately does not authorize unseen plans.
 
 ## Local checks
-`node --test test/*reconcile*.test.mjs test/arcsite-evidence.test.mjs test/verified-runtime.test.mjs`
+`node --test test/*.test.mjs`
 `node --check server.js`
 
 No production dry run, live write, record repair, deployment, or activation has been performed as part of this draft.
