@@ -1,15 +1,15 @@
-name: Verify guarded Sheet reconciliation (PR 447)
+name: Verify guarded Sheet reconciliation (PDF regression)
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 permissions:
   contents: read
 concurrency:
-  group: verified-sheet-pr447-${{ github.event.pull_request.number }}
+  group: verified-sheet-pdf-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
   validate:
-    if: github.event.pull_request.number == 447 && github.head_ref == 'jarvis/verified-sheet-ghl-reconcile'
+    if: github.head_ref == 'jarvis/verified-sheet-pdf-format'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
