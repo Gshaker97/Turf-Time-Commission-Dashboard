@@ -9,7 +9,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   validate:
-    if: github.head_ref == 'jarvis/verified-sheet-source-format'
+    if: github.head_ref == 'jarvis/verified-sheet-financial-source'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
