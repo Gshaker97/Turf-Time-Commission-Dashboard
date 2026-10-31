@@ -11,7 +11,9 @@ test('new endpoints exclusively require Jarvis analyst authorization',()=>{
   assert.doesNotMatch(routes,/await verifiedSheetRun|write:true/)
 })
 test('new adapter uses ESM PDF parsing and bounded no-credential storage GET',()=>{
-  assert.match(block,/import\('pdf-parse'\)/);assert.doesNotMatch(block,/require\(/)
+  assert.match(block,/parsePdfText:parseSignedPdfText/);assert.doesNotMatch(block,/require\(/)
+  const parser=readFileSync(new URL('../lib/parse-signed-pdf.mjs',import.meta.url),'utf8')
+  assert.match(parser,/createRequire\(import\.meta\.url\)/);assert.match(parser,/requirePdf\('pdf-parse'\)/)
   const download=block.slice(block.indexOf('fetchPdfBytes:'),block.indexOf('parsePdfText:'))
   assert.match(download,/verifiedPdfHosts\.has\(parsed\.hostname\)/)
   assert.match(download,/redirect:'manual',signal:AbortSignal\.timeout\(30000\)/)
