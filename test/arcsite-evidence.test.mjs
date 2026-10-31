@@ -75,3 +75,14 @@ test('PDF body amount must agree with exact approved metadata', async () => {
     assert.equal((await read('1', fixture({ extractPdfText: async () => text }), opts)).complete, false)
   }
 })
+
+// pdf-parse 1.1.1 joins independently positioned label/currency text items.
+test('exact Total accepts observed joined currency label without treating Subtotal or Balance as Total', async () => {
+  const suffix='\nCustomer Signature\n2026-10-30 01:45 PM UTC'
+  const a=fixture({extractPdfText:async()=> 'Subtotal$100.00\nTotal$100.00 \nPayment\nBalance$100.00'+suffix})
+  assert.equal((await read('1',a,opts)).complete,true)
+  for(const body of ['Subtotal$100.00\nBalance$100.00','Total$99.99','Total$100.00\nTotal$99.99','Grand Total$100.00','Total100.00','Total$100.000','Total$100.00 extra']) {
+    const r=await read('1',fixture({extractPdfText:async()=>body+suffix}),opts)
+    assert.equal(r.complete,false,body)
+  }
+})
