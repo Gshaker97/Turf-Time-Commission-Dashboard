@@ -16,6 +16,8 @@
  *   SUPABASE_SERVICE_KEY   — the service_role key (runtime only, this file)
  */
 import express from 'express'
+import { createVerifiedSheetRuntime } from './lib/verified-sheet-runtime.mjs'
+import { validatePrivatePolicy } from './lib/verified-sheet-policy.mjs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
@@ -2537,6 +2539,8 @@ async function arcValueSweep() {
       const cur = opp.monetaryValue != null ? Math.round(Number(opp.monetaryValue) * 100) / 100 : null
       const signed = await arcSignedContracts(pid)
       const attached = oppContractEntries(opp).length
+      // Always enqueue the guarded field-aware check before legacy total/count short-circuit.
+      verifiedSheetQueue(pid)
       // Value right AND every signed contract on the opp → confirmed.
       if (arcSame(cur, want) && signed.length <= attached) { seen[pid] = mark; changed = true; out.confirmed++; continue }
       // Stale value (missed change order) or a signed contract the opp doesn't
@@ -2920,6 +2924,7 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   // the install-calendar fields (install_date / payment_method, often a while
   // later). Plus: did the field apply above actually stick?
   const scheduleIncomplete = !estimator && (planned.install_date == null || planned.payment_method == null)
+  if (isChangeOrder) verifiedSheetQueue(projectId)
   const needEnrich = !isChangeOrder && (!fieldsOk || !job || scheduleIncomplete)
 
   let alert
@@ -4442,6 +4447,113 @@ app.post('/api/arcsite/pdf-pending', async (req, res) => {
   catch (e) { res.status(200).json({ ok: false, error: e.message }) }
 })
 
+// Verified Sheet -> GHL money reconciliation. Independent of commission-site
+// deals, gold checks and payroll. Deployment alone enables NO new schedule/writes.
+const VERIFIED_REPORT_KEY = 'verified_sheet_reconcile_report'
+const verifiedSheetPolicy = {version:'unconfigured',maxAgeMs:300000,scope:[]}
+let verifiedRunBusy=false
+async function verifiedLoadPrivatePolicy(){
+  const rows=await verifiedBoundedRead(()=>restGet('/rest/v1/app_settings?key=eq.verified_sheet_reconcile_policy&select=value'))
+  return validatePrivatePolicy(rows?.[0]?.value)
+}
+const verifiedPdfHosts = new Set((process.env.ARC_VERIFIED_PDF_HOSTS || 'cdn-files-1.arcsite.com').split(',').map(s=>s.trim()).filter(Boolean))
+async function verifiedBoundedRead(operation, ms=30000){
+  let timer
+  try{return await Promise.race([operation(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('read timeout')),ms)})])}
+  finally{clearTimeout(timer)}
+}
+async function verifiedReadOpportunity(opportunityId) {
+  const body = await verifiedBoundedRead(()=>ghlGetRetry(`/opportunities/${encodeURIComponent(opportunityId)}`))
+  const o = body.opportunity || body
+  if (o.id !== opportunityId) throw Error('opportunity identity mismatch')
+  return { opportunityId:o.id,projectId:oppProjectId(o),status:o.status,commissionApplicable:o.pipelineId === GHL_PIPELINES.outside.id,
+    fields:{value:o.monetaryValue,price:oppFieldVal(o,GHL_OPP_FIELD_IDS.price),baseline:oppFieldVal(o,GHL_OPP_FIELD_IDS.baseline),commission:oppFieldVal(o,GHL_OPP_FIELD_IDS.commission)} }
+}
+async function verifiedWriteOpportunity(opportunityId,payload){
+  const response=await fetch(`${GHL_BASE}/opportunities/${encodeURIComponent(opportunityId)}`,{method:'PUT',redirect:'manual',signal:AbortSignal.timeout(30000),headers:{...ghlHeaders(GHL_WRITE_TOKEN),'Content-Type':'application/json'},body:JSON.stringify(payload)})
+  if(!response.ok)throw Error('GHL field write rejected')
+}
+const verifiedSheetRuntime = createVerifiedSheetRuntime({
+  readGhlSnapshot:()=>verifiedBoundedRead(ghlFullSnapshot,180000),
+  readFreshSheet:async()=>{_sheetCache={at:0,data:null};return verifiedBoundedRead(readInstallSheet)},
+  readOpportunity:verifiedReadOpportunity,
+  arcsite:{arcGet:path=>verifiedBoundedRead(()=>arcGet(path)),
+    fetchPdfBytes:async url=>{
+      const parsed=new URL(url)
+      if (parsed.protocol!=='https:' || parsed.port && parsed.port!=='443' || !verifiedPdfHosts.has(parsed.hostname)) throw Error('PDF host not explicitly approved')
+      // No Authorization/cookies/visitor headers are forwarded to PDF storage.
+      const response=await fetch(url,{redirect:'manual',signal:AbortSignal.timeout(30000)})
+      if(response.status!==200) throw Error('PDF download not successful')
+      const declared=Number(response.headers.get('content-length')||0)
+      if(declared>32*1024*1024) throw Error('PDF too large')
+      const reader=response.body.getReader(),chunks=[];let size=0
+      for(;;){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>32*1024*1024){await reader.cancel();throw Error('PDF too large')}chunks.push(value)}
+      return {status:200,url:response.url,bytes:Buffer.concat(chunks)}
+    },
+    parsePdfText:async bytes=>(await (await import('pdf-parse')).default(bytes)).text,
+  },
+  writeGhlField:async(opportunityId,field,value)=>{
+    if(process.env.ARC_VERIFIED_SHEET_WRITES!=='1' || process.env.ARC_VERIFIED_SHEET_SINGLE_WRITER!=='1') throw Error('verified writer disabled')
+    if(field==='value') return verifiedWriteOpportunity(opportunityId,{monetaryValue:value})
+    if(!['price','baseline','commission'].includes(field)) throw Error('field not authorized')
+    const defs=await verifiedBoundedRead(ghlOppFields),write=oppFieldWrite(GHL_OPP_FIELD_IDS[field],value,defs)
+    if(!write) throw Error('GHL field schema unavailable')
+    return verifiedWriteOpportunity(opportunityId,{customFields:[write]})
+  },
+  readGhlField:async(opportunityId,field)=>(await verifiedReadOpportunity(opportunityId)).fields[field],
+  saveReport:async report=>{
+    if(!SUPABASE_URL || !SERVICE_KEY) throw Error('private report storage unavailable')
+    report.day=phoenixNow().day
+    await restWrite('POST','/rest/v1/app_settings?on_conflict=key',{key:VERIFIED_REPORT_KEY,value:report},'resolution=merge-duplicates')
+  },
+},verifiedSheetPolicy)
+async function verifiedSheetLast(){const rows=await restGet(`/rest/v1/app_settings?key=eq.${VERIFIED_REPORT_KEY}&select=value`);return rows?.[0]?.value||null}
+async function verifiedSheetRun({write=false,onlyProject=null}={}){
+  if(verifiedRunBusy)return {ok:false,reason:'verified reconciliation already running'}
+  verifiedRunBusy=true
+  try{
+    const privatePolicy=await verifiedLoadPrivatePolicy()
+    Object.assign(verifiedSheetPolicy,privatePolicy)
+    const enabled=write && process.env.ARC_VERIFIED_SHEET_WRITES==='1' && process.env.ARC_VERIFIED_SHEET_SINGLE_WRITER==='1'
+    return await verifiedSheetRuntime.run({enabled,approvedPlanHashes:privatePolicy.approvedPlanHashes,onlyProject})
+  }finally{verifiedRunBusy=false}
+}
+// A rejected/uncertain write is not blindly replayed: the core re-reads first.
+// Webhook hints do not reuse old sheet values or total/PDF-count confirmations.
+const verifiedSheetPending=new Set()
+let verifiedLastDailyDay=null
+function verifiedSheetQueue(projectId){if(process.env.ARC_VERIFIED_SHEET_AUTO==='1' && verifiedSheetPolicy.scope.some(s=>s.projectId===String(projectId)))verifiedSheetPending.add(String(projectId))}
+async function verifiedSheetTick(){
+  if(process.env.ARC_VERIFIED_SHEET_AUTO!=='1')return
+  const {day,hour}=phoenixNow()
+  if(hour===ARC_AUDIT_HOUR){
+    const last=await verifiedSheetLast()
+    if(verifiedLastDailyDay!==day && !(last?.fullScope && last?.ok!==false && last?.day===day)){
+      const report=await verifiedSheetRun({write:true});if(report.fullScope)verifiedLastDailyDay=day
+      return
+    }
+  }
+  if(verifiedSheetPending.size){
+    const pid=verifiedSheetPending.values().next().value
+    await verifiedSheetRun({write:true,onlyProject:pid})
+    // Unresolved evidence remains in private findings and is retried by the
+    // daily pass / next webhook. It must not starve all other queued jobs.
+    verifiedSheetPending.delete(pid)
+  }
+}
+app.get('/api/arcsite/verified-sheet-reconcile',async(req,res)=>{
+  if(analystAuthorized(req)!=='jarvis')return res.status(401).json(err('Unauthorized'))
+  try{res.json(await verifiedSheetLast()||{ok:false,error:'no verified reconciliation run yet'})}catch{res.status(503).json(err('report unavailable'))}
+})
+app.post('/api/arcsite/verified-sheet-reconcile',async(req,res)=>{
+  if(analystAuthorized(req)!=='jarvis')return res.status(401).json(err('Unauthorized'))
+  // HTTP trigger is strictly dry-run; activation/approvals cannot come from body.
+  if(verifiedRunBusy)return res.status(409).json(err('verified reconciliation already running'))
+  try{await verifiedLoadPrivatePolicy()}catch{return res.status(409).json(err('owner-private reviewed scope unavailable or unconfigured'))}
+  verifiedSheetRun().catch(()=>{})
+  res.status(202).json({ok:true,started:true,dry:true,result:'GET /api/arcsite/verified-sheet-reconcile'})
+})
+
 // The daily contract audit by hand (POST, takes a few minutes; body
 // { fix?: false, days_back?: n }) and its last stored result (GET).
 app.get('/api/arcsite/contract-audit', async (req, res) => {
@@ -4575,6 +4687,8 @@ if (TIMERS_ON) setInterval(() => arcContractAuditTick().catch(() => {}), 15 * 60
 // The READ-ONLY field audit (every mapped field, every job) runs once a day in
 // the same hour, after the repair pass, and stores its findings. It never writes.
 if (TIMERS_ON) setInterval(() => arcFieldAuditTick().catch(() => {}), 15 * 60_000).unref?.()
+// New schedule OFF unless explicitly activated after dry-run/manifest review.
+if (TIMERS_ON && process.env.ARC_VERIFIED_SHEET_AUTO === '1') setInterval(() => verifiedSheetTick().catch(() => {}), 5 * 60_000).unref?.()
 
 // The analyst feed's pre-built bundle: first build 3 min after boot, then
 // every ANALYST_TTL_MIN. Only when the bot's key is configured.
@@ -4589,3 +4703,4 @@ app.use((req, res) => res.sendFile(path.join(dist, 'index.html')))
 
 const port = process.env.PORT || 3000
 app.listen(port, () => console.log(`Turf Time dashboard on :${port} (user admin ${SERVICE_KEY ? 'ready' : 'NOT configured'})`))
+
