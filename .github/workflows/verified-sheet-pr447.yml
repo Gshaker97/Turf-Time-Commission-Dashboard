@@ -1,15 +1,15 @@
-name: Verify guarded Sheet reconciliation (raw-body batch regression)
+name: Verify guarded Sheet reconciliation (bounded continuation regression)
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 permissions:
   contents: read
 concurrency:
-  group: verified-sheet-body-${{ github.event.pull_request.number }}
+  group: verified-sheet-retry-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
   validate:
-    if: github.head_ref == 'jarvis/verified-sheet-batch-raw-body'
+    if: github.head_ref == 'jarvis/verified-sheet-unwritten-continuation'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
