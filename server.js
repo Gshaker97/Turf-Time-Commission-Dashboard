@@ -20,6 +20,8 @@ import express from 'express'
 import { createVerifiedSheetRuntime } from './lib/verified-sheet-runtime.mjs'
 import { createVerifiedBatch, batchGuards } from './lib/verified-sheet-batch.mjs'
 import { createVerifiedRetry, retryRequestValid } from './lib/verified-sheet-retry.mjs'
+import { createVerifiedDaily, dailyGuards } from './lib/verified-sheet-daily.mjs'
+import { createDailyStore, DAILY_WORKER_KEY, dailyDayKey, dailyCasPath } from './lib/verified-sheet-daily-store.mjs'
 import { validatePrivatePolicy } from './lib/verified-sheet-policy.mjs'
 import { parseSignedPdfText } from './lib/parse-signed-pdf.mjs'
 import { readVerifiedSheetSnapshot } from './lib/verified-sheet-snapshot.mjs'
@@ -4459,6 +4461,7 @@ const VERIFIED_REPORT_KEY = 'verified_sheet_reconcile_report'
 const verifiedSheetPolicy = {version:'unconfigured',maxAgeMs:300000,scope:[]}
 let verifiedRunBusy=false
 let verifiedBatchActive=false
+let verifiedDailyActive=false
 async function verifiedLoadPrivatePolicy(){
   const rows=await verifiedBoundedRead(()=>restGet('/rest/v1/app_settings?key=eq.verified_sheet_reconcile_policy&select=value'))
   return validatePrivatePolicy(rows?.[0]?.value)
@@ -4477,6 +4480,7 @@ async function verifiedReadOpportunity(opportunityId) {
     fields:{value:o.monetaryValue,price:oppFieldVal(o,GHL_OPP_FIELD_IDS.price),baseline:oppFieldVal(o,GHL_OPP_FIELD_IDS.baseline),commission:oppFieldVal(o,GHL_OPP_FIELD_IDS.commission)} }
 }
 async function verifiedWriteOpportunity(opportunityId,payload){
+  if(verifiedDailyActive)await verifiedDaily.assertAuthorized()
   if(process.env.ARC_VERIFIED_SHEET_WRITES!=='1' || process.env.ARC_VERIFIED_SHEET_SINGLE_WRITER!=='1' || (verifiedBatchActive && !batchGuards(process.env)))throw Error('verified writer disabled')
   const response=await fetch(`${GHL_BASE}/opportunities/${encodeURIComponent(opportunityId)}`,{method:'PUT',redirect:'manual',signal:AbortSignal.timeout(30000),headers:{...ghlHeaders(GHL_WRITE_TOKEN),'Content-Type':'application/json'},body:JSON.stringify(payload)})
   if(!response.ok)throw Error('GHL field write rejected')
@@ -4528,26 +4532,14 @@ async function verifiedSheetRun({write=false,onlyProject=null}={}){
 }
 // A rejected/uncertain write is not blindly replayed: the core re-reads first.
 // Webhook hints do not reuse old sheet values or total/PDF-count confirmations.
-const verifiedSheetPending=new Set()
-let verifiedLastDailyDay=null
-function verifiedSheetQueue(projectId){if(process.env.ARC_VERIFIED_SHEET_AUTO==='1' && verifiedSheetPolicy.scope.some(s=>s.projectId===String(projectId)))verifiedSheetPending.add(String(projectId))}
+// Signed webhook hints do not bypass the scheduled daily evidence/hold policy.
+// The daily sweep covers every configured project, including queued revisions.
+function verifiedSheetQueue(_projectId){}
 async function verifiedSheetTick(){
-  if(process.env.ARC_VERIFIED_SHEET_AUTO!=='1')return
+  if(!dailyGuards(process.env))return
   const {day,hour}=phoenixNow()
-  if(hour===ARC_AUDIT_HOUR){
-    const last=await verifiedSheetLast()
-    if(verifiedLastDailyDay!==day && !(last?.fullScope && last?.ok!==false && last?.day===day)){
-      const report=await verifiedSheetRun({write:true});if(report.fullScope)verifiedLastDailyDay=day
-      return
-    }
-  }
-  if(verifiedSheetPending.size){
-    const pid=verifiedSheetPending.values().next().value
-    await verifiedSheetRun({write:true,onlyProject:pid})
-    // Unresolved evidence remains in private findings and is retried by the
-    // daily pass / next webhook. It must not starve all other queued jobs.
-    verifiedSheetPending.delete(pid)
-  }
+  if(hour!==ARC_AUDIT_HOUR)return
+  await verifiedDaily.sweep({day})
 }
 app.get('/api/arcsite/verified-sheet-reconcile',async(req,res)=>{
   if(analystAuthorized(req)!=='jarvis')return res.status(401).json(err('Unauthorized'))
@@ -4646,6 +4638,42 @@ const verifiedRetry=createVerifiedRetry({
     if(!Array.isArray(rows)||rows.length!==1||rows[0].value?.retryId!==retryId||rows[0].value?.state!==outcome.state)throw Error('retry result unavailable')
   },
 })
+// Durable daily authorization is separate from historical one-shot plan hashes.
+// Configuration lives only in owner-private app_settings; HTTP cannot enable it.
+const verifiedDailyStore=createDailyStore({
+  read:verifiedPrivateValue,
+  insert:verifiedInsertClaim,
+  patch:async(key,previous,value)=>{
+    // Bounded revision-token CAS; full reports never enter a request URL.
+    const pathname=dailyCasPath(key,previous)
+    const rows=await verifiedBatchStore('PATCH',pathname,{value})
+    if(!Array.isArray(rows))throw Error('daily compare-and-set unavailable')
+    if(rows.length===0)return false
+    if(rows.length!==1 || rows[0].key!==key || !isDeepStrictEqual(rows[0].value,value))throw Error('daily compare-and-set read-back mismatch')
+    return true
+  },
+})
+const verifiedDaily=createVerifiedDaily({
+  env:process.env,
+  acquire:()=>{if(verifiedRunBusy)return false;verifiedRunBusy=true;verifiedDailyActive=true;return true},
+  release:()=>{verifiedDailyActive=false;verifiedRunBusy=false},
+  loadPolicy:verifiedLoadPrivatePolicy,
+  loadConfig:()=>verifiedPrivateValue('verified_sheet_daily_authorization'),
+  ...verifiedDailyStore,
+  run:async(policy,options)=>{
+    Object.assign(verifiedSheetPolicy,policy)
+    return verifiedSheetRuntime.run(options)
+  },
+})
+app.get('/api/arcsite/verified-sheet-reconcile/daily',async(req,res)=>{
+  if(analystAuthorized(req)!=='jarvis')return res.status(401).json(err('Unauthorized'))
+  try{
+    const {day}=phoenixNow()
+    const [worker,sweep]=await Promise.all([verifiedPrivateValue(DAILY_WORKER_KEY),verifiedPrivateValue(dailyDayKey(day))])
+    res.json({ok:true,guardsEnabled:dailyGuards(process.env),timersEnabled:process.env.ARC_DISABLE_TIMERS!=='1',hourPhoenix:ARC_AUDIT_HOUR,day,worker,sweep})
+  }catch{return res.status(503).json(err('daily status unavailable'))}
+})
+
 // Preview persists findings only. Each job gets a separate real fresh generation;
 // the five-minute TTL and per-field prewrite checks are not extended or relabeled.
 app.post('/api/arcsite/verified-sheet-reconcile/retry-preview',async(req,res)=>{
