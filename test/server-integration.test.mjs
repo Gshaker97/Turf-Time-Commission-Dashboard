@@ -28,8 +28,8 @@ test('writer has two OFF-default guards, field whitelist and abortable PUT',()=>
   assert.equal((block.match(/restWrite\(/g)||[]).length,1)
   assert.match(block,/restWrite\('POST','\/rest\/v1\/app_settings\?on_conflict=key'/)
 })
-test('schedule OFF by default and hooks only queue nonblocking hints',()=>{
-  assert.match(block,/ARC_VERIFIED_SHEET_AUTO!=='1'/)
+test('schedule OFF by default and webhook hints cannot bypass daily authorization',()=>{
+  assert.match(block,/if\(!dailyGuards\(process\.env\)\)return/)
   assert.match(server,/if \(TIMERS_ON && process\.env\.ARC_VERIFIED_SHEET_AUTO === '1'\) setInterval/)
   assert.match(server,/if \(isChangeOrder\) verifiedSheetQueue\(projectId\)/)
   assert.doesNotMatch(server,/await verifiedSheetQueue/)
