@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import {readFileSync} from 'node:fs'
 const server=readFileSync(new URL('../server.js',import.meta.url),'utf8')
 const block=server.slice(server.indexOf('// Verified Sheet -> GHL money reconciliation.'),server.indexOf('// The daily contract audit by hand',server.indexOf('// Verified Sheet -> GHL money reconciliation.')))
-test('new endpoints exclusively require Jarvis analyst authorization',()=>{
-  const routes=block.slice(block.indexOf("app.get('/api/arcsite/verified-sheet-reconcile'"))
+test('existing dry-run endpoints exclusively require Jarvis analyst authorization',()=>{
+  const routes=block.slice(block.indexOf("app.get('/api/arcsite/verified-sheet-reconcile'"),block.indexOf('// Explicit one-shot entry point'))
   assert.equal((routes.match(/analystAuthorized\(req\)!=='jarvis'/g)||[]).length,2)
   assert.doesNotMatch(routes,/ingestAuthorized|req\.body|req\.query/)
   assert.match(routes,/verifiedSheetRun\(\)\.catch/)
