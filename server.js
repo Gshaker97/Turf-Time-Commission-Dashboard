@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util'
 /**
  * Turf Time dashboard server — serves the built SPA and hosts the user-admin
  * API, so the site is completely standalone (no Apps Script in the critical
@@ -17,6 +18,7 @@
  */
 import express from 'express'
 import { createVerifiedSheetRuntime } from './lib/verified-sheet-runtime.mjs'
+import { createVerifiedBatch, batchGuards } from './lib/verified-sheet-batch.mjs'
 import { validatePrivatePolicy } from './lib/verified-sheet-policy.mjs'
 import { parseSignedPdfText } from './lib/parse-signed-pdf.mjs'
 import { readVerifiedSheetSnapshot } from './lib/verified-sheet-snapshot.mjs'
@@ -4455,6 +4457,7 @@ app.post('/api/arcsite/pdf-pending', async (req, res) => {
 const VERIFIED_REPORT_KEY = 'verified_sheet_reconcile_report'
 const verifiedSheetPolicy = {version:'unconfigured',maxAgeMs:300000,scope:[]}
 let verifiedRunBusy=false
+let verifiedBatchActive=false
 async function verifiedLoadPrivatePolicy(){
   const rows=await verifiedBoundedRead(()=>restGet('/rest/v1/app_settings?key=eq.verified_sheet_reconcile_policy&select=value'))
   return validatePrivatePolicy(rows?.[0]?.value)
@@ -4473,6 +4476,7 @@ async function verifiedReadOpportunity(opportunityId) {
     fields:{value:o.monetaryValue,price:oppFieldVal(o,GHL_OPP_FIELD_IDS.price),baseline:oppFieldVal(o,GHL_OPP_FIELD_IDS.baseline),commission:oppFieldVal(o,GHL_OPP_FIELD_IDS.commission)} }
 }
 async function verifiedWriteOpportunity(opportunityId,payload){
+  if(process.env.ARC_VERIFIED_SHEET_WRITES!=='1' || process.env.ARC_VERIFIED_SHEET_SINGLE_WRITER!=='1' || (verifiedBatchActive && !batchGuards(process.env)))throw Error('verified writer disabled')
   const response=await fetch(`${GHL_BASE}/opportunities/${encodeURIComponent(opportunityId)}`,{method:'PUT',redirect:'manual',signal:AbortSignal.timeout(30000),headers:{...ghlHeaders(GHL_WRITE_TOKEN),'Content-Type':'application/json'},body:JSON.stringify(payload)})
   if(!response.ok)throw Error('GHL field write rejected')
 }
@@ -4496,7 +4500,7 @@ const verifiedSheetRuntime = createVerifiedSheetRuntime({
     parsePdfText:parseSignedPdfText,
   },
   writeGhlField:async(opportunityId,field,value)=>{
-    if(process.env.ARC_VERIFIED_SHEET_WRITES!=='1' || process.env.ARC_VERIFIED_SHEET_SINGLE_WRITER!=='1') throw Error('verified writer disabled')
+    if(process.env.ARC_VERIFIED_SHEET_WRITES!=='1' || process.env.ARC_VERIFIED_SHEET_SINGLE_WRITER!=='1' || (verifiedBatchActive && !batchGuards(process.env))) throw Error('verified writer disabled')
     if(field==='value') return verifiedWriteOpportunity(opportunityId,{monetaryValue:value})
     if(!['price','baseline','commission'].includes(field)) throw Error('field not authorized')
     const defs=await verifiedBoundedRead(ghlOppFields),write=oppFieldWrite(GHL_OPP_FIELD_IDS[field],value,defs)
@@ -4555,6 +4559,57 @@ app.post('/api/arcsite/verified-sheet-reconcile',async(req,res)=>{
   try{await verifiedLoadPrivatePolicy()}catch{return res.status(409).json(err('owner-private reviewed scope unavailable or unconfigured'))}
   verifiedSheetRun().catch(()=>{})
   res.status(202).json({ok:true,started:true,dry:true,result:'GET /api/arcsite/verified-sheet-reconcile'})
+})
+
+// Explicit one-shot entry point; never enables AUTO or accepts write plans.
+// INSERT-only app_settings keys are durable replay barriers, not credentials.
+const VERIFIED_BATCH_PREFIX='verified_sheet_batch_'
+async function verifiedBatchStore(method,pathname,body){
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),25000)
+  try{
+    const response=await fetch(SUPABASE_URL+pathname,{method,headers:{...jsonHeaders,Prefer:'return=representation'},body:JSON.stringify(body),signal:controller.signal,redirect:'manual'})
+    if(response.status===409)return null
+    if(!response.ok)throw Error('batch store unavailable')
+    return await response.json()
+  }finally{clearTimeout(timer)}
+}
+const verifiedBatchStart=createVerifiedBatch({
+  env:process.env,
+  acquire:()=>{if(verifiedRunBusy)return false;verifiedRunBusy=true;verifiedBatchActive=true;return true},
+  release:()=>{verifiedBatchActive=false;verifiedRunBusy=false},
+  loadPolicy:verifiedLoadPrivatePolicy,
+  claim:async(batchId,approvals)=>{
+    const at=new Date().toISOString()
+    const rows=[{key:VERIFIED_BATCH_PREFIX+batchId,value:{batchId,state:'claimed',at,approvedPlanHashes:approvals}},...approvals.map(planHash=>({key:'verified_sheet_consumed_'+planHash,value:{batchId,planHash,at}}))]
+    // One PostgREST INSERT transaction: uniqueness conflict rejects ALL rows.
+    // No on_conflict, upsert, merge preference, or automatic retry.
+    const inserted=await verifiedBatchStore('POST','/rest/v1/app_settings',rows)
+    if(inserted===null)return false
+    if(!Array.isArray(inserted)||inserted.length!==rows.length||rows.some(expected=>!inserted.some(actual=>actual.key===expected.key && isDeepStrictEqual(actual.value,expected.value))))throw Error('claim read-back mismatch')
+    return true
+  },
+  run:async(policy,approvedPlanHashes)=>{
+    Object.assign(verifiedSheetPolicy,policy)
+    return verifiedSheetRuntime.run({enabled:true,approvedPlanHashes})
+  },
+  finish:async(batchId,outcome)=>{
+    const value={batchId,...outcome,finishedAt:new Date().toISOString(),processGuardReset:'scheduled in finally; verify external guards separately',persistedGuardReset:'operator must verify Railway guards OFF'}
+    const rows=await verifiedBatchStore('PATCH',`/rest/v1/app_settings?key=eq.${VERIFIED_BATCH_PREFIX+batchId}`,{value})
+    if(!Array.isArray(rows)||rows.length!==1||rows[0].value?.batchId!==batchId||rows[0].value?.state!==outcome.state)throw Error('batch result unavailable')
+  },
+})
+app.post('/api/arcsite/verified-sheet-reconcile/batch',async(req,res)=>{
+  const result=await verifiedBatchStart({authorized:analystAuthorized(req)==='jarvis',body:req.body,query:req.query})
+  res.status(result.status).json(result.body)
+})
+app.get('/api/arcsite/verified-sheet-reconcile/batch/:batchId',async(req,res)=>{
+  if(analystAuthorized(req)!=='jarvis')return res.status(401).json(err('Unauthorized'))
+  if(!/^[a-f0-9]{64}$/.test(req.params.batchId))return res.status(400).json(err('invalid batch identity'))
+  try{
+    const rows=await verifiedBoundedRead(()=>restGet(`/rest/v1/app_settings?key=eq.${VERIFIED_BATCH_PREFIX+req.params.batchId}&select=value`))
+    if(!rows?.[0]?.value)return res.status(404).json(err('batch not found'))
+    res.json({ok:true,...rows[0].value})
+  }catch{return res.status(503).json(err('batch status unavailable'))}
 })
 
 // The daily contract audit by hand (POST, takes a few minutes; body
