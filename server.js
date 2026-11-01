@@ -19,6 +19,7 @@ import { isDeepStrictEqual } from 'node:util'
 import express from 'express'
 import { createVerifiedSheetRuntime } from './lib/verified-sheet-runtime.mjs'
 import { createVerifiedBatch, batchGuards } from './lib/verified-sheet-batch.mjs'
+import { createVerifiedRetry, retryRequestValid } from './lib/verified-sheet-retry.mjs'
 import { validatePrivatePolicy } from './lib/verified-sheet-policy.mjs'
 import { parseSignedPdfText } from './lib/parse-signed-pdf.mjs'
 import { readVerifiedSheetSnapshot } from './lib/verified-sheet-snapshot.mjs'
@@ -4610,6 +4611,75 @@ app.get('/api/arcsite/verified-sheet-reconcile/batch/:batchId',async(req,res)=>{
     if(!rows?.[0]?.value)return res.status(404).json(err('batch not found'))
     res.json({ok:true,...rows[0].value})
   }catch{return res.status(503).json(err('batch status unavailable'))}
+})
+
+// Owner-reviewed continuation for ONLY terminal stale jobs with zero attempts.
+// Separate permit storage never changes the original policy/source/plan hashes.
+const VERIFIED_RETRY_PREFIX='verified_sheet_retry_'
+async function verifiedPrivateValue(key){
+  const rows=await verifiedBoundedRead(()=>restGet(`/rest/v1/app_settings?key=eq.${encodeURIComponent(key)}&select=value`))
+  return rows?.[0]?.value||null
+}
+async function verifiedInsertClaim(key,value){
+  const rows=await verifiedBatchStore('POST','/rest/v1/app_settings',[{key,value}])
+  if(rows===null)return false
+  if(!Array.isArray(rows)||rows.length!==1||rows[0].key!==key||!isDeepStrictEqual(rows[0].value,value))throw Error('claim read-back mismatch')
+  return true
+}
+const verifiedRetry=createVerifiedRetry({
+  env:process.env,
+  acquire:()=>{if(verifiedRunBusy)return false;verifiedRunBusy=true;verifiedBatchActive=true;return true},
+  release:()=>{verifiedBatchActive=false;verifiedRunBusy=false},
+  loadConfig:()=>verifiedPrivateValue('verified_sheet_retry_permit'),
+  loadParent:batchId=>verifiedPrivateValue(VERIFIED_BATCH_PREFIX+batchId),
+  loadPolicy:verifiedLoadPrivatePolicy,
+  loadConsumed:planHash=>verifiedPrivateValue('verified_sheet_consumed_'+planHash),
+  claimReceipt:(retryId,binding)=>verifiedInsertClaim(VERIFIED_RETRY_PREFIX+retryId,{retryId,state:'claimed',at:new Date().toISOString(),binding}),
+  claimPlan:(retryId,entry)=>verifiedInsertClaim('verified_sheet_retry_consumed_'+entry.planHash,{retryId,planHash:entry.planHash,projectId:entry.projectId,opportunityId:entry.opportunityId,at:new Date().toISOString()}),
+  run:async(policy,options)=>{
+    Object.assign(verifiedSheetPolicy,policy)
+    return verifiedSheetRuntime.run(options)
+  },
+  finish:async(retryId,outcome)=>{
+    const value={retryId,...outcome,finishedAt:new Date().toISOString(),processGuardReset:'scheduled in finally; verify external guards separately',persistedGuardReset:'operator must verify Railway guards OFF'}
+    const rows=await verifiedBatchStore('PATCH',`/rest/v1/app_settings?key=eq.${VERIFIED_RETRY_PREFIX+retryId}`,{value})
+    if(!Array.isArray(rows)||rows.length!==1||rows[0].value?.retryId!==retryId||rows[0].value?.state!==outcome.state)throw Error('retry result unavailable')
+  },
+})
+// Preview persists findings only. Each job gets a separate real fresh generation;
+// the five-minute TTL and per-field prewrite checks are not extended or relabeled.
+app.post('/api/arcsite/verified-sheet-reconcile/retry-preview',async(req,res)=>{
+  if(analystAuthorized(req)!=='jarvis')return res.status(401).json(err('Unauthorized'))
+  if(!retryRequestValid({body:req.body,query:req.query}))return res.status(400).json(err('preview accepts no parameters'))
+  if(verifiedRunBusy)return res.status(409).json(err('verified reconciliation already running'))
+  const requestId=crypto.randomUUID(),key=VERIFIED_RETRY_PREFIX+'preview_'+requestId
+  const operation=verifiedRetry.preview({authorized:true,body:req.body,query:req.query})
+  operation.then(async result=>{
+    const saved=await verifiedInsertClaim(key,{requestId,state:'finished',finishedAt:new Date().toISOString(),result})
+    if(!saved)throw Error('preview receipt collision')
+  }).catch(()=>{})
+  res.status(202).json({ok:true,started:true,dry:true,requestId,statusPath:`/api/arcsite/verified-sheet-reconcile/retry-preview/${requestId}`})
+})
+app.get('/api/arcsite/verified-sheet-reconcile/retry-preview/:requestId',async(req,res)=>{
+  if(analystAuthorized(req)!=='jarvis')return res.status(401).json(err('Unauthorized'))
+  if(!/^[a-f0-9-]{36}$/.test(req.params.requestId))return res.status(400).json(err('invalid preview identity'))
+  try{
+    const value=await verifiedPrivateValue(VERIFIED_RETRY_PREFIX+'preview_'+req.params.requestId)
+    res.json(value?{ok:true,...value}:{ok:false,state:'not recorded',meaning:'pending or unavailable; not evidence of completion'})
+  }catch{return res.status(503).json(err('preview unavailable'))}
+})
+app.post('/api/arcsite/verified-sheet-reconcile/retry',async(req,res)=>{
+  const result=await verifiedRetry.start({authorized:analystAuthorized(req)==='jarvis',body:req.body,query:req.query})
+  res.status(result.status).json(result.body)
+})
+app.get('/api/arcsite/verified-sheet-reconcile/retry/:retryId',async(req,res)=>{
+  if(analystAuthorized(req)!=='jarvis')return res.status(401).json(err('Unauthorized'))
+  if(!/^[a-f0-9]{64}$/.test(req.params.retryId))return res.status(400).json(err('invalid retry identity'))
+  try{
+    const value=await verifiedPrivateValue(VERIFIED_RETRY_PREFIX+req.params.retryId)
+    if(!value)return res.status(404).json(err('retry not found'))
+    res.json({ok:true,...value})
+  }catch{return res.status(503).json(err('retry status unavailable'))}
 })
 
 // The daily contract audit by hand (POST, takes a few minutes; body
