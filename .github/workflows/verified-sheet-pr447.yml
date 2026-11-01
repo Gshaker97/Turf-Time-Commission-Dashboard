@@ -1,15 +1,15 @@
-name: Verify guarded Sheet reconciliation (one-shot batch regression)
+name: Verify guarded Sheet reconciliation (raw-body batch regression)
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 permissions:
   contents: read
 concurrency:
-  group: verified-sheet-batch-${{ github.event.pull_request.number }}
+  group: verified-sheet-body-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
   validate:
-    if: github.head_ref == 'jarvis/verified-sheet-one-shot-batch'
+    if: github.head_ref == 'jarvis/verified-sheet-batch-raw-body'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -33,6 +33,7 @@ jobs:
       - name: Guarded reconciliation tests and actual PDF parser fixture
         env:
           RUN_PDF_PARSE_INTEGRATION: '1'
+          RUN_SERVER_HTTP_INTEGRATION: '1'
         run: node --test test/*.test.mjs
       - name: Server syntax only (never start it)
         run: node --check server.js
