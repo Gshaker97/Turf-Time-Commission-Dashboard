@@ -115,3 +115,9 @@ test('PUT boundary rechecks guards after any asynchronous schema lookup',()=>{
   assert.match(claim,/isDeepStrictEqual\(actual\.value,expected\.value\)/)
   assert.doesNotMatch(claim,/JSON\.stringify\(actual\.value\)/)
 })
+test('raw text middleware JSON bodies decode once and only empty objects pass',async()=>{
+  for(const body of ['{}',' \n { } \t']){const f=fixture();assert.equal((await complete(f,{...request,body})).status,202);assert.equal(f.calls.claims,1)}
+  for(const body of ['{','null','[]','[{}]','"{}"','true','1','{"hashes":[]}','{"scope":{}}','{"values":{}}','{"nested":{"hashes":[]}}','   ',null]){
+    const f=fixture(),r=await complete(f,{...request,body});assert.equal(r.status,400,String(body));assert.equal(f.calls.claims,0);assert.equal(f.calls.runs,0);assert.equal(f.calls.releases,0)
+  }
+})
