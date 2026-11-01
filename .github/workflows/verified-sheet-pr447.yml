@@ -1,15 +1,15 @@
-name: Verify guarded Sheet reconciliation (bounded continuation regression)
+name: Verify guarded Sheet reconciliation (bounded daily synchronization)
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 permissions:
   contents: read
 concurrency:
-  group: verified-sheet-retry-${{ github.event.pull_request.number }}
+  group: verified-sheet-daily-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
   validate:
-    if: github.head_ref == 'jarvis/verified-sheet-unwritten-continuation'
+    if: github.head_ref == 'jarvis/verified-sheet-daily-sync'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
