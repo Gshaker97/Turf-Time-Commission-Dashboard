@@ -56,8 +56,18 @@ const SCH_FINALIZED_STATUS = 'Pay Finalized';  // auto-advances to Paid once its
 const SCH_PAID_STATUS      = 'Paid';
 const SCH_BASELINE_PROP   = 'SCHED_BASELINE_IDS';
 // Version stamp — reported in the heartbeat and shown on Admin → System
-// Health, so a stale/botched paste is visible at a glance. Bump when editing.
-const SCH_VERSION         = '2026-10-13';
+// Health, so a stale/botched paste is visible at a glance. BUMP IT ON EVERY
+// BEHAVIOUR CHANGE, without exception.
+//
+// It went unbumped from 2026-10-13 through several real changes — the
+// Project-ID matcher, the duplicate warning, and the one that matters here:
+// an unresolved Sales Rep no longer blocking the import. The deployed script
+// and this file then reported the SAME version while behaving differently,
+// so System Health could not tell anyone the paste was overdue, and a real
+// sale (Richard Burkey, Andrew Sipila) was dropped with nothing to show why.
+// A stamp that does not move when behaviour moves is worse than none — it
+// reads as confirmation that the deploy is current.
+const SCH_VERSION         = '2026-11-04';
 // SAFETY: preview mode (logs what it WOULD do, writes nothing) now lives in
 // SCRIPT PROPERTIES, not code — so re-pasting this file can never silently
 // disable the sync again. To preview: Project Settings → Script Properties →
