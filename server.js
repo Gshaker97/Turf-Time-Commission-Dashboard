@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util'
+import { createMonitor, collectWebsiteRequests, buildReport } from './lib/website-lead-monitor.mjs'
 /**
  * Turf Time dashboard server — serves the built SPA and hosts the user-admin
  * API, so the site is completely standalone (no Apps Script in the critical
@@ -3013,6 +3014,39 @@ function analystAuthorized(req) {
   if (DASHBOARD_READ_KEY && supplied === DASHBOARD_READ_KEY) return 'dashboard'
   return false
 }
+// Private, read-only website request monitor. No timers, writes, new credentials,
+// caller-supplied URLs or refresh parameters. A single bounded read is shared.
+async function websiteMonitorJSON(url, headers, signal) {
+  const resp = await fetch(url, {method:'GET',headers,redirect:'manual',signal:AbortSignal.any([signal,AbortSignal.timeout(8000)])})
+  if (!resp.ok) throw Error('monitor_upstream_http_' + resp.status)
+  const reader = resp.body?.getReader()
+  if (!reader) throw Error('monitor_body_missing')
+  const chunks=[]; let size=0
+  try { for (;;) { const {done,value}=await reader.read(); if(done)break; size+=value.byteLength; if(size>8*1024*1024)throw Error('monitor_response_limit');chunks.push(value) } }
+  finally { await reader.cancel().catch(()=>{}) }
+  const bytes=new Uint8Array(size); let offset=0
+  for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length}
+  return JSON.parse(new TextDecoder().decode(bytes))
+}
+const websiteLeadMonitor = createMonitor({load:async()=>{
+  if(!GHL_API_TOKEN||!CALENDAR_SYNC_URL||!CALENDAR_EXPORT_KEY)throw Error('monitor_not_configured')
+  const signal=AbortSignal.timeout(120000)
+  const [website,calendar]=await Promise.all([
+    collectWebsiteRequests({locationId:GHL_LOCATION_ID,signal,getGhl:(path,s)=>websiteMonitorJSON(GHL_BASE+path,ghlHeaders(),s)}),
+    websiteMonitorJSON(CALENDAR_SYNC_URL+'/api/export/analyst?months=6&ahead=120',{Authorization:'Bearer '+CALENDAR_EXPORT_KEY,Accept:'application/json'},signal),
+  ])
+  return buildReport({...website,calendar})
+}})
+app.all('/api/analyst/website-lead-status', (req,res)=>{
+  res.set('Cache-Control','private, no-store').set('X-Content-Type-Options','nosniff')
+  if(analystAuthorized(req)!=='jarvis')return res.status(401).json({ok:false,error:'Unauthorized'})
+  if(req.method!=='GET')return res.status(405).set('Allow','GET').json({ok:false,error:'GET required'})
+  if(Object.keys(req.query).length)return res.status(400).json({ok:false,error:'No parameters supported'})
+  const result=websiteLeadMonitor.read()
+  if(result.status===202)res.set('Retry-After','10')
+  return res.status(result.status).json(result.body)
+})
+
 async function calendarExport(path) {
   if (!CALENDAR_SYNC_URL || !CALENDAR_EXPORT_KEY) throw new Error('calendar export not configured')
   const resp = await fetch(`${CALENDAR_SYNC_URL}${path}`, { headers: { Authorization: `Bearer ${CALENDAR_EXPORT_KEY}`, Accept: 'application/json' } })
