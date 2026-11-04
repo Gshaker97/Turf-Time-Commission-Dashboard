@@ -46,10 +46,12 @@ anonymous access is rejected by Sites dispatch, commission rejects anonymous and
 dashboard-only callers, and baseline leads are ineligible. Partial/stale/failed or
 ambiguous states suppress notifications. Scheduling/delivery is separate work.
 
-## Prepared rolling-window repair (not yet deployed)
+## Deployed rolling-window coverage repair
 
 A rolling six-month export must not be required to reach the fixed launch date
-forever. The prepared change validates the current export window globally, then
+forever. Commit `a2c1715e1cbe381e23e8deafe9a3d25bcc3fdfb0` was deployed
+successfully on November 4, 2026 (verified at 19:20 UTC). The change validates
+the current export window globally, then
 checks each grouped request separately. Only requests whose earliest submission
 is within that window can yield an absence conclusion; older requests return
 `source_incomplete / submission_precedes_calendar_window`. They do not suppress
