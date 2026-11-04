@@ -48,7 +48,7 @@ test('stable contact/opportunity IDs preferred when exported, email also support
  for(const fields of [{contactId:'c1'},{ghlOpportunityId:'opp1'},{customerEmail:'alex@example.test'}])assert.equal(report([r],[appt({customerName:null,customerAddress:null,customerPhone:null,...fields})]).leads[0].status,'scheduled')
 })
 test('source partial, stale, incomplete window, invalid entries suppress all missing conclusions',()=>{
- for(const c of [{...calendar([]),partial:true},{...calendar([]),generatedAt:'2026-11-03T00:00:00Z'},{...calendar([]),window:{from:'2026-11-01',appointmentsTo:'2027-03-04',ahead:120}},calendar([appt({startAt:'bad'})])]){
+ for(const c of [{...calendar([]),partial:true},{...calendar([]),generatedAt:'2026-11-03T00:00:00Z'},{...calendar([]),window:{from:'2027-01-01',appointmentsTo:'2027-03-04',ahead:120}},calendar([appt({startAt:'bad'})])]){
   const d=report([request()],[],{calendar:c});assert.equal(d.ok,false);assert.equal(d.leads[0].status,'source_incomplete');assert.deepEqual(d.notificationCandidates,[])
  }
  assert.equal(report([request()],[],{coverage:{complete:false,errors:['missing_page']}}).leads[0].notifyEligible,false)
@@ -103,4 +103,19 @@ test('locality-free submission cannot bridge conflicting projects',()=>{
 test('one identity-only booking cannot satisfy multiple distinct projects',()=>{
  const r=request(),other=parseRequest({...note(),body:note().body.replace('123 E Main Street','456 S Other Road')},'c1','loc1')
  const d=report([r,other],[appt({customerAddress:null})]);assert.equal(d.leads.length,2);assert.ok(d.leads.every(r=>r.status==='review_needed'))
+})
+
+test('rolling calendar does not disable new leads after launch leaves the six-month window',()=>{
+ const futureNow=Date.parse('2027-05-01T18:00:00Z'),fresh={...request(),contactId:'fresh',phone:'+14805550998',email:'fresh@example.test',submittedAt:'2027-04-30T18:00:00Z'}
+ const c={generatedAt:new Date(futureNow).toISOString(),window:{from:'2026-11-01',appointmentsTo:'2027-08-29',ahead:120,months:6},summary:{appointments:0,upcoming:0},appointments:[]}
+ const d=report([fresh],[],{now:futureNow,calendar:c});assert.equal(d.ok,true);assert.equal(d.leads[0].calendarRangeCovered,true);assert.equal(d.leads[0].status,'missing_after_12h');assert.equal(d.notificationCandidates.length,1)
+})
+test('old uncovered lead is held individually without suppressing covered new leads',()=>{
+ const futureNow=Date.parse('2027-05-01T18:00:00Z'),fresh={...request(),contactId:'fresh',phone:'+14805550998',email:'fresh@example.test',submittedAt:'2027-04-30T18:00:00Z'},old={...request(),submittedAt:'2026-10-31T18:00:00Z'}
+ const c={generatedAt:new Date(futureNow).toISOString(),window:{from:'2026-11-01',appointmentsTo:'2027-08-29',ahead:120,months:6},summary:{appointments:0,upcoming:0},appointments:[]}
+ const d=report([old,fresh],[],{now:futureNow,calendar:c});assert.equal(d.ok,true);assert.equal(d.leads.find(r=>r.contactId==='c1').status,'source_incomplete');assert.equal(d.leads.find(r=>r.contactId==='c1').reason,'submission_precedes_calendar_window');assert.equal(d.leads.find(r=>r.contactId==='fresh').notifyEligible,true);assert.equal(d.notificationCandidates.length,1)
+})
+test('repeat request after prior completed visit remains episode-ambiguous in current semantics',()=>{
+ const original=request(),repeat={...original,submittedAt:'2026-11-04T17:00:00Z'}
+ const d=report([original,repeat],[appt({startAt:'2026-11-03T18:00:00Z',status:'CLOSED'})]);assert.equal(d.leads.length,1);assert.equal(d.leads[0].submittedAt,original.submittedAt);assert.equal(d.leads[0].status,'scheduled');assert.equal(d.leads[0].notifyEligible,false)
 })

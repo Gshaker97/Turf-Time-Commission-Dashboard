@@ -45,3 +45,21 @@ equality, fresh timestamps and the required future window. Independently verify
 anonymous access is rejected by Sites dispatch, commission rejects anonymous and
 dashboard-only callers, and baseline leads are ineligible. Partial/stale/failed or
 ambiguous states suppress notifications. Scheduling/delivery is separate work.
+
+## Prepared rolling-window repair (not yet deployed)
+
+A rolling six-month export must not be required to reach the fixed launch date
+forever. The prepared change validates the current export window globally, then
+checks each grouped request separately. Only requests whose earliest submission
+is within that window can yield an absence conclusion; older requests return
+`source_incomplete / submission_precedes_calendar_window`. They do not suppress
+covered new leads. Existing future-window, summary-count, freshness and failure
+checks remain unchanged. Overall `complete` means the current source/window reads
+are complete; `calendarRangeCovered` separately records each request’s coverage.
+
+Separate unresolved semantics: a later same-property request after a completed
+visit/job currently remains grouped with the earliest request and may be marked
+scheduled by the earlier visit. A completed estimator appointment alone is not
+proof that the installation/project ended. Do not infer new episodes from elapsed
+time or reset the grace clock automatically. A policy decision is needed about
+what explicit event or evidence starts a new same-property request episode.
