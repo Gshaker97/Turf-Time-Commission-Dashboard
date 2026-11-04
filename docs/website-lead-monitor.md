@@ -63,3 +63,111 @@ scheduled by the earlier visit. A completed estimator appointment alone is not
 proof that the installation/project ended. Do not infer new episodes from elapsed
 time or reset the grace clock automatically. A policy decision is needed about
 what explicit event or evidence starts a new same-property request episode.
+
+## Durable delivery ledger — prepared contract, NOT deployed as of November 4
+
+The reader is live at private Jarvis v50. The delivery ledger described below is
+implemented and tested locally but must not be used by a scheduled sender until
+its migration and route are published and an independent cloud read verifies it.
+This guide contains no access token. The ledger uses the existing Site DB and
+stores internal delivery coordination, never customer leads/bookings/messages.
+
+### Existing access and safe checks
+
+A cloud run may call native Sites `get_site` for project
+`appgprj_6ae223c12d6081919d8fb7114fc003b3`, verify its owner-only access policy,
+and use its already existing `siwc_bypass_bearer_token` only as
+`OAI-Sites-Authorization: Bearer <token>` toward
+`https://jarvis-weekly-hq.gshaker97.chatgpt.site`. Keep the value in memory or
+protected stdin; never log/save it, put it in command arguments or task prompts,
+follow a redirect with it, generate another token, or impersonate visitor identity.
+This service token is distinct from a short-lived Git source-write credential;
+source-write access is not required by a scheduled consumer. A changed/private
+access boundary must halt execution, not prompt a sharing/permission change.
+
+After deployment, safe verification is `GET /api/website-lead-delivery` with no
+parameters. It returns schemaVersion 1, status ready, readOnly true,
+automaticReclaim false and sendGranted false. It reads only schema availability
+and does not reserve, finalize or send anything. Anonymous and nonowner callers
+must remain denied. Never reserve or mark a real lead accepted merely for a test.
+
+### Ledger API
+
+`POST /api/website-lead-delivery`, Content-Type application/json, no URL parameters,
+maximum 4096 body bytes. All responses carry scope `website-lead-delivery-v1`,
+`Cache-Control: private, no-store`, and `sendGranted: false` unless a first atomic
+`begin` transition succeeds. No SQL, owner identifier, message body, recipient,
+phone, email, address or arbitrary customer payload is accepted.
+
+Common request:
+
+```json
+{
+  "op": "claim",
+  "selector": {
+    "noticeKey": "website-estimate-v1:<64 lowercase hex characters>",
+    "contactId": "<original contactId from feed>",
+    "noteId": "<original noteId from feed>"
+  },
+  "attemptId": "<stable unique run/attempt ID: 20-100 letters, digits, _ or ->"
+}
+```
+
+Persist the attempt ID in the cloud run's durable context before claiming. Use
+only fields from the authoritative `GET /api/website-lead-status` response. `claim`
+and `begin` independently re-read that current complete feed and require exactly
+one matching eligible row, non-baseline, covered calendar range, matching
+notificationCandidates and source age at most five minutes. Partial/stale,
+pending or failed sources cannot produce send permission.
+
+Operations use the common selector/attempt fields:
+
+- `claim`: atomic original-contact/note reservation. First acquisition returns
+  201, acquired true, state reserved, sendGranted false. Concurrent requests and
+  retries return acquired false and existing reservation state. A changed parser
+  noticeKey cannot bypass the retained original contact/note identity. The original
+  submitted time and noticeKey remain stored. A different owner attempt is blocked.
+- `begin`: atomic reserved -> sending, after fresh eligibility validation. Exactly
+  one successful call returns 200 and sendGranted true. Only that response permits
+  ONE owner-directed phone send. All replays/concurrent calls return 409 and false.
+  Do not send customer contacts messages; recipient resolution/delivery to the
+  requesting owner is the consumer's separate authorized responsibility.
+- `status`: returns only this original reservation's state, original identifiers,
+  stored noticeKey, ownership, send-start timestamp and accepted receipt if present.
+  No fresh eligibility is required, allowing reconciliation after a lead is booked.
+- `finalize`: requires an additional receipt object
+  `{"provider":"messages","messageId":"<actual accepted provider ID>","acceptedAt":"<ISO timestamp>"}`.
+  Only sending/uncertain can become accepted. Receipt IDs are unique. An identical
+  receipt replay succeeds idempotently; a different receipt conflicts. Store only
+  the positive receipt actually returned by the Messages send or recovered from
+  actual message history. The ledger records provider acceptance, not delivery,
+  and does not independently query/validate Messages history or destination.
+- `mark_uncertain`: sending -> uncertain; never a fresh send permission. Use after
+  an ambiguous phone-send outcome. An actual positive history receipt may later
+  finalize it. Missing history alone is not proof of non-execution.
+- `cancel_before_send`: reserved -> confirmed_not_sent only. The atomic reserved
+  state proves no begin/send permission was issued. The same attempt cannot
+  reacquire; a distinct attempt may claim again only if the current feed remains
+  eligible. A racing begin either wins and blocks cancellation, or cancellation
+  wins and blocks the old sender. Sending/uncertain/accepted cannot be released.
+
+Status codes: 200 existing state/success; 201 first claim; 400 malformed or
+unsupported body/query; 403 nonowner/partial visitor identity; 404 missing
+reservation; 405 unsupported method; 409 ineligible/ownership/state/receipt
+conflict; 503 unavailable source/storage or uncertain storage outcome. A 503,
+transport timeout or lost response NEVER authorizes sending. Keep the same attempt
+ID and inspect status; never blindly retry a phone send. Reader 202 may be polled
+as documented above before claiming, but does not grant delivery permission.
+
+### At-most-once tradeoff and reconciliation
+
+D1 and phone delivery have no shared transaction. This design favors suppressing a
+possible duplicate over retrying an uncertain send: lost begin responses or a
+crash after permission may leave an alert unsent. Reservations never expire or
+release on a timer. A delayed original sender must not race a replacement sender.
+Only proven pre-begin cancellation can be automatically reused. Even a claimed
+post-begin provider rejection cannot be released through this API; actual outcome
+reconciliation is required. An eventually consistent history search showing no
+message is insufficient. There is intentionally no automatic post-begin release
+or arbitrary admin/SQL endpoint. If actual history establishes a positive receipt,
+finalize; otherwise retain the block and escalate for controlled reconciliation.
