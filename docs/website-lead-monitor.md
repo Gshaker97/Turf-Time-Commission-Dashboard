@@ -66,11 +66,23 @@ proof that the installation/project ended. Do not infer new episodes from elapse
 time or reset the grace clock automatically. A policy decision is needed about
 what explicit event or evidence starts a new same-property request episode.
 
-## Durable delivery ledger — prepared contract, NOT deployed as of November 4
+## Deployed durable delivery ledger and consumer contract
 
-The reader is live at private Jarvis v50. The delivery ledger described below is
-implemented and tested locally but must not be used by a scheduled sender until
-its migration and route are published and an independent cloud read verifies it.
+The reader proxy was introduced in private Jarvis v50. The delivery ledger and
+its schema-only migration are deployed in **Jarvis v51**, source commit
+`720f40a9240489642a55443522493022dc8a5d5e`, deployment
+`appgdep_6aeb89fa63108191886c901be327148d`, saved version
+`appgprj_6ae223c12d6081919d8fb7114fc003b3~appgver_f2b2bac09abc8191a6365418b18eb1d9`.
+Publication succeeded November 4, 2026 at 19:39:47 UTC. Owner-only access and the
+existing DB binding are unchanged. Tests: 156 passed, including 13 ledger tests
+with separate SQLite worker concurrency; independent review and build passed.
+
+Production metadata-only verification returned 200 ready, readOnly true,
+sendGranted false and automaticReclaim false. Anonymous access returned 401,
+query parameters 400, and DELETE 405. No real eligible notice was claimed, begun,
+finalized or sent. A fresh independent cloud readiness check is still required
+before scheduling. No automation was created.
+
 This guide contains no access token. The ledger uses the existing Site DB and
 stores internal delivery coordination, never customer leads/bookings/messages.
 
@@ -87,7 +99,7 @@ This service token is distinct from a short-lived Git source-write credential;
 source-write access is not required by a scheduled consumer. A changed/private
 access boundary must halt execution, not prompt a sharing/permission change.
 
-After deployment, safe verification is `GET /api/website-lead-delivery` with no
+Safe production verification is `GET /api/website-lead-delivery` with no
 parameters. It returns schemaVersion 1, status ready, readOnly true,
 automaticReclaim false and sendGranted false. It reads only schema availability
 and does not reserve, finalize or send anything. Anonymous and nonowner callers
