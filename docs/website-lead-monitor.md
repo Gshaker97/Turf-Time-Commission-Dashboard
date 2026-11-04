@@ -80,8 +80,10 @@ with separate SQLite worker concurrency; independent review and build passed.
 Production metadata-only verification returned 200 ready, readOnly true,
 sendGranted false and automaticReclaim false. Anonymous access returned 401,
 query parameters 400, and DELETE 405. No real eligible notice was claimed, begun,
-finalized or sent. A fresh independent cloud readiness check is still required
-before scheduling. No automation was created.
+finalized or sent. Independent cloud readiness verification completed at **2026-11-04T19:42:53Z**:
+ledger ready/readOnly true/sendGranted false; the reader covered all **2,232
+contacts**, **13 candidate-note reads** and **750 appointments**. No notice was
+claimed and no message was sent. No automation was created by this implementation.
 
 This guide contains no access token. The ledger uses the existing Site DB and
 stores internal delivery coordination, never customer leads/bookings/messages.
@@ -123,13 +125,18 @@ Common request:
     "contactId": "<original contactId from feed>",
     "noteId": "<original noteId from feed>"
   },
-  "attemptId": "<stable unique run/attempt ID: 20-100 letters, digits, _ or ->"
+  "attemptId": "website-lead-v1-<lowercase SHA256(contactId + | + noteId)>"
 }
 ```
 
-Persist the attempt ID in the cloud run's durable context before claiming. Use
-only fields from the authoritative `GET /api/website-lead-status` response. `claim`
-and `begin` independently re-read that current complete feed and require exactly
+For the supported scheduled consumer, compute the exact same attempt ID on every
+run: `website-lead-v1-` plus the lowercase hexadecimal SHA-256 digest of the exact
+UTF-8 string `contactId + "|" + noteId`. This is 79 characters. Do not trim or change
+case, and never include execution time, run ID or parser-dependent noticeKey.
+The immutable original identifiers make ownership recoverable without relying on
+transient execution context. Use only fields from the authoritative
+`GET /api/website-lead-status` response. `claim` and `begin` independently re-read
+that current complete feed and require exactly
 one matching eligible row, non-baseline, covered calendar range, matching
 notificationCandidates and source age at most five minutes. Partial/stale,
 pending or failed sources cannot produce send permission.
@@ -172,6 +179,29 @@ conflict; 503 unavailable source/storage or uncertain storage outcome. A 503,
 transport timeout or lost response NEVER authorizes sending. Keep the same attempt
 ID and inspect status; never blindly retry a phone send. Reader 202 may be polled
 as documented above before claiming, but does not grant delivery permission.
+
+### Supported scheduled recovery behavior
+
+Use the deterministic original-submission attempt ID above on every status,
+claim, begin and finalize request. Never automatically call cancel_before_send,
+reclaim a reservation, or derive a replacement attempt generation.
+
+- `reserved` with owned true: may call begin with the same deterministic ID.
+  Only a response with sendGranted true permits one phone send. Concurrent or
+  replayed begin calls cannot grant another permission.
+- `sending` or `uncertain`: never resend. Inspect actual message history; only a
+  positive accepted receipt can finalize. Missing/eventually consistent history
+  is not proof of non-execution.
+- `accepted`: suppress the notice.
+- `confirmed_not_sent` or `blocked_other_attempt`: escalate for controlled
+  reconciliation; do not cancel, reclaim, substitute another ID or send.
+- Lost responses, storage/source errors or any unexpected state: no send
+  permission. Retry status with the same ID and preserve uncertainty.
+
+The generic API's optional cancel_before_send operation is retained for controlled
+pre-send cancellation only; it is NOT part of the supported unattended consumer.
+A new attempt after cancellation requires separate durable coordination and is
+never selected automatically by the scheduled prompt.
 
 ### At-most-once tradeoff and reconciliation
 
