@@ -350,6 +350,19 @@ setup + deploy steps.
   param would have created an overload PostgREST cannot choose between), so
   moving a TEAM LEAD dissolves their team in the same action;
   see "Moving people between teams" below;
+  `060` drops NOT NULL from `deals.setter_id` — **a sold job must import even
+  when the sheet's Sales Rep matches nobody on the roster.** ScheduleSync had
+  imported an unresolved rep since Oct 2026 and every layer of the app was
+  ready for it (`saleOwnerId` falls back to the closer then null, team
+  breakdowns carry an Unassigned bucket, Payroll renders an unpayable share
+  as amber "Unassigned", and `needsReview.js` holds the deal in Needs review
+  on `if (!deal.setter_id)`), but 001's NOT NULL rejected the INSERT on every
+  run — once a minute, visible only as `out.errors++` in the Apps Script log.
+  Richard Burkey lost a day, Edward Grabowski over two months, silently. A
+  placeholder "Unassigned" PROFILE was rejected as the fix: it would put a
+  fake person on leaderboards, payroll and the commission engine and force
+  every consumer to special-case its id, which is what NULL already means.
+  `closer_id` has been nullable since 001; this only brings setter into line;
   `047` adds `competitions.excluded_ids` (jsonb
   array of profile ids) for the **Team Average (per rep)** competition type
   `team_avg` — entrants are TEAM HEADS (any `headIdSet` head, picked in the
