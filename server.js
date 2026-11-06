@@ -1777,16 +1777,47 @@ const GHL_PDF_FIELD = 'uluDL3vxcRVmeHSqpaj4'   // "Contract / PDF" (FILE_UPLOAD)
 // a visible failure list. `null` = text could not be read (never assumed
 // unsigned — a signature could be an image), reported as unverified.
 const ARC_SIGN_STAMP = /\d{4}-\d{2}-\d{2} \d{2}:\d{2} (AM|PM) UTC/
+// This used to call require('pdf-parse') directly. pdf-parse is CommonJS and
+// this file is ESM ("type": "module"), so that threw ReferenceError on EVERY
+// call and the catch below turned each one into PDF_UNVERIFIABLE — it never
+// worked once. The Nov 6 audit read "checked 187, ok 163, gaps 24, fixed 0,
+// failed 24" with all 24 failing on an unreadable render while the PDFs were
+// fine: four of them parse to 4,000+ characters with the stamp present.
+// lib/parse-signed-pdf.mjs is the adapter that already solved this for the
+// revision-evidence reader, and it also copies the buffer — bundled PDF.js
+// ignores byteOffset on a pooled Node Buffer, which is exactly what
+// Buffer.from(await res.arrayBuffer()) hands us.
+//
+// Why the reason is kept: without it a broken dependency, an expired link and
+// a scanned image are one indistinguishable "text unreadable", which is what
+// hid this for ten days.
+let pdfUnreadable = null
 async function pdfSigned(buf) {
+  pdfUnreadable = null
+  // A 200 that is not a PDF — an expired ArcSite link, a login page — must not
+  // be reported as a render whose TEXT could not be read. ghlHostPdf checks
+  // only dl.ok, so this is where that arrives.
+  if (!Buffer.isBuffer(buf) || buf.length < 5 || buf.subarray(0, 5).toString('latin1') !== '%PDF-') {
+    const head = Buffer.isBuffer(buf) ? JSON.stringify(buf.subarray(0, 24).toString('latin1')) : typeof buf
+    pdfUnreadable = `the download is not a PDF (${Buffer.isBuffer(buf) ? buf.length + ' bytes' : 'no buffer'}, starts ${head})`
+    return null
+  }
   try {
-    const pdfParse = require('pdf-parse')
-    const { text } = await pdfParse(buf, { max: 4 })
-    if (!text || text.trim().length < 50) return null
+    const text = await parseSignedPdfText(buf, { max: 4 })
+    if (!text || text.trim().length < 50) {
+      pdfUnreadable = `only ${text ? text.trim().length : 0} characters of text in the first 4 pages — a scanned or image-only render`
+      return null
+    }
     return ARC_SIGN_STAMP.test(text)
-  } catch { return null }
+  } catch (e) {
+    pdfUnreadable = (e && e.message) || String(e)
+    return null
+  }
 }
 const PDF_UNSIGNED = 'PDF_UNSIGNED', PDF_UNVERIFIABLE = 'PDF_UNVERIFIABLE'
-const pdfErr = code => { const e = new Error(code); e.code = code; return e }
+// `detail` carries WHY, never the code — isPdfErr matches on code/message, so
+// putting the reason in the message would break every one of those checks.
+const pdfErr = (code, detail) => { const e = new Error(code); e.code = code; if (detail) e.detail = detail; return e }
 const isPdfErr = (e, code) => !!e && (e.code === code || e.message === code)
 // requireSigned: 'strict' (default) throws PDF_UNSIGNED for an unsigned render and
 // PDF_UNVERIFIABLE when the text cannot be read — the caller must then decide, and
@@ -1799,7 +1830,7 @@ async function ghlHostPdf(pdfUrl, name, { requireSigned = true } = {}) {
   if (requireSigned) {
     const signed = await pdfSigned(buf)
     if (signed === false) throw pdfErr(PDF_UNSIGNED)
-    if (signed === null) throw pdfErr(PDF_UNVERIFIABLE)
+    if (signed === null) throw pdfErr(PDF_UNVERIFIABLE, pdfUnreadable)
   }
   const form = new FormData()
   form.append('file', new Blob([buf], { type: 'application/pdf' }), name)
@@ -1858,7 +1889,7 @@ async function arcPdfPendingTick() {
         if (isPdfErr(err, PDF_UNVERIFIABLE)) {
           // Unreadable text is not "signed": park it in the failure list as
           // UNVERIFIED so a human looks, instead of hosting it as verified.
-          failures.push({ ...e, tries: (e.tries || 0) + 1, failed_at: new Date().toISOString(), reason: 'PDF text unreadable — signature could not be verified (not hosted)' })
+          failures.push({ ...e, tries: (e.tries || 0) + 1, failed_at: new Date().toISOString(), reason: `signature could not be verified: ${err.detail || 'reason not recorded'} (not hosted)` })
         } else if (ageH >= ARC_PDF_RETRY_HOURS) failures.push({ ...e, tries: (e.tries || 0) + 1, failed_at: new Date().toISOString(), reason: unsigned ? `signed render never became available in ${ARC_PDF_RETRY_HOURS}h` : (err.message || 'error') })
         else keep.push({ ...e, tries: (e.tries || 0) + 1, last_error: unsigned ? 'still unsigned' : (err.message || 'error') })
       }
@@ -2311,7 +2342,10 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
       if (isPdfErr(e, PDF_UNVERIFIABLE)) {
         // A render whose text cannot be read: nothing is cleared or replaced,
         // and it is reported — never counted as a verified signed copy.
-        r.ok = false; r.pdf = 'skipped: a signed render could not be verified (PDF text unreadable) — existing attachments untouched'
+        // Name the reason. "PDF text unreadable" on all 24 jobs of the Nov 6
+        // run was a broken require, not a single unreadable render, and the
+        // message gave nobody a way to tell those apart.
+        r.ok = false; r.pdf = `skipped: a signed render could not be verified — ${e.detail || 'reason not recorded'} — existing attachments untouched`
       } else if (isPdfErr(e, PDF_UNSIGNED)) {
         // Newest render not signed yet: nothing is cleared or replaced; the
         // signed copy is appended by the retry queue when it appears.
@@ -2903,7 +2937,7 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
         try {
           const hosted = await ghlHostPdf(pdfUrl, `${custName} - contract (signature unverified).pdf`.replace(/[\/\\]/g, '-'), { requireSigned: false })
           if (hosted) { hostedUrl = hosted; await ghlUpdateOpp(oppId, { customFields: [{ id: GHL_PDF_FIELD, field_value: hosted }] }) }
-          pdf = 'uploaded — SIGNATURE UNVERIFIED (PDF text unreadable)'
+          pdf = `uploaded — SIGNATURE UNVERIFIED (${e.detail || 'reason not recorded'})`
         } catch (e2) { pdf = 'skipped: ' + (e2.message || 'upload failed') }
       } else pdf = 'skipped: ' + (e.message || 'upload failed')
     }
