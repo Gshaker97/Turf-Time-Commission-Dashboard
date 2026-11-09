@@ -1738,11 +1738,22 @@ export default function Payroll() {
                               <span className="text-white/70 truncate mr-2">
                                 {p.name}
                                 <span className="text-white/30"> · {p.selfGen ? 'Self-Gen' : p.role}</span>
-                                {/* The EFFECTIVE rate — amount ÷ baseline, so
-                                    override exclusions show as e.g. 2.7% not
-                                    3%. This is what the row's "3 · $389"
-                                    overrides column summarizes. */}
-                                {a.baseline > 0 && ['Manager', 'Director', 'VP'].includes(p.role) && (
+                                {/* amount ÷ baseline, for EVERY role (per
+                                    Keaton: "next to setter and closer, can we
+                                    add the % for the reps like you have next
+                                    to leadership"). One unit down the whole
+                                    list, and the same figure the pay statement
+                                    and the CSV export have always printed for
+                                    setter/closer — the card was the odd one
+                                    out. For mgmt it is the EFFECTIVE override
+                                    rate, so exclusions read e.g. 2.7% not 3%;
+                                    for a rep it is what they NET, so a deal
+                                    carrying a deduction reads lower than its
+                                    split would suggest. Deliberately NOT their
+                                    share of the rep pool — that is a % of a
+                                    different denominator and would sit one row
+                                    above a figure that means something else. */}
+                                {a.baseline > 0 && (
                                   <span className="text-white/25"> · {asPct(p.amount / a.baseline)}</span>
                                 )}
                               </span>

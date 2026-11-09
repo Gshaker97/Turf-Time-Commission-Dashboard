@@ -2013,9 +2013,22 @@ sat between the money and the payee list. Now:
    **Clicking anywhere on the row still expands it** (per Keaton) — only the
    NAME (opens the editor) and the action buttons stop propagation. The
    expanded card carries what the row can't: sale date, job price, rep pool,
-   pay date, payment method, every payee with their role and — for
-   manager/director/VP — the EFFECTIVE override rate (amount ÷ baseline, so
-   exclusions read 2.7% not 3%), the deduction breakdown, and Edit deal.
+   pay date, payment method, every payee with their role and **a % on EVERY
+   payee row — `amount ÷ baseline`, setter and closer included** (per Keaton:
+   "next to setter and closer, can we add the % for the reps like you have
+   next to leadership"). One unit down the whole list, and the same figure
+   the pay statement and the CSV export have always printed for setter/closer
+   — the card was the odd one out, showing it only for mgmt. For mgmt it is
+   the EFFECTIVE override rate, so exclusions read 2.7% not 3%; for a rep it
+   is what they NET, so a deal carrying a deduction reads lower than its split
+   would suggest. **Deliberately NOT the rep's share of the REP POOL** (the
+   50/50 split): that is a percentage of a different denominator, and printing
+   it one row above an override % would put two meanings in one column — the
+   same two-definitions-in-one-place trap the Dashboard merge exists to
+   prevent. On real deals both land in the same 2–5% range (a 7% markup split
+   50/50 = 3.5% each), so the column reads evenly; demo data's inflated
+   markups make a self-gen read 94%, which is arithmetically right and not a
+   bug. Also in the card: the deduction breakdown, and Edit deal.
    A "Show amounts" density toggle was mocked and NOT built: Keaton picked the
    single-line table plus the existing expander instead.
 The rep filter is now `RepMultiSelect` (searchable, MULTI-select — `repFilters`
