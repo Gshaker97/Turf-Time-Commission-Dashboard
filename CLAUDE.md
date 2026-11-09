@@ -1492,11 +1492,37 @@ min/max; day = `knock_at AT TIME ZONE 'America/Phoenix'`).
   groups), Goals + Leads team groups, Competitions (team-type entrants,
   squad pickers), the Record Book's team records, and the People chart's
   columns / Move-to menu / drawer.
-- **Deal manager auto-fill:** picking a setter/closer in the DealModal (and
-  the sync's schedule pass) backfills a MISSING `manager_id` from that
-  person's current reports-to — ONLY when that person's lead has the
-  `manager` ROLE (a director/VP-managed rep gets none; stamping the director
-  would double-pay). Never overwrites an assigned manager.
+- **Deal manager auto-fill — `dealManagerId(lookup, {setterId, closerId})` in
+  `utils/team.js` is the ONE rule**, mirrored by `schDealManager_` in
+  ScheduleSync.gs (keep the two in step; a parity test asserts they agree on
+  every id pair). Three call sites: the DealModal's `pickPerson`, the sync's
+  Jobs-pass create, and the sync's Schedule-pass backfill. It tries the
+  CLOSER, then the SETTER, and for each person:
+  - they ARE a `manager` → **themselves** (per Keaton: "manager earns
+    override on themselves"), so a manager's own sale earns their override;
+  - else their lead is a `manager` → that lead;
+  - else nothing, and the next person is tried.
+  A **director/VP-managed rep still gets none** — that person already earns
+  their own override and stamping them would double-pay. Never overwrites an
+  assigned manager.
+  **THE FALLTHROUGH IS THE POINT.** The old code resolved ONE person
+  (`profById[closer] || profById[setter]`) and gave up: the `||` fell through
+  only when the closer's PROFILE was missing, not when the closer had no
+  manager. So whenever a team lead or director CLOSED a rep's set deal, the
+  lead had no manager above them and the setter's manager was never
+  consulted — the override silently vanished. Live cases: Isaias Santovena
+  (Ricky Ortiz set, Jordan Bagwell closed), Jackie Stewart (Corbin set,
+  Keaton closed), Stephanie Donion (Bryan set, Conner closed).
+  **History was NOT backfilled** (per Keaton: "just fix it for new deals
+  moving forward") — stamping a manager on Paid deals would create override
+  commission that was never paid, on runs that are mostly locked.
+  **A missing manager is deliberately NOT in `dealMissingInfo`.** It looks
+  correct and is sometimes right (a director-managed rep, a VP's own sale),
+  and `dealMissingInfo(deal)` takes only the deal — it has no roster, so it
+  could only test TODAY's reports-to. That would flag every pre-28-Jul deal
+  of Stephen Long's and Scott Hershman's, who reported to Garrison (a
+  DIRECTOR) at the time and correctly got no manager. Flagging those would
+  be a worklist that never empties, for deals that are right.
 - **"Reports to" (`profiles.manager_id`) can be a manager, DIRECTOR, or VP** —
   some reps are managed directly by Garrison (director). It drives Team-page
   grouping (team heads = managers + anyone with direct reports), goal
@@ -2281,11 +2307,15 @@ which is why it exists.
   build` passing proves nothing renders-wise — a `const` read above its own
   declaration white-screened Leads in production while every node test passed.
   With no Supabase env vars the build runs in DEMO_MODE, so
-  `npx vite preview` + playwright-core against
-  `/opt/pw-browsers/chromium-1194/chrome-linux/chrome` can log in
+  `npx vite preview` + playwright-core against the chromium under
+  `/opt/pw-browsers/` can log in
   (any seeded account, `TurfTime2026!`), click through, and fail on `pageerror`.
   That is how the merged Dashboard was verified: render, drill, breadcrumb,
-  `?scope=` round-trip.
+  `?scope=` round-trip. **Check the paths before reusing a smoke script**:
+  the chromium build number changes between containers (1194 → 1243 within
+  one session, `chrome-linux/` → `chrome-linux64/`), and `playwright-core`
+  is not a project dependency, so a rebuilt container may need it installed
+  into a scratch prefix. Neither is a code failure — read the error.
 - `server.js` exposes `GET /api/health` (`{ ok, userAdmin, build }`) — the
   Watchdog pings it hourly and warns if the user-admin key is missing.
 - Deals are created via the Deals page "+" modal only — the old New Deal page

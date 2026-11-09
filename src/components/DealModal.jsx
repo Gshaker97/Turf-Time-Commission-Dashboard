@@ -5,6 +5,7 @@ import { fetchDealHistory } from '../lib/db'
 import { confirmDialog } from '../lib/dialog'
 import { calcDealCommissions, fmt, fmtPct, officeOverrideRate, managerDefaultRate } from '../utils/commission'
 import { payDateFromInstall } from '../utils/dateRanges'
+import { dealManagerId } from '../utils/team'
 import { useSettings } from '../contexts/SettingsContext'
 
 const Field = ({ label, children }) => (
@@ -238,19 +239,20 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
-  // Picking a setter/closer auto-fills a MISSING manager with that person's
-  // current reports-to — only when that person is an actual MANAGER role (a
-  // director/VP-managed rep gets no manager override; stamping the director
-  // would double-pay). Closer wins (the Sales Rep concept), setter fallback.
-  // Never overwrites a manager already on the deal.
+  // Picking a setter/closer auto-fills a MISSING manager. The rule itself is
+  // `dealManagerId` in utils/team.js — shared so this and the sync can never
+  // disagree about who earns the override. Never overwrites a manager already
+  // on the deal.
   const pickPerson = (field, id) => {
     setForm(f => {
       const next = { ...f, [field]: id }
       if (!next.manager_id) {
-        const person = users.find(u => u.id === (next.closer_id || next.setter_id))
-        const mgr = person?.manager_id ? users.find(u => u.id === person.manager_id) : null
-        if (mgr && mgr.role === 'manager') {
-          next.manager_id = mgr.id
+        const mgrId = dealManagerId(
+          (uid) => users.find(u => u.id === uid) || null,
+          { setterId: next.setter_id, closerId: next.closer_id },
+        )
+        if (mgrId) {
+          next.manager_id = mgrId
           if (!next.manager_override_pct) next.manager_override_pct = asPctStr(managerDefaultRate(next.sale_date || null))
         }
       }

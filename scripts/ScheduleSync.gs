@@ -67,7 +67,7 @@ const SCH_BASELINE_PROP   = 'SCHED_BASELINE_IDS';
 // sale (Richard Burkey, Andrew Sipila) was dropped with nothing to show why.
 // A stamp that does not move when behaviour moves is worse than none — it
 // reads as confirmation that the deploy is current.
-const SCH_VERSION         = '2026-11-04';
+const SCH_VERSION         = '2026-11-09';
 // SAFETY: preview mode (logs what it WOULD do, writes nothing) now lives in
 // SCRIPT PROPERTIES, not code — so re-pasting this file can never silently
 // disable the sync again. To preview: Project Settings → Script Properties →
@@ -453,7 +453,7 @@ function schSyncLocked_() {
           // reports-to is an actual MANAGER. A rep managed directly by a
           // director/VP has no manager override (that person already earns
           // their own override; stamping them as manager would double-pay).
-          manager_id: (rep && rep.manager_id && profById[rep.manager_id] && profById[rep.manager_id].role === 'manager') ? rep.manager_id : null,
+          manager_id: rep ? schDealManager_(profById, rep.id, rep.id) : null,
           director_id: directorId, vp_id: vpId,
           baseline_revenue: baselineVal, job_price: saleVal, project_id: projectId,
           // Snapshot of the sheet figures, so a later sheet change is detected
@@ -574,9 +574,10 @@ function schSyncLocked_() {
         // (a director/VP-managed rep gets no manager override — stamping the
         // director would double-pay). Never overwrites an assigned manager.
         if (!existing.manager_id) {
-          const repP = profById[patch.closer_id || existing.closer_id] || profById[patch.setter_id || existing.setter_id] || null;
-          const mgrP = repP && repP.manager_id ? profById[repP.manager_id] : null;
-          if (mgrP && mgrP.role === 'manager') patch.manager_id = mgrP.id;
+          const mgrId = schDealManager_(profById,
+            patch.setter_id || existing.setter_id,
+            patch.closer_id || existing.closer_id);
+          if (mgrId) patch.manager_id = mgrId;
         }
 
         if (!Object.keys(patch).length) { out.skipped++; continue; }
@@ -761,6 +762,32 @@ function schRepExcluded_(repName) {
     return small.every(function (t) { return big.indexOf(t) !== -1; });
   });
 }
+// WHICH MANAGER earns the override on a deal. Mirrors `dealManagerId` in
+// src/utils/team.js — keep the two in step; the site's DealModal uses that one
+// when an admin picks a setter/closer by hand.
+//
+// Tries the CLOSER, then the SETTER. For each person: they ARE a manager →
+// themselves (per Keaton, a manager earns their override on their own sale);
+// else their lead is a manager → that lead; else nothing, try the next person.
+//
+// A rep managed by a DIRECTOR or VP still gets none — that person already
+// earns their own override and stamping them would double-pay.
+//
+// The FALLTHROUGH is the fix: the old code resolved ONE person and gave up, so
+// when a team lead closed a rep's set deal the lead had no manager above them
+// and the setter's manager was never consulted. The override silently vanished
+// (live: Isaias Santovena — Ricky Ortiz set it, Jordan Bagwell closed it).
+function schDealManager_(profById, setterId, closerId) {
+  function forPerson(id) {
+    const p = id ? profById[id] : null;
+    if (!p) return null;
+    if (p.role === 'manager') return p.id;
+    const lead = p.manager_id ? profById[p.manager_id] : null;
+    return (lead && lead.role === 'manager') ? lead.id : null;
+  }
+  return forPerson(closerId) || forPerson(setterId) || null;
+}
+
 // Resolve a sheet name to a roster profile. Exact full-name match first, then a
 // UNIQUE first-name / "starts with" match so "JC" → "JC Correa" and
 // "Jean Carlo" → "Jean Carlo Correa". Returns null if nothing matches or the

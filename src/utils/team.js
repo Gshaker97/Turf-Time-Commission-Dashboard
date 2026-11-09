@@ -31,6 +31,35 @@ export function teamKeyFor(u, heads) {
   return 'unassigned'
 }
 
+// THE ONE RULE for which manager earns the override on a deal. Shared by the
+// DealModal's auto-fill and mirrored by the sync (`schDealManager_` in
+// ScheduleSync.gs — keep the two in step).
+//
+// `lookup(id)` returns a profile or null, so an array or a map both work.
+// Tries the CLOSER, then the SETTER. For each person:
+//   • they ARE a manager          → themselves (per Keaton: a manager earns
+//                                   their override on their own sale)
+//   • their lead is a manager     → that lead
+//   • otherwise                   → nothing, and we try the next person
+//
+// TWO things this fixes. (1) A rep managed by a DIRECTOR or VP still gets no
+// manager override — that person already earns their own, and stamping them
+// would double-pay. (2) The old version resolved ONE person and gave up: when
+// a team lead closed a rep's set deal, `repP` was the lead, the lead had no
+// manager above them, and the setter's manager was never consulted — so the
+// override silently vanished. Found live on Isaias Santovena (Ricky Ortiz set
+// it, Jordan Bagwell closed it, nobody got the override).
+export function dealManagerId(lookup, { setterId = null, closerId = null } = {}) {
+  const forPerson = (id) => {
+    const p = id ? lookup(id) : null
+    if (!p) return null
+    if (p.role === 'manager') return p.id
+    const lead = p.manager_id ? lookup(p.manager_id) : null
+    return lead && lead.role === 'manager' ? lead.id : null
+  }
+  return forPerson(closerId) || forPerson(setterId) || null
+}
+
 // Who a SALE belongs to for deal counts / revenue attribution — the setter
 // (company convention: setter gets full revenue credit), falling back to the
 // closer when no setter was recorded. Without the fallback, a deal missing
