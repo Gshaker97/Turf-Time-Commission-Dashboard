@@ -67,7 +67,7 @@ const SCH_BASELINE_PROP   = 'SCHED_BASELINE_IDS';
 // sale (Richard Burkey, Andrew Sipila) was dropped with nothing to show why.
 // A stamp that does not move when behaviour moves is worse than none — it
 // reads as confirmation that the deploy is current.
-const SCH_VERSION         = '2026-11-09';
+const SCH_VERSION         = '2026-11-09b';
 // SAFETY: preview mode (logs what it WOULD do, writes nothing) now lives in
 // SCRIPT PROPERTIES, not code — so re-pasting this file can never silently
 // disable the sync again. To preview: Project Settings → Script Properties →
@@ -386,6 +386,14 @@ function schSyncLocked_() {
               change_alert: {
                 prev_baseline: existing.synced_baseline, prev_job_price: existing.synced_job_price,
                 baseline: baselineVal, job_price: saleVal,
+                // The sheet's own APPROVED date for the new agreement. Carried
+                // so the Deals page's "Create as a separate deal" button (for
+                // a SECOND job sold under this same project id) can date the
+                // new deal from the sheet instead of from the day the sync
+                // happened to notice. Sale date drives the rate era, team
+                // attribution and the pay run, so the difference is real.
+                // Older alerts have no sale_date and fall back to `at`.
+                sale_date: schDate_(row[ix.approved]),
                 at: new Date().toISOString(),
               },
               // Advance the snapshot so this sheet version alerts ONCE — the
