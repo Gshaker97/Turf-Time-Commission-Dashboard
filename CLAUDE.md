@@ -2208,19 +2208,82 @@ setter from Lead Source (names resolved leniently: "JC" → "JC Correa" via
 baseline or sale price changes for an already-imported deal (matched by
 project_id with a deal-name fallback for re-signs under a new ID), the sync
 only stamps `deals.change_alert` = `{ prev_baseline, prev_job_price, baseline,
-job_price, at }` and advances the `synced_*` snapshot (migration 023) so each
+job_price, sale_date, at }` and advances the `synced_*` snapshot (migration 023) so each
 sheet version alerts exactly once. Nothing else changes: numbers, status, gold
 check, and stored amounts all stay put. The deal wears a clickable amber ❗
 next to its name (`ChangeAlertTag` in `DealTable.jsx`, both table + mobile
 card) showing old → new figures; admins apply the new numbers by hand if the
 re-sign is real, then **Dismiss** (sets `change_alert` null). An undismissed
-alert also holds the deal in the Needs-review tab (`dealNeedsReview`). The
+alert also holds the deal in the Needs-review tab (`dealNeedsReview`).
+**A THIRD answer: "Create as a separate deal" (`src/utils/splitDeal.js`)** —
+see the section below. The
 detection is still driven by the SHEET changing, not "stored differs" — a
 manual in-app edit or a duplicate sheet row with the same numbers does NOT
 fire. The SCHEDULE pass (install/pay/payment/office/override %s/setter) is
 still locked by the gold check. (The PAID pass that advances Pay Finalized →
 Paid still runs. The `Change Order` status label still exists in
 `app_settings` for manual use only.)
+**Splitting a change alert into a SECOND DEAL (`src/utils/splitDeal.js`).**
+Per Keaton: "occasionally, rare but it happens, this updated deal isnt
+actually a change order, its a secondary project sold for this job.
+Unfortunately the rep did it under the same project ID so the system thinks
+its a change order… instead of just apply or dismiss, allow me to create it
+as a new deal." Reps are *supposed* to raise a fresh ArcSite project for a
+second job; when they don't, the sheet row's figures move and the alert is
+indistinguishable from a re-sign. **Apply and Dismiss are both destructive
+here** — Apply overwrites the first job's money with the second job's,
+Dismiss throws the second sale away. This is the third button.
+- **`planSplit(deal, { names, projectIds, todayISO })` is the ONE rule** and
+  is PURE — it returns `{ newDeal, originalPatch, summary }` and the page
+  does the two writes. The confirm dialog prints from `summary`, so the
+  dialog and the write can never describe different things.
+- **The NEW deal** takes the alert's `baseline`/`job_price`, lands in
+  `Deal Review` unverified, and inherits setter, closer, split %, manager/
+  director/VP + their override %s, office and payment method — same crew,
+  same site. It gets **no install date, no pay date, no gold check** and
+  none of the first job's money (`NOT_INHERITED`: stored `*_amount`s,
+  deduction, financing, bonus, exclusions, notes, hidden/comp flags).
+- **The ORIGINAL is untouched.** The patch is exactly three keys —
+  `change_alert: null` plus the advanced `synced_*` snapshot. Its money,
+  status and **gold check all stay**: none of its numbers changed, so a
+  sign-off on them is still valid (unlike Apply, which has to clear it).
+  Those three columns are also precisely what migration 039 lets through a
+  LOCKED pay run, so the split needs no lock override.
+- **The new deal gets a DERIVED project id, `<original>-2`** (Keaton's
+  choice). Migration 033's UNIQUE index means the two physically cannot
+  share one; the original keeps the real ArcSite id and stays under the
+  sync's control, and `-2` matches no sheet row, so the sync ignores the new
+  deal entirely. Leaving it blank was the alternative and is worse — the
+  sync's name fallback adopts deals with no `project_id`, so it could later
+  be claimed by an unrelated job. **Say the consequence out loud, as the
+  dialog does: because one project covers two jobs, the Schedule tab can
+  only ever feed install/pay dates to one of them. The second deal is
+  hand-managed.**
+- **A COUNTER SUFFIX IS A SINGLE DIGIT 2-9, never multi-digit** — in both
+  `nextSplitName` and `nextSplitProjectId`. Stripping `(\d+)` read a house
+  number as a counter (`Smith 1420` → `Smith 1421`, a different address) and,
+  far worse, read `TT-1003` as stem `TT` + counter `1003` and produced
+  `TT-1004` — **a different job's id**, which is the exact collision the
+  derived id exists to prevent (caught in the browser; `TT-1004` is a real
+  row two lines below it). The `taken` sets are no defence: they only know
+  the deals loaded on the page.
+- **ORDER OF WRITES: insert first, clear the alert second.** Clearing the ❗
+  with nothing created would lose the second sale silently — the whole
+  failure this feature exists to prevent. A failed insert leaves the alert
+  up and says nothing was changed.
+- `ScheduleSync.gs` now puts the sheet's APPROVED date on the alert as
+  `sale_date` so the new deal dates from the sheet, not from the minute the
+  sync noticed; sale date drives the rate era, team attribution and the pay
+  run. Alerts written before this fall back to the LOCAL day of `at` (never
+  its UTC slice), then today.
+- Admin-only (`onSplit` is passed only when `isAdmin`), one surface: the
+  third button in the ❗ popover, under a divider and visually subordinate
+  to Apply/Dismiss. `EST_H` in `ChangeAlertTag` had to grow with it or the
+  panel stops flipping above the icon on a bottom row — the bug that once
+  made Dismiss unreachable.
+- 56 engine assertions + a browser pass that ends on the real claim: the row
+  is created, the ❗ clears, and the original's figures are unchanged.
+
 **CANCELLED schedule rows are IGNORED** — the sync never cancels a deal;
 cancellation is manual in the site. The sync never overrides
 `Pay Finalized`/`Paid`/`Sales Issue`/`Canceled` with schedule info.

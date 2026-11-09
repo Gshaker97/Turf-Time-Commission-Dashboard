@@ -339,14 +339,17 @@ function DeductionTag({ amount, deal }) {
 // flags it via deals.change_alert instead of rewriting anything — migration
 // 031). Click reveals the old → new figures; an admin dismisses it once the
 // deal has been reviewed (and hand-edited, if the re-sign is real).
-function ChangeAlertTag({ deal, canEdit, onUpdate }) {
+function ChangeAlertTag({ deal, canEdit, onUpdate, onSplit }) {
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState({ top: 0, left: 0 })
   const btnRef = useRef(null)
   const ca = deal.change_alert
   if (!ca) return null
   const money = (v) => (v == null || v === '' ? '—' : fmt(parseFloat(v) || 0))
-  const WIDTH = 256, EST_H = 262
+  // EST_H must cover the TALLEST panel — with the split button there are three
+  // actions, and an under-measured height stopped the last one flipping above
+  // the icon on a bottom row, which is how Dismiss became unreachable before.
+  const WIDTH = 256, EST_H = canEdit && onSplit ? 330 : 262
   // The popover renders in a portal with fixed positioning — inside the row it
   // gets clipped by the table's scroll container (the Dismiss button became
   // unreachable on bottom rows). Flip above the icon when there's no room below.
@@ -379,7 +382,7 @@ function ChangeAlertTag({ deal, canEdit, onUpdate }) {
               <p>Sale price {money(ca.prev_job_price)} → <b className="text-white">{money(ca.job_price)}</b></p>
             </div>
             <p className="text-[10px] text-white/40 mt-1.5 leading-snug">
-              Nothing on the deal was changed yet. Apply the sheet's figures, or dismiss if the deal is already right.
+              Nothing on the deal was changed yet.
             </p>
             {canEdit && (
               <div className="mt-2 space-y-1.5">
@@ -433,6 +436,25 @@ function ChangeAlertTag({ deal, canEdit, onUpdate }) {
                   style={{ color: '#f59e0b', border: '1px solid rgba(245,158,11,0.45)' }}>
                   Dismiss — deal is already right
                 </button>
+                {/* CREATE AS A NEW DEAL (per Keaton) — the third answer, for
+                    when the sheet changed because a SECOND job was sold under
+                    the same ArcSite project id. Apply would overwrite the first
+                    job's money with the second job's; Dismiss would throw the
+                    second sale away. The page owns the two writes (insert, then
+                    clear the alert) — see utils/splitDeal.js. */}
+                {onSplit && (
+                  <>
+                    <div className="h-px my-0.5" style={{ background: '#3a3a3a' }} />
+                    <button onClick={async () => { if (await onSplit(deal)) setOpen(false) }}
+                      className="w-full py-1.5 rounded-lg text-[11px] font-semibold text-white/70 transition-colors hover:bg-white/5"
+                      style={{ border: '1px solid #3a3a3a' }}>
+                      Create as a separate deal
+                    </button>
+                    <p className="text-[9px] text-white/35 leading-snug">
+                      For a second job sold under the same project ID — this deal is left untouched.
+                    </p>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -768,7 +790,7 @@ function NotesThread({ deal, profile, users, onCountChange }) {
 const subline = (deal) => [deal.office, deal.payment_method].filter(Boolean).join(' · ') || '—'
 
 // ── Mobile card (below lg) ────────────────────────────────────
-function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onToggleHidden, onUpdate, dupeIds, statusColor, statusLabels, profile, users, noteCount, onCountChange, audit = null, canAudit = false }) {
+function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onToggleHidden, onUpdate, onSplit, dupeIds, statusColor, statusLabels, profile, users, noteCount, onCountChange, audit = null, canAudit = false }) {
   const baseline = parseFloat(deal.baseline_revenue) || 0
   const jobPrice = parseFloat(deal.job_price)        || 0
   const [showNotes, setShowNotes] = useState(false)
@@ -778,7 +800,7 @@ function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onToggleHidden, 
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <button onClick={() => setShowNotes(s => !s)} className="text-[14px] font-semibold text-white truncate text-left">{deal.deal_name}</button>
-            <ChangeAlertTag deal={deal} canEdit={canEdit} onUpdate={onUpdate} />
+            <ChangeAlertTag deal={deal} canEdit={canEdit} onUpdate={onUpdate} onSplit={onSplit} />
             {audit?.byId[deal.id] && <AuditBadge done={audit.byId[deal.id].done} total={audit.byId[deal.id].total} reviewed={audit.byId[deal.id].reviewed} />}
             {(deal.notes || noteCount > 0) && (
               <span className="flex items-center gap-0.5 text-teal/70 flex-shrink-0">
@@ -852,7 +874,7 @@ export default function DealTable({
   paymentFilter, setPaymentFilter,
   dateField, setDateField,
   dateFrom, dateTo, datePreset, setDateRange,
-  onEdit, onDelete, onToggleHidden, onUpdate, dupeIds, loading, openNotesId,
+  onEdit, onDelete, onToggleHidden, onUpdate, onSplit, dupeIds, loading, openNotesId,
   audit = null, canAudit = false,
 }) {
   const { statusColor, statusLabels, offices, paymentMethods } = useSettings()
@@ -952,7 +974,7 @@ export default function DealTable({
                       className="text-[13px] font-semibold text-white truncate max-w-[210px] text-left hover:text-teal transition-colors">
                       {deal.deal_name}
                     </button>
-                    <ChangeAlertTag deal={deal} canEdit={canEdit} onUpdate={onUpdate} />
+                    <ChangeAlertTag deal={deal} canEdit={canEdit} onUpdate={onUpdate} onSplit={onSplit} />
                     {audit?.byId[deal.id] && <AuditBadge done={audit.byId[deal.id].done} total={audit.byId[deal.id].total} reviewed={audit.byId[deal.id].reviewed} />}
                     {(deal.notes || noteCounts[deal.id] > 0) && (
                       <span className="flex items-center gap-0.5 text-teal/70 flex-shrink-0">
@@ -1038,7 +1060,7 @@ export default function DealTable({
       <div className={`lg:hidden ${audit ? 'divide-y-[10px] divide-[#161616]' : 'divide-y divide-white/5'}`}>
         {deals.map(deal => (
           <DealCard key={deal.id} deal={deal} canEdit={canEdit} canVerify={canVerify}
-            onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} onUpdate={onUpdate} dupeIds={dupeIds}
+            onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} onUpdate={onUpdate} onSplit={onSplit} dupeIds={dupeIds}
             statusColor={statusColor} statusLabels={statusLabels}
             audit={audit} canAudit={canAudit}/>
         ))}

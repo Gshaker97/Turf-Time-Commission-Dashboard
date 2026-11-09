@@ -9,6 +9,8 @@ import FilterBar from '../components/FilterBar'
 import KpiCard from '../components/KpiCard'
 import DealTable, { dealNeedsReview } from '../components/DealTable'
 import { duplicateDealIds } from '../utils/needsReview'
+import { planSplit } from '../utils/splitDeal'
+import { fmtDay } from '../utils/teamMove'
 import { useAudit } from '../components/useAudit'
 import { AuditControls } from '../components/AuditStrip'
 import DealModal from '../components/DealModal'
@@ -363,6 +365,46 @@ export default function Deals() {
     load(true)
   }
 
+  // SPLIT a change alert into a second deal (per Keaton: "occasionally this
+  // updated deal isnt actually a change order, its a secondary project sold
+  // for this job… allow me to create it as a new deal, where i click that
+  // button and it adds an entirely new deal separate from the original").
+  //
+  // ORDER MATTERS: insert first, clear the alert second. Clearing the ❗ with
+  // nothing created would lose the second sale silently, which is the whole
+  // failure this feature exists to prevent. A failed insert leaves the alert
+  // up, so the choice is still there.
+  async function handleSplitAlert(deal) {
+    const plan = planSplit(deal, {
+      names: deals.map(d => d.deal_name).filter(Boolean),
+      projectIds: deals.map(d => d.project_id).filter(Boolean),
+    })
+    if (!plan) return false
+    const { newDeal, originalPatch, summary } = plan
+    const ok = await confirmDialog({
+      tone: 'warn',
+      title: 'Create the sheet’s new figures as a separate deal?',
+      message: 'Use this when the sheet changed because a SECOND job was sold under the same project ID — not because this job’s price changed.',
+      bullets: [
+        `New deal "${summary.name}" — ${fmt(summary.baseline)} baseline, ${fmt(summary.jobPrice)} sale price, closing ${fmtDay(summary.saleDate, { year: true })}, in Deal Review.`,
+        'It keeps the same setter, closer, overrides, office and payment method. No install date, no pay date and no gold check — set those once the second job is scheduled.',
+        `"${summary.keptName}" is left exactly as it is — ${fmt(summary.keptBaseline)} baseline, same status, gold check kept. Only the ❗ clears.`,
+        `The new deal’s project ID is ${summary.projectId}, so the sheet sync will never touch it: because one ArcSite project covers both jobs, its dates are yours to manage by hand.`,
+      ],
+      confirmLabel: 'Create the new deal',
+    })
+    if (!ok) return false
+    const res = await insertDeal(newDeal, profile?.id)
+    if (res?.error) {
+      toast.error('Could not create the new deal, so nothing was changed: ' + (res.error.message || 'unknown error'))
+      return false
+    }
+    await persistInline(deal.id, originalPatch)
+    toast.success(`Created "${summary.name}". Add its install date and check its office when you have them.`)
+    load(true)
+    return true
+  }
+
   async function handleDelete(id) {
     const d = deals.find(x => x.id === id)
     const ok = await confirmDialog({
@@ -556,6 +598,7 @@ export default function Deals() {
         onDelete={handleDelete}
         onToggleHidden={isAdmin ? handleToggleHidden : undefined}
         onUpdate={persistInline}
+        onSplit={isAdmin ? handleSplitAlert : null}
         dupeIds={dupeIds}
         loading={loading}
         audit={onReview ? audit : null}
