@@ -90,9 +90,21 @@ export default function Leads() {
   const [users, setUsers] = useState([])
   const [deals, setDeals] = useState([])
   const [teamChanges, setTeamChanges] = useState([])
-  // 'list' = the appointment schedule this page has always been;
-  // 'byrep' = the same appointments grouped per person (per Keaton).
-  const [view, setView] = useState('list')
+  // 'byrep' = the appointments grouped per person, the DEFAULT (per Keaton);
+  // 'list' = the day-grouped schedule this page used to open on.
+  // A switch is remembered per browser, the same way the Deals page remembers
+  // its page size — so defaulting to By rep never costs anyone who prefers
+  // the schedule a click on every visit. Storage can throw (private window,
+  // blocked site data), so the read and the write are both guarded and the
+  // page renders correctly without it.
+  const [view, setView] = useState(() => {
+    try { return localStorage.getItem('tt_leads_view') === 'list' ? 'list' : 'byrep' }
+    catch { return 'byrep' }
+  })
+  const pickView = (v) => {
+    setView(v)
+    try { localStorage.setItem('tt_leads_view', v) } catch { /* not worth failing over */ }
+  }
   const [teamFilter, setTeamFilter] = useState('')
   const [loading, setLoading] = useState(true)
   const initial = apptRange('week')
@@ -574,7 +586,7 @@ export default function Leads() {
         {/* The same appointments, read two ways: as a schedule, or per person. */}
         <div className="flex gap-1 p-1 rounded-xl ml-auto" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
           {[['list', 'List'], ['byrep', 'By rep']].map(([k, label]) => (
-            <button key={k} onClick={() => setView(k)}
+            <button key={k} onClick={() => pickView(k)}
               className={`px-2.5 py-1 rounded-lg text-[12px] font-semibold transition-colors ${view === k ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
               {label}
             </button>
