@@ -1241,7 +1241,11 @@ and the gap tallies are all still exactly as written:
   it belongs on the page that holds the appointment records.
   A `List | By rep` toggle swaps the day-grouped schedule for one row per rep;
   the KPI strip hides in By-rep so two sets of numbers (one of them the CRM's
-  "Sold at Appt") are never on screen together.
+  "Sold at Appt") are never on screen together. **BY REP IS THE DEFAULT** (per
+  Keaton) and a switch is remembered per browser in `tt_leads_view`, the same
+  way the Deals page remembers its page size — defaulting to it must not cost
+  someone who wants the schedule a click on every visit. Reads and writes are
+  both try/caught; the page renders correctly with no storage.
   - **FIVE STATS IN TWO GROUPS THAT DO NOT OVERLAP**, split by a rule:
     `Set → Ran → Closed` is what they BOOKED (one funnel, each a slice of the
     one before); `Leads Ran → Leads Closed` is someone else's lead they SAT.
