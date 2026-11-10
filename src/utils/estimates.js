@@ -20,7 +20,7 @@
 //     flags these so the missing setter can be fixed at the source.
 // (matches how `weekly_stats.self_gen_estimates` / `lead_estimates` were used)
 // ============================================================
-import { weekStartOf } from './dateRanges'
+import { weekStartOf } from './dateRanges.js'
 
 // Appointment statuses that mean it actually happened.
 export const RAN_STATUSES = new Set(['completed', 'sold'])

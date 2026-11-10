@@ -1231,8 +1231,63 @@ and the gap tallies are all still exactly as written:
   as "feed: <name>" under the empty select, but muted grey instead of amber.
   A non-rep setter does NOT excuse the other gaps — a past-due row with no
   outcome is still flagged.
-  **The Leads page carries no team/rep stat board** — those stats live on
-  Performance now; this page is the appointments themselves.
+  **The Leads page's "By rep" view (`src/utils/repActivity.js` +
+  `components/RepActivityTable.jsx`).** This REVERSES the old "the Leads page
+  carries no team/rep stat board" rule, per Keaton: "For a setter: how many
+  appointments did they set, and how many ran / closed, and who ran those
+  appointments and what was the outcome? For a closer: … how many leads they
+  ran and for who and how many of those ran / closed." The Dashboard had every
+  COUNT already and never said WHO — the counterparty is the whole point, and
+  it belongs on the page that holds the appointment records.
+  A `List | By rep` toggle swaps the day-grouped schedule for one row per rep;
+  the KPI strip hides in By-rep so two sets of numbers (one of them the CRM's
+  "Sold at Appt") are never on screen together.
+  - **FIVE STATS IN TWO GROUPS THAT DO NOT OVERLAP**, split by a rule:
+    `Set → Ran → Closed` is what they BOOKED (one funnel, each a slice of the
+    one before); `Leads Ran → Leads Closed` is someone else's lead they SAT.
+    A self-gen lives only on the left, a lead they ran only on the right, so
+    no column contains another. Four shapes were mocked and rejected before
+    this one — a two-section card, a Ran column with "N were other reps'
+    leads" as a sub-line, and `Leads Ran` nested inside `Ran`, which is the
+    two-levels-in-one-header-row trap that already broke the Dashboard
+    leaderboard. Don't reintroduce it.
+  - **THE TWO SIDES COME FROM DIFFERENT SYSTEMS, deliberately.**
+    `set`/`ran`/`leadsRan` are APPOINTMENTS from the CRM; `closed`/
+    `leadsClosed` are SIGNED DEALS from the site (per Keaton: "deals should
+    only count for actual signed deals… if outcomes number of deals differ,
+    it goes with the site's data which is true"). That is also why every rate
+    here can exceed 100% and must be allowed to BLANK — `rateOrNull`, the same
+    rule as `perfSummary`. A rep who closed with no appointment logged reads
+    "—", never a capped 100%. The per-appointment column is labelled
+    **"RepCard outcome"** and shown as the rep left it, because
+    `leads.deal_id` exists in the schema but NOTHING has ever written it:
+    there is no link between an appointment and a deal, so the detail rows
+    cannot sum to the Closed column and the gap is the honesty check.
+  - **THE TEAM FILTER PICKS THE ROSTER, NOT THE APPOINTMENTS** (per Keaton:
+    "if a closer ran a lead for another team, the closer stats would still
+    show they ran a lead even if it was for a different team when i filter to
+    the team he is on"). Date-effective via `teamOfSale` as of the RANGE END,
+    the same rule the Dashboard leaderboard uses. Filtering the appointments
+    first would move a closer onto the team whose lead they ran — the exact
+    bug already fixed there. The other team is NAMED on the row (amber chip).
+  - **THE SUMMARY COUNTS EACH APPOINTMENT AND EACH DEAL ONCE** (per Keaton: "a
+    lead set and ran by different people is still just 1 appointment"). The
+    column totals credit each PERSON, so an appointment with a setter and a
+    closer lands on two rows; the distinct box underneath is the figure to
+    quote as the group's own, and says why the columns add to more.
+  - **A scheduled appointment with no closer reads "Set", never "Self-Gen".**
+    `ranBy = closer_id || setter_id` falls back to the setter, so an unrun
+    appointment looked self-generated. Found in the BROWSER, not by the unit
+    tests — the role is display-only, and every count that uses `self` is
+    already behind `ran`, so nothing was mis-counted. Regression test checked
+    against the unfixed code first.
+  - 37 engine assertions (`test/repActivity.test.mjs`), mutation-checked:
+    breaking the distinct count, the self-gen/lead separation or the rate
+    blanking each fails a named test. Browser pass on view switching, the
+    drill-down, and a cross-team lead surviving the team filter.
+  - `src/utils/estimates.js` now imports `./dateRanges.js` with the
+    extension so the chain resolves under bare node for tests — the same
+    reason `needsReview.js` and `dealAudit7.js` already do.
   **Duplicates + `leads.ignored` (migration 049).** RepCard creates a NEW
   appointment record when one is REASSIGNED to another closer instead of
   updating the original, so the same doorstep arrives twice with two

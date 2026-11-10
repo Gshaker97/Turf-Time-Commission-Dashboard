@@ -3,7 +3,10 @@ import { useSearchParams } from 'react-router-dom'
 import { format } from 'date-fns'
 import { CalendarCheck, Search, Link2, Upload, X } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
-import { fetchLeads, fetchUsers, updateLead, upsertLeads, fetchLeadHistory } from '../lib/db'
+import { fetchLeads, fetchUsers, updateLead, upsertLeads, fetchLeadHistory, fetchDeals, fetchTeamChanges } from '../lib/db'
+import { headIdSet, buildChangesByProfile, teamOfSale, teamLabel } from '../utils/team'
+import { repActivity } from '../utils/repActivity'
+import RepActivityTable from '../components/RepActivityTable'
 import { csvToLeads } from '../utils/leadImport'
 import { gapReasons, duplicateIds, needsAttention, nonRepSet, isNonRep } from '../utils/leadGaps'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
@@ -85,6 +88,12 @@ export default function Leads() {
   const role = profile?.role ?? 'rep'
   const [leads, setLeads] = useState([])
   const [users, setUsers] = useState([])
+  const [deals, setDeals] = useState([])
+  const [teamChanges, setTeamChanges] = useState([])
+  // 'list' = the appointment schedule this page has always been;
+  // 'byrep' = the same appointments grouped per person (per Keaton).
+  const [view, setView] = useState('list')
+  const [teamFilter, setTeamFilter] = useState('')
   const [loading, setLoading] = useState(true)
   const initial = apptRange('week')
   const [dateFrom, setDateFrom] = useState(initial.from)
@@ -109,8 +118,15 @@ export default function Leads() {
     () => leadFeedHealth(leads, settings?.lead_last_payload?.at),
     [leads, settings?.lead_last_payload?.at])
 
-  const load = () => Promise.all([fetchLeads(), fetchUsers()])
-    .then(([l, u]) => { setLeads(l.data ?? []); setUsers(u.data ?? []) })
+  // Deals are what CLOSED means here — per Keaton, 'deals should only count
+  // for actual signed deals'. fetchDeals() is the RLS-restricted feed on
+  // purpose: a rep sees their own, which matches the appointments this page
+  // already scopes to them. No new information is exposed.
+  const load = () => Promise.all([fetchLeads(), fetchUsers(), fetchDeals(), fetchTeamChanges()])
+    .then(([l, u, d, tc]) => {
+      setLeads(l.data ?? []); setUsers(u.data ?? [])
+      setDeals(d.data ?? []); setTeamChanges(tc.data ?? [])
+    })
   useEffect(() => { load().finally(() => setLoading(false)) }, [])
   useRefreshOnFocus(load)
 
@@ -302,6 +318,41 @@ export default function Leads() {
   const pickUsers = useMemo(
     () => users.filter(u => u.active !== false && (isAdmin || !u.ghost)).sort((a, b) => a.name.localeCompare(b.name)),
     [users, isAdmin])
+  // ── By-rep view ───────────────────────────────────────────────────────────
+  // Team attribution is DATE-EFFECTIVE, the same rule the Dashboard and Deals
+  // pages use, so "Conner's Team" means the same thing on all three.
+  const usersById = useMemo(() => Object.fromEntries(users.map(u => [u.id, u])), [users])
+  const headsSet  = useMemo(() => headIdSet(users), [users])
+  const changesByProfile = useMemo(() => buildChangesByProfile(teamChanges), [teamChanges])
+  // As of the END of the range: a rep who moved mid-range is listed under the
+  // team they are on now, with everything they did in the window.
+  const teamOf = useMemo(
+    () => (id) => teamOfSale(id, dateTo, usersById, headsSet, changesByProfile),
+    [dateTo, usersById, headsSet, changesByProfile])
+
+  const teamOptions = useMemo(
+    () => users.filter(u => headsSet.has(u.id))
+      .map(h => ({ id: h.id, label: teamLabel(h) }))
+      .sort((a, b) => a.label.localeCompare(b.label)),
+    [users, headsSet])
+
+  // THE TEAM FILTER PICKS THE ROSTER, NOT THE APPOINTMENTS (per Keaton): a
+  // closer who ran another team's lead keeps that credit on their OWN team's
+  // view. Filtering the appointments first would move them onto the team
+  // whose lead they ran — the bug the Dashboard leaderboard already fixed.
+  const activity = useMemo(() => {
+    if (view !== 'byrep') return null
+    const roster = (role === 'rep' && !isAdmin)
+      ? [profile?.id].filter(Boolean)                       // a rep sees only themselves
+      : teamFilter
+        ? users.filter(u => teamOf(u.id) === teamFilter).map(u => u.id)
+        : null
+    const visible = isAdmin ? users : users.filter(u => !u.ghost)
+    return repActivity(scoped, deals, {
+      users: visible, from: dateFrom, to: dateTo, onlyIds: roster,
+    })
+  }, [view, scoped, deals, users, dateFrom, dateTo, teamFilter, teamOf, role, isAdmin, profile?.id])
+
   const selCls = 'h-8 px-2 rounded-lg text-[12px] text-white focus:outline-none'
   const selStyle = { background: '#242424', border: '1px solid #333' }
 
@@ -507,13 +558,31 @@ export default function Leads() {
             {pickUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select>
         )}
+        {(role !== 'rep' || isAdmin) && teamOptions.length > 0 && (
+          <select value={teamFilter} onChange={e => setTeamFilter(e.target.value)} style={selStyle}
+            className={`${selCls} max-w-[200px]`}
+            title="Picks the TEAM'S PEOPLE, then everything each of them did — including leads they ran for another team.">
+            <option value="">All teams</option>
+            {teamOptions.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+          </select>
+        )}
         <select value={missing} onChange={e => setMissing(e.target.value)} style={selStyle} className={selCls}
           title="Anything a human should look at: missing setter, no outcome logged after its time passed, a ran appointment with no closer, or a likely duplicate. Each row says which.">
           <option value="">All appointments</option>
           <option value="info">Needs attention</option>
         </select>
+        {/* The same appointments, read two ways: as a schedule, or per person. */}
+        <div className="flex gap-1 p-1 rounded-xl ml-auto" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+          {[['list', 'List'], ['byrep', 'By rep']].map(([k, label]) => (
+            <button key={k} onClick={() => setView(k)}
+              className={`px-2.5 py-1 rounded-lg text-[12px] font-semibold transition-colors ${view === k ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
+      {view === 'list' && (
       <div className="grid grid-cols-2 md:flex gap-2 md:gap-3">
         <Kpi label="Appointments Set" value={kpis.set} color="#74b9ff" />
         <Kpi label="Ran (Estimates)"  value={kpis.ran} sub={kpis.showRate != null ? `${kpis.showRate.toFixed(0)}% show rate` : undefined} />
@@ -523,14 +592,19 @@ export default function Leads() {
         <Kpi label="Appt Close %"     value={kpis.closeRate == null ? '—' : `${kpis.closeRate.toFixed(0)}%`} sub="sold ÷ ran" color="#a78bfa" />
         <Kpi label="No Shows"         value={kpis.noShow} color="#fb923c" />
       </div>
+      )}
 
-      {filtered.length === 0 && (
+      {view === 'byrep' && activity && (
+        <RepActivityTable data={activity} usersById={usersById} teamOf={teamOf} isAdmin={isAdmin} />
+      )}
+
+      {view === 'list' && filtered.length === 0 && (
         <div className="rounded-xl" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
           <p className="px-4 py-8 text-center text-[13px] text-white/30">No appointments in this range.</p>
         </div>
       )}
 
-      {byDay.map(g => (
+      {view === 'list' && byDay.map(g => (
       <div key={g.day || 'nodate'} className="rounded-xl overflow-hidden"
         style={{ background: '#1e1e1e', border: `1px solid ${g.isToday ? '#00b89455' : '#2a2a2a'}` }}>
         {/* Day header — the separator that turns one long list into a schedule. */}
