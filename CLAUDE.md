@@ -1285,6 +1285,16 @@ and the gap tallies are all still exactly as written:
     tests — the role is display-only, and every count that uses `self` is
     already behind `ran`, so nothing was mis-counted. Regression test checked
     against the unfixed code first.
+  - **EVERY PIECE OF TEXT IN `RepActivityTable` NAMES ITS OWN COLOUR.** The
+    first version left `Stat`'s colour `undefined` when a column had no
+    `tone`, so Rep / Set / Ran / Closed INHERITED — and nothing up the tree
+    set a text colour, so they rendered `rgb(0,0,0)`, pure black on the dark
+    page. Keaton hit it live ("the names are black. very hard to see"). It
+    hid from me because the two columns that DID set a colour (Leads Ran
+    violet, Closed teal) looked right, and I read a thumbnail screenshot as
+    "fine" instead of checking `getComputedStyle` — which is the only
+    evidence that settles a colour question. The panel root now carries
+    `text-white` and `Stat` falls back to an explicit `FG`, belt and braces.
   - 37 engine assertions (`test/repActivity.test.mjs`), mutation-checked:
     breaking the distinct count, the self-gen/lead separation or the rate
     blanking each fails a named test. Browser pass on view switching, the
