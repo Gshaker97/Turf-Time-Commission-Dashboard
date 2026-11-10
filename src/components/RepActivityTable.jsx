@@ -29,10 +29,16 @@ const OUTCOME = {
   canceled:  { label: 'Canceled',  color: '#6b7280' },
 }
 
+// A value with no `tone` must still name its own colour. Leaving it
+// undefined made the span INHERIT, and nothing up the tree set a text colour,
+// so Set/Ran/Closed rendered pure black on the dark page — unreadable, and
+// invisible to me because the coloured columns (teal, violet) looked right.
+// Never let text in this component fall through to an inherited colour.
+const FG = '#ededed', DIM = 'rgba(255,255,255,0.25)'
 function Stat({ value, rate, tone, muted }) {
   return (
     <>
-      <span className="text-[15px] font-semibold tabular-nums" style={{ color: muted && !value ? 'rgba(255,255,255,0.25)' : tone }}>
+      <span className="text-[15px] font-semibold tabular-nums" style={{ color: muted && !value ? DIM : (tone || FG) }}>
         {value}
       </span>
       {rate !== undefined && (
@@ -69,7 +75,7 @@ function Appointments({ row, usersById, teamOf, viewerTeam }) {
   const nameOf = (id, fallback) => (id ? (usersById[id]?.name || 'Unknown') : (fallback || null))
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[640px] text-[12.5px]">
+      <table className="w-full min-w-[640px] text-[12.5px] text-white/80">
         <thead>
           <tr className="text-left text-[9px] font-extrabold uppercase tracking-[0.1em] text-white/30">
             <th className="px-3 py-2 border-b border-white/10 whitespace-nowrap">Date</th>
@@ -143,7 +149,7 @@ export default function RepActivityTable({ data, usersById, teamOf, isAdmin }) {
   )
 
   return (
-    <div className="rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+    <div className="rounded-xl overflow-hidden text-white" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[760px]">
           <thead>
