@@ -2048,6 +2048,33 @@ sat between the money and the payee list. Now:
    `adjSummary(adjustments)` writes the reason ONTO the row (one item shows its
    note; several show "3 items · 2 deductions, 1 addition"), replacing the word
    "adjustment" repeated eleven times down the panel.
+   **"ADD PAY" — paying someone with NO deal on the run** (per Keaton: "I do
+   little incentives and such where i have to pay people out and they dont
+   always have a deal to be paid on when i owe them that money"). A button in
+   this panel's header opens a three-field bar: who (the whole active roster,
+   not just people on the run), amount, and what for. It writes an ordinary
+   dated `payroll_adjustments` row, so **nothing downstream changed**: the run
+   headline, the payee row, the pay statement, the CSV export and the lock
+   guard already handled it, because `payees`'s `ensure` has always been able
+   to build a row from an adjustment alone (027). The ONLY thing missing was a
+   way to create that first adjustment — the per-row `+` calls
+   `saveAdjustment(p.id)`, so it can only ever top up someone who already has
+   a row.
+   - **THE NOTE IS REQUIRED.** It is the line's label on the pay statement, and
+     a blank one renders as a bare "—" — the money-line-with-no-label bug
+     already fixed once for deductions. Verified by reading the clipboard:
+     "• Door-knock contest — 2nd place: $250.00".
+   - **Someone already on the run is LABELLED, not filtered out** of the
+     picker ("— already on this run"): a deal plus a spiff is normal, and
+     silently dropping them from the list would read as broken.
+   - A negative works (it is the same column as the `+` editor), but the hint
+     points at **Log a deduction** for anything tied to a job, since only that
+     path tracks what is still owed (050).
+   - **`distinctPayDates` now reads ADJUSTMENTS as well as deals.** A run used
+     to exist only if a deal carried that `pay_date`, so an incentive paid on
+     a week where that person — or anyone — had no deal could land on a date
+     the run picker never offers, and the money would be invisible on every
+     screen. Both call sites pass them.
    **The RUN TOTAL row sums its own column** (`payTotals.net = dealPay + adj`),
    never `summary.total`. The two differ when a deal carries a share with
    nobody assigned: that money is in the run headline but reaches no payee, so

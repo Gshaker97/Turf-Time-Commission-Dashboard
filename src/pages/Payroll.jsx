@@ -30,8 +30,14 @@ const ISSUE    = 'Sales Issue'
 // headline total — this is what keeps the run in step with the commission sheet.
 const isFinalized = (d) => d.status === APPROVED || d.status === PAID
 
-const distinctPayDates = (deals) =>
-  [...new Set(deals.filter(d => d.pay_date).map(d => d.pay_date))].sort()
+// Every pay date the page can show. Deals are the usual source, but an
+// ADJUSTMENT alone makes a run real too — an incentive paid to someone with no
+// deal that week (per Keaton) would otherwise sit on a date the run picker
+// never offers, and the money would be invisible on every screen.
+const distinctPayDates = (deals, adjustments = []) => [...new Set([
+  ...deals.filter(d => d.pay_date).map(d => d.pay_date),
+  ...adjustments.filter(a => a.pay_date).map(a => a.pay_date),
+])].sort()
 
 function downloadCsv(name, rows) {
   const csv = rows.map(r => r.map(c => {
@@ -241,7 +247,7 @@ export default function Payroll() {
     setDeals(dd); setUsers(u || []); setAdjustments(adj || []); setLocks(lk || [])
     setView(v => {
       if (v) return v
-      const pds = distinctPayDates(dd)
+      const pds = distinctPayDates(dd, adj || [])
       return pds.find(p => p >= today) || pds[pds.length - 1] || null
     })
     setLoading(false)
@@ -256,6 +262,49 @@ export default function Payroll() {
     () => (view && view !== 'overdue') ? adjustments.filter(a => a.pay_date === view) : [],
     [adjustments, view]
   )
+
+  // "Add pay" — a payee who is NOT on this run yet (per Keaton: "I do little
+  // incentives and such where i have to pay people out and they dont always
+  // have a deal to be paid on"). The payee panel has always been able to RENDER
+  // someone whose only line is an adjustment (`ensure` in `payees`); the one
+  // thing missing was a way to create that first adjustment, because the `+`
+  // is bound to an existing row.
+  const [addPayOpen, setAddPayOpen] = useState(false)
+  const [addPayId, setAddPayId]     = useState('')
+  const [addPayAmt, setAddPayAmt]   = useState('')
+  const [addPayNote, setAddPayNote] = useState('')
+  const [addPaySaving, setAddPaySaving] = useState(false)
+
+  // Anyone active on the roster can be paid, not just people already on the
+  // run — that is the whole point. Ghosts stay hidden from non-admins as
+  // everywhere else. Already-on-this-run is LABELLED rather than filtered out:
+  // adding a second line to someone who has one is perfectly normal (a deal
+  // plus a spiff), and silently dropping them from the list would look broken.
+  const payUsers = useMemo(
+    () => users.filter(u => u.active !== false && (isAdmin || !u.ghost))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    [users, isAdmin])
+
+  const closeAddPay = () => { setAddPayOpen(false); setAddPayId(''); setAddPayAmt(''); setAddPayNote('') }
+
+  async function saveAddPay() {
+    const amt = parseFloat(addPayAmt)
+    // A NOTE IS REQUIRED. The pay statement prints the note as the line's
+    // label, and a blank one renders as a bare "—" — the exact money-line-with-
+    // no-label bug already fixed once for deductions. An incentive the rep
+    // can't identify on their cheque is worse than no line at all.
+    if (!addPayId || !amt || !addPayNote.trim()) return
+    if (!view || view === 'overdue') return
+    setAddPaySaving(true)
+    const res = await addPayrollAdjustment(
+      { payeeId: addPayId, payDate: view, amount: amt, note: addPayNote.trim() }, profile?.id)
+    setAddPaySaving(false)
+    if (res?.error) { toast.error('Could not add that pay: ' + (res.error.message || 'unknown error')); return }
+    const who = users.find(u => u.id === addPayId)?.name || 'that person'
+    toast.success(`${fmt(amt)} added for ${who} on this run.`)
+    closeAddPay()
+    reloadAdjustments()
+  }
 
   async function saveAdjustment(payeeId) {
     const amt = parseFloat(adjAmt)
@@ -280,7 +329,7 @@ export default function Payroll() {
     vp:       users.find(u => u.id === data.vp_id)       ?? null,
   })
 
-  const payDates = useMemo(() => distinctPayDates(deals), [deals])
+  const payDates = useMemo(() => distinctPayDates(deals, adjustments), [deals, adjustments])
   const idx = payDates.indexOf(view)
 
   // Legacy deals (sale_date before the data-start cutoff) predate our atomized
@@ -397,6 +446,10 @@ export default function Payroll() {
     }
     return Object.values(m).sort((a, b) => b.total - a.total)
   }, [runDeals, runAdjustments, users])
+
+  // Who already has a row on this run — the Add-pay picker LABELS them rather
+  // than hiding them, since a second line (a deal plus a spiff) is normal.
+  const payeeIds = useMemo(() => new Set(payees.map(p => p.id)), [payees])
 
   // ── Pay per person per RUN, for the deduction modal ───────────────────
   // "Can this actually come out?" is a question about a cheque that may not
@@ -1392,6 +1445,16 @@ export default function Payroll() {
                       </button>
                     )}
                     {isAdmin && !runLock && (
+                      <button onClick={() => setAddPayOpen(o => !o)}
+                        title="Pay someone who has no deal on this run — an incentive, a spiff, anything owed"
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11.5px] font-semibold transition-colors"
+                        style={addPayOpen
+                          ? { background: 'rgba(0,184,148,0.12)', border: '1px solid rgba(0,184,148,0.5)', color: '#00b894' }
+                          : { background: '#1a1a1a', border: '1px solid #2e2e2e', color: 'rgba(255,255,255,0.6)' }}>
+                        <Plus size={12} /> Add pay
+                      </button>
+                    )}
+                    {isAdmin && !runLock && (
                       <button onClick={lockRun} title="Freeze this run — its deals and adjustments become read-only until unlocked"
                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11.5px] font-semibold text-white/60 hover:text-white transition-colors"
                         style={{ background: '#1a1a1a', border: '1px solid #2e2e2e' }}>
@@ -1403,6 +1466,61 @@ export default function Payroll() {
               </div>
               {showPayees && (
                 <>
+                  {/* "Add pay" form — a person who has no deal on this run.
+                      The write is an ordinary dated payroll_adjustment, so the
+                      run total, the payee row, the pay statement, the CSV
+                      export and the lock guard all handle it with no change:
+                      `payees` has always been able to build a row from an
+                      adjustment alone. */}
+                  {isAdmin && addPayOpen && view !== 'overdue' && !runLock && (
+                    <div className="px-4 py-3 border-b border-white/10" style={{ background: '#1a1a1a' }}>
+                      <div className="flex items-end gap-2 flex-wrap">
+                        <label className="flex flex-col gap-1 min-w-[180px] flex-1">
+                          <span className="text-[9px] font-bold uppercase tracking-[0.1em] text-white/30">Who</span>
+                          <select autoFocus value={addPayId} onChange={e => setAddPayId(e.target.value)}
+                            className="h-8 px-2 rounded-lg text-[12px] text-white focus:outline-none appearance-none"
+                            style={{ background: '#242424', border: '1px solid #333' }}>
+                            <option value="">Pick a person…</option>
+                            {payUsers.map(u => (
+                              <option key={u.id} value={u.id}>
+                                {u.name}{payeeIds.has(u.id) ? ' — already on this run' : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="flex flex-col gap-1">
+                          <span className="text-[9px] font-bold uppercase tracking-[0.1em] text-white/30">Amount</span>
+                          <input type="number" step="0.01" value={addPayAmt} onChange={e => setAddPayAmt(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') saveAddPay(); if (e.key === 'Escape') closeAddPay() }}
+                            placeholder="$" className="h-8 w-24 px-2 rounded-lg text-[12px] text-white focus:outline-none"
+                            style={{ background: '#242424', border: '1px solid rgba(0,184,148,0.4)' }} />
+                        </label>
+                        <label className="flex flex-col gap-1 flex-[2] min-w-[200px]">
+                          <span className="text-[9px] font-bold uppercase tracking-[0.1em] text-white/30">What for</span>
+                          <input value={addPayNote} onChange={e => setAddPayNote(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') saveAddPay(); if (e.key === 'Escape') closeAddPay() }}
+                            placeholder="e.g. Door-knock contest — 2nd place"
+                            className="h-8 px-2 rounded-lg text-[12px] text-white focus:outline-none"
+                            style={{ background: '#242424', border: '1px solid #333' }} />
+                        </label>
+                        <button onClick={saveAddPay} disabled={!addPayId || !parseFloat(addPayAmt) || !addPayNote.trim() || addPaySaving}
+                          className="h-8 px-4 rounded-lg text-[12px] font-bold text-dark transition-opacity disabled:opacity-35"
+                          style={{ background: '#00b894' }}>
+                          {addPaySaving ? 'Adding…' : 'Add to this run'}
+                        </button>
+                        <button onClick={closeAddPay} className="h-8 px-2 rounded-lg text-white/40 hover:text-white transition-colors">
+                          <X size={14} />
+                        </button>
+                      </div>
+                      <p className="text-[10.5px] text-white/35 mt-2">
+                        Paid on <b className="text-white/60">{fmtDay(view)}</b> and listed with everyone else.
+                        {' '}The note is what the rep sees on their pay statement, so say what it is for.
+                        {' '}A negative amount takes money off — though a deduction tied to a job belongs in
+                        {' '}<b className="text-white/60">Log a deduction</b>, which tracks what is still owed.
+                      </p>
+                    </div>
+                  )}
+
                   {/* Column headings. Deliberately the same shape as the
                       "Deals in this run" table below, so the page reads as one
                       thing. The old layout was a TWO-COLUMN grid, which went
