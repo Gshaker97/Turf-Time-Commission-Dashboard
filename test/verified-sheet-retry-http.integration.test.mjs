@@ -27,8 +27,8 @@ test('actual retry and preview HTTP routes retain raw-body auth and no-parameter
     const start=source.indexOf(`app.post('/api/arcsite/verified-sheet-reconcile/${routeName}',`),end=source.indexOf(`app.get('/api/arcsite/verified-sheet-reconcile/${routeName}/`,start)
     assert.ok(start>=0&&end>start)
     new Function('app','express',middleware)(app,express)
-    const args=['app','verifiedRetry','analystAuthorized','retryRequestValid','verifiedRunBusy','crypto','VERIFIED_RETRY_PREFIX','verifiedInsertClaim','err']
-    new Function(...args,source.slice(start,end))(app,verifiedRetry,req=>req.get('X-Test-Authorization')==='owner'?'jarvis':null,retryRequestValid,false,crypto,'synthetic_',async(key,value)=>{f.calls.previewRecords.push({key,value});return true},error=>({ok:false,error}))
+    const args=['app','verifiedRetry','verifiedTriggerAuthorized','retryRequestValid','verifiedRunBusy','crypto','VERIFIED_RETRY_PREFIX','verifiedInsertClaim','err']
+    new Function(...args,source.slice(start,end))(app,verifiedRetry,req=>req.get('X-Test-Authorization')==='owner',retryRequestValid,false,crypto,'synthetic_',async(key,value)=>{f.calls.previewRecords.push({key,value});return true},error=>({ok:false,error}))
     const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s))})
     try{
       const response=await fetch(`http://127.0.0.1:${server.address().port}/api/arcsite/verified-sheet-reconcile/${routeName}${scenario.query||''}`,{method:'POST',headers:{'Content-Type':'application/json','X-Test-Authorization':scenario.authorized===false?'denied':'owner'},body:scenario.body})
