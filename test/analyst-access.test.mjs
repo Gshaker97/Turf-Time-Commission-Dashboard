@@ -116,3 +116,8 @@ test('analystRoute answers 503 (not an empty 200) when a view reports a storage 
   assert.doesNotMatch(source, /arcSetting[\s\S]{0,200}\.catch\(\(\) => \[\]\)/, 'no read helper may turn an error into an empty list')
   assert.doesNotMatch(source, /ARC_VERIFIED_TRIGGER_KEY/, 'no new trigger credential')
 })
+
+test('analystRoute envelope fields come after the view body so a view can never shadow ok/caller', () => {
+  const src = source.match(/^function analystRoute[\s\S]*?\n\}/m)[0]
+  assert.ok(src.indexOf('...body,') < src.indexOf('ok: true, caller, bundle_built_at'), 'body spread must precede the envelope')
+})

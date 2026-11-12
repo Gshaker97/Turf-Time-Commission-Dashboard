@@ -3460,11 +3460,12 @@ function analystRoute(path, sourceKey, pick, { jarvisOnly = false } = {}) {
       // A view that could not READ its storage says so with a 503 — never a 200 that looks like "nothing stored".
       if (body && body.available === false && body.reason === 'error') return res.status(503).json({ ok: false, caller, error: 'storage read failed', detail: body.error || null })
       res.json({
+        ...body,
+        // envelope fields LAST so no view field can shadow them
         ok: true, caller, bundle_built_at: data.built_at,
         // served / served_at describe THIS response; fetched_at / data_as_of /
         // last_fetch_mode describe the data itself.
         ...(sourceKey ? { source: { name: sourceKey, served, mode: served, served_at: new Date().toISOString(), ...meta, ...(liveNote ? { note: liveNote } : {}) } } : {}),
-        ...body,
       })
     } catch (e) { res.status(500).json(err(e.message || 'feed failed')) }
   })

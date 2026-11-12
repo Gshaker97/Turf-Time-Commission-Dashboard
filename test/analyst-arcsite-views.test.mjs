@@ -100,7 +100,7 @@ test('run views: allowlisted scalars, paged lists, nothing unlisted', () => {
   assert.deepEqual(v.changes.rows[0], { customer: 'C', kind: 'move', from: '2026-01-01', to: '2026-01-02', outcome: 'ok' })
   assert.deepEqual(v.flags.rows[0], { customer: 'F', flag: 'no PM job' })
   const audit = runView(read({ at: 'A', scanned: 5, gaps: [{ project_id: 'p', customer: 'c', contracts: '2 attached / 1 signed', value: 1, signed_total: 2, sheet_price: 3, ghl_token: 'x' }], sheet_gaps: [], fixed: [], failed: [{ project_id: 'p', error: 'boom' }] }), 'contract-audit')
-  assert.equal(audit.scanned, 5); assert.deepEqual(audit.gaps.rows[0], { project_id: 'p', customer: 'c', contracts: '2 attached / 1 signed', value: 1, signed_total: 2, sheet_price: 3 }); assert.deepEqual(audit.failed.rows[0], { project_id: 'p', error: 'boom' })
+  assert.equal(audit.scanned, 5); assert.equal(audit.ok, undefined); assert.equal(runView(read({ ok: 205 }), 'contract-audit').ok_count, 205); assert.deepEqual(audit.gaps.rows[0], { project_id: 'p', customer: 'c', contracts: '2 attached / 1 signed', value: 1, signed_total: 2, sheet_price: 3 }); assert.deepEqual(audit.failed.rows[0], { project_id: 'p', error: 'boom' })
   const log = logView(read([{ at: 'A', opp: 'o', kind: 'fill', to: '2026-02-02', token: 'x' }]), {})
   assert.deepEqual(log.rows[0], { at: 'A', opp: 'o', kind: 'fill', to: '2026-02-02' })
 })
