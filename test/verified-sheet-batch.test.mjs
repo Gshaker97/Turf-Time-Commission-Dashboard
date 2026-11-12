@@ -70,8 +70,8 @@ test('server claims insert-only with private auth and per-field guards',()=>{
   assert.match(block,/verifiedBatchStore\('POST','\/rest\/v1\/app_settings',rows\)/)
   assert.match(block,/verified_sheet_consumed_/);assert.doesNotMatch(block,/resolution=merge-duplicates|\?on_conflict=/)
   assert.match(block,/redirect:'manual'/);assert.match(block,/controller\.signal/)
-  assert.match(block,/authorized:analystAuthorized\(req\)==='jarvis'/)
-  assert.match(block,/if\(analystAuthorized\(req\)!=='jarvis'\)/)
+  assert.match(block,/authorized:verifiedTriggerAuthorized\(req\)===true/)   // POST: owner trigger auth, never the analyst key
+  assert.match(block,/if\(analystAuthorized\(req\)!=='jarvis'\)/)              // GET status: Jarvis read
   assert.match(s,/verifiedBatchActive && !batchGuards\(process\.env\)/)
   assert.doesNotMatch(block,/ARC_VERIFIED_SHEET_AUTO\s*=/)
 })

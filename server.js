@@ -24,6 +24,7 @@ import { createVerifiedRetry, retryRequestValid } from './lib/verified-sheet-ret
 import { createVerifiedDaily, dailyGuards } from './lib/verified-sheet-daily.mjs'
 import { createDailyStore, DAILY_WORKER_KEY, dailyDayKey, dailyCasPath } from './lib/verified-sheet-daily-store.mjs'
 import { validatePrivatePolicy } from './lib/verified-sheet-policy.mjs'
+import * as arcViews from './lib/analyst-arcsite-views.mjs'
 import { parseSignedPdfText } from './lib/parse-signed-pdf.mjs'
 import { readVerifiedSheetSnapshot } from './lib/verified-sheet-snapshot.mjs'
 import {
@@ -4106,6 +4107,25 @@ analystRoute('/api/analyst/audit', 'change_order_audit', d => d.change_order_aud
 
 // The schema a Custom GPT "Action" imports (no secret inside — the key is
 // configured in the GPT as an API-key header named x-api-key).
+// ── Read-only operational views for Jarvis (access review, Nov 12 2026). Each
+// reads owner-private app_settings rows and returns a minimized, redacted copy:
+// no tokens, no PDF links, no secrets, bounded page sizes. GET only.
+const arcSetting = async key => (((await restGet(`/rest/v1/app_settings?key=eq.${encodeURIComponent(key)}&select=value`).catch(() => []))[0] || {}).value ?? null)
+const arcSettingsLike = async prefix => (await restGet(`/rest/v1/app_settings?key=like.${encodeURIComponent(prefix)}*&select=key,value`).catch(() => [])) || []
+analystRoute('/api/analyst/arcsite/sweep-seen', null, async (d, req) => arcViews.sweepSeenView(await arcSetting(ARC_VALUE_SEEN_KEY), { q: req.query.q, offset: req.query.offset, limit: req.query.limit }), { jarvisOnly: true })
+analystRoute('/api/analyst/arcsite/verified/daily', null, async (d, req) => {
+  const days = (await arcSettingsLike('verified_sheet_daily_day_')).map(r => r.key.replace('verified_sheet_daily_day_', '')).sort()
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.day || '')) ? String(req.query.day) : days[days.length - 1] || null
+  return arcViews.dailyView({ days, day, worker: await arcSetting(DAILY_WORKER_KEY), sweep: day ? await arcSetting(dailyDayKey(day)) : null })
+}, { jarvisOnly: true })
+analystRoute('/api/analyst/arcsite/verified/batches', null, async (d, req) => arcViews.receiptsView(await arcSettingsLike(VERIFIED_BATCH_PREFIX), VERIFIED_BATCH_PREFIX, { id: req.query.id, offset: req.query.offset, limit: req.query.limit }), { jarvisOnly: true })
+analystRoute('/api/analyst/arcsite/verified/retries', null, async (d, req) => arcViews.receiptsView(await arcSettingsLike(VERIFIED_RETRY_PREFIX), VERIFIED_RETRY_PREFIX, { id: req.query.id, offset: req.query.offset, limit: req.query.limit }), { jarvisOnly: true })
+analystRoute('/api/analyst/arcsite/install-date-sync', null, async (d, req) => String(req.query.log) === '1'
+  ? arcViews.pageView(await arcSetting(ARC_IDS_LOG_KEY), { offset: req.query.offset, limit: req.query.limit, q: req.query.q })
+  : arcViews.runView(await arcSetting(ARC_IDS_KEY), { offset: req.query.offset, limit: req.query.limit }), { jarvisOnly: true })
+analystRoute('/api/analyst/arcsite/pdf-pending', null, async () => arcViews.pdfQueueView(await arcSetting(ARC_PDF_PENDING_KEY), await arcSetting(ARC_PDF_FAIL_KEY)), { jarvisOnly: true })
+analystRoute('/api/analyst/arcsite/contract-audit', null, async (d, req) => arcViews.runView(await arcSetting(ARC_AUDIT_KEY), { offset: req.query.offset, limit: req.query.limit, listKeys: ['gaps', 'sheet_gaps', 'fixed', 'results'] }), { jarvisOnly: true })
+
 app.get('/api/analyst/openapi.json', (req, res) => {
   const base = (process.env.PUBLIC_SITE_URL || `https://${req.get('host')}`).replace(/\/+$/, '')
   const qp = (name, description, schema = { type: 'integer' }) => ({ name, in: 'query', required: false, description, schema })
@@ -4339,6 +4359,22 @@ app.get('/api/health', (req, res) => {
 // pasted into a third-party vendor's webhook config. The service key still
 // works (handy for curl tests) but the vendor should get the scoped secret.
 // Also accepts ?secret= for senders that can't set custom headers.
+// Verified-reconcile TRIGGER auth (the four POST routes that can start runs,
+// batches or retries). Accepts the owner's existing write mechanism
+// (ingestAuthorized: LEADS_INGEST_SECRET or the service key) or, when set, the
+// dedicated ARC_VERIFIED_TRIGGER_KEY. The ANALYST key is never accepted here,
+// so Jarvis's read-only key is GET-only by construction regardless of the
+// feature switches (access review, Nov 12 2026).
+function verifiedTriggerAuthorized(req) {
+  const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim()
+    || String(req.headers['x-api-key'] || '').trim()
+  if (!supplied) return false
+  if (ANALYST_API_KEY && supplied === ANALYST_API_KEY) return false
+  if (DASHBOARD_READ_KEY && supplied === DASHBOARD_READ_KEY) return false
+  const dedicated = (process.env.ARC_VERIFIED_TRIGGER_KEY || '').trim()
+  if (dedicated && supplied === dedicated) return true
+  return ingestAuthorized(req)
+}
 function ingestAuthorized(req) {
   const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim()
     || String(req.headers['x-api-key'] || '').trim()
@@ -4775,7 +4811,7 @@ app.get('/api/arcsite/verified-sheet-reconcile',async(req,res)=>{
   try{res.json(await verifiedSheetLast()||{ok:false,error:'no verified reconciliation run yet'})}catch{res.status(503).json(err('report unavailable'))}
 })
 app.post('/api/arcsite/verified-sheet-reconcile',async(req,res)=>{
-  if(analystAuthorized(req)!=='jarvis')return res.status(401).json(err('Unauthorized'))
+  if(!verifiedTriggerAuthorized(req))return res.status(401).json(err('Unauthorized'))
   // HTTP trigger is strictly dry-run; activation/approvals cannot come from body.
   if(verifiedRunBusy)return res.status(409).json(err('verified reconciliation already running'))
   try{await verifiedLoadPrivatePolicy()}catch{return res.status(409).json(err('owner-private reviewed scope unavailable or unconfigured'))}
@@ -4821,7 +4857,7 @@ const verifiedBatchStart=createVerifiedBatch({
   },
 })
 app.post('/api/arcsite/verified-sheet-reconcile/batch',async(req,res)=>{
-  const result=await verifiedBatchStart({authorized:analystAuthorized(req)==='jarvis',body:req.body,query:req.query})
+  const result=await verifiedBatchStart({authorized:verifiedTriggerAuthorized(req)===true,body:req.body,query:req.query})
   res.status(result.status).json(result.body)
 })
 app.get('/api/arcsite/verified-sheet-reconcile/batch/:batchId',async(req,res)=>{
@@ -4906,7 +4942,7 @@ app.get('/api/arcsite/verified-sheet-reconcile/daily',async(req,res)=>{
 // Preview persists findings only. Each job gets a separate real fresh generation;
 // the five-minute TTL and per-field prewrite checks are not extended or relabeled.
 app.post('/api/arcsite/verified-sheet-reconcile/retry-preview',async(req,res)=>{
-  if(analystAuthorized(req)!=='jarvis')return res.status(401).json(err('Unauthorized'))
+  if(!verifiedTriggerAuthorized(req))return res.status(401).json(err('Unauthorized'))
   if(!retryRequestValid({body:req.body,query:req.query}))return res.status(400).json(err('preview accepts no parameters'))
   if(verifiedRunBusy)return res.status(409).json(err('verified reconciliation already running'))
   const requestId=crypto.randomUUID(),key=VERIFIED_RETRY_PREFIX+'preview_'+requestId
@@ -4926,7 +4962,7 @@ app.get('/api/arcsite/verified-sheet-reconcile/retry-preview/:requestId',async(r
   }catch{return res.status(503).json(err('preview unavailable'))}
 })
 app.post('/api/arcsite/verified-sheet-reconcile/retry',async(req,res)=>{
-  const result=await verifiedRetry.start({authorized:analystAuthorized(req)==='jarvis',body:req.body,query:req.query})
+  const result=await verifiedRetry.start({authorized:verifiedTriggerAuthorized(req)===true,body:req.body,query:req.query})
   res.status(result.status).json(result.body)
 })
 app.get('/api/arcsite/verified-sheet-reconcile/retry/:retryId',async(req,res)=>{

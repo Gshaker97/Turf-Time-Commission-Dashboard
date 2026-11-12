@@ -31,7 +31,7 @@ test('real Express text middleware and actual batch route preserve strict raw-bo
     const app=express()
     // Evaluate the exact production middleware and POST route, not a substitute.
     new Function('app','express',middleware)(app,express)
-    new Function('app','verifiedBatchStart','analystAuthorized',route)(app,verifiedBatchStart,req=>req.get('X-Test-Authorization')==='owner'?'jarvis':null)
+    new Function('app','verifiedBatchStart','verifiedTriggerAuthorized',route)(app,verifiedBatchStart,req=>req.get('X-Test-Authorization')==='owner')
     const server=await new Promise(resolve=>{const listener=app.listen(0,'127.0.0.1',()=>resolve(listener))})
     try{
       const response=await fetch(`http://127.0.0.1:${server.address().port}/api/arcsite/verified-sheet-reconcile/batch${scenario.query||''}`,{method:'POST',headers:{'Content-Type':'application/json','X-Test-Authorization':scenario.authorized===false?'denied':'owner'},body:scenario.body})
