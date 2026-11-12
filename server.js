@@ -2510,35 +2510,33 @@ async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, ma
   if (!ARCSITE_API_TOKEN || !GHL_WRITE_TOKEN) { out.skipped = 'not configured'; return out }
   const floor = new Date(Date.now() - daysBack * 864e5).toISOString().slice(0, 10)
   const pause = ms => new Promise(res => setTimeout(res, ms))
-  // 1. Every opp installing on/after the floor (whole location, 100 a page).
+  // The same location-wide Project ID scan the sale path uses, before any
+  // update. A full page with no next-page proof is not the end. A Project ID
+  // on an opportunity outside this date window still counts.
+  _arcOppScanCache = { at: 0, scan: null }
+  const scan = await arcScanLocation()
+  const lookupBlocked = !scan.complete || scan.status === 'incomplete' || scan.status === 'uncertain' || scan.status === 'failed'
+  out.scanned = (scan.opportunities || []).length
   const cands = []
-  let path = `/opportunities/search?location_id=${GHL_LOCATION_ID}&limit=100`, pages = 0, scanComplete = true
-  while (path && pages < 300) {
-    const j = await ghlGet(path).catch(() => null)
-    if (!j) { scanComplete = false; break }
-    for (const op of (j.opportunities || [])) {
-      out.scanned++
-      const pid = oppProjectId(op), inst = oppInstallDay(op)
+  if (!lookupBlocked) {
+    for (const light of scan.opportunities || []) {
+      const op = light.raw
+      const pid = light.projectId
+      const inst = oppInstallDay(op)
       // No Install Date on the opp (common — Ron Little, Rocio Encinas…) used to
       // mean "never audited"; such opps now qualify by their created date.
       const key = inst || String(op.createdAt || '').slice(0, 10)
       if (pid && key && key >= floor) cands.push({ op, pid, inst: inst || null })
     }
-    pages++
-    const next = j.meta && j.meta.nextPageUrl
-    path = next && next.startsWith(GHL_BASE) ? next.slice(GHL_BASE.length) : null
-    if (pages >= 300 && path) scanComplete = false
-    await pause(150)
   }
   out.candidates = cands.length
-  const pidCount = new Map()
-  for (const cand of cands) pidCount.set(cand.pid, (pidCount.get(cand.pid) || 0) + 1)
-  if (!scanComplete) out.skipped = 'opportunity lookup did not finish'
+  if (lookupBlocked) out.skipped = 'opportunity lookup did not finish'
   // 2. Compare each against ArcSite. A gap is re-read by id before acting — the
   //    search index lags writes by minutes, so a fix from an hour ago can still
-  //    look missing there.
+  //    look missing there. More than one opportunity for a Project ID, anywhere
+  //    in the finished scan, is left for review.
   for (const { op, pid, inst } of cands) {
-    if (!scanComplete || (pidCount.get(pid) || 0) > 1) continue
+    if (lookupBlocked || scanProjectMatches(scan, pid).length !== 1) continue
     try {
       const signed = await arcSignedContracts(pid)
       if (!signed.length) continue

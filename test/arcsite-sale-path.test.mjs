@@ -481,3 +481,49 @@ test('multiple blank Project ID candidates are not chosen, created, or texted', 
   assert.equal(texts(), 0)
   assert.equal(world.puts.length, 0)
 })
+
+test('daily audit finds a same Project ID outside its date window and does not update or text', async () => {
+  const projectId = '900000000000012'
+  const fixture = projectFixture({
+    projectId, proposalId: '900012', total: 2300, phone: '555_010_0122', email: 'fixture-i@example.com', name: 'Fixture I', pdf: true,
+  })
+  const dated = (id, when) => ({
+    id, contactId: 'contact-i', status: 'open', pipelineId: 'pipe-outside', monetaryValue: 1000,
+    createdAt: new Date(when).toISOString(),
+    customFields: [{ id: PROJECT_FIELD, fieldValueString: projectId }, { id: INSTALL_FIELD, fieldValueDate: when }],
+  })
+  reset(makeWorld([
+    ...fillers(99, 'other-contact'),
+    dated('in-window', Date.now()),
+    dated('outside-window', Date.now() - 60 * 864e5),
+  ], [fixture]))
+  const audit = await arcContractAudit({ fix: true })
+  assert.equal(audit.skipped, null)
+  assert.ok(world.calls.some(call => call.href.includes('startAfterId=page2')))
+  assert.equal(creates(), 0)
+  assert.equal(texts(), 0)
+  assert.equal(world.puts.length, 0)
+  assert.equal(world.calls.some(call => call.method === 'PUT'), false)
+})
+
+test('daily audit does not treat a full page without a next page as a finished lookup', async () => {
+  const projectId = '900000000000013'
+  const fixture = projectFixture({
+    projectId, proposalId: '900013', total: 2400, phone: '555_010_0111', email: 'fixture-j@example.com', name: 'Fixture J', pdf: true,
+  })
+  reset(makeWorld([
+    ...fillers(99, 'other-contact'),
+    {
+      id: 'would-update', contactId: 'contact-j', status: 'open', pipelineId: 'pipe-outside', monetaryValue: 1000,
+      createdAt: new Date().toISOString(),
+      customFields: [{ id: PROJECT_FIELD, fieldValueString: projectId }, { id: INSTALL_FIELD, fieldValueDate: Date.now() }],
+    },
+  ], [fixture], { incomplete: true }))
+  const audit = await arcContractAudit({ fix: true })
+  assert.equal(audit.skipped, 'opportunity lookup did not finish')
+  assert.equal(audit.fixed.length, 0)
+  assert.equal(creates(), 0)
+  assert.equal(texts(), 0)
+  assert.equal(world.puts.length, 0)
+  assert.equal(world.calls.some(call => call.method === 'PUT'), false)
+})
