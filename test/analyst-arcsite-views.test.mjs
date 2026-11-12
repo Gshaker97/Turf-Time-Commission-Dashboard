@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { clampPage, redact, pageView, sweepSeenView, runView, dailyView, receiptsView, pdfQueueView } from '../lib/analyst-arcsite-views.mjs'
+import { clampPage, redact, read, pageView, sweepSeenView, runView, dailyView, receiptsView, pdfQueueView } from '../lib/analyst-arcsite-views.mjs'
 
 test('pagination clamps and pages correctly, including out-of-range offsets', () => {
   assert.deepEqual(clampPage({}), { offset: 0, limit: 50 })
@@ -14,20 +14,44 @@ test('pagination clamps and pages correctly, including out-of-range offsets', ()
 })
 
 test('missing data is explicit, never a crash', () => {
-  assert.deepEqual(pageView(null).available, false)
-  assert.deepEqual(sweepSeenView(undefined).available, false)
-  assert.deepEqual(runView(null), { available: false })
+  assert.equal(pageView(null).available, false); assert.equal(pageView(null).reason, 'missing')
+  assert.equal(sweepSeenView(undefined).reason, 'missing')
+  assert.deepEqual(runView(null), { available: false, reason: 'missing' })
   const d = dailyView({ days: [], day: null, worker: null, sweep: null }); assert.equal(d.available, false); assert.match(d.note, /no daily sweep records/)
   const d2 = dailyView({ days: ['2026-11-02'], day: '2026-11-09', worker: { state: 'running' }, sweep: null }); assert.equal(d2.available, true); assert.match(d2.note, /no sweep record stored for 2026-11-09/)
   assert.equal(receiptsView(undefined, 'x_', { id: 'abc' }).available, false)
-  assert.equal(pdfQueueView(null, null).available, false)
+  assert.equal(pdfQueueView(null, null).reason, 'missing')
 })
 
-test('redaction removes tokens, secrets and links at any depth and keeps everything else', () => {
-  const r = redact({ token: 'T', binding: 'keep-hash', nested: { secret: 'S', pdf_url: 'http://x', pdfUrl: 'http://y', url: 'http://z', ok: 1, list: [{ password: 'p', name: 'n' }] } })
-  assert.equal(r.token, '[redacted]'); assert.equal(r.binding, 'keep-hash')
-  assert.equal(r.nested.secret, '[redacted]'); assert.equal(r.nested.pdf_url, '[redacted]'); assert.equal(r.nested.pdfUrl, '[redacted]'); assert.equal(r.nested.url, '[redacted]')
-  assert.equal(r.nested.ok, 1); assert.equal(r.nested.list[0].password, '[redacted]'); assert.equal(r.nested.list[0].name, 'n')
+test('a FAILED storage read is reported as an error, never as an empty result', () => {
+  const err = read(null, new Error('fetch failed'))
+  for (const v of [pageView(err), sweepSeenView(err), runView(err), receiptsView(err, 'x_'), pdfQueueView(err, read([])), pdfQueueView(read([]), err), dailyView({ worker: err }), dailyView({ daysError: 'storage read failed' }), dailyView({ worker: read(null), sweep: err })]) {
+    assert.equal(v.available, false); assert.equal(v.reason, 'error'); assert.match(String(v.error), /fetch failed|storage read failed/)
+    assert.equal(v.rows, undefined, 'an error carries no rows that could pass for data')
+  }
+  // and a genuinely empty read is still 'missing', distinguishable from error
+  assert.equal(pageView(read(null)).reason, 'missing'); assert.equal(runView(read(null)).reason, 'missing')
+})
+
+test('daily sweep jobs are paged with next_offset so no record is unreachable', () => {
+  const jobs = Array.from({ length: 450 }, (_, i) => ({ state: i % 3 ? 'matched' : 'held', projectId: String(i) }))
+  const p1 = dailyView({ days: ['d'], day: 'd', worker: null, sweep: { ok: true, jobs } })
+  assert.equal(p1.sweep.jobs.total, 450); assert.equal(p1.sweep.jobs.rows.length, 50); assert.equal(p1.sweep.jobs.next_offset, 50)
+  const p2 = dailyView({ days: ['d'], day: 'd', worker: null, sweep: { ok: true, jobs } }, { offset: 400, limit: 500 })
+  assert.equal(p2.sweep.jobs.limit, 200); assert.equal(p2.sweep.jobs.rows.length, 50); assert.equal(p2.sweep.jobs.next_offset, null)
+  assert.deepEqual(p1.sweep.job_states, { held: 150, matched: 300 })
+})
+
+test('redaction removes secret-like KEYS (substring) and secret-like VALUES at any depth, keeps everything else', () => {
+  const r = redact({ token: 'T', binding: 'keep-hash', accessToken: 'a', sessionId: 's', 'X-Sync-Secret': 'x', apiKey: 'k', api_key: 'k2', Authorization: 'h', privateKey: 'pk', nested: { secret: 'S', pdf_url: 'http://x', pdfUrl: 'http://y', url: 'http://z', href: 'http://h', ok: 1, list: [{ password: 'p', passwd: 'q', name: 'n' }] } })
+  for (const k of ['token', 'accessToken', 'sessionId', 'X-Sync-Secret', 'apiKey', 'api_key', 'Authorization', 'privateKey']) assert.equal(r[k], '[redacted]', k)
+  assert.equal(r.binding, 'keep-hash')
+  for (const k of ['secret', 'pdf_url', 'pdfUrl', 'url', 'href']) assert.equal(r.nested[k], '[redacted]', k)
+  assert.equal(r.nested.ok, 1); assert.equal(r.nested.list[0].password, '[redacted]'); assert.equal(r.nested.list[0].passwd, '[redacted]'); assert.equal(r.nested.list[0].name, 'n')
+  // value-based: a JWT, a bearer string, a URL or a vendor key hiding under an innocent key name
+  const v = redact({ note: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U', hint: 'Bearer abc.def.ghi', where: 'https://assets.example/file.pdf', key2: 'sk-abcdefghijklmnopqrstuvwxyz', plain: 'Robert Durwood', amount: 2570.59, list: ['https://x.y/z', 'fine'] })
+  assert.equal(v.note, '[redacted]'); assert.equal(v.hint, '[redacted]'); assert.equal(v.where, '[redacted]'); assert.equal(v.key2, '[redacted]')
+  assert.equal(v.plain, 'Robert Durwood'); assert.equal(v.amount, 2570.59); assert.deepEqual(v.list, ['[redacted]', 'fine'])
   const d = dailyView({ days: ['d'], day: 'd', worker: { state: 'running', token: 'abc' }, sweep: { ok: true, jobs: [{ state: 'held', holds: ['x'] }, { state: 'matched' }] } })
   assert.equal(d.worker.token, '[redacted]'); assert.deepEqual(d.sweep.job_states, { held: 1, matched: 1 }); assert.equal(d.sweep.jobs.total, 2)
 })

@@ -1,6 +1,6 @@
 // Access review (Nov 12 2026): the analyst (Jarvis) key must read the analyst views and must get 401
 // on all four verified-sheet-reconcile POST routes even when every feature switch is enabled; the
-// owner's existing write mechanism and the dedicated trigger key must still work.
+// owner's existing write mechanism (and only that) must still work.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -10,7 +10,7 @@ const fn = name => { const m = source.match(new RegExp(`^function ${name}\\(req\
 const authSrc = fn('analystAuthorized') + '\n' + fn('ingestAuthorized') + '\n' + fn('verifiedTriggerAuthorized')
 const build = (env = {}) => {
   const saved = { ...process.env }
-  Object.assign(process.env, { LEADS_INGEST_SECRET: 'ingest-secret', ARC_VERIFIED_TRIGGER_KEY: '', ...env })
+  Object.assign(process.env, { LEADS_INGEST_SECRET: 'ingest-secret', ...env })
   const f = new Function('ANALYST_API_KEY', 'DASHBOARD_READ_KEY', 'SERVICE_KEY', 'process', authSrc + '; return { analystAuthorized, ingestAuthorized, verifiedTriggerAuthorized }')
   const out = f('jarvis-key', 'dashboard-key', 'service-key', process)
   return { ...out, restore: () => { for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]; Object.assign(process.env, saved) } }
@@ -28,8 +28,9 @@ test('analyst key reads: analystAuthorized recognises jarvis and dashboard keys 
   } finally { a.restore() }
 })
 
-test('trigger auth never accepts the analyst or dashboard key, even with every switch enabled and a dedicated key set', () => {
-  const a = build({ ...SWITCHES_ON, ARC_VERIFIED_TRIGGER_KEY: 'trigger-key' }); try {
+test('trigger auth never accepts the analyst or dashboard key, even with every switch enabled', () => {
+  const a = build({ ...SWITCHES_ON, ARC_VERIFIED_TRIGGER_KEY: 'should-be-ignored' }); try {
+    assert.equal(a.verifiedTriggerAuthorized(req('should-be-ignored')), false, 'no dedicated-key mechanism exists')
     assert.equal(a.verifiedTriggerAuthorized(req('jarvis-key')), false)
     assert.equal(a.verifiedTriggerAuthorized(req('jarvis-key', 'authorization')), false)
     assert.equal(a.verifiedTriggerAuthorized(req('dashboard-key')), false)
@@ -38,14 +39,13 @@ test('trigger auth never accepts the analyst or dashboard key, even with every s
   } finally { a.restore() }
 })
 
-test('trigger auth accepts the existing owner write mechanism and the dedicated key', () => {
-  const a = build({ ...SWITCHES_ON, ARC_VERIFIED_TRIGGER_KEY: 'trigger-key' }); try {
+test('trigger auth accepts only the existing owner write mechanism', () => {
+  const a = build(SWITCHES_ON); try {
     assert.equal(a.verifiedTriggerAuthorized(req('ingest-secret')), true)          // LEADS_INGEST_SECRET
     assert.equal(a.verifiedTriggerAuthorized(req('service-key')), true)            // service key
-    assert.equal(a.verifiedTriggerAuthorized(req('trigger-key')), true)            // dedicated key
-    assert.equal(a.verifiedTriggerAuthorized(req('trigger-key', 'authorization')), true)
+    assert.equal(a.verifiedTriggerAuthorized(req('ingest-secret', 'authorization')), true)
+    assert.equal(a.verifiedTriggerAuthorized(req('random')), false)
   } finally { a.restore() }
-  const b = build(SWITCHES_ON); try { assert.equal(b.verifiedTriggerAuthorized(req('trigger-key')), false, 'dedicated key unset → not accepted') } finally { b.restore() }
 })
 
 test('all four verified-reconcile POST routes use the trigger auth, and no POST route anywhere uses the analyst key', () => {
@@ -66,7 +66,7 @@ test('live route slices: analyst key → 401 on the four POST routes with switch
   const previewRoute = slice("app.post('/api/arcsite/verified-sheet-reconcile/retry-preview',", "app.get('/api/arcsite/verified-sheet-reconcile/retry-preview/:requestId'")
   const retryRoute = slice("app.post('/api/arcsite/verified-sheet-reconcile/retry',", "app.get('/api/arcsite/verified-sheet-reconcile/retry/:retryId'")
   const reportGet = slice("app.get('/api/arcsite/verified-sheet-reconcile',", "app.post('/api/arcsite/verified-sheet-reconcile',")
-  const a = build({ ...SWITCHES_ON, ARC_VERIFIED_TRIGGER_KEY: 'trigger-key' })
+  const a = build(SWITCHES_ON)
   const calls = { run: 0, batch: 0, preview: 0, retry: 0 }
   try {
     const app = express()
@@ -90,8 +90,8 @@ test('live route slices: analyst key → 401 on the four POST routes with switch
         }
       }
       assert.deepEqual(calls, { run: 0, batch: 0, preview: 0, retry: 0 }, 'rejected keys must trigger no run, batch, preview or retry work')
-      const ok1 = await fetch(base + '/api/arcsite/verified-sheet-reconcile/batch', { method: 'POST', headers: { 'x-api-key': 'trigger-key', 'Content-Type': 'application/json' }, body: '{}' })
-      assert.equal(ok1.status, 202, 'dedicated trigger key starts a batch')
+      const ok1 = await fetch(base + '/api/arcsite/verified-sheet-reconcile/batch', { method: 'POST', headers: { 'x-api-key': 'service-key', 'Content-Type': 'application/json' }, body: '{}' })
+      assert.equal(ok1.status, 202, 'owner service key starts a batch')
       const ok2 = await fetch(base + '/api/arcsite/verified-sheet-reconcile/retry', { method: 'POST', headers: { 'x-api-key': 'ingest-secret', 'Content-Type': 'application/json' }, body: '{}' })
       assert.equal(ok2.status, 200, 'existing owner write mechanism still works')
       const get = await fetch(base + '/api/arcsite/verified-sheet-reconcile', { headers: { 'x-api-key': 'jarvis-key' } })
@@ -107,4 +107,12 @@ test('analyst arcsite views are registered as Jarvis-only GET routes', () => {
   for (const v of views) { const m = source.match(new RegExp(`analystRoute\\('${v.replace(/\//g, '\\/')}'[\\s\\S]*?\\{ jarvisOnly: true \\}\\)`)); assert.ok(m, v + ' must be a jarvisOnly analystRoute') }
   assert.match(source.match(/^function analystRoute[\s\S]*?\n\}/m)[0], /app\.get\(path/, 'analystRoute registers GET only')
   assert.doesNotMatch(source.match(/^function analystRoute[\s\S]*?\n\}/m)[0], /app\.(post|put|delete)\(/)
+})
+
+test('analystRoute answers 503 (not an empty 200) when a view reports a storage read error', () => {
+  const src = source.match(/^function analystRoute[\s\S]*?\n\}/m)[0]
+  assert.match(src, /reason === 'error'\) return res\.status\(503\)/, 'a failed storage read must surface as 503')
+  assert.match(source, /const arcSetting = async key => \{ try \{/, 'arcSetting must catch and return a read result, not swallow to null')
+  assert.doesNotMatch(source, /arcSetting[\s\S]{0,200}\.catch\(\(\) => \[\]\)/, 'no read helper may turn an error into an empty list')
+  assert.doesNotMatch(source, /ARC_VERIFIED_TRIGGER_KEY/, 'no new trigger credential')
 })

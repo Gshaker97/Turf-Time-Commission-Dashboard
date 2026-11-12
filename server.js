@@ -3456,12 +3456,15 @@ function analystRoute(path, sourceKey, pick, { jarvisOnly = false } = {}) {
     const meta = sourceKey ? withAge(data.sources[sourceKey] || { status: 'missing' }) : undefined
     const served = servedLive ? 'live' : 'cached copy'
     try {
+      const body = await pick(data, req)   // a view may be async (the field audit reads its stored result)
+      // A view that could not READ its storage says so with a 503 — never a 200 that looks like "nothing stored".
+      if (body && body.available === false && body.reason === 'error') return res.status(503).json({ ok: false, caller, error: 'storage read failed', detail: body.error || null })
       res.json({
         ok: true, caller, bundle_built_at: data.built_at,
         // served / served_at describe THIS response; fetched_at / data_as_of /
         // last_fetch_mode describe the data itself.
         ...(sourceKey ? { source: { name: sourceKey, served, mode: served, served_at: new Date().toISOString(), ...meta, ...(liveNote ? { note: liveNote } : {}) } } : {}),
-        ...(await pick(data, req)),   // a view may be async (the field audit reads its stored result)
+        ...body,
       })
     } catch (e) { res.status(500).json(err(e.message || 'feed failed')) }
   })
@@ -4110,13 +4113,17 @@ analystRoute('/api/analyst/audit', 'change_order_audit', d => d.change_order_aud
 // ── Read-only operational views for Jarvis (access review, Nov 12 2026). Each
 // reads owner-private app_settings rows and returns a minimized, redacted copy:
 // no tokens, no PDF links, no secrets, bounded page sizes. GET only.
-const arcSetting = async key => (((await restGet(`/rest/v1/app_settings?key=eq.${encodeURIComponent(key)}&select=value`).catch(() => []))[0] || {}).value ?? null)
-const arcSettingsLike = async prefix => (await restGet(`/rest/v1/app_settings?key=like.${encodeURIComponent(prefix)}*&select=key,value`).catch(() => [])) || []
+// Reads return { ok, value, error } so a FAILED read is never mistaken for an empty row.
+const arcSetting = async key => { try { const rows = await restGet(`/rest/v1/app_settings?key=eq.${encodeURIComponent(key)}&select=value`); return arcViews.read(((rows || [])[0] || {}).value ?? null) } catch (e) { return arcViews.read(null, e) } }
+const arcSettingsLike = async prefix => { try { return arcViews.read((await restGet(`/rest/v1/app_settings?key=like.${encodeURIComponent(prefix)}*&select=key,value`)) || []) } catch (e) { return arcViews.read(null, e) } }
 analystRoute('/api/analyst/arcsite/sweep-seen', null, async (d, req) => arcViews.sweepSeenView(await arcSetting(ARC_VALUE_SEEN_KEY), { q: req.query.q, offset: req.query.offset, limit: req.query.limit }), { jarvisOnly: true })
 analystRoute('/api/analyst/arcsite/verified/daily', null, async (d, req) => {
-  const days = (await arcSettingsLike('verified_sheet_daily_day_')).map(r => r.key.replace('verified_sheet_daily_day_', '')).sort()
+  const dayRows = await arcSettingsLike('verified_sheet_daily_day_')
+  if (!dayRows.ok) return arcViews.dailyView({ daysError: dayRows.error })
+  const days = dayRows.value.map(r => r.key.replace('verified_sheet_daily_day_', '')).sort()
   const day = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.day || '')) ? String(req.query.day) : days[days.length - 1] || null
-  return arcViews.dailyView({ days, day, worker: await arcSetting(DAILY_WORKER_KEY), sweep: day ? await arcSetting(dailyDayKey(day)) : null })
+  // jobs are paged: ?offset=&limit= (≤200) with next_offset in the response
+  return arcViews.dailyView({ days, day, worker: await arcSetting(DAILY_WORKER_KEY), sweep: day ? await arcSetting(dailyDayKey(day)) : arcViews.read(null) }, { offset: req.query.offset, limit: req.query.limit })
 }, { jarvisOnly: true })
 analystRoute('/api/analyst/arcsite/verified/batches', null, async (d, req) => arcViews.receiptsView(await arcSettingsLike(VERIFIED_BATCH_PREFIX), VERIFIED_BATCH_PREFIX, { id: req.query.id, offset: req.query.offset, limit: req.query.limit }), { jarvisOnly: true })
 analystRoute('/api/analyst/arcsite/verified/retries', null, async (d, req) => arcViews.receiptsView(await arcSettingsLike(VERIFIED_RETRY_PREFIX), VERIFIED_RETRY_PREFIX, { id: req.query.id, offset: req.query.offset, limit: req.query.limit }), { jarvisOnly: true })
@@ -4360,9 +4367,8 @@ app.get('/api/health', (req, res) => {
 // works (handy for curl tests) but the vendor should get the scoped secret.
 // Also accepts ?secret= for senders that can't set custom headers.
 // Verified-reconcile TRIGGER auth (the four POST routes that can start runs,
-// batches or retries). Accepts the owner's existing write mechanism
-// (ingestAuthorized: LEADS_INGEST_SECRET or the service key) or, when set, the
-// dedicated ARC_VERIFIED_TRIGGER_KEY. The ANALYST key is never accepted here,
+// batches or retries). Accepts ONLY the owner's existing write mechanism
+// (ingestAuthorized: LEADS_INGEST_SECRET or the service key). The ANALYST key is never accepted here,
 // so Jarvis's read-only key is GET-only by construction regardless of the
 // feature switches (access review, Nov 12 2026).
 function verifiedTriggerAuthorized(req) {
@@ -4371,9 +4377,7 @@ function verifiedTriggerAuthorized(req) {
   if (!supplied) return false
   if (ANALYST_API_KEY && supplied === ANALYST_API_KEY) return false
   if (DASHBOARD_READ_KEY && supplied === DASHBOARD_READ_KEY) return false
-  const dedicated = (process.env.ARC_VERIFIED_TRIGGER_KEY || '').trim()
-  if (dedicated && supplied === dedicated) return true
-  return ingestAuthorized(req)
+  return ingestAuthorized(req)   // the owner's existing write mechanism only; no new credential
 }
 function ingestAuthorized(req) {
   const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim()
