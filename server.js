@@ -35,6 +35,9 @@ import {
   AUDIT_ITEM_KEYS, MANUAL_ITEM_KEYS,
 } from './src/utils/dealAudit7.js'
 import { dealNeedsReview } from './src/utils/needsReview.js'
+import {
+  authorizeNewSale, authorizeSaleText, evaluateMissedSale, guardOpportunityScan,
+} from './lib/ghl-opp-lookup.mjs'
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), 'dist')
 const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '')
@@ -1711,11 +1714,8 @@ async function ghlUpsertContact(person) {
   const j = await resp.json()
   return (j.contact && j.contact.id) || j.id || null
 }
-// A contact's opportunities (to find the one for this project_id).
-async function ghlContactOpps(contactId) {
-  const j = await ghlGet(`/opportunities/search?location_id=${GHL_LOCATION_ID}&contact_id=${contactId}&limit=100`)
-  return j.opportunities || []
-}
+// Contact opportunities are read through lib/ghl-opp-lookup.mjs. A failed or
+// unfinished search throws or returns lookup_blocked — it is never an empty list.
 const oppProjectId = (opp) => {
   for (const c of (opp.customFields || [])) if (c.id === GHL_OPP_FIELD_IDS.project_id) return String(c.fieldValueString || c.fieldValue || c.value || '').trim()
   return ''
@@ -2135,7 +2135,9 @@ async function arcPendingReconcile() {
 // and, for any whose signed total doesn't match the GHL opportunity's value — or
 // that has no opp yet — REPROCESSES the project through the same real mapping the
 // webhook runs, so the change-order stage move, the PDF append and the new-sale
-// text all apply exactly as they would have. A persistent "confirmed total" map
+// text all apply exactly as they would have. A failed or unfinished HighLevel
+// lookup is not "no opp": it is recorded on `blocked` and is not imported.
+// A persistent "confirmed total" map
 // (app_settings.arcsite_value_seen) keeps steady state nearly free: a project is
 // looked up in GHL only when its ArcSite total changed or was never confirmed.
 const ARC_VALUE_SEEN_KEY = 'arcsite_value_seen'
@@ -2153,29 +2155,10 @@ async function arcValueSeenWrite(map) {
   await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`,
     { key: ARC_VALUE_SEEN_KEY, value: map }, 'resolution=merge-duplicates').catch(() => {})
 }
-// The GHL opp (with its monetaryValue) for an ArcSite proposal-list item, found
-// by customer email then name and matched on project_id. Returns the opp or null.
-async function arcOppForProposal(p) {
-  const pid = String(p.project_id || '').trim()
-  const tryQuery = async (q) => {
-    if (!q) return []
-    try { const j = await ghlGet(`/contacts/?locationId=${GHL_LOCATION_ID}&query=${encodeURIComponent(q)}&limit=10`); return j.contacts || [] }
-    catch { return [] }
-  }
-  // Search by email AND name and merge — an email query that returns the wrong
-  // contacts must not suppress the name match (which left healthy sales unable
-  // to take the cheap "already correct" shortcut, so they got reprocessed once).
-  const byId = new Map()
-  for (const c of [...await tryQuery(p.customer_email), ...await tryQuery(p.customer_name)]) {
-    if (c && c.id) byId.set(c.id, c)
-  }
-  for (const c of byId.values()) {
-    const opps = await ghlContactOpps(c.id).catch(() => [])
-    const hit = opps.find(o => oppProjectId(o) === pid)
-    if (hit) return hit
-  }
-  return null
-}
+// The GHL opp for an ArcSite proposal, found by customer email AND name, then
+// matched on project_id. evaluateMissedSale pages both searches and refuses a
+// failed or unfinished lookup — a refusal is not "no opportunity". An email
+// query that returns the wrong contacts must not suppress the name match.
 // ── Change orders: the targeted path ─────────────────────────────────────────
 // A 2nd/3rd/… signed proposal on a Project ID. The live webhook handles it in
 // arcsiteToGhl; everything below is for the SAFETY NET (a webhook ArcSite never
@@ -2396,15 +2379,23 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
 }
 
 // Manual entry point (and the backfill tool): run the targeted change-order
-// path for one project. Finds the opp by the project's customer; a project
-// with NO opp yet is a missed sale — that is what /reprocess is for.
+// path for one project. Finds the opp by the project's customer. A finished
+// search with no opp is a missed sale — /reprocess creates one. A failed or
+// unfinished lookup returns lookup_blocked and does not say to create one.
 async function arcChangeOrderForProject(projectId, via, { dry = false } = {}) {
   const project = await arcGet(`/projects/${projectId}`)
   const c = project.customer || {}, a = c.address || {}
   const customer = { name: c.name || project.name || 'Customer', phone: c.phone || null, email: c.email || null, address1: a.street || null, city: a.city || null, state: a.state || null, postalCode: a.zip_code || null }
   const signed = await arcSignedContracts(projectId)
   if (!signed.length) return { ok: false, via, project_id: projectId, customer: customer.name, error: 'no signed proposal in ArcSite' }
-  const opp = await arcOppForProposal({ project_id: projectId, customer_name: customer.name, customer_email: customer.email })
+  const decision = await evaluateMissedSale(
+    { project_id: projectId, customer_name: customer.name, customer_email: customer.email },
+    { get: ghlGet, locationId: GHL_LOCATION_ID, projectIdOf: oppProjectId },
+  )
+  if (decision.action === 'lookup_blocked') {
+    return { ...decision, ok: false, via, project_id: projectId, customer: customer.name }
+  }
+  const opp = decision.action === 'found' ? decision.opportunity : null
   if (!opp) return { ok: false, via, project_id: projectId, customer: customer.name, error: 'no GHL opportunity for this project — /api/arcsite/reprocess creates one' }
   const newest = signed[signed.length - 1]
   return arcApplyChangeOrder(projectId, { opp, contactId: opp.contactId || null, customer, signed, newTotal: newest.total, via, dry })
@@ -2535,7 +2526,7 @@ async function arcContractAuditTick() {
 }
 
 async function arcValueSweep() {
-  const out = { scanned: 0, verified: 0, confirmed: 0, reprocessed: [], skipped: null }
+  const out = { scanned: 0, verified: 0, confirmed: 0, reprocessed: [], blocked: [], skipped: null }
   if (!ARCSITE_API_TOKEN || !GHL_WRITE_TOKEN || !SUPABASE_URL || !SERVICE_KEY) { out.skipped = 'not configured'; return out }
   // Newest committed proposal per project across the recent pages (list is
   // newest-first, so the first APPROVED we see for a project is the current one).
@@ -2570,13 +2561,20 @@ async function arcValueSweep() {
     out.verified++
     const mark = { t: want, p: info.proposal_id }
     try {
-      const opp = await arcOppForProposal(info)
-      if (!opp) {
-        // Missed sale entirely → the real mapping creates it (contact, opp, fields, text).
+      const decision = await evaluateMissedSale(info, { get: ghlGet, locationId: GHL_LOCATION_ID, projectIdOf: oppProjectId })
+      // Only a finished search that found no opportunity may enter the importer.
+      // A failed, truncated, or unreadable lookup is not a missed sale.
+      if (decision.action === 'absent' && decision.reprocess === true) {
         const r = await arcsiteToGhl(JSON.stringify({ status: 'APPROVED', project_id: pid })).catch(e => ({ ok: false, error: e.message }))
         await arcLog({ ...(r || { ok: false }), via: 'value_sweep' })
-        out.reprocessed.push({ project_id: pid, customer: info.customer_name, was: null, now: want, action: r && r.action, ok: !!(r && r.ok && !r.ignored) })
-        if (r && r.ok && !r.ignored && r.fields_ok !== false) { seen[pid] = mark; changed = true }
+        out.reprocessed.push({ project_id: pid, customer: info.customer_name, was: null, now: want, action: r && r.action, ok: !!(r && r.ok && !r.ignored && r.action !== 'lookup_blocked') })
+        if (r && r.action === 'lookup_blocked') out.blocked.push({ project_id: pid, customer: info.customer_name, lookup: r.code || 'uncertain', error: r.error })
+        if (r && r.ok && !r.ignored && r.fields_ok !== false && r.action !== 'lookup_blocked') { seen[pid] = mark; changed = true }
+        continue
+      }
+      const opp = decision.action === 'found' ? decision.opportunity : null
+      if (!opp) {
+        out.blocked.push({ project_id: pid, customer: info.customer_name, lookup: decision.code || decision.action || 'uncertain', error: decision.error || 'opportunity lookup did not authorize a missed-sale import' })
         continue
       }
       const cur = opp.monetaryValue != null ? Math.round(Number(opp.monetaryValue) * 100) / 100 : null
@@ -2837,14 +2835,44 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   }
   if (dryRun) return { ok: true, dryRun: true, plan, planned }
 
-  // ── Upsert contact, then find-or-create the opportunity by project_id.
-  const contactId = await ghlUpsertContact(person)
-  if (!contactId) return { ok: false, error: 'contact upsert returned no id', plan }
+  // Read HighLevel BEFORE creating anything. A failed or unfinished opportunity
+  // lookup stops here when it happens before the contact upsert, and stops
+  // again after the upsert before any opportunity is created or any sale text
+  // is sent. An empty catch-list is not a "no opportunity" result.
+  const pre = await evaluateMissedSale(
+    { project_id: projectId, customer_name: custName, customer_email: person.email },
+    { get: ghlGet, locationId: GHL_LOCATION_ID, projectIdOf: oppProjectId },
+  )
+  if (pre.action === 'lookup_blocked') return { ...pre, project_id: projectId, plan }
 
-  const opps = await ghlContactOpps(contactId).catch(() => [])
-  let existing = opps.find(o => oppProjectId(o) === projectId) || null
-  if (!existing) existing = opps.find(o => o.status === 'open' && !oppProjectId(o) && o.pipelineId === pipeline.id) || null
-  let oppId = existing ? existing.id : null
+  const contactId = await ghlUpsertContact(person)
+  if (!contactId) return { ok: false, error: 'contact upsert returned no id', plan, allowCreate: false, created: false, opportunity_created: false, sendSaleText: false, alert: 'not_sent' }
+
+  let guard = await guardOpportunityScan(contactId, ghlGet, {
+    locationId: GHL_LOCATION_ID,
+    match: (o) => oppProjectId(o) === projectId,
+  })
+  if (guard.action === 'lookup_blocked') {
+    // The customer search already found this project's opportunity. A later
+    // reread failed. Update that opportunity; do not create another and do
+    // not send a sale text.
+    if (pre.action === 'found' && pre.opportunity && pre.opportunity.id) {
+      guard = {
+        ok: true, action: 'matched', opportunity: pre.opportunity, opportunities: [pre.opportunity],
+        allowCreate: false, reprocess: false, created: false, opportunity_created: false,
+        sendSaleText: false, alert: 'not_sent', code: guard.code,
+      }
+    } else {
+      return { ...guard, project_id: projectId, contact_id: contactId, plan }
+    }
+  }
+  const opps = Array.isArray(guard.opportunities) ? guard.opportunities : []
+  let existing = guard.action === 'matched' && guard.opportunity && guard.opportunity.id ? guard.opportunity : null
+  if (!existing && guard.action === 'clear') {
+    existing = opps.find(o => oppProjectId(o) === projectId) || null
+    if (!existing) existing = opps.find(o => o.status === 'open' && !oppProjectId(o) && o.pipelineId === pipeline.id) || null
+  }
+  let oppId = existing && existing.id ? existing.id : null
 
   // CHANGE ORDER: a committed proposal for a Project ID that ALREADY has an
   // opportunity whose value differs from the new total = a 2nd (revised)
@@ -2892,6 +2920,10 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
     }
   }
   else {
+    const authorized = authorizeNewSale(guard)
+    if (authorized.action !== 'authorized') {
+      return { ...authorized, project_id: projectId, contact_id: contactId, plan }
+    }
     oppBody.locationId = GHL_LOCATION_ID; oppId = await ghlCreateOpp(oppBody); action = 'created'
     // GHL's opportunity CREATE silently drops MONETARY custom fields (Price,
     // Baseline, Commission) though it keeps text ones; a follow-up UPDATE sets
@@ -2958,6 +2990,7 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   // ── New-sale text alert. A brand-new opportunity = a deal just came in, so
   // text the team the summary. (Updates and change orders don't re-text.)
   const isNewSale = action === 'created' && !isChangeOrder
+  const saleText = authorizeSaleText(guard, { created: isNewSale })
   const alertData = {
     customer: custName,
     address: [addr.street, addr.city, addr.state].filter(Boolean).join(', ') || null,
@@ -2972,7 +3005,7 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
 
   let alert
   const moneyKnown = job && baseline != null
-  if (isNewSale && fieldsOk && moneyKnown) {
+  if (isNewSale && saleText.sendSaleText && fieldsOk && moneyKnown) {
     // Numbers already in hand and the opp is populated — text now.
     alert = await sendSaleAlert(projectId, { ...alertData, baseline, markup }).catch(() => null)
   }
@@ -2982,14 +3015,14 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
     // calendar. Defer the text to the sweep only if it hasn't gone out yet.
     arcEnrichQueue(oppId, projectId, estimator, {
       baseFields: customFields, needBase: !fieldsOk,
-      alert: (isNewSale && !alert) ? alertData : null,
+      alert: (isNewSale && saleText.sendSaleText && !alert) ? alertData : null,
     })
     // Also persist it so the durable reconciler keeps filling setter/closer/
     // payment/install after the in-memory window closes or a redeploy.
     arcPendingAdd(projectId, oppId, estimator).catch(() => {})
   }
 
-  return { ok: true, ...plan, action, change_order: isChangeOrder, opportunity_id: oppId, contact_id: contactId, owner: oppBody.assignedTo ? closerName : null, pdf, calendar, fields_ok: fieldsOk, enrich: needEnrich ? 'queued' : undefined, alert: alert ? alert.sent : (needEnrich && isNewSale ? 'deferred' : undefined) }
+  return { ok: true, ...plan, action, change_order: isChangeOrder, opportunity_id: oppId, contact_id: contactId, owner: oppBody.assignedTo ? closerName : null, pdf, calendar, fields_ok: fieldsOk, enrich: needEnrich ? 'queued' : undefined, alert: alert ? alert.sent : (needEnrich && saleText.sendSaleText ? 'deferred' : undefined) }
 }
 
 const app = express()
