@@ -25,6 +25,7 @@ import { createVerifiedDaily, dailyGuards } from './lib/verified-sheet-daily.mjs
 import { createDailyStore, DAILY_WORKER_KEY, dailyDayKey, dailyCasPath } from './lib/verified-sheet-daily-store.mjs'
 import { validatePrivatePolicy } from './lib/verified-sheet-policy.mjs'
 import { parseSignedPdfText } from './lib/parse-signed-pdf.mjs'
+import { classifyLaterSignature, commitPendingRevisionHold, seenEntryForHold, sweepSkipsProject, sha256Pdf, signNowSignedAt } from './lib/arcsite-change-order-hold.mjs'
 import { readVerifiedSheetSnapshot } from './lib/verified-sheet-snapshot.mjs'
 import path from 'node:path'
 import crypto from 'node:crypto'
@@ -1832,6 +1833,9 @@ async function ghlHostPdf(pdfUrl, name, { requireSigned = true } = {}) {
     if (signed === false) throw pdfErr(PDF_UNSIGNED)
     if (signed === null) throw pdfErr(PDF_UNVERIFIABLE, pdfUnreadable)
   }
+  return ghlUploadPdfBuffer(buf, name)
+}
+async function ghlUploadPdfBuffer(buf, name) {
   const form = new FormData()
   form.append('file', new Blob([buf], { type: 'application/pdf' }), name)
   form.append('hosted', 'false')
@@ -2032,13 +2036,19 @@ async function arcEnrichSweep() {
   for (const [oppId, item] of [..._arcEnrich]) {
     item.tries++
     try {
+      // A pending later signature keeps baseline / markup / commission / price
+      // on the original contract. Install date, payment, setter and closer still fill.
+      const moneyHeld = await projectHasPendingRevision(item.projectId)
+      const heldMoneyIds = new Set([GHL_OPP_FIELD_IDS.price, GHL_OPP_FIELD_IDS.baseline, GHL_OPP_FIELD_IDS.markup, GHL_OPP_FIELD_IDS.commission])
+      const baseFields = moneyHeld ? (item.baseFields || []).filter(f => f && !heldMoneyIds.has(f.id)) : item.baseFields
       // 1. Restore the full field set once, if the initial apply failed.
-      if (item.needBase && item.baseFields && item.baseFields.length) {
-        await ghlUpdateOpp(oppId, { customFields: item.baseFields })
+      if (item.needBase && baseFields && baseFields.length) {
+        await ghlUpdateOpp(oppId, { customFields: baseFields })
         item.needBase = false
-      }
+      } else if (item.needBase && moneyHeld) item.needBase = false
       // 2. Patch on whatever late values have shown up since last tick.
       const vals = await arcLateValues(item.projectId, item.estimator)
+      if (moneyHeld) { delete vals.baseline; delete vals.markup; delete vals.commission }
       const defs = await ghlOppFields()
       const toWrite = []
       for (const [k, v] of Object.entries(vals)) {
@@ -2111,6 +2121,9 @@ async function arcPendingReconcile() {
       const est = !!e.estimator
       const wrote = e.wrote || {}
       const vals = await arcLateValues(projectId, est).catch(() => ({}))
+      // Later signatures stay pending. Do not copy a newer sheet row's
+      // baseline, markup or commission onto the original contract.
+      if (await projectHasPendingRevision(projectId)) { delete vals.baseline; delete vals.markup; delete vals.commission }
       const toWrite = []
       for (const [k, v] of Object.entries(vals)) {
         if (wrote[k] === v) continue
@@ -2130,14 +2143,15 @@ async function arcPendingReconcile() {
 
 // ── Value reconcile sweep ───────────────────────────────────────────────────
 // Safety net for a committed proposal ArcSite never delivered a webhook for (or
-// that failed): a CHANGE ORDER whose new signed total never reached the opp, or
-// a brand-new sale missed entirely. Polls ArcSite's recently-approved proposals
-// and, for any whose signed total doesn't match the GHL opportunity's value — or
-// that has no opp yet — REPROCESSES the project through the same real mapping the
-// webhook runs, so the change-order stage move, the PDF append and the new-sale
-// text all apply exactly as they would have. A persistent "confirmed total" map
-// (app_settings.arcsite_value_seen) keeps steady state nearly free: a project is
-// looked up in GHL only when its ArcSite total changed or was never confirmed.
+// that failed): a later signature on a project that already has an opportunity,
+// or a brand-new sale missed entirely. Polls ArcSite's recently-approved
+// proposals. A project with no opportunity yet is created through the webhook
+// mapping. A later signature on an existing opportunity is recorded as a
+// pending revision (PDF appended, money and stage left on the original
+// contract) — the same hold the live webhook uses. A persistent seen map
+// (app_settings.arcsite_value_seen) keeps steady state nearly free. A hold
+// marker stores the opportunity's current value separately from the pending
+// total, so a skip is not a confirmation that money was replaced.
 const ARC_VALUE_SEEN_KEY = 'arcsite_value_seen'
 const ARC_VALUE_PAGES = Number(process.env.ARC_VALUE_PAGES || 4)         // recent proposal pages to scan (×20)
 const ARC_VALUE_MAX_PROJECTS = Number(process.env.ARC_VALUE_MAX || 40)   // GHL lookups to spend per tick
@@ -2181,9 +2195,12 @@ async function arcOppForProposal(p) {
 // arcsiteToGhl; everything below is for the SAFETY NET (a webhook ArcSite never
 // sent) and the manual endpoint, and it deliberately does NOT run the full
 // reprocess: that re-maps every field, re-assigns the owner and sets the stage
-// to Closed — which knocked Jacob Smith's opp back from Ready For Install. This
-// touches only what a change order means: the contracts, the value + stage,
-// the contact's New Price, and the install calendar.
+// to Closed — which knocked Jacob Smith's opp back from Ready For Install.
+// A later signature is a PENDING REVISION. It does not replace opportunity
+// value, Price, baseline, markup, commission, contact prices, or the calendar
+// amount, and it does not move the stage. The new PDF is appended and the
+// old ones stay. Money waits for an explicit add-on or replacement decision.
+// A project with only its original signed proposal can still be repaired here.
 const GHL_CONTACT_NEW_PRICE_FIELD = 'X6s8Kc6QVEVyzSIISktA'   // contact "New Price" — the install calendar's 6h sync reads it FIRST
 const GHL_CONTACT_JOB_PRICE_FIELD = 'gz5Xoix8Sd37hUbrvQuQ'   // contact "Job Price" — follows the change order too (per Garrison)
 const CALENDAR_SYNC_URL = (process.env.CALENDAR_SYNC_URL || '').replace(/\/+$/, '')
@@ -2271,6 +2288,62 @@ async function arcPropagateChangeOrder({ oppId, contactId, projectId, customer, 
   return out
 }
 
+// Pending revisions for a later signature on an existing Project ID.
+// Money is not in this record — it stays on the original contract until
+// an explicit add-on or replacement decision, which this path does not make.
+const ARC_REVISION_KEY = 'arcsite_pending_revisions'
+async function arcRevisionRead() {
+  if (!SUPABASE_URL || !SERVICE_KEY) return {}
+  const rows = await restGet(`/rest/v1/app_settings?key=eq.${ARC_REVISION_KEY}&select=value`).catch(() => [])
+  const value = rows && rows[0] && rows[0].value
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+}
+async function arcRevisionWrite(store) {
+  if (!SUPABASE_URL || !SERVICE_KEY) throw new Error('revision store unavailable')
+  await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`,
+    { key: ARC_REVISION_KEY, value: store }, 'resolution=merge-duplicates')
+}
+async function projectHasPendingRevision(projectId) {
+  try {
+    const store = await arcRevisionRead()
+    const revisions = store && store[String(projectId)] && store[String(projectId)].revisions
+    return Array.isArray(revisions) && revisions.some(r => r && r.status === 'pending' && r.decision == null)
+  } catch { return false }
+}
+// Download the later proposal once, keep its hash and SignNow time, and
+// host the file. Attaching it to the opportunity is a separate append.
+async function arcEvidenceForLaterPdf(proposal, customerName) {
+  const pdfUrl = proposal.pdfUrl || proposal.pdf_url
+  if (!pdfUrl) return { pdfSha256: proposal.pdfSha256 || null, signedAt: proposal.signedAt || null, hostedUrl: null }
+  const dl = await fetch(pdfUrl)
+  if (!dl.ok) throw new Error(`pdf download ${dl.status}`)
+  const buf = Buffer.from(await dl.arrayBuffer())
+  const pdfSha256 = sha256Pdf(buf)
+  let signedAt = null
+  try {
+    const text = await parseSignedPdfText(buf, { max: 4 })
+    signedAt = signNowSignedAt(text)
+  } catch { signedAt = null }
+  if (!signedAt) return { pdfSha256, signedAt: null, hostedUrl: null, total: proposal.total ?? null }
+  const proposalId = proposal.proposalId || proposal.proposal_id
+  const name = `${customerName || 'Customer'} - contract ${proposal.documentNumber || proposal.document_number || proposalId}.pdf`.replace(/[/\\]/g, '-')
+  const hostedUrl = await ghlUploadPdfBuffer(buf, name)
+  return { pdfSha256, signedAt, hostedUrl, name, total: proposal.total ?? null }
+}
+async function arcCommitLaterSignature({ decision, customerName }) {
+  try {
+    const committed = await commitPendingRevisionHold(decision, {
+      store: await arcRevisionRead(),
+      loadEvidence: proposal => arcEvidenceForLaterPdf(proposal, customerName),
+      appendPdf: (opportunityId, file) => ghlUpdateOpp(opportunityId, { customFields: [{ id: GHL_PDF_FIELD, field_value: file.url }] }),
+      saveStore: arcRevisionWrite,
+    })
+    return { ...committed, revision_recorded: true }
+  } catch (e) {
+    return { applied: true, held: true, moneyWritten: false, stageMoved: false, clearedPdfs: false, stageWrite: null, pdf: 'not appended: ' + (e.message || 'hold failed'), pending: [], revision_recorded: false, effects: { appendPdfs: [] } }
+  }
+}
+
 async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed, newTotal, via, dry = false }) {
   const pipe = opp.pipelineId === GHL_PIPELINES.estimator.id ? GHL_PIPELINES.estimator : GHL_PIPELINES.outside
   const cur = opp.monetaryValue != null ? Math.round(Number(opp.monetaryValue) * 100) / 100 : null
@@ -2313,6 +2386,36 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
   // Baseline/Mark Up/Commission did — re-stamp those without touching the
   // value, the stage, the contact or the calendar.
   const moneyChanged = !!money && !disputed && !totalChanged && ['baseline', 'markup', 'commission'].some(k => money[k] != null && !arcSame(money[k], numOf(ghlFld(opp.customFields || [], k === 'markup' ? 'Mark Up' : k === 'baseline' ? 'Baseline Price' : 'Commission'))))
+  // A second (or later) committed proposal is NOT applied. The newest total
+  // used to replace opportunity value, Price, sheet money, contact prices
+  // and the calendar amount. Those stay on the original contract. The later
+  // proposal is recorded as a pending revision and its PDF is appended.
+  const later = classifyLaterSignature({
+    projectId,
+    existingOpportunity: { id: opp.id, monetaryValue: cur },
+    signedProposals: signed,
+    incomingProposal: null,
+    currentValue: cur,
+    listFailed: false,
+  })
+  if (later.hold) {
+    r.action = 'pending_revision'
+    r.held = true
+    r.now = cur
+    r.value_source = 'held — later signature is a pending revision; original contract unchanged'
+    r.stage_moved = false
+    if (dry) {
+      return { ...r, dry: true, money_written: false, plan: {
+        contracts: 'append the later PDF; existing PDFs are not cleared',
+        stage: 'unchanged (not moved to Closed)',
+        value: 'unchanged', price_field: 'unchanged', sheet_money: 'unchanged',
+        contact_new_price_and_job_price: 'unchanged', calendar_value: 'unchanged',
+        pending_revision: (later.later || []).map(p => ({ proposalId: p.proposalId, total: p.total })),
+      } }
+    }
+    const committed = await arcCommitLaterSignature({ decision: later, customerName: customer.name })
+    return { ...r, pdf: committed.pdf, pending_revisions: committed.pending || [], money_written: false, revision_recorded: !!committed.revision_recorded, calendar: 'not called', contact_new_price: 'unchanged' }
+  }
   if (dry) {
     return { ...r, dry: true, plan: {
       contracts: signed.length > attached.length ? `rebuild ${signed.length} (currently ${attached.length})` : 'kept',
@@ -2444,7 +2547,7 @@ function phoenixNow(dt = new Date()) {
 }
 
 async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, maxFix = ARC_AUDIT_MAX_FIX } = {}) {
-  const out = { at: new Date().toISOString(), day: phoenixNow().day, fix, days_back: daysBack, scanned: 0, candidates: 0, checked: 0, ok: 0, gaps: [], fixed: [], failed: [], sheet_gaps: [], skipped: null }
+  const out = { at: new Date().toISOString(), day: phoenixNow().day, fix, days_back: daysBack, scanned: 0, candidates: 0, checked: 0, ok: 0, gaps: [], fixed: [], held: [], failed: [], sheet_gaps: [], skipped: null }
   if (!ARCSITE_API_TOKEN || !GHL_WRITE_TOKEN) { out.skipped = 'not configured'; return out }
   const floor = new Date(Date.now() - daysBack * 864e5).toISOString().slice(0, 10)
   const pause = ms => new Promise(res => setTimeout(res, ms))
@@ -2499,22 +2602,26 @@ async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, ma
       const fresh = (await ghlGet(`/opportunities/${op.id}`).catch(() => null)) || {}
       const opp = fresh.opportunity || fresh
       if (!opp.id || !stale(opp)) { out.ok++; continue }
-      const gap = { project_id: pid, customer: opp.name, install: inst, contracts: `${oppContractEntries(opp).length} attached / ${signed.length} signed`, value: opp.monetaryValue, signed_total: want, sheet_price: sheet }
+      const laterSignature = signed.length >= 2
+      const gap = { project_id: pid, customer: opp.name, install: inst, contracts: `${oppContractEntries(opp).length} attached / ${signed.length} signed`, value: opp.monetaryValue, signed_total: want, sheet_price: sheet, disposition: laterSignature ? 'pending_revision' : 'repair' }
       out.gaps.push(gap)
-      if (!fix || out.fixed.length + out.failed.length >= maxFix) continue
+      // A later signature is recorded, not repaired, and does not use up the
+      // repair budget. The apply below holds money on the original contract.
+      if (!fix || (!laterSignature && out.fixed.length + out.failed.length >= maxFix)) continue
       const project = await arcGet(`/projects/${pid}`).catch(() => null)
       const c = (project && project.customer) || {}, a = c.address || {}
       const customer = { name: c.name || opp.name || 'Customer', phone: c.phone || null, email: c.email || null, address1: a.street || null, city: a.city || null, state: a.state || null, postalCode: a.zip_code || null }
       const r = await arcApplyChangeOrder(pid, { opp, contactId: opp.contactId || null, customer, signed, newTotal: want, via: 'daily_audit' })
       await arcLog(r)
       const cal = r.calendar && typeof r.calendar === 'object' ? (r.calendar.job ? r.calendar.job.jobNumber : r.calendar.error || null) : r.calendar
-      ;(r.ok ? out.fixed : out.failed).push({ ...gap, pdf: r.pdf, stage_moved: r.stage_moved, calendar: cal, error: r.error })
+      if (r.held) out.held.push({ ...gap, pdf: r.pdf, stage_moved: false, money_written: false })
+      else (r.ok ? out.fixed : out.failed).push({ ...gap, pdf: r.pdf, stage_moved: r.stage_moved, calendar: cal, error: r.error })
       await pause(500)
     } catch (e) { out.failed.push({ project_id: pid, install: inst, error: e.message || 'audit failed' }) }
   }
   if (SUPABASE_URL && SERVICE_KEY) {
     await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`,
-      { key: ARC_AUDIT_KEY, value: { ...out, gaps: out.gaps.slice(0, 100), sheet_gaps: out.sheet_gaps.slice(0, 100) } }, 'resolution=merge-duplicates').catch(() => {})
+      { key: ARC_AUDIT_KEY, value: { ...out, gaps: out.gaps.slice(0, 100), sheet_gaps: out.sheet_gaps.slice(0, 100), held: out.held.slice(0, 100) } }, 'resolution=merge-duplicates').catch(() => {})
   }
   return out
 }
@@ -2563,10 +2670,12 @@ async function arcValueSweep() {
     if (out.verified >= ARC_VALUE_MAX_PROJECTS) break
     const want = Math.round(info.total * 100) / 100
     const s = seen[pid]
-    // Confirmed at this total AND this newest proposal → nothing to do. (Entries
-    // written before the proposal id was tracked are a bare number, so they get
-    // one more verification, which also checks their contracts.)
-    if (s && typeof s === 'object' && Math.round(Number(s.t) * 100) / 100 === want && s.p === info.proposal_id) continue
+    // Confirmed at this total AND this newest proposal → nothing to do.
+    // A pending-revision hold matches on the later total, and its `t` stays
+    // the opportunity's current value — not a confirmation that money moved.
+    // Bare-number entries (written before the proposal id was tracked) are
+    // not skipped; they get one more verification.
+    if (sweepSkipsProject(s, want, info.proposal_id)) continue
     out.verified++
     const mark = { t: want, p: info.proposal_id }
     try {
@@ -2584,19 +2693,22 @@ async function arcValueSweep() {
       const attached = oppContractEntries(opp).length
       // Always enqueue the guarded field-aware check before legacy total/count short-circuit.
       verifiedSheetQueue(pid)
-      // Value right AND every signed contract on the opp → confirmed.
-      if (arcSame(cur, want) && signed.length <= attached) { seen[pid] = mark; changed = true; out.confirmed++; continue }
-      // Stale value (missed change order) or a signed contract the opp doesn't
-      // carry → the targeted change-order path, never the full reprocess.
+      // Single signed proposal, value already right, contracts attached → confirmed.
+      // Two or more signed proposals fall through so the later one is held
+      // instead of being stamped as the confirmed total.
+      if (signed.length < 2 && arcSame(cur, want) && signed.length <= attached) { seen[pid] = mark; changed = true; out.confirmed++; continue }
+      // Stale value, a missing contract, or a later signature → the targeted
+      // path. A later signature records a pending revision and does not write money.
       const project = await arcGet(`/projects/${pid}`).catch(() => null)
       const c = (project && project.customer) || {}, a = c.address || {}
       const customer = { name: c.name || info.customer_name || 'Customer', phone: c.phone || null, email: c.email || info.customer_email || null, address1: a.street || null, city: a.city || null, state: a.state || null, postalCode: a.zip_code || null }
       const r = await arcApplyChangeOrder(pid, { opp, contactId: opp.contactId || null, customer, signed, newTotal: want, via: 'value_sweep' }).catch(e => ({ ok: false, error: e.message }))
       await arcLog(r)
-      out.reprocessed.push({ project_id: pid, customer: customer.name, was: cur, now: r.now, value_source: r.value_source, sheet_lag: r.sheet_lag, action: 'change_order', contracts: r.contracts, pdf: r.pdf, ok: !!r.ok })
-      // Settled only once the AI sheet agrees with ArcSite — a lagging sheet row
-      // means the value isn't final yet, so re-verify next tick rather than stamp.
-      if (r.ok && !r.sheet_lag) { seen[pid] = mark; changed = true }
+      out.reprocessed.push({ project_id: pid, customer: customer.name, was: cur, now: r.held ? cur : r.now, value_source: r.value_source, sheet_lag: r.sheet_lag, action: r.held ? 'pending_revision' : 'change_order', contracts: r.contracts, pdf: r.pdf, held: !!r.held, ok: !!r.ok })
+      // A held later signature is settled as a revision, not as a new total.
+      // Otherwise settle only once the AI sheet agrees with ArcSite.
+      if (r.held && r.revision_recorded) { seen[pid] = seenEntryForHold(cur, info.proposal_id, want); changed = true }
+      else if (!r.held && r.ok && !r.sheet_lag) { seen[pid] = mark; changed = true }
     } catch { /* retry next tick */ }
   }
   if (changed) {
@@ -2846,19 +2958,41 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   if (!existing) existing = opps.find(o => o.status === 'open' && !oppProjectId(o) && o.pipelineId === pipeline.id) || null
   let oppId = existing ? existing.id : null
 
-  // CHANGE ORDER: a committed proposal for a Project ID that ALREADY has an
-  // opportunity whose value differs from the new total = a 2nd (revised)
-  // contract. Move it to the Change Order stage and KEEP BOTH drawings (append
-  // the new PDF). The VALUE itself updates to the new total just like any other
-  // sync (per Keaton — the opp always shows the current job amount). Compare
-  // against the opp's live monetaryValue, since the Price custom field is often
-  // empty on older opps (an empty field read as $0 made every 2nd proposal look
-  // like a change order and the value never updated).
+  // A later committed proposal on a Project ID that ALREADY has an opportunity
+  // is a pending revision. Keep the one opportunity. Do not replace its value,
+  // Price, baseline, markup, commission, contact prices, or calendar amount,
+  // and do not move the stage to Closed. Append the new PDF; leave the old
+  // ones. Compare against live monetaryValue — an empty Price field is not $0.
   const curVal = existing && existing.monetaryValue != null
     ? Math.round(Number(existing.monetaryValue) * 100) / 100 : NaN
   const sameProject = !!existing && oppProjectId(existing) === projectId
   const priceChanged = sameProject
     && sellTotal != null && !isNaN(curVal) && Math.abs(Math.round(sellTotal * 100) / 100 - curVal) > 0.01
+  if (sameProject && existing) {
+    let signedProposals = []
+    let listFailed = false
+    try { signedProposals = await arcSignedContracts(projectId) }
+    catch { listFailed = true }
+    const decision = classifyLaterSignature({
+      projectId,
+      existingOpportunity: { id: existing.id, monetaryValue: Number.isFinite(curVal) ? curVal : null },
+      signedProposals,
+      incomingProposal: proposalId ? { proposalId: String(proposalId), total: sellTotal, pdfUrl } : null,
+      currentValue: Number.isFinite(curVal) ? curVal : null,
+      listFailed,
+    })
+    if (decision.hold) {
+      const committed = (decision.later || []).length
+        ? await arcCommitLaterSignature({ decision, customerName: custName })
+        : { pdf: 'not attached — signed proposal list unread', pending: [], revision_recorded: true, moneyWritten: false, stageMoved: false }
+      return {
+        ok: true, ...plan, action: 'pending_revision', change_order: false, hold: true,
+        opportunity_id: existing.id, contact_id: contactId, pdf: committed.pdf,
+        pending_revisions: committed.pending || [], money_written: false, stage_moved: false,
+        calendar: null, revision_recorded: !!committed.revision_recorded,
+      }
+    }
+  }
   // A change order can be a PRODUCT swap at the SAME price (Holland Slate →
   // Townscape Slate, per Garrison), so a signed proposal the opp doesn't carry
   // yet counts as one too — those used to take the plain path below, which
@@ -4236,11 +4370,11 @@ app.post('/api/arcsite/reprocess', async (req, res) => {
   catch (e) { const r = { ok: false, error: e.message || 'reprocess failed' }; await arcLog(r); res.status(200).json(r) }
 })
 
-// Change order, by hand: the TARGETED path for one project (contracts rebuilt
-// if ArcSite holds more signed proposals than the opp carries, value + Change
-// Order stage if the total moved, the contact's New Price, and the install
-// calendar). Unlike /reprocess it never re-maps fields or moves a job back to
-// Closed. Body = { project_id }. Same guard as the feed.
+// Change order, by hand: the TARGETED path for one project. A later signed
+// proposal is held as a pending revision — PDF appended, money and stage
+// unchanged. A single original proposal can still be repaired. Unlike
+// /reprocess it never re-maps fields or moves a job back to Closed.
+// Body = { project_id }. Same guard as the feed.
 app.post('/api/arcsite/change-order', async (req, res) => {
   if (!ingestAuthorized(req)) return res.status(401).json(err('Unauthorized'))
   let body = {}
