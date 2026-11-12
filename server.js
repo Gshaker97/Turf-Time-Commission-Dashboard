@@ -26,6 +26,10 @@ import { createDailyStore, DAILY_WORKER_KEY, dailyDayKey, dailyCasPath } from '.
 import { validatePrivatePolicy } from './lib/verified-sheet-policy.mjs'
 import { parseSignedPdfText } from './lib/parse-signed-pdf.mjs'
 import { readVerifiedSheetSnapshot } from './lib/verified-sheet-snapshot.mjs'
+import {
+  normalizeHighLevelPhone, scanLocationOpportunities, resolveSaleContacts, decideUnmatchedProject,
+  createSaleLedger, saleEventId, messageIdentifiers, createOutcomeFromError,
+} from './lib/arcsite-sale-guard.mjs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
@@ -1711,11 +1715,6 @@ async function ghlUpsertContact(person) {
   const j = await resp.json()
   return (j.contact && j.contact.id) || j.id || null
 }
-// A contact's opportunities (to find the one for this project_id).
-async function ghlContactOpps(contactId) {
-  const j = await ghlGet(`/opportunities/search?location_id=${GHL_LOCATION_ID}&contact_id=${contactId}&limit=100`)
-  return j.opportunities || []
-}
 const oppProjectId = (opp) => {
   for (const c of (opp.customFields || [])) if (c.id === GHL_OPP_FIELD_IDS.project_id) return String(c.fieldValueString || c.fieldValue || c.value || '').trim()
   return ''
@@ -2153,28 +2152,85 @@ async function arcValueSeenWrite(map) {
   await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`,
     { key: ARC_VALUE_SEEN_KEY, value: map }, 'resolution=merge-duplicates').catch(() => {})
 }
-// The GHL opp (with its monetaryValue) for an ArcSite proposal-list item, found
-// by customer email then name and matched on project_id. Returns the opp or null.
+// Location-wide Project ID search. A short contact query is not a complete
+// answer: the sweep used to treat "not on the contacts this search reached"
+// as "no opportunity" and create one. A failed or unfinished scan throws so
+// the caller cannot create. A finished scan with no exact Project ID returns
+// null. The raw opportunity is returned when the id is present anywhere.
+const ARC_SALE_KEY = /^arcsite_(opp_create|sale_alert)(_evt)?_\d{6,24}(_[a-f0-9]{24})?$/
+let _arcOppScanCache = { at: 0, scan: null }
+
+async function arcSettingsRead(key) {
+  if (!SUPABASE_URL || !SERVICE_KEY || !ARC_SALE_KEY.test(key)) return { ok: false, value: null }
+  try {
+    const rows = await restGet(`/rest/v1/app_settings?key=eq.${encodeURIComponent(key)}&select=key,value`)
+    if (!Array.isArray(rows)) return { ok: false, value: null }
+    return { ok: true, value: rows[0]?.value ?? null }
+  } catch { return { ok: false, value: null } }
+}
+async function arcSettingsInsert(rows) {
+  if (!SUPABASE_URL || !SERVICE_KEY || !Array.isArray(rows) || !rows.length) return { ok: false }
+  if (rows.some(row => !row || !ARC_SALE_KEY.test(row.key) || !row.value || typeof row.value !== 'object')) return { ok: false }
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/app_settings`, {
+      method: 'POST',
+      headers: { ...jsonHeaders, Prefer: 'return=representation' },
+      body: JSON.stringify(rows),
+    })
+    if (resp.status === 409) return { ok: false, conflict: true }
+    if (!resp.ok) return { ok: false }
+    const body = await resp.json().catch(() => null)
+    if (!Array.isArray(body) || body.length !== rows.length) return { ok: false }
+    return { ok: true, rows: body }
+  } catch { return { ok: false } }
+}
+async function arcSettingsCas(key, fromState, value) {
+  if (!ARC_SALE_KEY.test(key) || !['intent', 'uncertain', 'failed'].includes(fromState)) return { ok: false }
+  if (!SUPABASE_URL || !SERVICE_KEY) return { ok: false }
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/app_settings?key=eq.${encodeURIComponent(key)}&value->>state=eq.${encodeURIComponent(fromState)}`, {
+      method: 'PATCH',
+      headers: { ...jsonHeaders, Prefer: 'return=representation' },
+      body: JSON.stringify({ value }),
+    })
+    if (!resp.ok) return { ok: false }
+    const body = await resp.json().catch(() => null)
+    if (!Array.isArray(body) || body.length !== 1 || body[0].key !== key) return { ok: false }
+    return { ok: true, value: body[0].value }
+  } catch { return { ok: false } }
+}
+const arcSaleLedger = createSaleLedger({ read: arcSettingsRead, insert: arcSettingsInsert, patch: arcSettingsCas })
+
+async function arcScanLocation({ stopAtProjectId = null } = {}) {
+  const cached = _arcOppScanCache
+  if (cached.scan?.complete && Date.now() - cached.at < 20000) {
+    const hit = stopAtProjectId ? cached.scan.byProject.get(String(stopAtProjectId)) : null
+    if (hit?.raw) return { ...cached.scan, status: 'found', found: hit.raw }
+    return cached.scan
+  }
+  const scan = await scanLocationOpportunities({
+    get: ghlGet, locationId: GHL_LOCATION_ID, origin: GHL_BASE, projectIdOf: oppProjectId,
+    limit: 100, maxPages: 300, stopAtProjectId,
+  })
+  if (scan.complete) _arcOppScanCache = { at: Date.now(), scan }
+  return scan
+}
+function arcSaleBlocked(projectId, action, extra = {}) {
+  return {
+    ok: action === 'held', action, project_id: projectId, fields_ok: false, alert: 'not_sent',
+    opportunity_created: false, created: false, ...extra,
+  }
+}
 async function arcOppForProposal(p) {
   const pid = String(p.project_id || '').trim()
-  const tryQuery = async (q) => {
-    if (!q) return []
-    try { const j = await ghlGet(`/contacts/?locationId=${GHL_LOCATION_ID}&query=${encodeURIComponent(q)}&limit=10`); return j.contacts || [] }
-    catch { return [] }
+  if (!pid) return null
+  const scan = await arcScanLocation()
+  if (!scan.complete) {
+    const error = new Error('opportunity lookup did not finish')
+    error.code = scan.status || 'incomplete'
+    throw error
   }
-  // Search by email AND name and merge — an email query that returns the wrong
-  // contacts must not suppress the name match (which left healthy sales unable
-  // to take the cheap "already correct" shortcut, so they got reprocessed once).
-  const byId = new Map()
-  for (const c of [...await tryQuery(p.customer_email), ...await tryQuery(p.customer_name)]) {
-    if (c && c.id) byId.set(c.id, c)
-  }
-  for (const c of byId.values()) {
-    const opps = await ghlContactOpps(c.id).catch(() => [])
-    const hit = opps.find(o => oppProjectId(o) === pid)
-    if (hit) return hit
-  }
-  return null
+  return scan.byProject.get(pid)?.raw || null
 }
 // ── Change orders: the targeted path ─────────────────────────────────────────
 // A 2nd/3rd/… signed proposal on a Project ID. The live webhook handles it in
@@ -2672,14 +2728,27 @@ async function ghlSendSms(contactId, message) {
 }
 async function sendSaleAlert(projectId, data) {
   if (!GHL_SMS_TOKEN || !SALE_ALERT_CONTACTS.length) return { sent: 0, skipped: 'not configured' }
-  if (projectId && _arcAlerted.has(projectId)) return { sent: 0, skipped: 'already alerted' }
-  if (projectId) _arcAlerted.add(projectId)
+  const eventId = data?.eventId || saleEventId(projectId, '', 'sale')
+  let gate
+  try { gate = await arcSaleLedger.claimAlert({ projectId, eventId }) }
+  catch { return { sent: 0, skipped: 'uncertain' } }
+  if (!gate.send) return { sent: 0, skipped: gate.reason || 'already alerted', reconciled: gate.reason === 'uncertain' || gate.reason === 'sent' }
   const text = saleAlertText(data)
   let sent = 0
+  let failed = false
+  const ids = []
   for (const cid of SALE_ALERT_CONTACTS) {
-    try { await ghlSendSms(cid, text); sent++ } catch { /* one bad contact shouldn't block the others */ }
+    try {
+      const body = await ghlSendSms(cid, text)
+      sent++
+      ids.push(...messageIdentifiers(body))
+    } catch { failed = true }
   }
-  return { sent }
+  const state = failed || sent !== SALE_ALERT_CONTACTS.length ? 'uncertain' : 'sent'
+  try { await arcSaleLedger.finishAlert({ projectId, eventId, state, messageIds: ids, reason: state === 'sent' ? null : 'send_error' }) }
+  catch { return { sent, uncertain: true } }
+  if (state === 'sent' && projectId) _arcAlerted.add(projectId)
+  return state === 'sent' ? { sent, messageIds: ids } : { sent, uncertain: true }
 }
 
 // In-memory dedupe: collapse a burst of retries for the same project+status.
@@ -2739,7 +2808,7 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   }
   if (!projectId) return { ok: false, error: 'no project_id in event' }
 
-  if (!dryRun && arcRecentlyHandled(`${projectId}:${normStatus}`)) return { ok: true, deduped: true, project_id: projectId }
+  if (!dryRun && arcRecentlyHandled(`${projectId}:${normStatus}`)) return { ok: true, deduped: true, project_id: projectId, fields_ok: false, alert: 'not_sent' }
 
   // ── Pull ArcSite detail: project (customer/address/rep) + proposal total + PDF.
   const project = await arcGet(`/projects/${projectId}`)
@@ -2807,8 +2876,9 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
 
   // ── Field plan.
   const addr = customer.address || {}
+  const phoneNorm = normalizeHighLevelPhone(customer.phone)
   const person = {
-    name: custName, phone: customer.phone || null, email: customer.email || evt.customer_email || null,
+    name: custName, phone: phoneNorm.ok ? phoneNorm.e164 : null, email: customer.email || evt.customer_email || null,
     address1: addr.street || null, city: addr.city || null, state: addr.state || null, postalCode: addr.zip_code || null,
   }
   const defs = await ghlOppFields()
@@ -2837,13 +2907,64 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   }
   if (dryRun) return { ok: true, dryRun: true, plan, planned }
 
-  // ── Upsert contact, then find-or-create the opportunity by project_id.
-  const contactId = await ghlUpsertContact(person)
-  if (!contactId) return { ok: false, error: 'contact upsert returned no id', plan }
+  // ── Match the Project ID before any HighLevel write. Phone format is not a
+  // reason to skip this search, and it is not what decides whether a second
+  // opportunity can be created. An unfinished search does not create.
+  const saleEvent = saleEventId(projectId, proposalId || signedDoc || '', normStatus)
+  const scan = await arcScanLocation({ stopAtProjectId: projectId })
+  let existing = scan.byProject.get(projectId)?.raw || (scan.found && oppProjectId(scan.found) === projectId ? scan.found : null)
+  let createClaim = null
+  if (!existing && !scan.complete) return arcSaleBlocked(projectId, 'lookup_blocked', { code: scan.status || 'incomplete' })
+  if (!existing) {
+    const contacts = await resolveSaleContacts({
+      phone: customer.phone || null, email: person.email, name: custName, get: ghlGet,
+      locationId: GHL_LOCATION_ID, origin: GHL_BASE,
+    })
+    if (!contacts.complete) return arcSaleBlocked(projectId, 'lookup_blocked', { code: contacts.status || 'incomplete' })
+    const decision = decideUnmatchedProject({ contacts: contacts.rows, opportunities: scan.opportunities, pipelineId: pipeline.id })
+    if (decision.action === 'hold') {
+      let held
+      try { held = await arcSaleLedger.holdCreate({ projectId, eventId: saleEvent, reason: decision.reason }) }
+      catch { held = { ok: false } }
+      if (!held.ok) return arcSaleBlocked(projectId, 'create_blocked', { state: 'uncertain' })
+      return arcSaleBlocked(projectId, 'held', { state: held.record?.state || 'uncertain', reason: decision.reason })
+    }
+    if (decision.action === 'adopt' && decision.opportunity?.raw?.id) existing = decision.opportunity.raw
+  }
+  if (!existing) {
+    try { createClaim = await arcSaleLedger.claimCreate({ projectId, eventId: saleEvent }) }
+    catch { return arcSaleBlocked(projectId, 'create_blocked', { state: 'uncertain' }) }
+    if (!createClaim.proceed) {
+      const recordedId = createClaim.record?.state === 'created' ? createClaim.record.opportunityId : null
+      if (recordedId) {
+        const fresh = await ghlGet(`/opportunities/${recordedId}`).catch(() => null)
+        existing = (fresh && (fresh.opportunity || fresh)) || { id: recordedId, monetaryValue: null, customFields: [], pipelineId: pipeline.id, status: 'open' }
+        if (!existing.id) existing.id = recordedId
+      } else {
+        _arcOppScanCache = { at: 0, scan: null }
+        const again = await arcScanLocation({ stopAtProjectId: projectId })
+        const recovered = again.byProject.get(projectId)?.raw || (again.found && oppProjectId(again.found) === projectId ? again.found : null)
+        if (recovered?.id && (createClaim.record?.state === 'intent' || createClaim.record?.state === 'uncertain' || createClaim.record?.state === 'failed')) {
+          try { await arcSaleLedger.finishCreate({ projectId, eventId: saleEvent, state: 'created', opportunityId: recovered.id, reason: 'read_back' }) } catch { /* the found id is still not a new create */ }
+          existing = recovered
+        } else return arcSaleBlocked(projectId, 'create_blocked', { state: createClaim.record?.state || 'uncertain' })
+      }
+    }
+  }
 
-  const opps = await ghlContactOpps(contactId).catch(() => [])
-  let existing = opps.find(o => oppProjectId(o) === projectId) || null
-  if (!existing) existing = opps.find(o => o.status === 'open' && !oppProjectId(o) && o.pipelineId === pipeline.id) || null
+  // Contact upsert happens after the Project ID decision. An invalid phone is
+  // omitted; a failed upsert must not turn into a second opportunity.
+  let contactId = existing?.contactId || existing?.contact_id || null
+  try {
+    const upserted = await ghlUpsertContact(person)
+    if (upserted) contactId = upserted
+  } catch (error) {
+    if (!existing && createClaim?.proceed) {
+      try { await arcSaleLedger.finishCreate({ projectId, eventId: saleEvent, state: 'uncertain', reason: 'contact_upsert_error' }) } catch { /* stay uncreated */ }
+    }
+    if (!contactId) return arcSaleBlocked(projectId, 'create_blocked', { state: 'uncertain', error: 'contact upsert failed' })
+  }
+  if (!contactId) return { ok: false, error: 'contact upsert returned no id', plan, fields_ok: false, alert: 'not_sent' }
   let oppId = existing ? existing.id : null
 
   // CHANGE ORDER: a committed proposal for a Project ID that ALREADY has an
@@ -2891,18 +3012,35 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
       try { await ghlUpdateOpp(oppId, { monetaryValue: sellTotal }) } catch { fieldsOk = false }
     }
   }
-  else {
-    oppBody.locationId = GHL_LOCATION_ID; oppId = await ghlCreateOpp(oppBody); action = 'created'
+  else if (createClaim?.proceed) {
+    oppBody.locationId = GHL_LOCATION_ID
+    try {
+      oppId = await ghlCreateOpp(oppBody)
+      if (!oppId) throw new Error('GHL opp create returned no id')
+      await arcSaleLedger.finishCreate({ projectId, eventId: saleEvent, state: 'created', opportunityId: oppId })
+      action = 'created'
+    } catch (error) {
+      const state = createOutcomeFromError(error)
+      try { await arcSaleLedger.finishCreate({ projectId, eventId: saleEvent, state, reason: 'create_error' }) } catch { /* do not create again */ }
+      _arcOppScanCache = { at: 0, scan: null }
+      const again = await arcScanLocation({ stopAtProjectId: projectId })
+      const recovered = again.byProject.get(projectId)?.raw || (again.found && oppProjectId(again.found) === projectId ? again.found : null)
+      if (!recovered?.id) return arcSaleBlocked(projectId, 'create_blocked', { state, error: 'create outcome uncertain' })
+      try { await arcSaleLedger.finishCreate({ projectId, eventId: saleEvent, state: 'created', opportunityId: recovered.id, reason: 'read_back' }) } catch { /* found, so this call still must not create another */ }
+      oppId = recovered.id
+      existing = recovered
+      action = 'created'
+    }
     // GHL's opportunity CREATE silently drops MONETARY custom fields (Price,
     // Baseline, Commission) though it keeps text ones; a follow-up UPDATE sets
     // every field type, so re-apply them so a brand-new opp isn't missing price.
     // If that UPDATE blips (it left Jalyn Robbins' opp blank once), DON'T throw
     // the whole push away — flag it so the sweep re-applies the full set.
-    if (customFields.length) {
+    if (customFields.length && oppId) {
       try { await ghlUpdateOpp(oppId, { customFields }) }
       catch { fieldsOk = false }
     }
-  }
+  } else return arcSaleBlocked(projectId, 'create_blocked', { state: 'uncertain' })
 
   // ── Contract PDF (best-effort; needs the token's medias.write scope). On a
   // change order the new contract is APPENDED so both contracts are kept.
@@ -2961,7 +3099,7 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   const alertData = {
     customer: custName,
     address: [addr.street, addr.city, addr.state].filter(Boolean).join(', ') || null,
-    price: sellTotal, rep: closerName,
+    price: sellTotal, rep: closerName, eventId: saleEvent,
   }
   // What still has to catch up after the webhook: the sheet money (seconds) and
   // the install-calendar fields (install_date / payment_method, often a while
@@ -4925,6 +5063,18 @@ app.use(express.static(dist))
 // SPA fallback — every non-file route serves the app shell.
 app.use((req, res) => res.sendFile(path.join(dist, 'index.html')))
 
+export function resetArcSaleMemoryForTests() {
+  if (process.env.ARC_SALE_TEST !== '1') return
+  _arcSeen.clear()
+  _arcAlerted.clear()
+  _arcOppScanCache = { at: 0, scan: null }
+  _sheetCache = { at: 0, data: null }
+  _arcEnrich.clear()
+}
+export { arcsiteToGhl, arcValueSweep, arcContractAudit }
+
 const port = process.env.PORT || 3000
-app.listen(port, () => console.log(`Turf Time dashboard on :${port} (user admin ${SERVICE_KEY ? 'ready' : 'NOT configured'})`))
+if (process.env.ARC_NO_LISTEN !== '1') {
+  app.listen(port, () => console.log(`Turf Time dashboard on :${port} (user admin ${SERVICE_KEY ? 'ready' : 'NOT configured'})`))
+}
 
