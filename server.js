@@ -2201,13 +2201,13 @@ async function arcSettingsCas(key, fromState, value) {
 }
 const arcSaleLedger = createSaleLedger({ read: arcSettingsRead, insert: arcSettingsInsert, patch: arcSettingsCas })
 
+function scanProjectMatches(scan, projectId) {
+  const list = scan?.byProject?.get(String(projectId)) || []
+  return Array.isArray(list) ? list : []
+}
 async function arcScanLocation({ stopAtProjectId = null } = {}) {
   const cached = _arcOppScanCache
-  if (cached.scan?.complete && Date.now() - cached.at < 20000) {
-    const hit = stopAtProjectId ? cached.scan.byProject.get(String(stopAtProjectId)) : null
-    if (hit?.raw) return { ...cached.scan, status: 'found', found: hit.raw }
-    return cached.scan
-  }
+  if (cached.scan?.complete && Date.now() - cached.at < 20000) return cached.scan
   const scan = await scanLocationOpportunities({
     get: ghlGet, locationId: GHL_LOCATION_ID, origin: GHL_BASE, projectIdOf: oppProjectId,
     limit: 100, maxPages: 300, stopAtProjectId,
@@ -2225,12 +2225,18 @@ async function arcOppForProposal(p) {
   const pid = String(p.project_id || '').trim()
   if (!pid) return null
   const scan = await arcScanLocation()
+  const matches = scanProjectMatches(scan, pid)
+  if (matches.length > 1 || scan.status === 'ambiguous') {
+    const error = new Error('opportunity lookup is ambiguous')
+    error.code = 'ambiguous'
+    throw error
+  }
   if (!scan.complete) {
     const error = new Error('opportunity lookup did not finish')
     error.code = scan.status || 'incomplete'
     throw error
   }
-  return scan.byProject.get(pid)?.raw || null
+  return matches.length === 1 ? matches[0].raw : null
 }
 // ── Change orders: the targeted path ─────────────────────────────────────────
 // A 2nd/3rd/… signed proposal on a Project ID. The live webhook handles it in
@@ -2506,10 +2512,10 @@ async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, ma
   const pause = ms => new Promise(res => setTimeout(res, ms))
   // 1. Every opp installing on/after the floor (whole location, 100 a page).
   const cands = []
-  let path = `/opportunities/search?location_id=${GHL_LOCATION_ID}&limit=100`, pages = 0
+  let path = `/opportunities/search?location_id=${GHL_LOCATION_ID}&limit=100`, pages = 0, scanComplete = true
   while (path && pages < 300) {
     const j = await ghlGet(path).catch(() => null)
-    if (!j) break
+    if (!j) { scanComplete = false; break }
     for (const op of (j.opportunities || [])) {
       out.scanned++
       const pid = oppProjectId(op), inst = oppInstallDay(op)
@@ -2521,13 +2527,18 @@ async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, ma
     pages++
     const next = j.meta && j.meta.nextPageUrl
     path = next && next.startsWith(GHL_BASE) ? next.slice(GHL_BASE.length) : null
+    if (pages >= 300 && path) scanComplete = false
     await pause(150)
   }
   out.candidates = cands.length
+  const pidCount = new Map()
+  for (const cand of cands) pidCount.set(cand.pid, (pidCount.get(cand.pid) || 0) + 1)
+  if (!scanComplete) out.skipped = 'opportunity lookup did not finish'
   // 2. Compare each against ArcSite. A gap is re-read by id before acting — the
   //    search index lags writes by minutes, so a fix from an hour ago can still
   //    look missing there.
   for (const { op, pid, inst } of cands) {
+    if (!scanComplete || (pidCount.get(pid) || 0) > 1) continue
     try {
       const signed = await arcSignedContracts(pid)
       if (!signed.length) continue
@@ -2727,28 +2738,32 @@ async function ghlSendSms(contactId, message) {
   return resp.json()
 }
 async function sendSaleAlert(projectId, data) {
-  if (!GHL_SMS_TOKEN || !SALE_ALERT_CONTACTS.length) return { sent: 0, skipped: 'not configured' }
+  const intended = Array.isArray(data?.recipients) && data.recipients.length
+    ? data.recipients.map(id => String(id || '').trim()).filter(Boolean)
+    : SALE_ALERT_CONTACTS.slice()
+  if (!GHL_SMS_TOKEN || !intended.length) return { sent: 0, skipped: 'not configured' }
   const eventId = data?.eventId || saleEventId(projectId, '', 'sale')
   let gate
-  try { gate = await arcSaleLedger.claimAlert({ projectId, eventId }) }
-  catch { return { sent: 0, skipped: 'uncertain' } }
-  if (!gate.send) return { sent: 0, skipped: gate.reason || 'already alerted', reconciled: gate.reason === 'uncertain' || gate.reason === 'sent' }
+  try { gate = await arcSaleLedger.claimAlert({ projectId, eventId, recipients: intended }) }
+  catch { return { sent: 0, skipped: 'unresolved', uncertain: true } }
+  if (!gate.send) return { sent: 0, skipped: gate.reason || 'unresolved', uncertain: gate.reason !== 'sent', reconciled: true }
   const text = saleAlertText(data)
-  let sent = 0
-  let failed = false
-  const ids = []
-  for (const cid of SALE_ALERT_CONTACTS) {
+  const outcomes = []
+  for (const cid of gate.pending || []) {
     try {
       const body = await ghlSendSms(cid, text)
-      sent++
-      ids.push(...messageIdentifiers(body))
-    } catch { failed = true }
+      const messageIds = messageIdentifiers(body)
+      if (!messageIds.length) outcomes.push({ contactId: cid, ok: false, messageIds: [], reason: 'no_acceptance' })
+      else outcomes.push({ contactId: cid, ok: true, messageIds })
+    } catch { outcomes.push({ contactId: cid, ok: false, messageIds: [], reason: 'send_error' }) }
   }
-  const state = failed || sent !== SALE_ALERT_CONTACTS.length ? 'uncertain' : 'sent'
-  try { await arcSaleLedger.finishAlert({ projectId, eventId, state, messageIds: ids, reason: state === 'sent' ? null : 'send_error' }) }
-  catch { return { sent, uncertain: true } }
-  if (state === 'sent' && projectId) _arcAlerted.add(projectId)
-  return state === 'sent' ? { sent, messageIds: ids } : { sent, uncertain: true }
+  let finished
+  try { finished = await arcSaleLedger.finishAlert({ projectId, eventId, outcomes, reason: 'send_error' }) }
+  catch { return { sent: outcomes.filter(row => row.ok).length, uncertain: true } }
+  const resolved = finished?.record?.state === 'sent'
+  if (resolved && projectId) _arcAlerted.add(projectId)
+  const messageIds = finished?.record?.messageIds || outcomes.flatMap(row => row.messageIds || [])
+  return resolved ? { sent: outcomes.filter(row => row.ok).length, messageIds } : { sent: outcomes.filter(row => row.ok).length, uncertain: true, messageIds }
 }
 
 // In-memory dedupe: collapse a burst of retries for the same project+status.
@@ -2912,9 +2927,15 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   // opportunity can be created. An unfinished search does not create.
   const saleEvent = saleEventId(projectId, proposalId || signedDoc || '', normStatus)
   const scan = await arcScanLocation({ stopAtProjectId: projectId })
-  let existing = scan.byProject.get(projectId)?.raw || (scan.found && oppProjectId(scan.found) === projectId ? scan.found : null)
+  const projectMatches = scanProjectMatches(scan, projectId)
+  let existing = null
   let createClaim = null
-  if (!existing && !scan.complete) return arcSaleBlocked(projectId, 'lookup_blocked', { code: scan.status || 'incomplete' })
+  if (projectMatches.length > 1 || scan.status === 'ambiguous') {
+    try { await arcSaleLedger.holdCreate({ projectId, eventId: saleEvent, reason: 'ambiguous_project_id' }) } catch { /* still do not pick one */ }
+    return arcSaleBlocked(projectId, 'ambiguous', { reason: 'ambiguous_project_id' })
+  }
+  if (projectMatches.length === 1 && scan.complete) existing = projectMatches[0].raw
+  else if (!scan.complete) return arcSaleBlocked(projectId, 'lookup_blocked', { code: scan.status || 'incomplete' })
   if (!existing) {
     const contacts = await resolveSaleContacts({
       phone: customer.phone || null, email: person.email, name: custName, get: ghlGet,
@@ -2922,12 +2943,12 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
     })
     if (!contacts.complete) return arcSaleBlocked(projectId, 'lookup_blocked', { code: contacts.status || 'incomplete' })
     const decision = decideUnmatchedProject({ contacts: contacts.rows, opportunities: scan.opportunities, pipelineId: pipeline.id })
-    if (decision.action === 'hold') {
+    if (decision.action === 'hold' || decision.action === 'ambiguous') {
       let held
       try { held = await arcSaleLedger.holdCreate({ projectId, eventId: saleEvent, reason: decision.reason }) }
       catch { held = { ok: false } }
       if (!held.ok) return arcSaleBlocked(projectId, 'create_blocked', { state: 'uncertain' })
-      return arcSaleBlocked(projectId, 'held', { state: held.record?.state || 'uncertain', reason: decision.reason })
+      return arcSaleBlocked(projectId, decision.action === 'ambiguous' ? 'ambiguous' : 'held', { state: held.record?.state || 'uncertain', reason: decision.reason })
     }
     if (decision.action === 'adopt' && decision.opportunity?.raw?.id) existing = decision.opportunity.raw
   }
@@ -2943,7 +2964,9 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
       } else {
         _arcOppScanCache = { at: 0, scan: null }
         const again = await arcScanLocation({ stopAtProjectId: projectId })
-        const recovered = again.byProject.get(projectId)?.raw || (again.found && oppProjectId(again.found) === projectId ? again.found : null)
+        const againMatches = scanProjectMatches(again, projectId)
+        if (againMatches.length > 1 || again.status === 'ambiguous') return arcSaleBlocked(projectId, 'ambiguous', { reason: 'ambiguous_project_id' })
+        const recovered = againMatches.length === 1 && again.complete ? againMatches[0].raw : null
         if (recovered?.id && (createClaim.record?.state === 'intent' || createClaim.record?.state === 'uncertain' || createClaim.record?.state === 'failed')) {
           try { await arcSaleLedger.finishCreate({ projectId, eventId: saleEvent, state: 'created', opportunityId: recovered.id, reason: 'read_back' }) } catch { /* the found id is still not a new create */ }
           existing = recovered
@@ -3024,7 +3047,9 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
       try { await arcSaleLedger.finishCreate({ projectId, eventId: saleEvent, state, reason: 'create_error' }) } catch { /* do not create again */ }
       _arcOppScanCache = { at: 0, scan: null }
       const again = await arcScanLocation({ stopAtProjectId: projectId })
-      const recovered = again.byProject.get(projectId)?.raw || (again.found && oppProjectId(again.found) === projectId ? again.found : null)
+      const againMatches = scanProjectMatches(again, projectId)
+      if (againMatches.length > 1 || again.status === 'ambiguous') return arcSaleBlocked(projectId, 'ambiguous', { reason: 'ambiguous_project_id' })
+      const recovered = againMatches.length === 1 && again.complete ? againMatches[0].raw : null
       if (!recovered?.id) return arcSaleBlocked(projectId, 'create_blocked', { state, error: 'create outcome uncertain' })
       try { await arcSaleLedger.finishCreate({ projectId, eventId: saleEvent, state: 'created', opportunityId: recovered.id, reason: 'read_back' }) } catch { /* found, so this call still must not create another */ }
       oppId = recovered.id
@@ -5071,7 +5096,7 @@ export function resetArcSaleMemoryForTests() {
   _sheetCache = { at: 0, data: null }
   _arcEnrich.clear()
 }
-export { arcsiteToGhl, arcValueSweep, arcContractAudit }
+export { arcsiteToGhl, arcValueSweep, arcContractAudit, sendSaleAlert }
 
 const port = process.env.PORT || 3000
 if (process.env.ARC_NO_LISTEN !== '1') {

@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { generateKeyPairSync } from 'node:crypto'
+import { saleEventId } from '../lib/arcsite-sale-guard.mjs'
 
 const GHL = 'https://services.leadconnectorhq.com'
 const ARC = 'https://api.arcsite.com/v1'
@@ -60,6 +61,7 @@ function makeWorld(opportunities, proposals, extra = {}) {
     puts: [],
     failCreate: new Set(extra.failCreate || []),
     landThenThrow: new Set(extra.landThenThrow || []),
+    smsTimeout: new Set(extra.smsTimeout || []),
     upsertStatus: extra.upsertStatus || 200,
     incomplete: !!extra.incomplete,
   }
@@ -184,8 +186,11 @@ globalThis.fetch = async (url, opts = {}) => {
   }
   if (method === 'PUT' && parsed.pathname.startsWith('/contacts/')) return send(200, { contact: { id: parsed.pathname.split('/').at(-1) } })
   if (parsed.pathname === '/conversations/messages' && method === 'POST') {
+    world.smsAttempts = world.smsAttempts || []
+    world.smsAttempts.push(body.contactId)
+    if (world.smsTimeout.has(body.contactId)) throw new Error('network timeout')
     const message = { messageId: `msg-${world.sms.length + 1}`, conversationId: 'conv-1' }
-    world.sms.push(message)
+    world.sms.push({ ...message, contactId: body.contactId })
     return send(200, message)
   }
   if (parsed.pathname.startsWith('/users/')) return send(200, { users: [] })
@@ -193,7 +198,7 @@ globalThis.fetch = async (url, opts = {}) => {
   return send(404, { message: 'unexpected ghl ' + method + ' ' + parsed.pathname })
 }
 
-const { arcsiteToGhl, arcValueSweep, arcContractAudit, resetArcSaleMemoryForTests } = await import('../server.js')
+const { arcsiteToGhl, arcValueSweep, arcContractAudit, sendSaleAlert, resetArcSaleMemoryForTests } = await import('../server.js')
 
 function projectFixture({ projectId, proposalId, total, phone, email, name, pdf = false, monetaryValue = null, opp = null, recent = true }) {
   const proposal = {
@@ -395,4 +400,84 @@ test('a create that lands without a response is reconciled and not repeated', as
   await arcsiteToGhl(JSON.stringify({ status: 'APPROVED', project_id: fixture.project_id, proposal_id: '900003' }))
   assert.equal(creates(), 1)
   assert.equal(texts(), 1)
+})
+
+test('a partial sale alert stays unresolved and is not sent again', async () => {
+  reset(makeWorld([], [], { smsTimeout: ['recipient-b'] }))
+  const eventId = saleEventId('900000000000009', '900009', 'approved')
+  const first = await sendSaleAlert('900000000000009', {
+    eventId, recipients: ['recipient-a', 'recipient-b'], customer: 'Fixture G', price: 10, baseline: 4, markup: 1,
+  })
+  assert.equal(first.uncertain, true)
+  assert.equal(world.smsAttempts.length, 2)
+  assert.deepEqual(world.sms.map(row => row.contactId), ['recipient-a'])
+  const row = world.settings.get('arcsite_sale_alert_900000000000009')
+  assert.equal(row.state, 'uncertain')
+  assert.notEqual(row.state, 'sent')
+  assert.equal(row.recipients.find(item => item.contactId === 'recipient-a').messageIds.length > 0, true)
+  assert.equal(row.recipients.find(item => item.contactId === 'recipient-b').messageIds.length, 0)
+  resetArcSaleMemoryForTests()
+  const second = await sendSaleAlert('900000000000009', {
+    eventId, recipients: ['recipient-a', 'recipient-b'], customer: 'Fixture G', price: 10, baseline: 4, markup: 1,
+  })
+  assert.equal(second.uncertain, true)
+  assert.equal(second.skipped, 'unresolved')
+  assert.equal(world.smsAttempts.length, 2)
+  assert.equal(world.sms.length, 1)
+  assert.equal(world.settings.get('arcsite_sale_alert_900000000000009').state, 'uncertain')
+})
+
+test('multiple opportunities with one Project ID are not chosen, created, or texted', async () => {
+  const projectId = '900000000000010'
+  const fixture = projectFixture({
+    projectId, proposalId: '900010', total: 2100, phone: '555_010_0144', email: 'fixture-g@example.com', name: 'Fixture G', pdf: true,
+  })
+  const match = (id) => ({
+    id, contactId: 'contact-g', status: 'open', pipelineId: 'pipe-outside', monetaryValue: 1000,
+    customFields: [{ id: PROJECT_FIELD, fieldValueString: projectId }, { id: INSTALL_FIELD, fieldValueDate: Date.now() }],
+  })
+  reset(makeWorld([...fillers(99, 'other-contact'), match('match-a'), match('match-b')], [fixture], {
+    contacts: [{ id: 'contact-g', email: 'fixture-g@example.com', contactName: 'Fixture G' }],
+    byPhone: { '+15550100144': { id: 'contact-g', email: 'fixture-g@example.com', contactName: 'Fixture G' } },
+  }))
+  const webhook = await arcsiteToGhl(JSON.stringify({ status: 'APPROVED', project_id: projectId, proposal_id: '900010' }))
+  assert.equal(webhook.action, 'ambiguous')
+  assert.equal(creates(), 0)
+  assert.equal(texts(), 0)
+  assert.equal(world.puts.length, 0)
+  assert.equal(world.upserts.length, 0)
+  assert.ok(world.calls.some(call => call.href.includes('startAfterId=page2')))
+  resetArcSaleMemoryForTests()
+  await arcValueSweep()
+  resetArcSaleMemoryForTests()
+  await arcContractAudit({ fix: true })
+  assert.equal(creates(), 0)
+  assert.equal(texts(), 0)
+  assert.equal(world.puts.length, 0)
+})
+
+test('multiple blank Project ID candidates are not chosen, created, or texted', async () => {
+  const projectId = '900000000000011'
+  const fixture = projectFixture({
+    projectId, proposalId: '900011', total: 2200, phone: '555_010_0133', email: 'fixture-h@example.com', name: 'Fixture H',
+  })
+  const blank = (id, status) => ({
+    id, contactId: 'contact-h', status, pipelineId: 'pipe-outside', monetaryValue: 500, customFields: [],
+  })
+  reset(makeWorld([blank('blank-open', 'open'), blank('blank-won', 'won')], [fixture], {
+    contacts: [{ id: 'contact-h', email: 'fixture-h@example.com', contactName: 'Fixture H' }],
+    byPhone: { '+15550100133': { id: 'contact-h', email: 'fixture-h@example.com', contactName: 'Fixture H' } },
+  }))
+  const webhook = await arcsiteToGhl(JSON.stringify({ status: 'APPROVED', project_id: projectId, proposal_id: '900011' }))
+  assert.equal(webhook.action, 'ambiguous')
+  assert.equal(webhook.reason, 'ambiguous_blank_project_id')
+  assert.equal(creates(), 0)
+  assert.equal(texts(), 0)
+  assert.equal(world.puts.length, 0)
+  assert.equal(world.upserts.length, 0)
+  resetArcSaleMemoryForTests()
+  await arcValueSweep()
+  assert.equal(creates(), 0)
+  assert.equal(texts(), 0)
+  assert.equal(world.puts.length, 0)
 })

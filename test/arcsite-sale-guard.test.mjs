@@ -156,13 +156,55 @@ test('create and alert ledgers are per project and per event and do not retry', 
   assert.equal(held.held, true)
   assert.equal((await ledger.claimCreate({ projectId: '282300041920658', eventId })).proceed, false)
 
-  const alert = createSaleLedger({ ...memoryStore(), now: () => '2026-11-12T00:00:00.000Z' })
-  const send = await alert.claimAlert({ projectId: PID, eventId })
+  const alertDb = memoryStore()
+  const alert = createSaleLedger({ ...alertDb, now: () => '2026-11-12T00:00:00.000Z' })
+  const send = await alert.claimAlert({ projectId: PID, eventId, recipients: ['recipient-a', 'recipient-b'] })
   assert.equal(send.send, true)
+  assert.deepEqual(send.pending, ['recipient-a', 'recipient-b'])
   const ids = messageIdentifiers({ messageId: 'msg-1', conversationId: 'conv-1', message: 'Customer Name: hidden' })
   assert.deepEqual(ids, [{ kind: 'messageId', id: 'msg-1' }, { kind: 'conversationId', id: 'conv-1' }])
-  await alert.finishAlert({ projectId: PID, eventId, state: 'uncertain', messageIds: ids, reason: 'send_error' })
-  const again = await alert.claimAlert({ projectId: PID, eventId })
+  await alert.finishAlert({
+    projectId: PID, eventId, reason: 'send_error',
+    outcomes: [
+      { contactId: 'recipient-a', ok: true, messageIds: ids },
+      { contactId: 'recipient-b', ok: false, messageIds: [], reason: 'send_error' },
+    ],
+  })
+  const partial = alertDb.db.get(alertProjectKey(PID))
+  assert.equal(partial.state, 'uncertain')
+  assert.equal(partial.recipients.find(row => row.contactId === 'recipient-a').messageIds[0].id, 'msg-1')
+  assert.equal(partial.recipients.find(row => row.contactId === 'recipient-b').state, 'uncertain')
+  const again = await alert.claimAlert({ projectId: PID, eventId, recipients: ['recipient-a', 'recipient-b'] })
   assert.equal(again.send, false)
-  assert.equal(again.reason, 'uncertain')
+  assert.deepEqual(again.pending, [])
+  assert.equal(again.reason, 'unresolved')
+  assert.notEqual(again.record.state, 'sent')
+})
+
+test('a second Project ID match is ambiguous and a single match waits until the list ends', async () => {
+  const page = (rows, next) => ({ opportunities: rows, meta: next ? { nextPageUrl: `${ORIGIN}/opportunities/search?location_id=${LOC}&limit=100&${next}` } : {} })
+  const one = (id, project) => ({ id, contactId: 'c', status: 'open', customFields: [{ id: 'project', value: project }] })
+  let calls = 0
+  const ambiguous = await scanLocationOpportunities({
+    locationId: LOC, origin: ORIGIN, projectIdOf: pidOf, stopAtProjectId: PID,
+    get: async () => {
+      calls++
+      return calls === 1 ? page([one('first', PID)], 'page=2') : page([one('second', PID)])
+    },
+  })
+  assert.equal(calls, 2)
+  assert.equal(ambiguous.status, 'ambiguous')
+  assert.equal(ambiguous.found, null)
+  assert.equal(ambiguous.byProject.get(PID).length, 2)
+
+  const blanks = [
+    { id: 'blank-1', contactId: 'contact-a', status: 'open', projectId: '', pipelineId: 'pipe' },
+    { id: 'blank-2', contactId: 'contact-a', status: 'won', projectId: '', pipelineId: 'pipe' },
+  ]
+  const decision = decideUnmatchedProject({ contacts: [{ id: 'contact-a' }], opportunities: blanks, pipelineId: 'pipe' })
+  assert.equal(decision.action, 'ambiguous')
+  assert.deepEqual(decision.opportunityIds, ['blank-1', 'blank-2'])
+  assert.equal(decideUnmatchedProject({
+    contacts: [{ id: 'contact-a' }], opportunities: [blanks[0]], pipelineId: 'pipe',
+  }).action, 'adopt')
 })
