@@ -25,6 +25,7 @@ import { createVerifiedDaily, dailyGuards } from './lib/verified-sheet-daily.mjs
 import { createDailyStore, DAILY_WORKER_KEY, dailyDayKey, dailyCasPath } from './lib/verified-sheet-daily-store.mjs'
 import { validatePrivatePolicy } from './lib/verified-sheet-policy.mjs'
 import * as arcViews from './lib/analyst-arcsite-views.mjs'
+import { readBackAndRepair } from './lib/ghl-opp-readback.mjs'
 import { parseSignedPdfText } from './lib/parse-signed-pdf.mjs'
 import { readVerifiedSheetSnapshot } from './lib/verified-sheet-snapshot.mjs'
 import {
@@ -3023,7 +3024,7 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   if (sellTotal != null) oppBody.monetaryValue = sellTotal   // value always reflects the current total
   if (ownerId) oppBody.assignedTo = ownerId
 
-  let action, fieldsOk = true
+  let action, fieldsOk = true, readBack = null
   if (oppId) {
     await ghlUpdateOpp(oppId, oppBody); action = isChangeOrder ? 'change_order' : 'updated'
     // GHL drops monetaryValue when the SAME update also moves the pipeline stage
@@ -3033,6 +3034,19 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
     if (isChangeOrder && sellTotal != null) {
       try { await ghlUpdateOpp(oppId, { monetaryValue: sellTotal }) } catch { fieldsOk = false }
     }
+    // Read the opportunity back and re-apply ONLY what the PUT dropped. An
+    // ADOPTED opportunity (matched by contact, not Project ID — a hand-made opp
+    // or a website lead) has twice landed without its Project ID (Durward #2,
+    // Sibold), which breaks every exact-ID match downstream. The CREATE path
+    // already re-applies fields; this gives the update path the same guard.
+    // Stage is corrected for adopted opps only; same-project updates unchanged.
+    // Still wrong after the repair → fields_ok=false, so the enrich queue and the
+    // value sweep keep reconciling exactly as they do for a blipped create.
+    readBack = await readBackAndRepair({
+      oppId, customFields, exactIds: [F.project_id], adopted: !sameProject,
+      targetStageId: oppBody.pipelineStageId, get: id => ghlGet(`/opportunities/${id}`), put: ghlUpdateOpp,
+    })
+    if (!readBack.ok) fieldsOk = false
   }
   else if (createClaim?.proceed) {
     oppBody.locationId = GHL_LOCATION_ID
@@ -3151,7 +3165,7 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
     arcPendingAdd(projectId, oppId, estimator).catch(() => {})
   }
 
-  return { ok: true, ...plan, action, change_order: isChangeOrder, opportunity_id: oppId, contact_id: contactId, owner: oppBody.assignedTo ? closerName : null, pdf, calendar, fields_ok: fieldsOk, enrich: needEnrich ? 'queued' : undefined, alert: alert ? alert.sent : (needEnrich && isNewSale ? 'deferred' : undefined) }
+  return { ok: true, ...plan, action, adopted: !!oppId && !sameProject && action !== 'created', read_back: readBack, change_order: isChangeOrder, opportunity_id: oppId, contact_id: contactId, owner: oppBody.assignedTo ? closerName : null, pdf, calendar, fields_ok: fieldsOk, enrich: needEnrich ? 'queued' : undefined, alert: alert ? alert.sent : (needEnrich && isNewSale ? 'deferred' : undefined) }
 }
 
 const app = express()
