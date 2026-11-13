@@ -124,7 +124,7 @@ test('a booking cancelled on the Schedule tab is not compared, but a GHL opportu
   p.ghl.opportunities[0].value = 1   // would be a price mismatch if compared
   const r = buildEodReport(p)
   assert.deepEqual(r.issues.map(i => i.kind), ['canceled_but_open']); assert.match(r.issues[0].detail, /cancelled by Keaton 11\/06/); assert.equal(r.checked, 0)
-  p.ghl.opportunities[0].status = 'lost'; assert.deepEqual(buildEodReport(p).issues, [])
+  p.ghl.opportunities[0].status = 'lost'; p.calendarJobs[0].canceledAt = '2026-11-06T00:00:00Z'; assert.deepEqual(buildEodReport(p).issues, [])
 })
 
 test('a calendar job for the same contact but another opportunity is reported as such, with both values', () => {
@@ -132,4 +132,10 @@ test('a calendar job for the same contact but another opportunity is reported as
   const r = buildEodReport(p)
   const k = r.issues.find(i => i.kind === 'calendar_other_opp'); assert.ok(k); assert.equal(k.job, 'J-1'); assert.match(k.detail, /\$6,200\.00.*\$19,881\.77/)
   assert.ok(!r.issues.some(i => i.kind === 'missing_calendar_job'))
+})
+
+test('a calendar job linked to a LOST opportunity is flagged like a website lead', () => {
+  const p = base(); p.ghl.opportunities.push({ id: 'dead', name: 'Jon Kim', contact_id: 'c9', pipeline: 'Outside Sales', stage: 'Ready For Install', status: 'lost', value: 6200, project_id: null, contracts: 0, fields: {} })
+  p.calendarJobs.push({ jobNumber: 'J-9', ghlOpportunityId: 'dead', ghlContactId: 'c9', customer: { name: 'Jonathan Kim' }, installDate: '2026-11-27', value: 6200, contracts: [] })
+  assert.ok(buildEodReport(p).issues.some(i => i.kind === 'calendar_lead_opp' && i.job === 'J-9'))
 })
