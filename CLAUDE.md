@@ -1000,6 +1000,11 @@ funnel.
   shows none and the rest of the site reads `field_activity`. The ingest, the
   table and the rollup trigger are untouched, so bringing doors back is
   re-adding a fetch; **do NOT reintroduce the name-matched leaderboard call**.
+- **The 🔥 Personal best badge rides INLINE beside the "Revenue sold" label**,
+  never `absolute top-3 right-3`. Commission now occupies the hero's top
+  right, and the absolutely-positioned badge printed straight on top of the
+  figure at laptop width (Keaton hit it live). It describes the revenue, so
+  it belongs next to that label, where it cannot collide with anything.
 - `ROLE_LABEL` spells the acronym: Tailwind's `capitalize` rendered the vp
   role as "Vp".
 - The header sub-line is the rep's **team name** (`teamLabel`), falling back
@@ -1007,6 +1012,20 @@ funnel.
 - **Option 2 (a role-aware admin worklist at the same route) was mocked and
   KILLED** (per Keaton: "No need for option 2"). One page, one face, every
   role. Do not rebuild it.
+- **The DEAL-SIDE figures were audited against an independent recompute**
+  (`revenue sold`, self-gen closed/revenue, leads closed/revenue, both ranks,
+  the Leads-group gate, and commission with no double-count): 160 figures
+  across all 22 demo cards, every one matching rules written from scratch
+  against the raw rows rather than through `repActivity`. **Demo's lead store
+  starts EMPTY (`_leads = []` in db.js), so the appointment side cannot be
+  exercised there** — `Appts set` and `Ran` read 0 on every demo card. Those
+  definitions are pinned by `test/repActivity.test.mjs` instead.
+- **`Ran` under "Self Gens" is the SET COHORT: of the appointments they
+  BOOKED in range, how many have happened — including ones ANOTHER rep sat**
+  (asserted: "caleb: set one, sat none, ran 1"). So the group heading uses
+  "self gen" more loosely than the Dashboard leaderboard does, where
+  `Self-Gen` means set AND closed by one person. Keep that in mind before
+  adding anything else to this card that leans on the word.
 - Verified by a BROWSER pass, not just a build (27 assertions): the default
   landing, the nav rename, every section present, the removed blocks absent,
   both ranks on one card, the Leads group actually hiding, inline goal editing

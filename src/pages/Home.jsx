@@ -471,15 +471,17 @@ export default function Home() {
       </div>
 
       {/* Hero — what they sold, where they rank, what they earned */}
-      <div className="rounded-2xl p-4 md:p-5 mb-3 relative overflow-hidden"
+      <div className="rounded-2xl p-4 md:p-5 mb-3 overflow-hidden"
         style={{ background: "linear-gradient(135deg,#0e3b35,#143d52)", border: "1px solid #1c5a50" }}>
-        {isBest && (
-          <div className="absolute top-3 right-3 text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-full"
-            style={{ background: "#fb923c22", color: "#fdba74", border: "1px solid #fb923c55" }}>🔥 Personal best</div>
-        )}
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="min-w-0">
-            <p className="text-[10px] uppercase tracking-widest text-white/45 font-bold">Revenue sold</p>
+            <p className="text-[10px] uppercase tracking-widest text-white/45 font-bold flex items-center gap-2 flex-wrap">
+              Revenue sold
+              {isBest && (
+                <span className="text-[9.5px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full whitespace-nowrap"
+                  style={{ background: "#fb923c22", color: "#fdba74", border: "1px solid #fb923c55" }}>🔥 Personal best</span>
+              )}
+            </p>
             <p className="text-[30px] md:text-[40px] font-extrabold leading-none text-white mt-1">{money(sold)}</p>
             {soldDelta != null && soldDelta !== 0 && (
               <p className="text-[12px] font-semibold mt-1.5" style={{ color: soldDelta > 0 ? "#6ee7c8" : "#f87171" }}>
