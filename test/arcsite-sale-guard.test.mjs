@@ -225,3 +225,27 @@ test('a final page that reaches GHL\'s own total is complete even when meta.next
   const s2 = await scanLocationOpportunities({ get: async () => short[0], locationId: LOC, origin: ORIGIN, projectIdOf: () => '', limit: 100, maxPages: 300, stopAtProjectId: 'x' })
   assert.equal(s2.complete, false); assert.equal(s2.status, 'incomplete')
 })
+
+test('claimAlert survives a store that returns JSONB key order (Postgres reorders object keys)', async () => {
+  const jsonbOrder = v => Array.isArray(v) ? v.map(jsonbOrder) : (v && typeof v === 'object') ? Object.fromEntries(Object.keys(v).sort((a, b) => a.length - b.length || (a < b ? -1 : 1)).map(k => [k, jsonbOrder(v[k])])) : v
+  const mem = new Map()
+  const store = {
+    read: async key => ({ ok: true, value: mem.has(key) ? jsonbOrder(JSON.parse(JSON.stringify(mem.get(key)))) : null }),
+    insert: async rows => { if (rows.some(r => mem.has(r.key))) return { ok: false, conflict: true }; for (const r of rows) mem.set(r.key, r.value); return { ok: true, rows } },
+    patch: async (key, from, value) => { const cur = mem.get(key); if (!cur || cur.state !== from) return { ok: false }; mem.set(key, value); return { ok: true, value } },
+  }
+  const ledger = createSaleLedger(store)
+  const eid = saleEventId('282300045519074', '630163', 'APPROVED')
+  const claim = await ledger.claimAlert({ projectId: '282300045519074', eventId: eid, recipients: ['a', 'b', 'c'] })
+  assert.equal(claim.send, true, claim.reason); assert.deepEqual(claim.pending, ['a', 'b', 'c'])
+  const fin = await ledger.finishAlert({ projectId: '282300045519074', eventId: eid, outcomes: [{ contactId: 'a', ok: true, messageIds: ['m1'] }, { contactId: 'b', ok: true, messageIds: ['m2'] }, { contactId: 'c', ok: true, messageIds: ['m3'] }] })
+  assert.equal(fin.ok, true); assert.equal(fin.record.state, 'sent')
+  // a second claim for the same project reports it as already sent, never re-sends
+  const again = await ledger.claimAlert({ projectId: '282300045519074', eventId: eid, recipients: ['a', 'b', 'c'] })
+  assert.equal(again.send, false); assert.equal(again.reason, 'sent')
+  // a genuinely different read-back (another writer changed the state) is still rejected
+  mem.clear()
+  const tampered = createSaleLedger({ ...store, read: async key => { const v = mem.get(key); return { ok: true, value: v ? { ...v, state: 'failed' } : null } } })
+  const bad = await tampered.claimAlert({ projectId: '282300045519074', eventId: eid, recipients: ['a'] })
+  assert.equal(bad.send, false); assert.equal(bad.reason, 'readback')
+})
