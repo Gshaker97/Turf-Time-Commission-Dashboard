@@ -107,3 +107,29 @@ test('a sold job whose opportunity still carries the website-estimate name is NO
   const p = base(); p.ghl.opportunities[0].name = 'Camron Johnson · website estimate · turf'
   assert.ok(!buildEodReport(p).issues.some(i => i.kind === 'calendar_lead_opp'))
 })
+
+test('completed installs are skipped; the ignore list drops a job or just a kind; a -2 site id matches; a canceled site deal is its own finding', () => {
+  const done = base(); done.sheetSchedule.rows[0]['Install Date'] = '2026-11-01'; done.ghl.opportunities = []
+  const r1 = buildEodReport(done); assert.equal(r1.checked, 0); assert.equal(r1.skipped_completed, 1); assert.deepEqual(r1.issues, [])
+  const ig = base(); ig.ghl.opportunities[0].value = 1; ig.siteDeals[0].deal_name = 'Other Person'; ig.ignore = [{ match: 'Camron & Bobbie Johnson', kinds: ['name'] }]
+  const r2 = buildEodReport(ig); assert.ok(r2.issues.some(i => i.kind === 'price')); assert.ok(!r2.issues.some(i => i.kind === 'name'))
+  ig.ignore = ['Camron & Bobbie Johnson']; assert.deepEqual(buildEodReport(ig).issues, [])
+  const two = base(); two.siteDeals[0].project_id = 'P1-2'; assert.ok(!buildEodReport(two).issues.some(i => i.kind === 'missing_on_site'))
+  const cx = base(); cx.sheetJobs.rows[0]['Approved Date'] = '2026-11-10'; cx.siteDeals[0].status = 'Canceled'
+  assert.deepEqual(buildEodReport(cx).issues.map(i => i.kind), ['site_canceled'])
+})
+
+test('a booking cancelled on the Schedule tab is not compared, but a GHL opportunity still live is flagged once', () => {
+  const p = base(); p.sheetSchedule.rows[0].Status = 'CANCELLED'; p.sheetSchedule.rows[0].Notes = ' [cancelled by Keaton 11/06: Failed credit ]'; p.sheetSchedule.headers.push('Notes')
+  p.ghl.opportunities[0].value = 1   // would be a price mismatch if compared
+  const r = buildEodReport(p)
+  assert.deepEqual(r.issues.map(i => i.kind), ['canceled_but_open']); assert.match(r.issues[0].detail, /cancelled by Keaton 11\/06/); assert.equal(r.checked, 0)
+  p.ghl.opportunities[0].status = 'lost'; assert.deepEqual(buildEodReport(p).issues, [])
+})
+
+test('a calendar job for the same contact but another opportunity is reported as such, with both values', () => {
+  const p = base(); p.calendarJobs[0].ghlOpportunityId = 'old-opp'; p.calendarJobs[0].value = 6200
+  const r = buildEodReport(p)
+  const k = r.issues.find(i => i.kind === 'calendar_other_opp'); assert.ok(k); assert.equal(k.job, 'J-1'); assert.match(k.detail, /\$6,200\.00.*\$19,881\.77/)
+  assert.ok(!r.issues.some(i => i.kind === 'missing_calendar_job'))
+})

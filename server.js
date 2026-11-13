@@ -5143,6 +5143,15 @@ const EOD_CHECK_HOUR = Number(process.env.EOD_CHECK_HOUR || 21)
 const EOD_CHECK_SMS = process.env.EOD_CHECK_SMS !== '0'   // on by default (Garrison asked for the text); EOD_CHECK_SMS=0 silences it
 const EOD_CHECK_CONTACT_ID = (process.env.EOD_CHECK_CONTACT_ID || 'tyHlLNS6nuB1BdQRe1hH').trim()   // Garrison
 const EOD_KEY = day => `eod_check_${day}`, EOD_LAST_KEY = 'eod_check_last'
+// Jobs Garrison has reviewed and chosen to leave (Nov 13 2026). `kinds` limits the
+// ignore to those findings; no kinds = ignore the job entirely. EOD_CHECK_IGNORE
+// (JSON array) replaces this list without a deploy.
+const EOD_IGNORE_DEFAULT = [
+  { match: 'Anna Lee' },
+  { match: 'Rene Sanchez' },
+  { match: 'Robert Durwood', kinds: ['name'] },
+]
+const eodIgnoreList = () => { try { const v = JSON.parse(process.env.EOD_CHECK_IGNORE || 'null'); if (Array.isArray(v)) return v } catch { /* fall through */ } return EOD_IGNORE_DEFAULT }
 const eodRead = async key => { const r = await arcSetting(key); return r.ok ? r.value : null }
 async function eodCollect(day) {
   // Use the hourly analyst bundle (one consistent read of every source); refresh it if it is older than 70 minutes.
@@ -5173,7 +5182,7 @@ async function eodCollect(day) {
   const [worker, contractAudit, last] = await Promise.all([eodRead(DAILY_WORKER_KEY), eodRead(ARC_AUDIT_KEY), eodRead(EOD_LAST_KEY)])
   let previous = last && last.day && last.day < day ? last : null
   if (!previous && last && last.day === day && last.previous_day) previous = await eodRead(EOD_KEY(last.previous_day))
-  return { day, sheetJobs, sheetSchedule, ghl: { opportunities: g.opportunities || [], contacts: g.contacts || {} }, calendarJobs, siteDeals, events: _eodEvents.filter(e => String(e.at).slice(0, 10) === day), alertStates, worker, contractAudit, previous, sourceErrors, bundle_built_at: d.built_at }
+  return { day, sheetJobs, sheetSchedule, ghl: { opportunities: g.opportunities || [], contacts: g.contacts || {} }, calendarJobs, siteDeals, events: _eodEvents.filter(e => String(e.at).slice(0, 10) === day), alertStates, worker, contractAudit, previous, sourceErrors, ignore: eodIgnoreList(), bundle_built_at: d.built_at }
 }
 let _eodRunning = false
 async function eodRun({ dry = false } = {}) {
