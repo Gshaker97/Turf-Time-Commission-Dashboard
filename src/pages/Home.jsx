@@ -61,7 +61,10 @@ function Stat({ value, label, sub, subColor, color = "#ededed", onClick }) {
   const Tag = onClick ? "button" : "div";
   return (
     <Tag onClick={onClick ? onClickUnlessSelecting(onClick) : undefined}
-      className={`flex-1 min-w-0 text-left ${onClick ? "cursor-pointer" : ""}`}>
+      // `self-start` because a stretched <button> VERTICALLY CENTRES its own
+      // content: Revenue (no rate line) sat 7px below its neighbours, whose
+      // extra sub-line made them taller. Top-align and every label lines up.
+      className={`flex-1 min-w-0 text-left self-start ${onClick ? "cursor-pointer" : ""}`}>
       <p className="text-[18px] md:text-[20px] font-bold leading-none truncate" style={{ color }}>{value}</p>
       <p className="text-[10px] text-white/45 mt-1 truncate">{label}</p>
       {sub && <p className="text-[10px] truncate" style={{ color: subColor || "rgba(255,255,255,0.3)" }}>{sub}</p>}
@@ -74,7 +77,23 @@ function Stat({ value, label, sub, subColor, color = "#ededed", onClick }) {
 // marking the join is what let "10 Ran" be read as ten sales (Keaton did it
 // on his own card within minutes of the page going live). Same hairline the
 // Leads by-rep board already uses, so the two pages show the split alike.
-const Seam = () => <div className="w-px self-stretch my-0.5 mx-1 md:mx-2 flex-shrink-0" style={{ background: "#ffffff1f" }} />;
+// ...and on a PHONE it turns HORIZONTAL, because four equal cells across 390px
+// leave ~90px for a money value and "$35,334" clipped to "$35,3…" on Keaton's
+// phone. **A TRUNCATED NUMBER IS WORSE THAN NO NUMBER** — it reads as a real,
+// smaller figure. Stacking into two rows gives every cell ~half the screen,
+// and the split lands exactly on the seam: appointments above, deals below.
+// `grow` is the cell COUNT, so a half holding two stats gets twice the width
+// of one holding a single stat.
+function StatRow({ left, right }) {
+  return (
+    <div className="flex flex-col md:flex-row md:items-stretch gap-2.5 md:gap-0">
+      <div className="flex gap-3 md:gap-4 min-w-0" style={{ flex: `${left.length} 1 0%` }}>{left}</div>
+      <div className="w-full h-px md:w-px md:h-auto md:self-stretch md:mx-3 my-0.5 flex-shrink-0"
+        style={{ background: "#ffffff1f" }} />
+      <div className="flex gap-3 md:gap-4 min-w-0" style={{ flex: `${right.length} 1 0%` }}>{right}</div>
+    </div>
+  );
+}
 
 function GroupCard({ title, tone, children }) {
   return (
@@ -540,29 +559,33 @@ export default function Home() {
 
       {/* Self gens — the appointments they booked and what became of them */}
       <GroupCard title="Self Gens" tone="#00b894">
-        <div className="flex items-stretch gap-2 md:gap-3">
-          <Stat value={act.set} label="Appts set" />
-          {/* "Appts ran" = of the ones they BOOKED, how many have happened —
-              including any another rep sat. Bare "Ran" never said either. */}
-          <Stat value={act.ran} label="Appts ran" sub={pct(act.ranRate)} subColor={rateColor(act.ranRate)} />
-          <Seam />
-          <Stat value={act.closed} label="Deals closed" sub={pct(act.closeRate)} subColor={rateColor(act.closeRate)}
-            onClick={() => toggleDrill("self")} />
-          <Stat value={money(act.revenue)} label="Revenue" color="#00b894" onClick={() => toggleDrill("self")} />
-        </div>
+        <StatRow
+          left={[
+            <Stat key="set" value={act.set} label="Appts set" />,
+            // "Appts ran" = of the ones they BOOKED, how many have happened —
+            // including any another rep sat. Bare "Ran" never said either.
+            <Stat key="ran" value={act.ran} label="Appts ran" sub={pct(act.ranRate)} subColor={rateColor(act.ranRate)} />,
+          ]}
+          right={[
+            <Stat key="closed" value={act.closed} label="Deals closed" sub={pct(act.closeRate)} subColor={rateColor(act.closeRate)}
+              onClick={() => toggleDrill("self")} />,
+            <Stat key="rev" value={money(act.revenue)} label="Revenue" color="#00b894" onClick={() => toggleDrill("self")} />,
+          ]} />
       </GroupCard>
 
       {/* Leads — only when they actually ran one */}
       {hasLeads && (
         <GroupCard title="Leads" tone="#c084fc">
-          <div className="flex items-stretch gap-2 md:gap-3">
-            <Stat value={act.leadsRan} label="Appts ran" />
-            <Seam />
-            <Stat value={act.leadsClosed} label="Deals closed" sub={pct(act.leadsCloseRate)} subColor={rateColor(act.leadsCloseRate)}
-              onClick={() => toggleDrill("leads")} />
-            <Stat value={money(act.leadRevenue)} label="Revenue" color="#00b894" onClick={() => toggleDrill("leads")} />
-            <div className="flex-1" />
-          </div>
+          {/* NO EMPTY SPACER CELL. A fourth `flex-1` div used to pad this row
+              out to match Self Gens, which handed a quarter of the width to
+              nothing and squeezed Revenue until it clipped. */}
+          <StatRow
+            left={[<Stat key="ran" value={act.leadsRan} label="Appts ran" />]}
+            right={[
+              <Stat key="closed" value={act.leadsClosed} label="Deals closed" sub={pct(act.leadsCloseRate)} subColor={rateColor(act.leadsCloseRate)}
+                onClick={() => toggleDrill("leads")} />,
+              <Stat key="rev" value={money(act.leadRevenue)} label="Revenue" color="#00b894" onClick={() => toggleDrill("leads")} />,
+            ]} />
         </GroupCard>
       )}
 
