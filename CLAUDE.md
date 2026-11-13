@@ -983,6 +983,28 @@ funnel.
   that. Keaton kept the group heading "Self Gens" knowing it is looser here
   than the Dashboard leaderboard's `Self-Gen` (set AND closed by one person)
   — the labels carry the precision instead.
+- **A TRUNCATED NUMBER IS WORSE THAN NO NUMBER, and the layout must make it
+  impossible.** Four equal cells across a 430px phone left ~90px for money and
+  clipped `$35,334` to **"$35,3…"** on Keaton's phone — which reads as a real,
+  smaller figure. `StatRow` now stacks the two halves on a phone and **turns
+  the seam HORIZONTAL**, so each cell gets ~half the screen and the split
+  lands exactly where it means something: appointments above, deals below.
+  One row with a vertical seam returns at `md`. Each half's flex-grow is its
+  CELL COUNT, so a half holding two stats gets twice the width of one holding
+  one. The Leads card also carried an **empty fourth `flex-1` spacer** to pad
+  itself out to Self Gens' width — that is what handed a quarter of the row to
+  nothing and squeezed Revenue until it clipped; never add a filler cell to
+  make two cards line up.
+  Proved by a stress pass, not by eye: every value element in both cards, on
+  all 23 cards, at 320 / 360 / 390 / 430 / 768 / 1400 px, measured
+  `scrollWidth <= clientWidth` **both as rendered and with `$1,234,567`
+  forced in** — a card that fits this month's numbers can still clip next
+  month's.
+- **`Stat` is `self-start`, because a stretched `<button>` VERTICALLY CENTRES
+  its own content.** Revenue has no rate sub-line, so it stretched to its
+  taller neighbours and its text was centred — putting the label 7px below
+  every other label in the row. Found by measuring `getBoundingClientRect`,
+  not by looking.
 - **A COUNT IS NEVER COLOURED BY ITS RATE.** `Deals closed` used to render
   the COUNT in `rateColor(closeRate)`, so a rep with a 10% close rate got an
   orange `1` — the number read as an error when it is just a count, and the
