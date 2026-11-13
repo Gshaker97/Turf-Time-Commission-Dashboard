@@ -1,19 +1,33 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { startOfWeek, endOfWeek, addDays, format as dfFormat } from "date-fns";
-import { Trophy, TrendingUp, Award, Target, ClipboardList, Percent, DollarSign, Wallet, Layers, Flame, Clock, Share2, Check, X, DoorOpen, CalendarCheck } from "lucide-react";
-import { fetchDeals, fetchCompetitions, fetchUsers, fetchWeeklyStats, fetchLeads, fetchTeamChanges, fetchRepcardLeaderboard } from "../lib/db";
-import { headIdSet, teamKeyFor, buildChangesByProfile } from "../utils/team";
-import { estimatesFor } from "../utils/estimates";
+import { format as dfFormat } from "date-fns";
+import { Trophy, Award, Target, Flame, Share2, Check, X } from "lucide-react";
+import { fetchDeals, fetchCompetitions, fetchUsers, fetchWeeklyStats, fetchLeads, fetchTeamChanges,
+  fetchPersonalGoals, upsertPersonalGoal } from "../lib/db";
+import { headIdSet, teamKeyFor, buildChangesByProfile, saleOwnerId, teamLabel } from "../utils/team";
 import { onClickUnlessSelecting } from "../utils/selection";
 import { getUserCommission, countsInTotals, fmt } from "../utils/commission";
 import { personalBests } from "../utils/records";
+// THE SAME ENGINE THE LEADS BY-REP BOARD USES. My Card is one person's row of
+// exactly those numbers, so set / ran / closed / leads can never disagree
+// between the two pages (per Keaton's spec: Appts Set, Appts Ran, Run %,
+// Closed, Closing %, Revenue — then Leads Ran, Leads Closed, Closing %, Lead
+// Revenue).
+import { repActivity } from "../utils/repActivity";
+import { currentPeriods, resolveGoal, repProduction, periodElapsed, metricProgress } from "../utils/goals";
 import { useSettings } from "../contexts/SettingsContext";
 import { useAuth } from "../contexts/AuthContext";
+import { toast } from "../lib/toast";
 import { competitionStandings, competitionStatus, fmtScore } from "../utils/competition";
 
 const money = (n) => "$" + Math.round(Number(n) || 0).toLocaleString("en-US");
 const SELLER = (u) => ["rep", "manager", "director", "vp"].includes(u.role);
+// A rate over 100% measures the gap between two systems (appointments come
+// from RepCard, deals from the site), not performance — so it reads blank.
+// repActivity already applies that rule; this only formats what it returns.
+const pct = (r) => (r == null ? "—" : `${r.toFixed(0)}%`);
+// `capitalize` renders the vp role as "Vp". Spell the acronym out.
+const ROLE_LABEL = { rep: "Rep", manager: "Manager", director: "Director", vp: "VP", admin: "Admin" };
 
 function getMonths(n = 12) {
   const months = [];
@@ -37,30 +51,25 @@ function rateColor(r) {
   return "#fb923c";
 }
 
-// A compact derived-average cell for the RepCard metrics row.
-function Avg({ label, value, sub }) {
-  return (
-    <div className="text-center">
-      <p className="text-[9px] uppercase tracking-[0.12em] text-white/35 font-bold">{label}</p>
-      <p className="text-[20px] md:text-[22px] font-bold text-white mt-0.5 tabular-nums">{value}</p>
-      <p className="text-[9px] text-white/25">{sub}</p>
-    </div>
-  );
-}
-
-function StatTile({ icon: Icon, label, value, sub, color = "#00b894", trend, onClick }) {
+// One figure inside a group card. Clickable ones drill to the deals behind them.
+function Stat({ value, label, sub, color = "#ededed", onClick }) {
   const Tag = onClick ? "button" : "div";
   return (
     <Tag onClick={onClick ? onClickUnlessSelecting(onClick) : undefined}
-      className={`rounded-xl p-3 md:p-4 min-w-0 text-left w-full ${onClick ? "cursor-pointer hover:border-white/25 transition-colors" : ""}`}
-      style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
-      <div className="flex items-center gap-1.5 mb-1.5">
-        <Icon size={12} style={{ color }} />
-        <p className="text-[9px] md:text-[10px] uppercase tracking-widest text-white/30 font-semibold leading-tight">{label}</p>
-      </div>
-      <p className="text-[17px] md:text-[22px] font-bold leading-none truncate" style={{ color }}>{value}</p>
-      {trend ? <div className="mt-1">{trend}</div> : sub && <p className="text-[10px] text-white/30 mt-1 truncate">{sub}</p>}
+      className={`min-w-0 text-left ${onClick ? "cursor-pointer" : ""}`}>
+      <p className="text-[18px] md:text-[20px] font-bold leading-none truncate" style={{ color }}>{value}</p>
+      <p className="text-[10px] text-white/45 mt-1 truncate">{label}</p>
+      {sub && <p className="text-[10px] text-white/30 truncate">{sub}</p>}
     </Tag>
+  );
+}
+
+function GroupCard({ title, tone, children }) {
+  return (
+    <div className="rounded-xl p-3.5 md:p-4 mb-3" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
+      <p className="text-[10px] uppercase tracking-widest font-bold mb-3" style={{ color: tone }}>{title}</p>
+      {children}
+    </div>
   );
 }
 
@@ -80,13 +89,13 @@ export default function Home() {
   const me = viewId || profile?.id;
   const { dataStartDate, estimatesFrom } = useSettings();
   const [leads, setLeads] = useState([]);
+  const todayISO = dfFormat(new Date(), "yyyy-MM-dd");
 
-  // Personal bests (owner-credited, completed periods) + how close the
-  // current month is to the rep's best — the "beat yourself" nudge.
+  // Personal bests (owner-credited, completed periods) — the all-time marks.
   const bests = useMemo(() => {
     if (!me || !allDeals.length) return null;
-    return personalBests(allDeals, me, { dataStartDate, todayISO: dfFormat(new Date(), "yyyy-MM-dd") });
-  }, [allDeals, me, dataStartDate]);
+    return personalBests(allDeals, me, { dataStartDate, todayISO });
+  }, [allDeals, me, dataStartDate, todayISO]);
   const viewUser = useMemo(() => users.find(u => u.id === me) || profile, [users, me, profile]);
   const viewingOther = !!viewId && viewId !== profile?.id;
 
@@ -102,33 +111,23 @@ export default function Home() {
       });
   }, []);
 
-  // RepCard D2D leaderboard — the ONLY source whose door numbers reconcile with
-  // what reps see in RepCard (the webhook/customers feeds only capture pins
-  // attached to a saved contact and undercount badly). The Field-activity
-  // section lets the rep pick ONE date window; the board is fetched for that
-  // window and the card picks its rep's row by name. configured:null = loading.
-  const faIso = (d) => dfFormat(d, "yyyy-MM-dd");
-  const [faPreset, setFaPreset] = useState("week");   // week|month|lastMonth|90d|custom
-  const [faFrom, setFaFrom] = useState(() => faIso(startOfWeek(new Date(), { weekStartsOn: 1 })));
-  const [faTo, setFaTo] = useState(() => faIso(endOfWeek(new Date(), { weekStartsOn: 1 })));
-  const faRange = useMemo(() => {
-    const today = new Date(), y = today.getFullYear(), m = today.getMonth();
-    if (faPreset === "month") return { from: faIso(new Date(y, m, 1)), to: faIso(new Date(y, m + 1, 0)), label: "This month" };
-    if (faPreset === "lastMonth") return { from: faIso(new Date(y, m - 1, 1)), to: faIso(new Date(y, m, 0)), label: "Last month" };
-    if (faPreset === "90d") return { from: faIso(addDays(today, -90)), to: faIso(today), label: "Last 90 days" };
-    if (faPreset === "custom") return { from: faFrom, to: faTo, label: `${faFrom} – ${faTo}` };
-    return { from: faIso(startOfWeek(today, { weekStartsOn: 1 })), to: faIso(endOfWeek(today, { weekStartsOn: 1 })), label: "This week" };   // RepCard weeks run Mon–Sun
-  }, [faPreset, faFrom, faTo]);
+  // DOOR KNOCKS ARE NOT SHOWN HERE (per Keaton: "we can drop them for now").
+  // My Card was the last surface rendering them, and it read them from a THIRD
+  // source — RepCard's own /api/repcard/leaderboard, matched to reps BY NAME —
+  // while the Dashboard shows none and the rest of the site reads
+  // `field_activity`. The ingest, the table and the rollup trigger are all
+  // untouched, so nothing is lost and bringing doors back is re-adding a fetch.
+  // Do NOT reintroduce the name-matched leaderboard call: it was a third path
+  // to the same fact and could disagree with both of the others.
 
-  const [repcard, setRepcard] = useState({ configured: null, rows: [] });
-  useEffect(() => {
-    if (!faRange.from || !faRange.to) return;
-    let cancelled = false;
-    fetchRepcardLeaderboard(faRange.from, faRange.to)
-      .then((res) => { if (!cancelled) setRepcard({ configured: !!res?.configured, rows: res?.rows || [] }); })
-      .catch(() => { if (!cancelled) setRepcard({ configured: false, rows: [] }); });
-    return () => { cancelled = true; };
-  }, [faRange.from, faRange.to]);
+  // Personal goals — the REAL commitments from `personal_goals`, the same rows
+  // the Goals page writes, so the targets on this card are the targets the rep
+  // set. This REPLACES Home's old auto-target ("trailing 3-month average
+  // +10%"), which was a second, invisible definition of a goal that the Goals
+  // page knew nothing about.
+  const [goalRows, setGoalRows] = useState([]);
+  const reloadGoals = () => fetchPersonalGoals().then(({ data }) => setGoalRows(data || []));
+  useEffect(() => { reloadGoals(); }, []);
 
   const ghostIds = useMemo(() => new Set(users.filter(u => u.ghost).map(u => u.id)), [users]);
   // Same date-effective team context the Competitions page scores with, so
@@ -141,132 +140,168 @@ export default function Home() {
   }), [users, teamChanges]);
   const monthDeals = useMemo(() => allDeals.filter(d => d.sale_date?.startsWith(mr.key)), [allDeals, mr.key]);
 
-  // RepCard field metrics for the shown rep, read straight off RepCard's D2D
-  // leaderboard so the numbers equal what the rep sees in RepCard. Doors +
-  // appointments come from the board (this week / last month / a trailing
-  // 90-day span); CLOSES stay our own deals (per Keaton — go off actual sales,
-  // not the CRM's "sold"). Rows are matched to the rep BY NAME, the same
-  // fallback the leads feed uses. Returns configured=false → the card hides its
-  // door tiles; null → still loading.
-  const repCard = useMemo(() => {
-    if (repcard.configured === null) return { configured: null };
-    if (!repcard.configured) return { configured: false };
-    const myName = (users.find((u) => u.id === me)?.name || viewUser?.name || "").trim().toLowerCase();
-    const row = repcard.rows.find((r) => r.name.toLowerCase() === myName) || null;
+  // ONE ROW of the by-rep board, for the viewed rep and the viewed month.
+  // set/ran come from the APPOINTMENT feed, closed/revenue from SIGNED DEALS —
+  // the same two-source split, and the same >100% blank rule, as that board.
+  // `Appts set` and `Run %` did not exist on this page before: it only had
+  // self-gen ESTIMATES (set AND ran by the same person), never the set → ran
+  // funnel.
+  const actFor = (key) => {
+    const { rows } = repActivity(leads, allDeals, {
+      users, from: `${key}-01`, to: `${key}-31`, onlyIds: me ? [me] : [],
+    });
+    return rows.find((r) => r.id === me) || null;
+  };
+  const EMPTY_ACT = { set: 0, ran: 0, closed: 0, leadsRan: 0, leadsClosed: 0, revenue: 0, leadRevenue: 0,
+    ranRate: null, closeRate: null, leadsCloseRate: null };
+  const act = useMemo(() => actFor(mr.key) || EMPTY_ACT, [leads, allDeals, users, mr.key, me]);
+  // REVENUE SOLD = everything they sold, owner-credited revenue plus the
+  // baseline of the leads they closed for someone else. A PER-PERSON figure:
+  // never sum it across people, since a deal whose setter and closer are both
+  // on the team would count twice (same rule as the Dashboard leaderboard's
+  // Total Revenue column).
+  const sold = act.revenue + act.leadRevenue;
+  const prevSold = useMemo(() => {
+    const pm = months[selected + 1];
+    if (!pm) return null;
+    const a = actFor(pm.key);
+    return a ? a.revenue + a.leadRevenue : 0;
+  }, [leads, allDeals, users, months, selected, me]);
 
-    const doors = row?.doors || 0, appts = row?.appts || 0, knockDays = row?.knockDays || 0;
-    // CLOSES stay our own deals (per Keaton — go off actual sales, not the CRM's
-    // "sold"), counted in the SAME window the doors/appts come from.
-    const closes = allDeals.filter((d) => d.setter_id === me && d.sale_date
-      && d.sale_date >= faRange.from && d.sale_date <= faRange.to).length;
-    return {
-      configured: true,
-      doors, appts, closes,
-      avgDoorsPerDay: knockDays > 0 ? doors / knockDays : null,
-      doorsPerAppt: appts > 0 ? doors / appts : null,
-      apptsPerClose: closes > 0 ? appts / closes : null,
-    };
-  }, [repcard, users, me, viewUser, allDeals, faRange.from, faRange.to]);
+  const commission = useMemo(() => getUserCommission(monthDeals, me), [monthDeals, me]);
 
-  const setterRevForMonth = (key) => allDeals
-    .filter(d => d.setter_id === me && d.sale_date?.startsWith(key))
+  // Owner-credited revenue for a month — the SAME credit rule as `act.revenue`
+  // and the Dashboard leaderboard. It used to be `setter_id === me`, which
+  // silently disagreed with both whenever a deal had no setter recorded.
+  const ownerRevForMonth = (key) => allDeals
+    .filter(d => d.sale_date?.startsWith(key) && saleOwnerId(d) === me)
     .reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0);
-  // Estimates come from the leads feed on/after the cutover, manual before —
-  // one shared rule so Home, Goals and Performance never disagree.
-  const monthEstimates = (key) => estimatesFor({
-    leads, weeklyStats: weekly, repId: me,
-    start: `${key}-01`, end: `${key}-31`, from: estimatesFrom,
-  });
-  const sgEstForMonth = (key) => monthEstimates(key).sgEst;
-  const ldEstForMonth = (key) => monthEstimates(key).leadEst;
-  const setterCountForMonth = (key) => allDeals.filter(d => d.setter_id === me && d.sale_date?.startsWith(key)).length;
 
-  // My stats for the selected month — split self-gen (deals I set) vs leads
-  // (deals I closed that someone else set).
-  const stats = useMemo(() => {
-    const setterDeals = monthDeals.filter(d => d.setter_id === me);
-    const leadDeals   = monthDeals.filter(d => d.closer_id === me && d.setter_id !== me);
-    const sum = (arr) => arr.reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0);
-    const sgRevenue = sum(setterDeals), sgCloses = setterDeals.length, sgEst = sgEstForMonth(mr.key);
-    const ldRevenue = sum(leadDeals),   ldCloses = leadDeals.length,   ldEst = ldEstForMonth(mr.key);
-    return {
-      sgRevenue, sgCloses, sgEst, sgRate: sgEst > 0 ? (sgCloses / sgEst) * 100 : null,
-      ldRevenue, ldCloses, ldEst, ldRate: ldEst > 0 ? (ldCloses / ldEst) * 100 : null,
-      commission: getUserCommission(monthDeals, me),
-      avgDeal: sgCloses > 0 ? sgRevenue / sgCloses : 0,
-      hasLeads: ldEst > 0 || ldCloses > 0,
+  // TWO RANKS, EACH NAMING ITS OWN UNIT (per Keaton: "can we have a rank for
+  // self-gen rev + total rev?"). One rank under a "Revenue sold" headline was
+  // ambiguous: ranked on owner revenue, the "$X to pass <name>" line sat
+  // directly beneath a figure that meant something else — two definitions in
+  // one box, the fault this whole rework exists to remove. Naming both is the
+  // fix: each row carries its own rank AND its own gap, in its own unit.
+  //   • Revenue sold = owner-credited revenue + the baseline of deals they
+  //     CLOSED for another setter (the hero figure, and the Dashboard
+  //     leaderboard's `Total Revenue`).
+  //   • Self-gen    = owner-credited revenue alone (the site's one definition
+  //     of "revenue" everywhere else, and that leaderboard's `Revenue`).
+  // A deal counts ONCE per person on either board, so neither double-counts a
+  // self-gen; `Revenue sold` is a PER-PERSON figure and is never summed here.
+  const ranks = useMemo(() => {
+    const own = {}, lead = {};
+    for (const d of monthDeals) {
+      const v = parseFloat(d.baseline_revenue) || 0;
+      const owner = saleOwnerId(d);
+      if (owner) own[owner] = (own[owner] || 0) + v;
+      if (d.closer_id && d.closer_id !== owner) lead[d.closer_id] = (lead[d.closer_id] || 0) + v;
+    }
+    const board = (value) => {
+      const rows = users
+        .filter(u => SELLER(u) && (isAdmin || !u.ghost))
+        .map(u => ({ id: u.id, name: u.name, revenue: value(u.id) }))
+        .filter(r => r.revenue > 0)
+        .sort((a, b) => b.revenue - a.revenue);
+      const idx = rows.findIndex(r => r.id === me);
+      if (idx === -1) return { ranked: false, total: rows.length };
+      const ahead = idx > 0 ? rows[idx - 1] : null;
+      const behind = rows[idx + 1] || null;
+      return {
+        ranked: true, rank: idx + 1, total: rows.length, myRev: rows[idx].revenue,
+        ahead, gapAhead: ahead ? ahead.revenue - rows[idx].revenue : 0,
+        behind, leadBehind: behind ? rows[idx].revenue - behind.revenue : 0,
+      };
     };
-  }, [monthDeals, weekly, allDeals, me, mr.key]);
-
-  // Self-gen closing-% trend vs the previous month.
-  const closeDelta = useMemo(() => {
-    const pm = months[selected + 1]; if (!pm) return null;
-    const est = sgEstForMonth(pm.key); if (!est) return null;
-    const prev = (setterCountForMonth(pm.key) / est) * 100;
-    return stats.sgRate == null ? null : stats.sgRate - prev;
-  }, [months, selected, allDeals, weekly, me, stats.sgRate]);
-
-  // Company rank by setter revenue this month (ghosts excluded for non-admins).
-  const rank = useMemo(() => {
-    const revBy = {};
-    for (const d of monthDeals) if (d.setter_id) revBy[d.setter_id] = (revBy[d.setter_id] || 0) + (parseFloat(d.baseline_revenue) || 0);
-    const board = users
-      .filter(u => SELLER(u) && (isAdmin || !u.ghost))
-      .map(u => ({ id: u.id, name: u.name, revenue: revBy[u.id] || 0 }))
-      .filter(r => r.revenue > 0)
-      .sort((a, b) => b.revenue - a.revenue);
-    const idx = board.findIndex(r => r.id === me);
-    if (idx === -1) return { ranked: false, total: board.length };
-    const ahead = idx > 0 ? board[idx - 1] : null;
-    const behind = board[idx + 1] || null;
     return {
-      ranked: true, rank: idx + 1, total: board.length, myRev: board[idx].revenue,
-      ahead, gapAhead: ahead ? ahead.revenue - board[idx].revenue : 0,
-      behind, leadBehind: behind ? board[idx].revenue - behind.revenue : 0,
+      sold:    board(id => (own[id] || 0) + (lead[id] || 0)),
+      selfgen: board(id => own[id] || 0),
     };
   }, [monthDeals, users, me, isAdmin]);
+  // The share image prints one rank; it is the one the headline describes.
+  const rank = ranks.sold;
 
-  // Personal pace vs the rep's trailing 3-month average (×1.1).
-  const pace = useMemo(() => {
-    const prev = [1, 2, 3].map(i => months[selected + i]).filter(Boolean).map(m => setterRevForMonth(m.key));
-    if (!prev.length) return null;
-    const goal = Math.max((prev.reduce((s, v) => s + v, 0) / prev.length) * 1.1, 5000);
-    return { goal, pct: Math.min((stats.sgRevenue / goal) * 100, 100) };
-  }, [allDeals, me, months, selected, stats.sgRevenue]);
-
-  // Momentum: weekly win streak + last sale.
-  const momentum = useMemo(() => {
-    const mine = allDeals.filter(d => d.setter_id === me && d.sale_date).map(d => d.sale_date);
-    const last = mine.sort((a, b) => b.localeCompare(a))[0] || null;
-    const now = new Date();
-    const daysSince = last ? Math.max(0, Math.floor((now - new Date(last + "T12:00:00")) / 86400000)) : null;
-    const hasWeek = (p) => {
-      const ws = dfFormat(p, "yyyy-MM-dd"), we = dfFormat(endOfWeek(p, { weekStartsOn: 0 }), "yyyy-MM-dd");
-      return mine.some(d => d >= ws && d <= we);
-    };
-    let streak = 0, ptr = startOfWeek(now, { weekStartsOn: 0 });
-    if (!hasWeek(ptr)) ptr = addDays(ptr, -7);       // current week may be incomplete
-    for (let i = 0; i < 52; i++) { if (!hasWeek(ptr)) break; streak++; ptr = addDays(ptr, -7); }
-    return { last, daysSince, streak };
-  }, [allDeals, me]);
-
-  // Personal best month (by setter revenue) across the last 12 months.
+  // Personal best month across the last 12, on the same owner-credited rule.
   const best = useMemo(() => {
     let bk = null, bl = null, br = 0;
-    for (const m of months) { const r = setterRevForMonth(m.key); if (r > br) { br = r; bk = m.key; bl = m.label; } }
+    for (const m of months) { const r = ownerRevForMonth(m.key); if (r > br) { br = r; bk = m.key; bl = m.label; } }
     return br > 0 ? { key: bk, label: bl, rev: br } : null;
   }, [allDeals, me, months]);
-  const isBest = best && best.key === mr.key && stats.sgRevenue > 0;
+  const isBest = best && best.key === mr.key && act.revenue > 0;
+
+  // ── Goals ────────────────────────────────────────────────────────────────
+  // The rep's own commitments, resolved for the CURRENT week and month (a
+  // period with no row of its own inherits the latest earlier one — the
+  // "carried" rule the Goals page already uses). Editing a target here writes
+  // the same `personal_goals` row that page writes.
+  //
+  // THESE ALWAYS TRACK THE CURRENT PERIOD, not the month picker above —
+  // a goal is a live commitment, and measuring August's production against
+  // this month's target would be two periods in one card. The row labels say
+  // which period they mean, and a note appears when you're looking at an
+  // older month.
+  const periods = useMemo(() => currentPeriods(todayISO), [todayISO]);
+  const myGoals = useMemo(() => ({
+    week:  resolveGoal(goalRows, me, "week",  periods.week.start),
+    month: resolveGoal(goalRows, me, "month", periods.month.start),
+  }), [goalRows, me, periods]);
+  const prod = useMemo(() => ({
+    week:  repProduction(allDeals, weekly, me, periods.week,  { leads, estimatesFrom }),
+    month: repProduction(allDeals, weekly, me, periods.month, { leads, estimatesFrom }),
+  }), [allDeals, weekly, me, periods, leads, estimatesFrom]);
+
+  const goalLines = useMemo(() => {
+    const line = (period, field, label, target, value, format) => ({
+      key: `${period}:${field}`, period, field, label, target, value, format,
+      prog: metricProgress(value, target, periodElapsed(periods[period], todayISO)),
+    });
+    return [
+      line("month", "revenue", "Revenue this month", myGoals.month?.revenue_target, prod.month.revenue, money),
+      line("month", "deals",   "Deals this month",   myGoals.month?.deals_target,   prod.month.deals,   String),
+      line("week",  "est",     "Estimates this week", myGoals.week?.est_target,     prod.week.sgEst,    String),
+    ];
+  }, [myGoals, prod, periods, todayISO]);
+
+  // Admins set anyone's goals; a rep sets their own (the Goals-page rule).
+  const canEditGoals = !viewingOther || isAdmin;
+  const [editGoal, setEditGoal] = useState(null);   // "month:revenue"
+  const [editVal, setEditVal] = useState("");
+  const [savingGoal, setSavingGoal] = useState(null);
+  // Escape unmounts the input, which can fire its own blur — without this the
+  // cancel would save the very value it was cancelling.
+  const goalCancelled = useRef(false);
+
+  // Saving one target keeps the other two on that row — upsert writes the whole
+  // row, so sending only the edited field would blank the rest.
+  async function saveTarget(period, field, value) {
+    const raw = String(value).replace(/[$,\s]/g, "");
+    const n = raw === "" ? null : Number(raw);
+    if (n != null && !Number.isFinite(n)) { toast.error("That target isn't a number."); return; }
+    const base = myGoals[period] || {};
+    setSavingGoal(`${period}:${field}`);
+    const res = await upsertPersonalGoal({
+      rep_id: me,
+      period,
+      period_start: periods[period].start,
+      est_target:     field === "est"     ? n : (base.est_target     ?? null),
+      deals_target:   field === "deals"   ? n : (base.deals_target   ?? null),
+      revenue_target: field === "revenue" ? n : (base.revenue_target ?? null),
+    }, profile?.id);
+    setSavingGoal(null);
+    setEditGoal(null);
+    if (res?.error) { toast.error("Could not save that target: " + (res.error.message || "unknown error")); return; }
+    reloadGoals();
+  }
 
   // Active competitions the rep is entered in.
   const myComps = useMemo(() => {
-    const today = dfFormat(new Date(), "yyyy-MM-dd");   // local, not UTC
     const hiddenIds = isAdmin ? null : ghostIds;
     // Team Average rows match by the viewer's RESOLVED team key (same grouping
     // the engine scores by); a rep left out of the contest isn't in it.
     const myTeamKey = viewUser ? teamKeyFor(viewUser, teamCtx.heads) : null;
     return comps
-      .filter(c => competitionStatus(c, today) === "active")
+      .filter(c => competitionStatus(c, todayISO) === "active")
       .map(c => {
         const standings = competitionStandings(c, allDeals, users, { hiddenIds, teamCtx });
         const mine = standings.find(e => e.id === me
@@ -277,49 +312,47 @@ export default function Home() {
         return { comp: c, mine, count: standings.length, leader: standings[0], ahead, gap: ahead ? ahead.score - mine.score : 0 };
       })
       .filter(Boolean);
-  }, [comps, allDeals, users, me, viewUser, isAdmin, ghostIds, teamCtx]);
+  }, [comps, allDeals, users, me, viewUser, isAdmin, ghostIds, teamCtx, todayISO]);
 
-  // Tap-to-view breakdown for a stat tile.
+  // Tap-to-view breakdown for a stat.
   const [drill, setDrill] = useState(null);
   const toggleDrill = (k) => setDrill(d => d === k ? null : k);
   const drillData = useMemo(() => {
     if (!drill) return null;
     const fmtD = (d) => d ? dfFormat(new Date(d + "T12:00:00"), "MMM d") : "—";
     const byDate = (arr) => arr.slice().sort((a, b) => (b.sale_date || "").localeCompare(a.sale_date || ""));
-    const setterDeals = byDate(monthDeals.filter(d => d.setter_id === me));
-    const leadDeals   = byDate(monthDeals.filter(d => d.closer_id === me && d.setter_id !== me));
+    // OWNER-credited, the same rule `act` counts by — listing `setter_id === me`
+    // here would make the drill-down disagree with the figure it explains.
+    const ownDeals  = byDate(monthDeals.filter(d => saleOwnerId(d) === me));
+    const leadDeals = byDate(monthDeals.filter(d => d.closer_id === me && saleOwnerId(d) !== me));
     const dealRows = (arr) => arr.map(d => ({ id: d.id, name: d.deal_name, sub: `${fmtD(d.sale_date)} · ${d.status}`, value: money(parseFloat(d.baseline_revenue) || 0) }));
 
-    if (drill === "sgRevenue" || drill === "sgCloses" || drill === "avgDeal")
-      return { title: "Self-gen — deals you set", total: `${stats.sgCloses} deals · ${money(stats.sgRevenue)}`, rows: dealRows(setterDeals) };
-    if (drill === "ldRevenue" || drill === "ldCloses")
-      return { title: "Leads — deals you closed for another setter", total: `${stats.ldCloses} deals · ${money(stats.ldRevenue)}`, rows: dealRows(leadDeals) };
-    if (drill === "sgEst" || drill === "ldEst") {
-      const field = drill === "sgEst" ? "self_gen_estimates" : "lead_estimates";
-      const rows = weekly.filter(s => s.rep_id === me && (s.week_start || "").startsWith(mr.key))
-        .sort((a, b) => (b.week_start || "").localeCompare(a.week_start || ""))
-        .map(s => ({ id: s.week_start, name: `Week of ${fmtD(s.week_start)}`, value: String(Number(s[field]) || 0) }));
-      return { title: drill === "sgEst" ? "Self-gen estimates" : "Lead estimates", total: `${drill === "sgEst" ? stats.sgEst : stats.ldEst} estimates`, rows };
-    }
+    if (drill === "self")
+      return { title: "Self gens — the deals you own", total: `${act.closed} deals · ${money(act.revenue)}`, rows: dealRows(ownDeals) };
+    if (drill === "leads")
+      return { title: "Leads — deals you closed for another setter", total: `${act.leadsClosed} deals · ${money(act.leadRevenue)}`, rows: dealRows(leadDeals) };
     if (drill === "commission") {
       const rows = monthDeals.map(d => ({ d, amt: getUserCommission([d], me) })).filter(x => x.amt > 0)
         .sort((a, b) => b.amt - a.amt)
         .map(({ d, amt }) => {
           const roles = [];
-          if (d.setter_id === me) roles.push("Self-gen");
+          if (saleOwnerId(d) === me) roles.push("Self-gen");
           if (d.closer_id === me && d.closer_id !== d.setter_id) roles.push("Closer");
-          if (d.manager_id === me) roles.push("Override");
-          if (d.director_id === me) roles.push("Override");
-          if (d.vp_id === me) roles.push("Override");
+          if (d.manager_id === me || d.director_id === me || d.vp_id === me) roles.push("Override");
           return { id: d.id, name: d.deal_name, sub: `${fmtD(d.sale_date)} · ${[...new Set(roles)].join(", ") || "—"}`, value: money(amt) };
         });
-      return { title: "Commission — your earnings", total: `${money(stats.commission)} total`, rows };
+      return { title: "Commission — your earnings", total: `${money(commission)} total`, rows };
     }
     return null;
-  }, [drill, monthDeals, weekly, me, mr.key, stats]);
+  }, [drill, monthDeals, me, act, commission]);
 
   const firstName = (viewUser?.name || "").split(" ")[0] || "there";
   const initials = (viewUser?.name || "?").split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase();
+  const myTeam = useMemo(() => {
+    const headId = viewUser ? teamKeyFor(viewUser, teamCtx.heads) : null;
+    const head = headId ? users.find(u => u.id === headId) : null;
+    return head ? teamLabel(head) : null;
+  }, [viewUser, users, teamCtx]);
 
   // Share: render the card to a PNG and copy to clipboard (download fallback).
   async function shareCard() {
@@ -356,14 +389,15 @@ export default function Home() {
       : "Make your first sale to hit the board";
     ctx.fillText(ribbon, P, 262);
 
-    // stat cards
+    // stat cards — the same six figures the card shows on screen
+    const hasLeads = act.leadsRan > 0 || act.leadsClosed > 0;
     const tiles = [
-      ["REVENUE", money(stats.sgRevenue), "#2dd4bf"],
-      ["COMMISSION", money(stats.commission), "#34d399"],
-      ["DEALS", String(stats.sgCloses), "#fff"],
-      ["CLOSING %", stats.sgRate == null ? "—" : `${stats.sgRate.toFixed(0)}%`, rateColor(stats.sgRate)],
-      ["ESTIMATES", String(stats.sgEst), "#74b9ff"],
-      [stats.hasLeads ? "LEADS CLOSED" : "WIN STREAK", stats.hasLeads ? String(stats.ldCloses) : `${momentum.streak} wk`, "#fbbf24"],
+      ["REVENUE SOLD", money(sold), "#2dd4bf"],
+      ["COMMISSION", money(commission), "#34d399"],
+      ["APPTS SET", String(act.set), "#74b9ff"],
+      ["RUN %", pct(act.ranRate), rateColor(act.ranRate)],
+      ["CLOSED", String(act.closed), "#fff"],
+      [hasLeads ? "LEADS CLOSED" : "CLOSING %", hasLeads ? String(act.leadsClosed) : pct(act.closeRate), "#fbbf24"],
     ];
     const cw = (W - P * 2 - 40) / 2, ch = 190, gap = 40;
     tiles.forEach((t, i) => {
@@ -397,8 +431,10 @@ export default function Home() {
 
   if (loading) return <div className="text-white/30 text-sm py-16 text-center" style={{ background: "#1a1a1a", minHeight: "100%" }}>Loading…</div>;
 
-  const lastLabel = momentum.daysSince == null ? "No sales yet"
-    : momentum.daysSince === 0 ? "Today" : momentum.daysSince === 1 ? "Yesterday" : `${momentum.daysSince} days ago`;
+  const soldDelta = prevSold == null ? null : sold - prevSold;
+  // THE LEADS GROUP IS GONE ENTIRELY when the rep has run none (per Keaton:
+  // "so it doesn't take up space") — not a row of dashes.
+  const hasLeads = act.leadsRan > 0 || act.leadsClosed > 0;
 
   return (
     <div style={{ background: "#1a1a1a", color: "#fff", minHeight: "100%" }} className="pb-8">
@@ -412,7 +448,7 @@ export default function Home() {
             <h1 className="text-lg md:text-xl font-bold text-white truncate">
               {viewUser?.name}{viewingOther && <span className="text-[11px] font-semibold text-amber-300 ml-2">· viewing</span>}
             </h1>
-            <p className="text-[12px] text-white/40 capitalize">{viewUser?.role} · {mr.label}</p>
+            <p className="text-[12px] text-white/40 truncate">{myTeam || ROLE_LABEL[viewUser?.role] || viewUser?.role}</p>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
@@ -426,177 +462,91 @@ export default function Home() {
               ))}
             </select>
           )}
-          <button onClick={shareCard}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold transition-colors"
-            style={{ background: shared ? "#00b89420" : "#1e1e1e", border: `1px solid ${shared ? "#00b89455" : "#2a2a2a"}`, color: shared ? "#00b894" : "rgba(255,255,255,0.6)" }}
-            title="Copy a shareable card image">
-            {shared ? <Check size={14} /> : <Share2 size={14} />}
-            {shared === "copied" ? "Copied" : shared === "downloaded" ? "Saved" : "Share"}
-          </button>
           <select value={selected} onChange={e => setSelected(Number(e.target.value))}
-            className="text-[12px] px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white">
+            className="text-[12px] px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white"
+            title="Which month this card shows">
             {months.map((m, i) => <option key={i} value={i} style={{ background: "#2a2a2a" }}>{m.label}</option>)}
           </select>
         </div>
       </div>
 
-      {/* Rank hero */}
+      {/* Hero — what they sold, where they rank, what they earned */}
       <div className="rounded-2xl p-4 md:p-5 mb-3 relative overflow-hidden"
         style={{ background: "linear-gradient(135deg,#0e3b35,#143d52)", border: "1px solid #1c5a50" }}>
         {isBest && (
           <div className="absolute top-3 right-3 text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-full"
             style={{ background: "#fb923c22", color: "#fdba74", border: "1px solid #fb923c55" }}>🔥 Personal best</div>
         )}
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="min-w-0">
-            <p className="text-[10px] uppercase tracking-widest text-white/50 font-semibold mb-1 flex items-center gap-1.5">
-              <Award size={13} className="text-amber-300" /> Company Rank
-            </p>
-            {rank.ranked ? (
-              <>
-                <p className="text-[30px] md:text-[40px] font-extrabold leading-none text-white">
-                  #{rank.rank}<span className="text-[16px] md:text-[20px] font-bold text-white/40"> / {rank.total}</span>
-                </p>
-                <p className="text-[12px] md:text-[13px] mt-2 text-white/80">
-                  {rank.ahead
-                    ? <><span className="font-bold text-amber-300">{money(rank.gapAhead)}</span> to pass <span className="font-semibold">{rank.ahead.name}</span></>
-                    : <>🏆 You're #1{rank.behind ? <> — leading {rank.behind.name} by <span className="font-bold text-amber-300">{money(rank.leadBehind)}</span></> : ""}</>}
-                </p>
-              </>
-            ) : (
-              <>
-                <p className="text-[22px] md:text-[26px] font-extrabold leading-tight text-white">Not ranked yet</p>
-                <p className="text-[12px] mt-1.5 text-white/60">Log a sale this month to hit the board, {firstName}.</p>
-              </>
+            <p className="text-[10px] uppercase tracking-widest text-white/45 font-bold">Revenue sold</p>
+            <p className="text-[30px] md:text-[40px] font-extrabold leading-none text-white mt-1">{money(sold)}</p>
+            {soldDelta != null && soldDelta !== 0 && (
+              <p className="text-[12px] font-semibold mt-1.5" style={{ color: soldDelta > 0 ? "#6ee7c8" : "#f87171" }}>
+                {soldDelta > 0 ? "▲" : "▼"} {money(Math.abs(soldDelta))} on last month
+              </p>
             )}
           </div>
-          <Trophy size={54} className="text-white/10 flex-shrink-0" />
+          <button onClick={onClickUnlessSelecting(() => toggleDrill("commission"))}
+            className="flex-shrink-0 text-right" title="Tap for the deals behind it">
+            <p className="text-[10px] uppercase tracking-widest text-white/45 font-bold">Your commission</p>
+            <p className="text-[24px] md:text-[30px] font-extrabold leading-none mt-1" style={{ color: "#6ee7c8" }}>{money(commission)}</p>
+          </button>
         </div>
-      </div>
 
-      {/* Momentum strip */}
-      <div className="grid grid-cols-2 gap-2 md:gap-3 mb-3">
-        <div className="rounded-xl p-3 md:p-4 flex items-center gap-3" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
-          <Flame size={20} className="flex-shrink-0" style={{ color: momentum.streak > 0 ? "#fb923c" : "#4b5563" }} />
-          <div className="min-w-0">
-            <p className="text-[17px] md:text-[20px] font-bold leading-none text-white">{momentum.streak} <span className="text-[12px] font-semibold text-white/40">{momentum.streak === 1 ? "week" : "weeks"}</span></p>
-            <p className="text-[10px] text-white/30 mt-1">win streak</p>
-          </div>
-        </div>
-        <div className="rounded-xl p-3 md:p-4 flex items-center gap-3" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
-          <Clock size={20} className="text-teal flex-shrink-0" />
-          <div className="min-w-0">
-            <p className="text-[15px] md:text-[18px] font-bold leading-none text-white truncate">{lastLabel}</p>
-            <p className="text-[10px] text-white/30 mt-1">last sale</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Self-gen stats */}
-      <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold mb-2">Self-gen</p>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mb-3">
-        <StatTile icon={DollarSign}    label="Revenue"    value={money(stats.sgRevenue)} sub="baseline you set · tap" onClick={() => toggleDrill("sgRevenue")} />
-        <StatTile icon={Layers}        label="Closes"     value={stats.sgCloses} sub="deals you set · tap" color="#fff" onClick={() => toggleDrill("sgCloses")} />
-        <StatTile icon={ClipboardList} label="Estimates"  value={stats.sgEst} sub="self-gen · tap" color="#74b9ff" onClick={() => toggleDrill("sgEst")} />
-        <StatTile icon={Percent}       label="Closing %"  value={stats.sgRate == null ? "—" : `${stats.sgRate.toFixed(0)}%`} color={rateColor(stats.sgRate)} onClick={() => toggleDrill("sgCloses")}
-          trend={closeDelta == null ? null : (
-            <span className="text-[10px] font-semibold" style={{ color: closeDelta >= 0 ? "#4ade80" : "#f87171" }}>
-              {closeDelta >= 0 ? "▲" : "▼"} {Math.abs(closeDelta).toFixed(0)} pts vs last mo
-            </span>
-          )} />
-      </div>
-
-      {/* Leads stats — only when the rep has run leads */}
-      {stats.hasLeads && (<>
-        <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold mb-2">Leads</p>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mb-3">
-          <StatTile icon={DollarSign}    label="Lead Rev"   value={money(stats.ldRevenue)} sub="closed for setters · tap" color="#a78bfa" onClick={() => toggleDrill("ldRevenue")} />
-          <StatTile icon={Layers}        label="Leads Closed" value={stats.ldCloses} sub="you closed · tap" color="#fff" onClick={() => toggleDrill("ldCloses")} />
-          <StatTile icon={ClipboardList} label="Lead Est"   value={stats.ldEst} sub="leads ran · tap" color="#74b9ff" onClick={() => toggleDrill("ldEst")} />
-          <StatTile icon={Percent}       label="Closing %"  value={stats.ldRate == null ? "—" : `${stats.ldRate.toFixed(0)}%`} color={rateColor(stats.ldRate)} onClick={() => toggleDrill("ldCloses")} />
-        </div>
-      </>)}
-
-      {/* Combined earnings */}
-      <div className="grid grid-cols-2 gap-2 md:gap-3 mb-3">
-        <StatTile icon={Wallet}     label="Commission" value={money(stats.commission)} sub="your total earnings · tap" color="#34d399" onClick={() => toggleDrill("commission")} />
-        <StatTile icon={TrendingUp} label="Avg Deal"   value={money(stats.avgDeal)} sub="per self-gen deal · tap" color="#fff" onClick={() => toggleDrill("avgDeal")} />
-      </div>
-
-      {/* Field activity · RepCard — doors + appointments straight off RepCard's
-          D2D leaderboard, so they match what the rep sees in RepCard. Hidden
-          entirely when RepCard isn't connected (no API token on the service). */}
-      {repCard.configured !== false && (<>
-        <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
-          <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold">Field activity · RepCard</p>
-          <div className="flex items-center gap-1 flex-wrap">
-            {[["week", "This week"], ["month", "This month"], ["lastMonth", "Last month"], ["90d", "90 days"], ["custom", "Custom"]].map(([k, lbl]) => (
-              <button key={k} onClick={() => setFaPreset(k)}
-                className={`px-2 py-1 rounded-md text-[10px] font-semibold transition-colors ${faPreset === k ? "bg-teal text-dark" : "text-white/45 hover:text-white"}`}
-                style={faPreset === k ? {} : { background: "#1e1e1e", border: "1px solid #282828" }}>
-                {lbl}
-              </button>
-            ))}
-          </div>
-        </div>
-        {faPreset === "custom" && (
-          <div className="flex items-center gap-2 mb-2">
-            <input type="date" value={faFrom} max={faTo || undefined} onChange={(e) => setFaFrom(e.target.value)}
-              className="text-[11px] px-2 py-1.5 rounded-lg border border-white/10 bg-white/5 text-white" />
-            <span className="text-[11px] text-white/30">to</span>
-            <input type="date" value={faTo} min={faFrom || undefined} onChange={(e) => setFaTo(e.target.value)}
-              className="text-[11px] px-2 py-1.5 rounded-lg border border-white/10 bg-white/5 text-white" />
-          </div>
-        )}
-        <div className="grid grid-cols-3 gap-2 md:gap-3 mb-2">
-          <StatTile icon={DoorOpen}      label="Doors"     value={repCard.doors == null ? "—" : repCard.doors.toLocaleString("en-US")} sub={faRange.label} color="#74b9ff" />
-          <StatTile icon={CalendarCheck} label="Appts set" value={repCard.appts == null ? "—" : repCard.appts.toLocaleString("en-US")} sub={faRange.label} color="#a78bfa" />
-          <StatTile icon={Layers}        label="Closes"    value={repCard.closes == null ? "—" : repCard.closes.toLocaleString("en-US")} sub="your sales" color="#fff" />
-        </div>
-        <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold mb-2">Averages · {faRange.label}</p>
-        <div className="rounded-xl px-4 py-3 mb-3 grid grid-cols-3 gap-3" style={{ background: "#1e1e1e", border: "1px solid #282828" }}>
-          <Avg label="Avg doors / day" sub="per day knocked" value={repCard.avgDoorsPerDay == null ? "—" : repCard.avgDoorsPerDay.toFixed(1)} />
-          <Avg label="Doors / appt"    sub="to set one"      value={repCard.doorsPerAppt == null ? "—" : repCard.doorsPerAppt.toFixed(1)} />
-          <Avg label="Appts / close"   sub="to close one"    value={repCard.apptsPerClose == null ? "—" : repCard.apptsPerClose.toFixed(1)} />
-        </div>
-      </>)}
-
-      {/* Personal bests — all-time, owner-credited, completed periods only */}
-      {bests && (bests.bestMonth.best || bests.biggestDeal) && (<>
-        <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold mb-2">Personal bests</p>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mb-2">
-          {[
-            { label: "Best Month", v: bests.bestMonth.best ? fmt(bests.bestMonth.best.value) : "—", sub: bests.bestMonth.best?.label },
-            { label: "Best Week", v: bests.bestWeek.best ? fmt(bests.bestWeek.best.value) : "—", sub: bests.bestWeek.best?.label },
-            { label: "Most Deals / Mo", v: bests.mostDealsMonth.best ? String(bests.mostDealsMonth.best.value) : "—", sub: bests.mostDealsMonth.best?.label },
-            { label: "Biggest Deal", v: bests.biggestDeal ? fmt(bests.biggestDeal.value) : "—", sub: bests.biggestDeal?.when },
-          ].map(t => (
-            <div key={t.label} className="rounded-xl p-3" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
-              <p className="text-[9px] uppercase tracking-widest text-white/30 font-semibold">{t.label}</p>
-              <p className="text-[16px] md:text-[18px] font-bold mt-1" style={{ color: "#fbbf24" }}>{t.v}</p>
-              {t.sub && <p className="text-[10px] text-white/30 mt-0.5">{t.sub}</p>}
+        {/* Two ranks. Each row names the figure it ranks on and carries its own
+            gap in that same unit — the headline's gap can never be read as the
+            other board's. */}
+        <div className="mt-3.5 pt-3 border-t" style={{ borderColor: "rgba(255,255,255,0.1)" }}>
+          <p className="text-[10px] uppercase tracking-widest text-white/45 font-bold flex items-center gap-1.5 mb-1.5">
+            <Award size={12} className="text-amber-300" /> Company rank
+          </p>
+          {!ranks.sold.ranked && !ranks.selfgen.ranked ? (
+            <p className="text-[12px] text-white/70">Log a sale this month to hit the board, {firstName}.</p>
+          ) : [
+            { key: "sold", label: "Revenue sold", r: ranks.sold },
+            { key: "selfgen", label: "Self-gen", r: ranks.selfgen },
+          ].map(({ key, label, r }) => (
+            <div key={key} className="flex items-baseline gap-2 flex-wrap py-0.5">
+              <span className="text-[19px] md:text-[22px] font-extrabold leading-none text-white flex-shrink-0">
+                {r.ranked ? <>#{r.rank}<span className="text-[12px] md:text-[13px] font-bold text-white/40"> / {r.total}</span></> : <span className="text-[13px] font-bold text-white/40">—</span>}
+              </span>
+              <span className="text-[11.5px] text-white/50 flex-shrink-0">{label}</span>
+              <span className="text-[11.5px] text-white/70 min-w-0">
+                {!r.ranked
+                  ? "not on this board yet"
+                  : r.ahead
+                    ? <><span className="font-bold text-amber-300">{money(r.gapAhead)}</span> to pass {r.ahead.name}</>
+                    : <>🏆 #1{r.behind ? <> by <span className="font-bold text-amber-300">{money(r.leadBehind)}</span></> : ""}</>}
+              </span>
             </div>
           ))}
         </div>
-        {(() => {
-          const bm = bests.bestMonth;
-          if (!bm.best || !bm.current || bm.current.value <= 0) return null;
-          const gap = bm.best.value - bm.current.value;
-          if (gap <= 0) return (
-            <div className="flex items-center gap-2 rounded-xl px-3.5 py-2.5 mb-3 text-[12px]"
-              style={{ background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.3)", color: "#fde68a" }}>
-              <Flame size={14} /> <span><b>{fmt(bm.current.value)} this month</b> — a new personal best, and the month isn't over.</span>
-            </div>
-          );
-          if (bm.current.value >= bm.best.value * 0.8) return (
-            <div className="flex items-center gap-2 rounded-xl px-3.5 py-2.5 mb-3 text-[12px]"
-              style={{ background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.3)", color: "#fde68a" }}>
-              <Flame size={14} /> <span><b>{fmt(bm.current.value)} this month</b> — {fmt(gap)} away from your best month ever.</span>
-            </div>
-          );
-          return null;
-        })()}
-      </>)}
+      </div>
+
+      {/* Self gens — the appointments they booked and what became of them */}
+      <GroupCard title="Self Gens" tone="#00b894">
+        <div className="grid grid-cols-4 gap-2 md:gap-3">
+          <Stat value={act.set} label="Appts set" />
+          <Stat value={act.ran} label="Ran" sub={pct(act.ranRate)} />
+          <Stat value={act.closed} label="Closed" sub={pct(act.closeRate)} color={rateColor(act.closeRate)}
+            onClick={() => toggleDrill("self")} />
+          <Stat value={money(act.revenue)} label="Revenue" color="#00b894" onClick={() => toggleDrill("self")} />
+        </div>
+      </GroupCard>
+
+      {/* Leads — only when they actually ran one */}
+      {hasLeads && (
+        <GroupCard title="Leads" tone="#c084fc">
+          <div className="grid grid-cols-4 gap-2 md:gap-3">
+            <Stat value={act.leadsRan} label="Ran" />
+            <Stat value={act.leadsClosed} label="Closed" sub={pct(act.leadsCloseRate)} color={rateColor(act.leadsCloseRate)}
+              onClick={() => toggleDrill("leads")} />
+            <Stat value={money(act.leadRevenue)} label="Revenue" color="#00b894" onClick={() => toggleDrill("leads")} />
+            <div />
+          </div>
+        </GroupCard>
+      )}
 
       {/* Stat drill-down — inline, subtle */}
       {drill && drillData && (
@@ -624,37 +574,81 @@ export default function Home() {
         </div>
       )}
 
-      {/* Personal pace */}
-      {pace && (
-        <div className="rounded-xl p-4 mb-3" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold flex items-center gap-1.5">
-              <Target size={12} className="text-teal" /> Monthly pace
-            </p>
-            <p className="text-[11px] text-white/40">
-              <span className="font-bold text-white">{money(stats.sgRevenue)}</span> of {money(pace.goal)} target
-            </p>
-          </div>
-          <div className="h-2.5 rounded-full overflow-hidden" style={{ background: "#2a2a2a" }}>
-            <div className="h-full rounded-full transition-all duration-700"
-              style={{ width: `${pace.pct}%`, background: pace.pct >= 100 ? "#4ade80" : "#00b894" }} />
-          </div>
-          <p className="text-[10px] text-white/30 mt-1.5">
-            Target = your trailing 3-month average +10%.{best ? ` · Best month: ${best.label} (${money(best.rev)})` : ""}
+      {/* Goals — targets edited in place, no modal, no Change button */}
+      <div className="rounded-xl p-3.5 md:p-4 mb-3" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
+        <div className="flex items-baseline justify-between gap-3 mb-3">
+          <p className="text-[10px] uppercase tracking-widest text-white/35 font-bold flex items-center gap-1.5">
+            <Target size={12} className="text-teal" /> Your goals
           </p>
+          {canEditGoals
+            ? <span className="text-[10.5px] text-white/25">tap a target to change it</span>
+            : <Link to="/goals" className="text-[11px] text-teal hover:underline">Goals →</Link>}
         </div>
-      )}
+
+        {goalLines.map(g => {
+          const editing = editGoal === g.key;
+          const tone = !g.prog ? "#4b5563"
+            : g.prog.status === "done" ? "#4ade80"
+            : g.prog.status === "ahead" ? "#00b894" : "#f59e0b";
+          return (
+            <div key={g.key} className="mb-3 last:mb-0">
+              <div className="flex items-baseline justify-between gap-2 text-[11.5px] mb-1.5">
+                <span className="text-white/70 min-w-0 truncate">{g.label}</span>
+                <span className="flex-shrink-0 text-white/45">
+                  {g.format(g.value)} of{" "}
+                  {editing ? (
+                    <input autoFocus type="text" inputMode="numeric" value={editVal}
+                      onChange={e => setEditVal(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") saveTarget(g.period, g.field, editVal);
+                        if (e.key === "Escape") { goalCancelled.current = true; setEditGoal(null); }
+                      }}
+                      onBlur={() => {
+                        if (goalCancelled.current) { goalCancelled.current = false; return; }
+                        saveTarget(g.period, g.field, editVal);
+                      }}
+                      aria-label={`${g.label} target`}
+                      className="w-20 px-1.5 py-0.5 rounded text-[11.5px] font-semibold text-white"
+                      style={{ background: "#141414", border: "1px solid #00b894" }} />
+                  ) : canEditGoals ? (
+                    <button
+                      onClick={() => { setEditGoal(g.key); setEditVal(g.target == null ? "" : String(g.target)); }}
+                      className="font-semibold text-white"
+                      style={{ borderBottom: "1px dashed rgba(255,255,255,0.3)" }}
+                      title="Tap to change this target">
+                      {g.target == null ? "set one" : g.format(g.target)}
+                    </button>
+                  ) : (
+                    <span className="font-semibold text-white">{g.target == null ? "—" : g.format(g.target)}</span>
+                  )}
+                  {savingGoal === g.key && <span className="text-white/30 ml-1">…</span>}
+                </span>
+              </div>
+              <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "#2a2a2a" }}>
+                <div className="h-full rounded-full transition-all duration-500"
+                  style={{ width: `${g.prog ? g.prog.frac * 100 : 0}%`, background: tone }} />
+              </div>
+            </div>
+          );
+        })}
+
+        {selected !== 0 && (
+          <p className="text-[10px] text-white/25 mt-3">
+            Goals always track the current week and month — not {mr.label}.
+          </p>
+        )}
+      </div>
 
       {/* Active competitions */}
-      <div className="rounded-xl p-4 md:p-5" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
+      <div className="rounded-xl p-3.5 md:p-4 mb-3" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
         <div className="flex items-center justify-between mb-3">
-          <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold flex items-center gap-1.5">
-            <Trophy size={13} className="text-amber-300" /> Your competitions
+          <p className="text-[10px] uppercase tracking-widest text-white/35 font-bold flex items-center gap-1.5">
+            <Trophy size={13} className="text-amber-300" /> Contests you're in
           </p>
           <Link to="/competitions" className="text-[11px] text-teal hover:underline">View all</Link>
         </div>
         {myComps.length === 0 ? (
-          <p className="text-[12px] text-white/30 py-2">You're not in any active competitions right now.</p>
+          <p className="text-[12px] text-white/30 py-1">You're not in any active competitions right now.</p>
         ) : (
           <div className="space-y-2">
             {myComps.map(({ comp, mine, count, leader, ahead, gap }) => {
@@ -688,6 +682,50 @@ export default function Home() {
           </div>
         )}
       </div>
+
+      {/* Best ever — all-time, owner-credited, completed periods only */}
+      {bests && (bests.bestMonth.best || bests.biggestDeal) && (
+        <div className="rounded-xl p-3.5 md:p-4 mb-3" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
+          <p className="text-[10px] uppercase tracking-widest text-white/35 font-bold mb-3">Your best ever</p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { label: "Best month", v: bests.bestMonth.best ? fmt(bests.bestMonth.best.value) : "—", sub: bests.bestMonth.best?.label },
+              { label: "Best week", v: bests.bestWeek.best ? fmt(bests.bestWeek.best.value) : "—", sub: bests.bestWeek.best?.label },
+              { label: "Most deals / mo", v: bests.mostDealsMonth.best ? String(bests.mostDealsMonth.best.value) : "—", sub: bests.mostDealsMonth.best?.label },
+              { label: "Biggest deal", v: bests.biggestDeal ? fmt(bests.biggestDeal.value) : "—", sub: bests.biggestDeal?.when },
+            ].map(t => (
+              <div key={t.label} className="min-w-0">
+                <p className="text-[15px] md:text-[17px] font-bold truncate" style={{ color: "#fbbf24" }}>{t.v}</p>
+                <p className="text-[10px] text-white/45 truncate">{t.label}{t.sub ? ` · ${t.sub}` : ""}</p>
+              </div>
+            ))}
+          </div>
+          {(() => {
+            const bm = bests.bestMonth;
+            if (!bm.best || !bm.current || bm.current.value <= 0) return null;
+            const gap = bm.best.value - bm.current.value;
+            if (gap <= 0) return (
+              <p className="flex items-center gap-2 text-[11.5px] mt-3" style={{ color: "#6ee7c8" }}>
+                <Flame size={13} /> <span><b>{fmt(bm.current.value)} this month</b> — a new personal best, and the month isn't over.</span>
+              </p>
+            );
+            if (bm.current.value >= bm.best.value * 0.8) return (
+              <p className="flex items-center gap-2 text-[11.5px] mt-3" style={{ color: "#6ee7c8" }}>
+                <Flame size={13} /> <span><b>{fmt(bm.current.value)} this month</b> — {fmt(gap)} from your best month ever.</span>
+              </p>
+            );
+            return null;
+          })()}
+        </div>
+      )}
+
+      <button onClick={shareCard}
+        className="w-full flex items-center justify-center gap-2 px-3 py-3 rounded-xl text-[12.5px] font-semibold transition-colors"
+        style={{ background: shared ? "#00b89420" : "#1e1e1e", border: `1px solid ${shared ? "#00b89455" : "#2a2a2a"}`, color: shared ? "#00b894" : "rgba(255,255,255,0.55)" }}
+        title="Copy a shareable card image">
+        {shared ? <Check size={14} /> : <Share2 size={14} />}
+        {shared === "copied" ? "Copied to clipboard" : shared === "downloaded" ? "Saved" : "Share my card"}
+      </button>
     </div>
   );
 }

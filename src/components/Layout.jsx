@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, BarChart2, DollarSign,
   ShieldCheck, Eye, X,
-  Home, Wallet, Trophy, Upload, ScanSearch, Target, CalendarCheck, Users,
+  Contact, Wallet, Trophy, Upload, ScanSearch, Target, CalendarCheck, Users,
 } from 'lucide-react'
 import NavBar from './NavBar'
 import Notices from './Notices'
@@ -13,7 +13,10 @@ import { useAuth } from '../contexts/AuthContext'
 import { fetchMyTeams } from '../lib/db'
 
 const NAV = [
-  { to: '/home',        icon: Home,            label: 'Home',        short: 'Home',    roles: ['rep','manager','director','vp','admin'] },
+  // MY CARD — the rep's own page, and the default landing spot. Renamed from
+  // "Home" (per Keaton) with an id-card icon: the product already called it
+  // "My card" in the admin dropdown and on the Share button.
+  { to: '/home',        icon: Contact,         label: 'My Card',     short: 'Card',    roles: ['rep','manager','director','vp','admin'] },
   { to: '/dashboard',   icon: LayoutDashboard, label: 'Dashboard',   short: 'Stats',   roles: ['rep','manager','director','vp','admin'] },
   { to: '/deals',       icon: BarChart2,       label: 'Deals',       short: 'Deals',   roles: ['rep','manager','director','vp','admin'] },
   { to: '/leads',       icon: CalendarCheck,   label: 'Leads',       short: 'Leads',   roles: ['rep','manager','director','vp','admin'] },

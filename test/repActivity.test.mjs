@@ -181,5 +181,41 @@ const RANGE = { users: U, from: '2026-10-01', to: '2026-10-31' }
   eq('counts are unaffected', [r.bryan.set, r.bryan.ran, r.bryan.leadsRan], [2, 1, 0])
 }
 
+// ── revenue: owner-credited vs lead, never summed ────────────────────────
+{
+  const deals = [
+    { ...D({ id: 'r1', on: '2026-10-05', setter: 'bryan', closer: 'ricky' }), baseline_revenue: 12000 },
+    { ...D({ id: 'r2', on: '2026-10-06', setter: 'bryan', closer: 'bryan' }), baseline_revenue: 8000 },
+    { ...D({ id: 'r3', on: '2026-10-07', setter: 'caleb', closer: 'ricky' }), baseline_revenue: 5000 },
+  ]
+  const out = repActivity([], deals, RANGE)
+  const r = R(out.rows)
+  eq('owner gets revenue',        [r.bryan.revenue, r.bryan.leadRevenue], [20000, 0])
+  eq('closer gets lead revenue',  [r.ricky.revenue, r.ricky.leadRevenue], [0, 17000])
+  eq('a self-gen counts once',    r.bryan.closed, 2)
+  eq('totals carry both',         [out.totals.revenue, out.totals.leadRevenue], [25000, 17000])
+  // The two columns deliberately overlap: r1 is $12k of Bryan's revenue AND
+  // $12k of Ricky's lead revenue. Summing them double-counts that sale.
+  ok('the two columns overlap on purpose',
+     out.totals.revenue + out.totals.leadRevenue > 25000)
+  eq('revenue is BASELINE, never job price', r.caleb.revenue, 5000)
+}
+
+// ── canceled / hidden carry no revenue either ────────────────────────────
+{
+  const deals = [
+    { ...D({ id: 'r1', on: '2026-10-05', setter: 'bryan' }), baseline_revenue: 9000 },
+    { ...D({ id: 'r2', on: '2026-10-06', setter: 'bryan', status: 'Canceled' }), baseline_revenue: 9000 },
+    { ...D({ id: 'r3', on: '2026-10-07', setter: 'bryan' }), baseline_revenue: 9000, hidden: true },
+  ]
+  eq('only the live deal pays', R(repActivity([], deals, RANGE).rows).bryan.revenue, 9000)
+}
+
+// ── a missing baseline is 0, not NaN ─────────────────────────────────────
+{
+  const deals = [D({ id: 'r1', on: '2026-10-05', setter: 'bryan' })]   // no baseline_revenue
+  eq('null baseline reads 0', R(repActivity([], deals, RANGE).rows).bryan.revenue, 0)
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)
