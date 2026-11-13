@@ -208,3 +208,20 @@ test('a second Project ID match is ambiguous and a single match waits until the 
     contacts: [{ id: 'contact-a' }], opportunities: [blanks[0]], pipelineId: 'pipe',
   }).action, 'adopt')
 })
+
+test('a final page that reaches GHL\'s own total is complete even when meta.nextPage lies (live GHL shape, Nov 12 2026)', async () => {
+  // GHL returns 14 full pages then a short page (92 rows) whose meta says nextPage: 2 with no cursor: 1400 + 92 = total 1492.
+  const row = i => ({ id: 'o' + i, contactId: 'c' + i, status: 'open', customFields: [] })
+  const TOTAL = 1492
+  const pages = []
+  for (let p = 0; p < 14; p++) pages.push({ opportunities: Array.from({ length: 100 }, (_, i) => row(p * 100 + i)), meta: { total: TOTAL, nextPageUrl: `${ORIGIN}/opportunities/search?location_id=${LOC}&limit=100&startAfterId=o${p * 100 + 99}&startAfter=${p + 1}` } })
+  pages.push({ opportunities: Array.from({ length: 92 }, (_, i) => row(1500 + i)), meta: { total: TOTAL, nextPageUrl: null, startAfterId: null, startAfter: null, currentPage: 1, nextPage: 2, prevPage: null } })
+  let n = 0
+  const get = async () => pages[Math.min(n++, pages.length - 1)]
+  const s = await scanLocationOpportunities({ get, locationId: LOC, origin: ORIGIN, projectIdOf: () => '', limit: 100, maxPages: 300, stopAtProjectId: '282300045519074' })
+  assert.equal(s.complete, true); assert.equal(s.status, 'absent'); assert.equal(s.opportunities.length, TOTAL); assert.equal(n, 15)
+  // the same lie BEFORE the total is reached is still a real gap and still blocks
+  const short = [{ opportunities: Array.from({ length: 50 }, (_, i) => row(i)), meta: { total: 200, nextPageUrl: null, startAfterId: null, startAfter: null, nextPage: 2 } }]
+  const s2 = await scanLocationOpportunities({ get: async () => short[0], locationId: LOC, origin: ORIGIN, projectIdOf: () => '', limit: 100, maxPages: 300, stopAtProjectId: 'x' })
+  assert.equal(s2.complete, false); assert.equal(s2.status, 'incomplete')
+})
