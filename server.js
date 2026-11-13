@@ -3136,7 +3136,13 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
 
   // ── New-sale text alert. A brand-new opportunity = a deal just came in, so
   // text the team the summary. (Updates and change orders don't re-text.)
-  const isNewSale = action === 'created' && !isChangeOrder
+  // A sale that ADOPTS an existing lead opportunity (a website / Nextdoor
+  // estimate request the sale path claims — matched by contact, not Project ID)
+  // is a brand-new deal for the team even though the update path ran, so it
+  // texts like a create. The alert ledger still fires once per project.
+  // (Richard Gober, Nov 13 2026: adopted, fully populated, no text sent.)
+  const adoptedLead = !!oppId && !!existing && !sameProject && action === 'updated'
+  const isNewSale = (action === 'created' || adoptedLead) && !isChangeOrder
   const alertData = {
     customer: custName,
     address: [addr.street, addr.city, addr.state].filter(Boolean).join(', ') || null,
