@@ -4,6 +4,28 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── "Private Bank" palette (redesign/private-bank, Nov 2026) ───────────────
+   Design tokens. Pages adopt them one at a time; anything still on the old
+   teal/dark classes keeps rendering exactly as before. Gold is reserved for
+   the active nav item, primary buttons and links — never decoration. */
+:root {
+  --bg: #131416;        /* page background, deep charcoal */
+  --side: #16181a;      /* sidebar and top bar */
+  --card: #1c1e21;      /* cards */
+  --raise: #23262a;     /* inputs, hover, nested surfaces */
+  --line: #2c2f33;      /* thin borders */
+  --tx: #ede7da;        /* primary text, warm ivory */
+  --mu: #a19e97;        /* secondary text */
+  --fa: #8c8a84;        /* labels, faint text */
+  --gold: #bfa46c;      /* primary button fill, active indicator */
+  --gold-tx: #cdb684;   /* gold text: active nav item, links, the one key number per screen */
+  --gold-ink: #191509;  /* text on a gold button */
+  --pos: #a9c4b2;       /* paid / positive amounts, muted sage */
+  --warn: #d2a074;      /* warnings, overdue */
+  --neg: #d98c80;       /* deductions, errors */
+  --card-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 18px 40px rgba(0,0,0,0.35);
+}
+
 @layer base {
   html, body, #root {
     height: 100%;

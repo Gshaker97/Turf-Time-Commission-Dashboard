@@ -60,7 +60,7 @@ export default function Layout() {
   if (isAdmin || isKeaton(profile)) items.push(AUDIT_NAV)
 
   return (
-    <div className="flex flex-col h-screen" style={{ background: '#1a1a1a' }}>
+    <div className="flex flex-col h-screen" style={{ background: 'var(--bg)', color: 'var(--tx)' }}>
 
       {/* Viewing as someone else, for real — their session, read-only. Red,
           not amber: this is a borrowed identity, not a permissions preview,
@@ -73,11 +73,11 @@ export default function Layout() {
             <span className="text-[13px] font-semibold truncate">
               Viewing as {viewingAs?.name} — you are seeing exactly what they see
             </span>
-            <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded flex-shrink-0"
+            <span className="text-[13px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded flex-shrink-0"
               style={{ background: 'rgba(0,0,0,0.25)' }}>read-only</span>
           </div>
           <button onClick={stopViewingAs}
-            className="px-2.5 py-1 rounded-lg text-[12px] font-bold flex-shrink-0 transition-colors"
+            className="px-3 py-1.5 min-h-[44px] md:min-h-0 rounded-lg text-[13px] font-bold flex-shrink-0 transition-colors"
             style={{ background: 'rgba(255,255,255,0.18)' }}>
             Back to me
           </button>
@@ -91,10 +91,10 @@ export default function Layout() {
           <div className="flex items-center gap-2">
             <Eye size={14} strokeWidth={2.5} />
             <span className="text-[13px] font-semibold">Viewing as {profile?.name} · {profile?.role} permissions</span>
-            <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
+            <span className="text-[13px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded"
               style={{ background: 'rgba(0,0,0,0.15)', color: '#1a1a1a' }}>{role}</span>
           </div>
-          <button onClick={clearPreview} className="p-1 rounded hover:bg-black/15 transition-colors">
+          <button onClick={clearPreview} aria-label="Exit preview" className="p-1 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center rounded hover:bg-black/15 transition-colors">
             <X size={15} strokeWidth={2.5} />
           </button>
         </div>
@@ -110,7 +110,7 @@ export default function Layout() {
         <aside className="hidden md:block flex-shrink-0 w-16 relative group">
           <div
             className="absolute inset-y-0 left-0 w-16 group-hover:w-52 transition-[width] duration-200 ease-out flex flex-col py-4 overflow-hidden z-40 group-hover:shadow-2xl"
-            style={{ background: '#1e1e1e', borderRight: '1px solid #2a2a2a' }}
+            style={{ background: 'var(--side)', borderRight: '1px solid var(--line)' }}
           >
             <nav className="px-2 group-hover:px-3 space-y-0.5 flex-1">
               {items.map(({ to, icon: Icon, label }) => (
@@ -122,15 +122,15 @@ export default function Layout() {
                     `flex items-center gap-3 px-2 group-hover:px-3 py-2.5 rounded-lg text-[13px] font-medium transition-colors
                      justify-center group-hover:justify-start ${
                       isActive
-                        ? 'bg-teal/10 text-teal border border-teal/20'
-                        : 'text-white/40 hover:text-white hover:bg-white/[0.04]'
+                        ? 'bg-[rgba(191,164,108,0.12)] text-bank-gold-tx border border-[rgba(191,164,108,0.30)]'
+                        : 'text-bank-mu hover:text-bank-tx hover:bg-bank-raise border border-transparent'
                     }`
                   }
                 >
                   {({ isActive }) => (
                     <>
                       <Icon size={18} strokeWidth={isActive ? 2.5 : 1.5}
-                        className={isActive ? 'text-teal flex-shrink-0' : 'text-white/30 flex-shrink-0'} />
+                        className={isActive ? 'text-bank-gold-tx flex-shrink-0' : 'text-bank-fa flex-shrink-0'} />
                       <span className="hidden group-hover:inline whitespace-nowrap">{label}</span>
                     </>
                   )}
@@ -140,12 +140,12 @@ export default function Layout() {
 
             {/* Role badge — dot when collapsed, full text on hover */}
             <div className="px-2 group-hover:px-5 pb-1">
-              <div className="hidden group-hover:block text-[10px] font-semibold uppercase tracking-widest px-2 py-1 rounded text-center whitespace-nowrap"
-                style={{ background: isPreviewMode ? '#f59e0b22' : '#2a2a2a', color: isPreviewMode ? '#f59e0b' : '#00b894' }}>
+              <div className="hidden group-hover:block text-[13px] font-semibold uppercase tracking-wider px-2 py-1 rounded text-center whitespace-nowrap"
+                style={{ background: isPreviewMode ? '#f59e0b22' : 'var(--raise)', color: isPreviewMode ? '#f59e0b' : 'var(--mu)', border: '1px solid var(--line)' }}>
                 {role}
               </div>
               <div className="group-hover:hidden flex justify-center">
-                <div className="w-2 h-2 rounded-full" style={{ background: isPreviewMode ? '#f59e0b' : '#00b894' }} />
+                <div className="w-2 h-2 rounded-full" style={{ background: isPreviewMode ? '#f59e0b' : 'var(--mu)' }} />
               </div>
             </div>
           </div>
@@ -155,7 +155,7 @@ export default function Layout() {
         <main className="flex-1 overflow-y-auto p-3 md:p-5 lg:p-6 pb-24 md:pb-6">
           <Suspense fallback={
             <div className="flex items-center justify-center py-24">
-              <div className="w-6 h-6 border-2 border-teal/30 border-t-teal rounded-full animate-spin" />
+              <div className="w-6 h-6 border-2 border-bank-line border-t-bank-mu rounded-full animate-spin" />
             </div>
           }>
             <ErrorBoundary key={pathname}>
@@ -171,8 +171,8 @@ export default function Layout() {
       <nav
         className="md:hidden fixed bottom-0 inset-x-0 z-50 flex overflow-x-auto"
         style={{
-          background: '#1e1e1e',
-          borderTop: '1px solid #2a2a2a',
+          background: 'var(--side)',
+          borderTop: '1px solid var(--line)',
           paddingBottom: 'env(safe-area-inset-bottom)',
         }}
       >
@@ -181,15 +181,15 @@ export default function Layout() {
             key={to}
             to={to}
             className={({ isActive }) =>
-              `flex flex-col items-center justify-center gap-1 py-2 flex-1 min-w-[56px] transition-colors ${
-                isActive ? 'text-teal' : 'text-white/35'
+              `flex flex-col items-center justify-center gap-1 py-2 flex-1 min-w-[56px] min-h-[44px] transition-colors ${
+                isActive ? 'text-bank-gold-tx' : 'text-bank-fa'
               }`
             }
           >
             {({ isActive }) => (
               <>
                 <Icon size={22} strokeWidth={isActive ? 2.5 : 1.5} />
-                <span className="text-[10px] font-medium leading-none">{short}</span>
+                <span className="text-[13px] font-medium leading-none">{short}</span>
               </>
             )}
           </NavLink>

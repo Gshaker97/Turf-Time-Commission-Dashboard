@@ -9,9 +9,9 @@ import { useAuth } from '../contexts/AuthContext'
 //    page is empty instead of a silently blank screen.
 
 const TOAST_STYLE = {
-  error:   { border: '#ef4444', icon: AlertTriangle, color: '#f87171', ttl: 10000 },
-  success: { border: '#00b894', icon: CheckCircle2,  color: '#2dd4bf', ttl: 5000 },
-  info:    { border: '#3a3a3a', icon: Info,          color: 'rgba(255,255,255,0.7)', ttl: 7000 },
+  error:   { border: 'var(--neg)',  icon: AlertTriangle, color: 'var(--neg)', ttl: 10000 },
+  success: { border: 'var(--pos)',  icon: CheckCircle2,  color: 'var(--pos)', ttl: 5000 },
+  info:    { border: 'var(--line)', icon: Info,          color: 'var(--mu)',  ttl: 7000 },
 }
 
 export default function Notices() {
@@ -46,7 +46,7 @@ export default function Notices() {
           </span>
           <button
             onClick={async () => { try { await signOut?.() } finally { window.location.href = '/login' } }}
-            className="px-3 py-1 rounded-lg text-[12px] font-bold text-red-900 bg-red-100 hover:bg-white transition-colors">
+            className="px-3 py-1.5 min-h-[44px] md:min-h-0 rounded-lg text-[13px] font-bold text-red-900 bg-red-100 hover:bg-white transition-colors">
             Sign in again
           </button>
         </div>
@@ -57,12 +57,12 @@ export default function Notices() {
           const s = TOAST_STYLE[t.type]
           const Icon = s.icon
           return (
-            <div key={t.id} className="flex items-start gap-2.5 rounded-xl px-3.5 py-3 shadow-2xl"
-              style={{ background: '#242424', border: `1px solid ${s.border}` }}>
+            <div key={t.id} className="flex items-start gap-2.5 rounded-xl px-3.5 py-3 shadow-card"
+              style={{ background: 'var(--card)', border: `1px solid ${s.border}` }}>
               <Icon size={15} className="flex-shrink-0 mt-0.5" style={{ color: s.color }} />
-              <p className="text-[12.5px] leading-snug text-white/85 whitespace-pre-line flex-1 min-w-0">{t.message}</p>
+              <p className="text-[13px] leading-snug text-bank-tx whitespace-pre-line flex-1 min-w-0">{t.message}</p>
               <button onClick={() => setToasts(xs => xs.filter(x => x.id !== t.id))}
-                className="text-white/30 hover:text-white/70 transition-colors flex-shrink-0"><X size={13} /></button>
+                aria-label="Dismiss" className="text-bank-fa hover:text-bank-tx transition-colors flex-shrink-0 -m-2 p-2"><X size={13} /></button>
             </div>
           )
         })}

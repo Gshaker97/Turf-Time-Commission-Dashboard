@@ -15,10 +15,12 @@ import { AlertTriangle, Check, Copy, HelpCircle, Info, ShieldAlert } from 'lucid
 // ============================================================
 
 const TONE = {
-  default: { accent: '#00b894', btn: '#00b894', btnText: '#0b0b0b', icon: HelpCircle,   ring: 'rgba(0,184,148,0.35)' },
-  danger:  { accent: '#ef4444', btn: '#ef4444', btnText: '#ffffff', icon: AlertTriangle, ring: 'rgba(239,68,68,0.35)' },
-  warn:    { accent: '#f59e0b', btn: '#f59e0b', btnText: '#0b0b0b', icon: ShieldAlert,  ring: 'rgba(245,158,11,0.35)' },
-  info:    { accent: '#60a5fa', btn: '#00b894', btnText: '#0b0b0b', icon: Info,         ring: 'rgba(96,165,250,0.35)' },
+  // Private Bank palette: the primary button is gold; danger/warn keep their
+  // own warning colours so a destructive dialog never looks like a routine one.
+  default: { accent: '#bfa46c', btn: '#bfa46c', btnText: '#191509', icon: HelpCircle,   ring: 'rgba(191,164,108,0.35)' },
+  danger:  { accent: '#d98c80', btn: '#d98c80', btnText: '#191509', icon: AlertTriangle, ring: 'rgba(217,140,128,0.35)' },
+  warn:    { accent: '#d2a074', btn: '#d2a074', btnText: '#191509', icon: ShieldAlert,  ring: 'rgba(210,160,116,0.35)' },
+  info:    { accent: '#a19e97', btn: '#bfa46c', btnText: '#191509', icon: Info,         ring: 'rgba(161,158,151,0.35)' },
 }
 
 export default function DialogHost() {
@@ -94,7 +96,7 @@ export default function DialogHost() {
 
       <div className="relative w-full sm:w-[min(460px,100%)] tt-dlg-pop overflow-hidden
                       rounded-t-2xl sm:rounded-2xl"
-        style={{ background: '#1c1c1c', border: '1px solid #303030', boxShadow: '0 24px 60px rgba(0,0,0,0.65)' }}>
+        style={{ background: 'var(--card)', border: '1px solid var(--line)', boxShadow: 'var(--card-shadow), 0 24px 60px rgba(0,0,0,0.55)' }}>
         {/* Tone stripe — the one piece of colour, so a destructive dialog
             reads as destructive before anyone gets to the button. */}
         <div style={{ height: 3, background: tone.accent }} />
@@ -106,9 +108,9 @@ export default function DialogHost() {
               <Icon size={17} style={{ color: tone.accent }} />
             </span>
             <div className="min-w-0 flex-1">
-              <h2 className="text-[15px] font-bold text-white leading-snug">{d.title}</h2>
+              <h2 className="text-[15px] font-bold text-bank-tx leading-snug">{d.title}</h2>
               {d.message && (
-                <p className="text-[12.5px] text-white/55 mt-1.5 leading-relaxed whitespace-pre-line">{d.message}</p>
+                <p className="text-[13px] text-bank-mu mt-1.5 leading-relaxed whitespace-pre-line">{d.message}</p>
               )}
             </div>
           </div>
@@ -116,9 +118,9 @@ export default function DialogHost() {
           {/* Consequences, one per line — the part a \n-joined confirm() used
               to bury in a grey paragraph nobody read. */}
           {Array.isArray(d.bullets) && d.bullets.filter(Boolean).length > 0 && (
-            <ul className="mt-3.5 rounded-xl p-3 space-y-1.5" style={{ background: '#161616', border: '1px solid #282828' }}>
+            <ul className="mt-3.5 rounded-xl p-3 space-y-1.5" style={{ background: 'var(--bg)', border: '1px solid var(--line)' }}>
               {d.bullets.filter(Boolean).map((b, i) => (
-                <li key={i} className="flex gap-2 text-[12px] text-white/65 leading-relaxed">
+                <li key={i} className="flex gap-2 text-[13px] text-bank-mu leading-relaxed">
                   <span className="flex-shrink-0 mt-[7px] w-1 h-1 rounded-full" style={{ background: tone.accent }} />
                   <span className="min-w-0">{b}</span>
                 </li>
@@ -128,36 +130,36 @@ export default function DialogHost() {
 
           {isPrompt && (
             <div className="mt-3.5">
-              {d.label && <label className="block text-[10px] font-bold uppercase tracking-wider text-white/35 mb-1.5">{d.label}</label>}
+              {d.label && <label className="block text-[13px] font-bold uppercase tracking-wide text-bank-fa mb-1.5">{d.label}</label>}
               {d.multiline ? (
                 <textarea ref={inputRef} rows={3} value={value} onChange={e => setValue(e.target.value)}
                   placeholder={d.placeholder || ''}
-                  className="w-full px-3 py-2 rounded-xl text-[13px] text-white placeholder-white/25 resize-y focus:outline-none"
-                  style={{ background: '#141414', border: '1px solid #333' }}
+                  className="w-full px-3 py-2 rounded-xl text-[13px] text-bank-tx placeholder-bank-fa resize-y focus:outline-none"
+                  style={{ background: 'var(--bg)', border: '1px solid var(--line)' }}
                   onFocus={e => { e.target.style.borderColor = tone.accent; e.target.style.boxShadow = `0 0 0 3px ${tone.ring}` }}
-                  onBlur={e => { e.target.style.borderColor = '#333'; e.target.style.boxShadow = 'none' }} />
+                  onBlur={e => { e.target.style.borderColor = 'var(--line)'; e.target.style.boxShadow = 'none' }} />
               ) : (
                 <input ref={inputRef} value={value} onChange={e => setValue(e.target.value)}
                   placeholder={d.placeholder || ''}
-                  className="w-full px-3 py-2 rounded-xl text-[13px] text-white placeholder-white/25 focus:outline-none"
-                  style={{ background: '#141414', border: '1px solid #333' }}
+                  className="w-full px-3 py-2 rounded-xl text-[13px] text-bank-tx placeholder-bank-fa focus:outline-none"
+                  style={{ background: 'var(--bg)', border: '1px solid var(--line)' }}
                   onFocus={e => { e.target.style.borderColor = tone.accent; e.target.style.boxShadow = `0 0 0 3px ${tone.ring}` }}
-                  onBlur={e => { e.target.style.borderColor = '#333'; e.target.style.boxShadow = 'none' }} />
+                  onBlur={e => { e.target.style.borderColor = 'var(--line)'; e.target.style.boxShadow = 'none' }} />
               )}
               {d.required && !String(value).trim() && (
-                <p className="text-[11px] text-white/30 mt-1.5">Required.</p>
+                <p className="text-[12px] text-bank-fa mt-1.5">Required.</p>
               )}
             </div>
           )}
 
           {isReveal && (
             <div className="mt-3.5 flex items-center gap-2 rounded-xl px-3 py-2.5"
-              style={{ background: '#141414', border: '1px solid #333' }}>
-              <code className="flex-1 min-w-0 text-[13px] text-white font-mono break-all select-all">{String(d.value ?? '')}</code>
+              style={{ background: 'var(--bg)', border: '1px solid var(--line)' }}>
+              <code className="flex-1 min-w-0 text-[13px] text-bank-tx font-mono break-all select-all">{String(d.value ?? '')}</code>
               <button onClick={copy}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex-shrink-0 transition-colors ${
-                  copied ? 'text-emerald-300' : 'text-white/60 hover:text-white'}`}
-                style={{ background: '#1e1e1e', border: '1px solid #3a3a3a' }}>
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] font-bold flex-shrink-0 transition-colors ${
+                  copied ? 'text-bank-pos' : 'text-bank-mu hover:text-bank-tx'}`}
+                style={{ background: 'var(--raise)', border: '1px solid var(--line)' }}>
                 {copied ? <Check size={12} /> : <Copy size={12} />}{copied ? 'Copied' : 'Copy'}
               </button>
             </div>
@@ -171,12 +173,12 @@ export default function DialogHost() {
                 const ot = TONE[o.tone] || (i === 0 ? TONE.default : TONE.info)
                 return (
                   <button key={o.key} ref={i === 0 ? okRef : undefined} onClick={() => close(o.key)}
-                    className="w-full text-left px-3.5 py-2.5 rounded-xl transition-colors hover:bg-white/[0.04]"
-                    style={{ background: '#161616', border: `1px solid ${i === 0 ? `${ot.accent}55` : '#2e2e2e'}` }}>
-                    <span className="block text-[13px] font-bold" style={{ color: i === 0 ? ot.accent : 'rgba(255,255,255,0.85)' }}>
+                    className="w-full text-left px-3.5 py-2.5 min-h-[44px] rounded-xl transition-colors hover:bg-bank-raise"
+                    style={{ background: 'var(--bg)', border: `1px solid ${i === 0 ? `${ot.accent}55` : 'var(--line)'}` }}>
+                    <span className="block text-[13px] font-bold" style={{ color: i === 0 ? ot.accent : 'var(--tx)' }}>
                       {o.label}{i === 0 ? ' · recommended' : ''}
                     </span>
-                    {o.description && <span className="block text-[11.5px] text-white/45 mt-0.5 leading-relaxed">{o.description}</span>}
+                    {o.description && <span className="block text-[12px] text-bank-mu mt-0.5 leading-relaxed">{o.description}</span>}
                   </button>
                 )
               })}
@@ -186,13 +188,13 @@ export default function DialogHost() {
           <div className="flex items-center justify-end gap-2 mt-5">
             {!isReveal && !isAlert && (
               <button onClick={cancel}
-                className="px-3.5 py-2 rounded-xl text-[12.5px] font-semibold text-white/55 hover:text-white transition-colors"
-                style={{ background: '#222', border: '1px solid #333' }}>
+                className="px-3.5 py-2 min-h-[44px] sm:min-h-0 rounded-xl text-[13px] font-semibold text-bank-mu hover:text-bank-tx transition-colors"
+                style={{ background: 'var(--raise)', border: '1px solid var(--line)' }}>
                 {d.cancelLabel || 'Cancel'}
               </button>
             )}
             {!isChoice && <button ref={okRef} onClick={confirm} disabled={blocked}
-              className="px-4 py-2 rounded-xl text-[12.5px] font-bold transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-4 py-2 min-h-[44px] sm:min-h-0 rounded-xl text-[13px] font-bold transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
               style={{ background: tone.btn, color: tone.btnText }}>
               {d.confirmLabel || (isReveal || isAlert ? 'Done' : isPrompt ? 'Save' : 'Confirm')}
             </button>}

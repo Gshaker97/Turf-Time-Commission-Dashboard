@@ -79,27 +79,27 @@ function NotificationBell() {
   return (
     <div className="relative" ref={ref}>
       <button onClick={toggle} title="Notifications"
-        className="relative p-2 rounded-lg text-white/45 hover:text-white hover:bg-white/5 transition-colors">
+        className="relative p-2 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center rounded-lg text-bank-mu hover:text-bank-tx hover:bg-bank-raise transition-colors">
         <Bell size={16} />
         {unread > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full text-[9px] font-bold text-dark flex items-center justify-center"
-            style={{ background: '#f59e0b' }}>
+          <span className="absolute top-1 right-1 md:-top-0.5 md:-right-0.5 min-w-[18px] h-[18px] px-1 rounded-full text-[11px] font-bold flex items-center justify-center"
+            style={{ background: 'var(--warn)', color: 'var(--gold-ink)' }}>
             {unread > 9 ? '9+' : unread}
           </span>
         )}
       </button>
       {open && (
-        <div className="absolute top-10 right-0 w-72 rounded-xl shadow-2xl py-1.5 z-50 max-h-[360px] overflow-y-auto"
-          style={{ background: '#2a2a2a', border: '1px solid #3a3a3a' }}>
-          <p className="px-4 py-1.5 text-[10px] font-bold uppercase tracking-widest text-white/30">Notifications</p>
+        <div className="absolute top-12 md:top-10 right-0 w-72 rounded-xl shadow-card py-1.5 z-50 max-h-[360px] overflow-y-auto"
+          style={{ background: 'var(--card)', border: '1px solid var(--line)' }}>
+          <p className="px-4 py-1.5 text-[13px] font-bold uppercase tracking-wider text-bank-fa">Notifications</p>
           {items.length === 0 ? (
-            <p className="px-4 py-4 text-[12px] text-white/30">Nothing yet — you'll see deal-note replies here.</p>
+            <p className="px-4 py-4 text-[13px] text-bank-fa">Nothing yet — you'll see deal-note replies here.</p>
           ) : items.map(n => (
             <button key={n.id}
               onClick={() => { setOpen(false); if (n.deal_id) navigate(`/deals?note=${n.deal_id}`) }}
-              className="w-full text-left px-4 py-2.5 hover:bg-white/5 transition-colors border-t border-white/5">
-              <p className={`text-[12px] ${n.read ? 'text-white/55' : 'text-white/90 font-semibold'}`}>{n.body}</p>
-              <p className="text-[10px] text-white/25 mt-0.5">{fmtWhen(n.created_at)} ago · tap to open the thread</p>
+              className="w-full text-left px-4 py-2.5 hover:bg-bank-raise transition-colors border-t border-bank-line">
+              <p className={`text-[13px] ${n.read ? 'text-bank-mu' : 'text-bank-tx font-semibold'}`}>{n.body}</p>
+              <p className="text-[12px] text-bank-fa mt-0.5">{fmtWhen(n.created_at)} ago · tap to open the thread</p>
             </button>
           ))}
         </div>
@@ -198,16 +198,16 @@ export default function NavBar() {
   return (
     <nav
       className="h-14 flex items-center px-5 flex-shrink-0 z-50 relative"
-      style={{ background: '#1e1e1e', borderBottom: '1px solid #2a2a2a' }}
+      style={{ background: 'var(--side)', borderBottom: '1px solid var(--line)' }}
     >
       {/* Logo */}
       <div className="flex items-center gap-2.5 w-48 flex-shrink-0">
         <Logo size={28} />
-        <span className="font-bold text-white text-[13px] tracking-tight">{siteName}</span>
+        <span className="font-bold text-bank-tx text-[13px] tracking-tight">{siteName}</span>
       </div>
 
       {/* Page title */}
-      <h1 className="flex-1 text-center text-[14px] font-semibold text-white/80">
+      <h1 className="flex-1 text-center text-[14px] font-semibold text-bank-tx">
         {TITLES[pathname] ?? 'Turf Time'}
       </h1>
 
@@ -216,41 +216,41 @@ export default function NavBar() {
         <NotificationBell />
         <button
           onClick={() => setOpen(v => !v)}
-          className="flex items-center gap-2.5 text-white/70 hover:text-white transition-colors"
+          className="flex items-center gap-2.5 min-h-[44px] md:min-h-0 text-bank-mu hover:text-bank-tx transition-colors"
         >
           <div className="text-right hidden sm:block">
-            <p className="text-[12px] font-semibold text-white leading-tight">
+            <p className="text-[13px] font-semibold text-bank-tx leading-tight">
               {profile?.name ?? '—'}
             </p>
-            <p className="text-[10px] text-white/40 leading-tight">
+            <p className="text-[12px] text-bank-fa leading-tight">
               {profile?.company_name ?? ''}
             </p>
           </div>
           <div
             className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0"
             style={{
-              background: isPreviewMode ? '#f59e0b22' : '#00b89420',
-              border: `1px solid ${isPreviewMode ? '#f59e0b60' : '#00b89430'}`,
-              color: isPreviewMode ? '#f59e0b' : '#00b894',
+              background: isPreviewMode ? '#f59e0b22' : 'var(--raise)',
+              border: `1px solid ${isPreviewMode ? '#f59e0b60' : 'var(--line)'}`,
+              color: isPreviewMode ? '#f59e0b' : 'var(--tx)',
             }}
           >
             {initials}
           </div>
-          <ChevronDown size={13} className={`text-white/40 transition-transform ${open ? 'rotate-180' : ''}`} />
+          <ChevronDown size={13} className={`text-bank-fa transition-transform ${open ? 'rotate-180' : ''}`} />
         </button>
 
         {open && (
           <div
-            className="absolute top-14 right-4 w-56 rounded-xl shadow-2xl py-1.5 z-50"
-            style={{ background: '#2a2a2a', border: '1px solid #3a3a3a' }}
+            className="absolute top-14 right-4 w-56 rounded-xl shadow-card py-1.5 z-50"
+            style={{ background: 'var(--card)', border: '1px solid var(--line)' }}
           >
             {/* Profile info */}
-            <div className="px-4 py-2 border-b border-white/5 mb-1">
-              <p className="text-[12px] font-semibold text-white">{profile?.name}</p>
-              <p className="text-[11px] text-white/40">{profile?.email}</p>
+            <div className="px-4 py-2 border-b border-bank-line mb-1">
+              <p className="text-[13px] font-semibold text-bank-tx">{profile?.name}</p>
+              <p className="text-[12px] text-bank-fa">{profile?.email}</p>
               <span
-                className="mt-1 inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider"
-                style={{ background: '#00b89420', color: '#00b894' }}
+                className="mt-1 inline-block px-1.5 py-0.5 rounded text-[13px] font-semibold uppercase tracking-wide"
+                style={{ background: 'var(--raise)', color: 'var(--mu)', border: '1px solid var(--line)' }}
               >
                 {profile?.role}
               </span>
@@ -259,12 +259,12 @@ export default function NavBar() {
             {/* View site as role — admin only. Permission preview for screen
                 sharing: you stay you, overrides/payroll/admin disappear. */}
             {isAdmin && (
-              <div className="border-b border-white/5 pb-1 mb-1">
-                <p className="px-4 pt-1 pb-0.5 text-[9px] font-bold uppercase tracking-widest text-white/30">View site as</p>
+              <div className="border-b border-bank-line pb-1 mb-1">
+                <p className="px-4 pt-1 pb-0.5 text-[13px] font-bold uppercase tracking-wider text-bank-fa">View site as</p>
                 {[['rep', 'Rep view'], ['manager', 'Manager view']].map(([role, label]) => (
                   <button key={role}
                     onClick={() => toggleRoleView(role)}
-                    className="w-full flex items-center justify-between gap-2 px-4 py-2 text-[13px] text-white/60 hover:text-white hover:bg-white/5 transition-colors"
+                    className="w-full flex items-center justify-between gap-2 px-4 py-2 min-h-[44px] md:min-h-0 text-[13px] text-bank-mu hover:text-bank-tx hover:bg-bank-raise transition-colors"
                   >
                     <span className="flex items-center gap-2">
                       <Glasses size={14} />
@@ -278,10 +278,10 @@ export default function NavBar() {
 
             {/* Preview as User — admin only */}
             {isAdmin && (
-              <div className="border-b border-white/5 pb-1 mb-1">
+              <div className="border-b border-bank-line pb-1 mb-1">
                 <button
                   onClick={handlePreviewClick}
-                  className="w-full flex items-center justify-between gap-2 px-4 py-2 text-[13px] text-white/60 hover:text-white hover:bg-white/5 transition-colors"
+                  className="w-full flex items-center justify-between gap-2 px-4 py-2 min-h-[44px] md:min-h-0 text-[13px] text-bank-mu hover:text-bank-tx hover:bg-bank-raise transition-colors"
                 >
                   <span className="flex items-center gap-2">
                     <Eye size={14} />
@@ -289,19 +289,19 @@ export default function NavBar() {
                   </span>
                   <ChevronRight
                     size={12}
-                    className={`text-white/30 transition-transform ${showPicker ? 'rotate-90' : ''}`}
+                    className={`text-bank-fa transition-transform ${showPicker ? 'rotate-90' : ''}`}
                   />
                 </button>
 
                 {showPicker && (
                   <div
                     className="mx-2 mb-1 rounded-lg overflow-hidden"
-                    style={{ background: '#222', border: '1px solid #333', maxHeight: 260, overflowY: 'auto' }}
+                    style={{ background: 'var(--bg)', border: '1px solid var(--line)', maxHeight: 260, overflowY: 'auto' }}
                   >
                     {grouped.map(({ role, members }) => (
                       <div key={role}>
                         <p
-                          className="px-3 pt-2 pb-0.5 text-[9px] font-bold uppercase tracking-widest"
+                          className="px-3 pt-2 pb-0.5 text-[13px] font-bold uppercase tracking-wider"
                           style={{ color: ROLE_COLOR[role] ?? '#888' }}
                         >
                           {role}
@@ -310,11 +310,11 @@ export default function NavBar() {
                           <button
                             key={u.id}
                             onClick={() => handleSelectUser(u)}
-                            className="w-full text-left px-3 py-1.5 text-[12px] text-white/70 hover:text-white hover:bg-white/5 transition-colors flex items-center justify-between"
+                            className="w-full text-left px-3 py-1.5 min-h-[44px] md:min-h-0 text-[13px] text-bank-mu hover:text-bank-tx hover:bg-bank-raise transition-colors flex items-center justify-between"
                           >
                             <span>{u.name}</span>
                             <span
-                              className="text-[9px] font-semibold px-1 py-0.5 rounded"
+                              className="text-[12px] font-semibold px-1 py-0.5 rounded"
                               style={{ background: (ROLE_COLOR[role] ?? '#888') + '22', color: ROLE_COLOR[role] ?? '#888' }}
                             >
                               {u.role}
@@ -330,30 +330,30 @@ export default function NavBar() {
 
             {/* Change password */}
             {!demoMode && (
-              <div className="border-t border-white/5">
+              <div className="border-t border-bank-line">
                 <button
                   onClick={() => { setPwOpen(o => !o); setPwMsg(null) }}
-                  className="w-full flex items-center justify-between px-4 py-2 text-[13px] text-white/60 hover:text-white hover:bg-white/5 transition-colors"
+                  className="w-full flex items-center justify-between px-4 py-2 min-h-[44px] md:min-h-0 text-[13px] text-bank-mu hover:text-bank-tx hover:bg-bank-raise transition-colors"
                 >
                   <span className="flex items-center gap-2.5"><KeyRound size={14} /> Change Password</span>
-                  <ChevronRight size={12} className={`text-white/30 transition-transform ${pwOpen ? 'rotate-90' : ''}`} />
+                  <ChevronRight size={12} className={`text-bank-fa transition-transform ${pwOpen ? 'rotate-90' : ''}`} />
                 </button>
                 {pwOpen && (
                   <div className="px-4 pb-3 pt-1 space-y-2">
                     <input type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="New password"
-                      className="w-full px-2.5 py-1.5 rounded-lg text-[12px] text-white focus:outline-none"
-                      style={{ background: '#1a1a1a', border: '1px solid #333' }} />
+                      className="w-full px-2.5 py-1.5 rounded-lg text-[13px] text-bank-tx placeholder-bank-fa focus:outline-none"
+                      style={{ background: 'var(--bg)', border: '1px solid var(--line)' }} />
                     <input type="password" value={pw2} onChange={e => setPw2(e.target.value)} placeholder="Confirm new password"
                       onKeyDown={e => { if (e.key === 'Enter') submitPassword() }}
-                      className="w-full px-2.5 py-1.5 rounded-lg text-[12px] text-white focus:outline-none"
-                      style={{ background: '#1a1a1a', border: '1px solid #333' }} />
+                      className="w-full px-2.5 py-1.5 rounded-lg text-[13px] text-bank-tx placeholder-bank-fa focus:outline-none"
+                      style={{ background: 'var(--bg)', border: '1px solid var(--line)' }} />
                     {pwMsg && (
-                      <p className="text-[11px] flex items-center gap-1" style={{ color: pwMsg.type === 'ok' ? '#34d399' : '#f87171' }}>
+                      <p className="text-[12px] flex items-center gap-1" style={{ color: pwMsg.type === 'ok' ? 'var(--pos)' : 'var(--neg)' }}>
                         {pwMsg.type === 'ok' && <Check size={12} />}{pwMsg.text}
                       </p>
                     )}
                     <button onClick={submitPassword} disabled={pwSaving}
-                      className="w-full py-1.5 rounded-lg text-[12px] font-bold text-dark bg-teal disabled:opacity-50 transition-colors">
+                      className="w-full py-2 rounded-lg text-[13px] font-bold text-bank-gold-ink bg-bank-gold hover:brightness-105 disabled:opacity-50 transition-colors">
                       {pwSaving ? 'Saving…' : 'Update password'}
                     </button>
                   </div>
@@ -364,7 +364,7 @@ export default function NavBar() {
             {/* Sign out */}
             <button
               onClick={() => { signOut(); setOpen(false) }}
-              className="w-full flex items-center gap-2.5 px-4 py-2 text-[13px] text-white/60 hover:text-white hover:bg-white/5 transition-colors border-t border-white/5"
+              className="w-full flex items-center gap-2.5 px-4 py-2 min-h-[44px] md:min-h-0 text-[13px] text-bank-mu hover:text-bank-tx hover:bg-bank-raise transition-colors border-t border-bank-line"
             >
               <LogOut size={14} />
               Sign Out
