@@ -1044,8 +1044,11 @@ const GHL_LOCATION_ID = (process.env.GHL_LOCATION_ID || 'lm0glrcKsZ05EcZrGS9t').
 const GHL_SMS_TOKEN = (process.env.GHL_SMS_TOKEN || '').trim()
 // Who gets the new-sale text — GHL contact ids, comma-separated. Defaults to
 // Tanner / Keaton / Garrison; override with SALE_ALERT_CONTACT_IDS.
+// New-sale text recipients: Tanner Arnett, Keaton Shaker, Garrison Shaker (GHL
+// contact ids). Nov 12 2026: the middle id had pointed at a contact GHL no longer
+// knows (every send to it 400'd), so Keaton was getting no sale texts.
 const SALE_ALERT_CONTACTS = (process.env.SALE_ALERT_CONTACT_IDS
-  || 'OjhxskL9Tc6kE6wXPcFU,QPCjvSdLNjsfFnhC07YM,tyHlLNS6nuB1BdQRe1hH')
+  || 'OjhxskL9Tc6kE6wXPcFU,5J7WLToG7PBneC7yxxnA,tyHlLNS6nuB1BdQRe1hH')
   .split(',').map(s => s.trim()).filter(Boolean)
 const GHL_BASE = 'https://services.leadconnectorhq.com'
 // Known custom-field ids (fallbacks when name resolution misses them).
