@@ -52,17 +52,29 @@ function rateColor(r) {
 }
 
 // One figure inside a group card. Clickable ones drill to the deals behind them.
-function Stat({ value, label, sub, color = "#ededed", onClick }) {
+// A COUNT IS NEVER COLOURED BY ITS RATE. `Closed` used to render the count
+// itself in rateColor(closeRate), so a rep with a 10% close rate got an
+// ORANGE "1" — the number read as an error when it is just a count, and the
+// verdict belongs to the rate underneath it (Keaton: "why is the deals #
+// orange?"). The rate line carries the colour now; the count stays plain.
+function Stat({ value, label, sub, subColor, color = "#ededed", onClick }) {
   const Tag = onClick ? "button" : "div";
   return (
     <Tag onClick={onClick ? onClickUnlessSelecting(onClick) : undefined}
-      className={`min-w-0 text-left ${onClick ? "cursor-pointer" : ""}`}>
+      className={`flex-1 min-w-0 text-left ${onClick ? "cursor-pointer" : ""}`}>
       <p className="text-[18px] md:text-[20px] font-bold leading-none truncate" style={{ color }}>{value}</p>
       <p className="text-[10px] text-white/45 mt-1 truncate">{label}</p>
-      {sub && <p className="text-[10px] text-white/30 truncate">{sub}</p>}
+      {sub && <p className="text-[10px] truncate" style={{ color: subColor || "rgba(255,255,255,0.3)" }}>{sub}</p>}
     </Tag>
   );
 }
+
+// THE SEAM. Left of it the figures are APPOINTMENTS from RepCard; right of it
+// they are SIGNED DEALS from the site. Two systems in one row with nothing
+// marking the join is what let "10 Ran" be read as ten sales (Keaton did it
+// on his own card within minutes of the page going live). Same hairline the
+// Leads by-rep board already uses, so the two pages show the split alike.
+const Seam = () => <div className="w-px self-stretch my-0.5 mx-1 md:mx-2 flex-shrink-0" style={{ background: "#ffffff1f" }} />;
 
 function GroupCard({ title, tone, children }) {
   return (
@@ -528,10 +540,13 @@ export default function Home() {
 
       {/* Self gens — the appointments they booked and what became of them */}
       <GroupCard title="Self Gens" tone="#00b894">
-        <div className="grid grid-cols-4 gap-2 md:gap-3">
+        <div className="flex items-stretch gap-2 md:gap-3">
           <Stat value={act.set} label="Appts set" />
-          <Stat value={act.ran} label="Ran" sub={pct(act.ranRate)} />
-          <Stat value={act.closed} label="Closed" sub={pct(act.closeRate)} color={rateColor(act.closeRate)}
+          {/* "Appts ran" = of the ones they BOOKED, how many have happened —
+              including any another rep sat. Bare "Ran" never said either. */}
+          <Stat value={act.ran} label="Appts ran" sub={pct(act.ranRate)} subColor={rateColor(act.ranRate)} />
+          <Seam />
+          <Stat value={act.closed} label="Deals closed" sub={pct(act.closeRate)} subColor={rateColor(act.closeRate)}
             onClick={() => toggleDrill("self")} />
           <Stat value={money(act.revenue)} label="Revenue" color="#00b894" onClick={() => toggleDrill("self")} />
         </div>
@@ -540,12 +555,13 @@ export default function Home() {
       {/* Leads — only when they actually ran one */}
       {hasLeads && (
         <GroupCard title="Leads" tone="#c084fc">
-          <div className="grid grid-cols-4 gap-2 md:gap-3">
-            <Stat value={act.leadsRan} label="Ran" />
-            <Stat value={act.leadsClosed} label="Closed" sub={pct(act.leadsCloseRate)} color={rateColor(act.leadsCloseRate)}
+          <div className="flex items-stretch gap-2 md:gap-3">
+            <Stat value={act.leadsRan} label="Appts ran" />
+            <Seam />
+            <Stat value={act.leadsClosed} label="Deals closed" sub={pct(act.leadsCloseRate)} subColor={rateColor(act.leadsCloseRate)}
               onClick={() => toggleDrill("leads")} />
             <Stat value={money(act.leadRevenue)} label="Revenue" color="#00b894" onClick={() => toggleDrill("leads")} />
-            <div />
+            <div className="flex-1" />
           </div>
         </GroupCard>
       )}
