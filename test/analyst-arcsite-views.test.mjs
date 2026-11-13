@@ -130,3 +130,9 @@ test('pdf queue: both lists paged and allowlisted, links never present', () => {
   assert.deepEqual(v.failures.rows[0], { customer: 'f', reason: 'unsigned', failed_at: 't' })
   assert.equal(JSON.stringify(v).includes('http'), false)
 })
+
+test('eod run view: allowlisted scalars, paged issues, sms text passes but nothing unlisted', () => {
+  const v = runView(read({ day: '2026-11-13', checked: 217, ok: false, issue_count: 2, new_count: 1, counts: { price: 2 }, sms: { enabled: false, would_send: true, text: 'Turf EOD …', token: 'x' }, secret: 's', issues: [{ kind: 'price', severity: 'high', customer: 'A', detail: 'Sheet $1 vs GHL $2', new: true, first_seen: '2026-11-13', url: 'http://x' }, { kind: 'name', severity: 'low', customer: 'B', detail: 'd' }] }), 'eod', { limit: 1 })
+  assert.equal(v.available, true); assert.equal(v.checked, 217); assert.deepEqual(v.counts, { price: 2 }); assert.equal(v.sms.text, 'Turf EOD …'); assert.equal(v.sms.token, undefined); assert.equal(v.secret, undefined)
+  assert.equal(v.issues.total, 2); assert.equal(v.issues.rows.length, 1); assert.equal(v.issues.next_offset, 1); assert.deepEqual(Object.keys(v.issues.rows[0]).sort(), ['customer', 'detail', 'first_seen', 'kind', 'new', 'severity'])
+})

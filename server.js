@@ -26,6 +26,7 @@ import { createDailyStore, DAILY_WORKER_KEY, dailyDayKey, dailyCasPath } from '.
 import { validatePrivatePolicy } from './lib/verified-sheet-policy.mjs'
 import * as arcViews from './lib/analyst-arcsite-views.mjs'
 import { readBackAndRepair } from './lib/ghl-opp-readback.mjs'
+import { buildEodReport, eodSmsText } from './lib/eod-check.mjs'
 import { parseSignedPdfText } from './lib/parse-signed-pdf.mjs'
 import { readVerifiedSheetSnapshot } from './lib/verified-sheet-snapshot.mjs'
 import {
@@ -2792,7 +2793,13 @@ function arcSignatureOk(rawBody, header) {
   try { return crypto.timingSafeEqual(Buffer.from(expect), Buffer.from(v)) } catch { return false }
 }
 
+// Today's sale events for the end-of-day check (in memory; a redeploy clears it).
+const _eodEvents = []
+function eodRemember(result) {
+  try { _eodEvents.push({ at: new Date().toISOString(), action: result.action || null, ok: !!result.ok, ignored: !!result.ignored, project_id: result.project_id || null, customer: result.customer || null, code: result.code || null }); if (_eodEvents.length > 300) _eodEvents.splice(0, _eodEvents.length - 300) } catch { /* never block a sale on bookkeeping */ }
+}
 async function arcLog(result) {
+  eodRemember(result)
   if (!SUPABASE_URL || !SERVICE_KEY) return
   try {
     await fetch(`${SUPABASE_URL}/rest/v1/app_settings?on_conflict=key`, {
@@ -5124,6 +5131,81 @@ async function teamMoveSweep() {
 }
 // A short delay at boot so a deploy isn't racing the database coming up.
 // ARC_DISABLE_TIMERS=1 runs the API without any background automation (local test instance).
+// ── End-of-day alignment check (Garrison, Nov 13 2026) ──────────────────────
+// 9 pm Phoenix, once a day: compare every in-scope job across the AI Sheet, GHL,
+// the install calendar and the commission site (name, phone, address, price,
+// install date, setter/closer, contract PDF; never commission) plus the day's
+// blocked sales, calendar jobs still on a website lead, unsent sale texts and a
+// stuck daily worker. READ-ONLY apart from storing the report. Texts Garrison
+// only when there is something to say (EOD_CHECK_SMS=0 silences it); repeats
+// from previous days are carried, not re-announced.
+const EOD_CHECK_HOUR = Number(process.env.EOD_CHECK_HOUR || 21)
+const EOD_CHECK_SMS = process.env.EOD_CHECK_SMS !== '0'   // on by default (Garrison asked for the text); EOD_CHECK_SMS=0 silences it
+const EOD_CHECK_CONTACT_ID = (process.env.EOD_CHECK_CONTACT_ID || 'tyHlLNS6nuB1BdQRe1hH').trim()   // Garrison
+const EOD_KEY = day => `eod_check_${day}`, EOD_LAST_KEY = 'eod_check_last'
+const eodRead = async key => { const r = await arcSetting(key); return r.ok ? r.value : null }
+async function eodCollect(day) {
+  // Use the hourly analyst bundle (one consistent read of every source); refresh it if it is older than 70 minutes.
+  let d = _analyst.data
+  if (!d || Date.now() - Date.parse(d.built_at || 0) > 70 * 60_000) { try { await analystBuild() } catch { /* fall back to whatever we have */ } d = _analyst.data }
+  if (!d) throw new Error('analyst bundle unavailable')
+  const g = ghlOf(d)
+  const srcErr = k => { const m = (d.sources || {})[k]; return m && m.status && m.status !== 'ok' ? m.status : null }
+  const sourceErrors = { sheet: srcErr('sheet'), ghl: srcErr('ghl'), calendar: srcErr('calendar_full') || srcErr('calendar_jobs'), site: srcErr('site') }
+  const sheetJobs = (d.sheet && d.sheet.jobs) || { headers: [], rows: [] }, sheetSchedule = (d.sheet && d.sheet.schedule) || { headers: [], rows: [] }
+  const calendarJobs = (d.calendar_full && d.calendar_full.jobs) || listOf(d.calendar_jobs)
+  const siteDeals = (d.site && d.site.deals) || []
+  // alert states for today's approved projects (exact-key reads only)
+  const apprH = sheetJobs.headers.find(h => /approved\s*date/i.test(h)), pidH = sheetJobs.headers.find(h => /project\s*id/i.test(h))
+  const todayPids = apprH && pidH ? [...new Set(sheetJobs.rows.filter(r => String(r[apprH] || '').slice(0, 10) === day).map(r => String(r[pidH] || '').trim()).filter(Boolean))].slice(0, 50) : []
+  const alertStates = {}
+  for (const pid of todayPids) { const v = await eodRead(`arcsite_sale_alert_${pid}`); if (v && v.state) alertStates[pid] = v.state }
+  // Previous report for repeat-tracking: the last stored one from an EARLIER day
+  // (a same-day re-run must not make yesterday's open items look new or old).
+  const [worker, contractAudit, last] = await Promise.all([eodRead(DAILY_WORKER_KEY), eodRead(ARC_AUDIT_KEY), eodRead(EOD_LAST_KEY)])
+  let previous = last && last.day && last.day < day ? last : null
+  if (!previous && last && last.day === day && last.previous_day) previous = await eodRead(EOD_KEY(last.previous_day))
+  return { day, sheetJobs, sheetSchedule, ghl: { opportunities: g.opportunities || [], contacts: g.contacts || {} }, calendarJobs, siteDeals, events: _eodEvents.filter(e => String(e.at).slice(0, 10) === day), alertStates, worker, contractAudit, previous, sourceErrors, bundle_built_at: d.built_at }
+}
+let _eodRunning = false
+async function eodRun({ dry = false } = {}) {
+  if (_eodRunning) return { ok: false, error: 'already running' }
+  _eodRunning = true
+  try {
+    const { day } = phoenixNow()
+    const input = await eodCollect(day)
+    const report = buildEodReport(input)
+    report.bundle_built_at = input.bundle_built_at
+    report.previous_day = input.previous ? input.previous.day : null
+    const text = eodSmsText(report)
+    report.sms = { enabled: EOD_CHECK_SMS, would_send: !!text, text, sent: false, dry }
+    if (!dry) {
+      if (text && EOD_CHECK_SMS && GHL_SMS_TOKEN && EOD_CHECK_CONTACT_ID) {
+        try { const body = await ghlSendSms(EOD_CHECK_CONTACT_ID, text); report.sms.sent = messageIdentifiers(body).length > 0; report.sms.message_ids = messageIdentifiers(body) }
+        catch (e) { report.sms.error = String(e.message || e).slice(0, 160) }
+      }
+      const stored = report
+      await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`, { key: EOD_KEY(day), value: stored }, 'resolution=merge-duplicates').catch(() => {})
+      await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`, { key: EOD_LAST_KEY, value: stored }, 'resolution=merge-duplicates').catch(() => {})
+    }
+    return report
+  } finally { _eodRunning = false }
+}
+async function eodTick() {
+  const { day, hour } = phoenixNow()
+  if (hour !== EOD_CHECK_HOUR) return
+  const last = await eodRead(EOD_LAST_KEY)
+  if (last && last.day === day) return
+  await eodRun().catch(() => {})
+}
+// Jarvis / Garrison read view. ?day=YYYY-MM-DD for a stored day; ?preview=1 computes a fresh report now without storing or texting.
+analystRoute('/api/analyst/eod', null, async (d, req) => {
+  if (String(req.query.preview || '') === '1') { const r = await eodRun({ dry: true }); return arcViews.runView(arcViews.read(r), 'eod', { offset: req.query.offset, limit: req.query.limit }) }
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.day || '')) ? String(req.query.day) : null
+  const stored = await arcSetting(day ? EOD_KEY(day) : EOD_LAST_KEY)
+  return arcViews.runView(stored, 'eod', { offset: req.query.offset, limit: req.query.limit })
+}, { jarvisOnly: true })
+
 const TIMERS_ON = process.env.ARC_DISABLE_TIMERS !== '1'
 if (TIMERS_ON) setTimeout(teamMoveSweep, 20_000).unref?.()
 if (TIMERS_ON) setInterval(teamMoveSweep, TEAM_MOVE_SWEEP_MS).unref?.()
@@ -5148,6 +5230,7 @@ if (TIMERS_ON) setInterval(() => arcContractAuditTick().catch(() => {}), 15 * 60
 // The READ-ONLY field audit (every mapped field, every job) runs once a day in
 // the same hour, after the repair pass, and stores its findings. It never writes.
 if (TIMERS_ON) setInterval(() => arcFieldAuditTick().catch(() => {}), 15 * 60_000).unref?.()
+if (TIMERS_ON) setInterval(() => eodTick().catch(() => {}), 10 * 60_000).unref?.()
 // New schedule OFF unless explicitly activated after dry-run/manifest review.
 if (TIMERS_ON && process.env.ARC_VERIFIED_SHEET_AUTO === '1') setInterval(() => verifiedSheetTick().catch(() => {}), 5 * 60_000).unref?.()
 
