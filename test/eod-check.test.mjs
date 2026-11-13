@@ -84,7 +84,7 @@ test('when a source failed to load, the report says so instead of flagging every
   const p = base(); p.sourceErrors = { sheet: 'Install sheet read failed (429)' }; p.sheetJobs = { headers: [], rows: [] }; p.sheetSchedule = { headers: [], rows: [] }
   const r = buildEodReport(p)
   assert.equal(r.checked, 0); assert.deepEqual(r.issues.map(i => i.kind), ['source_unavailable'])
-  assert.match(eodSmsText(r), /source unavailable/)
+  assert.match(eodSmsText(r), /source unavailable \(1\): sheet/)
   const q = base(); q.sourceErrors = { ghl: 'failed' }
   assert.deepEqual(buildEodReport(q).issues.map(i => i.kind), ['source_unavailable'])
 })

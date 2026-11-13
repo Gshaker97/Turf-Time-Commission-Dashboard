@@ -5152,7 +5152,15 @@ async function eodCollect(day) {
   const g = ghlOf(d)
   const srcErr = k => { const m = (d.sources || {})[k]; return m && m.status && m.status !== 'ok' ? m.status : null }
   const sourceErrors = { sheet: srcErr('sheet'), ghl: srcErr('ghl'), calendar: srcErr('calendar_full') || srcErr('calendar_jobs'), site: srcErr('site') }
-  const sheetJobs = (d.sheet && d.sheet.jobs) || { headers: [], rows: [] }, sheetSchedule = (d.sheet && d.sheet.schedule) || { headers: [], rows: [] }
+  let sheet = d.sheet
+  // The Google Sheets per-minute quota (429) sometimes catches the hourly bundle
+  // read. The end-of-day check is the one reader that can wait: one retry after
+  // the quota window resets, direct from the Sheet, before reporting it unavailable.
+  if (sourceErrors.sheet) {
+    await new Promise(r => setTimeout(r, 65_000))
+    try { sheet = await readInstallSheet(); sourceErrors.sheet = null } catch (e) { sourceErrors.sheet = `${sourceErrors.sheet}; retry failed: ${String(e.message || e).slice(0, 80)}` }
+  }
+  const sheetJobs = (sheet && sheet.jobs) || { headers: [], rows: [] }, sheetSchedule = (sheet && sheet.schedule) || { headers: [], rows: [] }
   const calendarJobs = (d.calendar_full && d.calendar_full.jobs) || listOf(d.calendar_jobs)
   const siteDeals = (d.site && d.site.deals) || []
   // alert states for today's approved projects (exact-key reads only)
