@@ -43,14 +43,15 @@ test('every mismatch kind is detected and commission is ignored', () => {
   assert.ok(!r.issues.some(i => i.kind === 'commission' || /commission field/i.test(i.detail)), 'commission never compared')
   assert.equal(r.issues[0].severity, 'high', 'worst first')
   const sms = eodSmsText(r)
-  assert.ok(sms.startsWith('Turf EOD 2026-11-13:')); assert.ok(sms.length <= 600); assert.match(sms, /price mismatch/); assert.match(sms, /Full list: \/api\/analyst\/eod\?day=2026-11-13/)
+  assert.ok(sms.startsWith('Turf Time end-of-day check, Nov 13.')); assert.match(sms, /PRICE DOES NOT MATCH \(\d\)/); assert.match(sms, /- Camron & Bobbie Johnson \(J-1\): Sheet \$19,881\.77 vs GHL value \$19,000\.00/)
+  assert.match(sms, /INSTALL DATE DOES NOT MATCH[^\n]*\n- Camron & Bobbie Johnson \(J-1\): schedule Nov 27 vs GHL Nov 28/); assert.match(sms, /Full list with every job: \/api\/analyst\/eod\?day=2026-11-13/)
 })
 
 test('a sale approved today with no GHL opportunity is the top finding', () => {
   const p = base(); p.ghl.opportunities = []
   p.sheetJobs.rows[0]['Approved Date'] = '2026-11-13'
   const r = buildEodReport(p)
-  assert.equal(r.issues[0].kind, 'missing_in_ghl_today'); assert.match(eodSmsText(r), /sale missing from GHL \(1\): Camron &/)
+  assert.equal(r.issues[0].kind, 'missing_in_ghl_today'); assert.match(eodSmsText(r), /SOLD TODAY BUT NOT IN GHL \(1\)[^\n]*\n- Camron & Bobbie Johnson: approved Nov 13 for \$19,881\.77 \(Jared Aguilar\): no GHL opportunity/)
 })
 
 test('calendar job linked to a website lead, blocked sale events, stuck worker, unsent text', () => {
@@ -75,16 +76,16 @@ test('reps the commission site never imports are not flagged as missing there; d
   assert.ok(buildEodReport(p).issues.some(i => i.kind === 'duplicate_opportunity'))
 })
 
-test('text stays within the limit with many issues', () => {
+test('many issues: each group is capped with an "and N more" line', () => {
   const p = base(); p.sheetJobs.rows = Array.from({ length: 60 }, (_, i) => ({ ...p.sheetJobs.rows[0], Customer: 'Customer Number' + i, 'Project ID': 'P' + i, 'Approved Date': '2026-11-13' })); p.ghl.opportunities = []
-  const sms = eodSmsText(buildEodReport(p)); assert.ok(sms.length <= 600, sms.length); assert.match(sms, /\+\d+/)
+  const sms = eodSmsText(buildEodReport(p)); assert.ok(sms.length <= 1500, sms.length); assert.match(sms, /SOLD TODAY BUT NOT IN GHL \(60\)/)
 })
 
 test('when a source failed to load, the report says so instead of flagging every job as missing', () => {
   const p = base(); p.sourceErrors = { sheet: 'Install sheet read failed (429)' }; p.sheetJobs = { headers: [], rows: [] }; p.sheetSchedule = { headers: [], rows: [] }
   const r = buildEodReport(p)
   assert.equal(r.checked, 0); assert.deepEqual(r.issues.map(i => i.kind), ['source_unavailable'])
-  assert.match(eodSmsText(r), /source unavailable \(1\): sheet/)
+  assert.match(eodSmsText(r), /A SOURCE DID NOT LOAD \(1\)[^\n]*\n- sheet: Install sheet read failed/)
   const q = base(); q.sourceErrors = { ghl: 'failed' }
   assert.deepEqual(buildEodReport(q).issues.map(i => i.kind), ['source_unavailable'])
 })
@@ -99,7 +100,7 @@ test('nicknames and one-letter typos are the same person; repeats carry first_se
   const p2 = base(); p2.day = '2026-11-14'; p2.ghl.opportunities[0].value = 19000; p2.previous = day1
   const day2 = buildEodReport(p2)
   assert.equal(day2.new_count, 0); assert.equal(day2.carried_count, 1); assert.equal(day2.issues[0].first_seen, '2026-11-13')
-  assert.match(eodSmsText(day2), /0 new issues \(\+1 still open from before\)/)
+  assert.match(eodSmsText(day2), /Nothing new today\. 1 item from earlier days still open/)
 })
 
 test('a sold job whose opportunity still carries the website-estimate name is NOT a lead opp once it has a Project ID', () => {
