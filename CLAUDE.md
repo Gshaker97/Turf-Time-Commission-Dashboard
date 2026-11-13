@@ -2493,3 +2493,13 @@ which is why it exists.
 - Deals are created via the Deals page "+" modal only — the old New Deal page
   and the per-deal checklist were retired. Each deal's edit history (from
   migration 019) shows in the edit modal's collapsible "Edit history" panel.
+
+## Redesign rules (UI-only redesign, branch `redesign/private-bank`, Nov 2026)
+
+Per Garrison. These override anything else in this file while the redesign is in flight.
+
+1. **Branch:** work only on `redesign/private-bank`. Never commit to `main`, never merge, never deploy, never touch live Supabase data or Railway settings without his explicit approval.
+2. **UI only.** Allowed: JSX markup, Tailwind classes, inline styles, CSS. **Not allowed:** anything in `src/utils/`, `src/lib/`, `src/contexts/`, `server.js`, `scripts/`, `supabase/`, or any commission, payroll, permission, routing, or data-fetching logic. If a visual change seems to require touching logic, STOP and ask.
+3. **Nothing disappears.** Never remove a field, column, filter, button, export, tab, modal, or menu option. If something must move, list where it moved to. `docs/redesign-inventory.md` is the checklist; verify every page against it after restyling.
+4. **Role visibility is frozen** exactly as it is: rep / manager / director / vp / admin, plus the Keaton and team-lead special cases in `Layout.jsx` (`isKeaton`, `canSeeTeam`), the `vp`/`admin` route guards (Payroll, Import), and the admin-only Admin page.
+5. **Numbers never change.** `test/redesign-baseline.test.mjs` runs every demo deal through `src/utils/commission.js` for every demo user and compares against the committed snapshot `test/fixtures/redesign-baseline.json`. It must pass before and after every restyle. The snapshot is regenerated ONLY when the engine itself is intentionally changed on `main`, never from this branch.
