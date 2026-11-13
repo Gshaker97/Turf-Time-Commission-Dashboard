@@ -966,8 +966,31 @@ funnel.
   the Dashboard leaderboard — a deal with no setter recorded made the two
   pages report different ranks for the same rep. The drill-down lists
   owner-credited deals for the same reason.
-- **Self Gens group**: Appts set · Ran (+Run %) · Closed (+Closing %) ·
-  Revenue. **Leads group**: Ran · Closed (+%) · Revenue — and the group is
+- **A HAIRLINE SEAM MARKS WHERE APPOINTMENTS STOP AND DEALS START** (`Seam`
+  in Home.jsx). Left of it the figures are APPOINTMENTS from RepCard, right
+  of it SIGNED DEALS from the site — two systems in one row, and with nothing
+  marking the join Keaton read "10 Ran" as ten sales on his own card within
+  minutes of the page going live. Same hairline the Leads by-rep board
+  already uses, so the two pages show the split alike. **The labels carry the
+  unit too** — `Appts set` · `Appts ran` · `Deals closed` — because a 1px
+  line vanishes in a screenshot, and this card gets screenshotted. Two other
+  shapes were mocked: divider alone, and a caption over each half (rejected —
+  it costs a line on every card and is exactly what Keaton had removed from
+  the Leads board for being noisy).
+  **`Appts ran` is the SET COHORT**: of the appointments they BOOKED in
+  range, how many have happened, INCLUDING any another rep sat (asserted:
+  "caleb: set one, sat none, ran 1"). Bare "Ran" said neither the unit nor
+  that. Keaton kept the group heading "Self Gens" knowing it is looser here
+  than the Dashboard leaderboard's `Self-Gen` (set AND closed by one person)
+  — the labels carry the precision instead.
+- **A COUNT IS NEVER COLOURED BY ITS RATE.** `Deals closed` used to render
+  the COUNT in `rateColor(closeRate)`, so a rep with a 10% close rate got an
+  orange `1` — the number read as an error when it is just a count, and the
+  verdict belongs to the rate under it (Keaton: "why is the deals # orange?").
+  `Stat` takes `subColor`; the rate line is coloured, the count stays plain.
+- **Self Gens group**: Appts set · Appts ran (+Run %) · Deals closed
+  (+Closing %) · Revenue. **Leads group**: Appts ran · Deals closed (+%) ·
+  Revenue — and the group is
   **removed from the DOM entirely when the rep has neither a lead ran nor a
   lead close** (per Keaton: "so it doesn't take up space"), never a row of
   dashes. Note it is gated on `leadsRan > 0 || leadsClosed > 0`, not on
