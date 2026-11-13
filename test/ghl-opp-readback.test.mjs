@@ -101,3 +101,11 @@ test('server.js wires the read-back into the UPDATE branch with the right inputs
   // the create branch is untouched: it still re-applies customFields itself
   assert.match(src, /oppId = await ghlCreateOpp\(oppBody\)[\s\S]{0,4000}await ghlUpdateOpp\(oppId, \{ customFields \}\)/)
 })
+
+test('an adopted lead opportunity counts as a new sale for the text alert (source check)', () => {
+  const src = readFileSync(new URL('../server.js', import.meta.url), 'utf8')
+  assert.match(src, /const adoptedLead = !!oppId && !!existing && !sameProject && action === 'updated'/)
+  assert.match(src, /const isNewSale = \(action === 'created' \|\| adoptedLead\) && !isChangeOrder/)
+  // a same-project update (re-fired webhook, change order) is still NOT a new sale
+  assert.ok(src.indexOf('const adoptedLead') < src.indexOf('const isNewSale'))
+})
