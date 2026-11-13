@@ -9,7 +9,7 @@ const base = () => ({
   sheetJobs: J([{ 'Approved Date': '2026-11-10', Customer: 'Camron & Bobbie Johnson', 'Sales Rep': 'Jared Aguilar', 'Approved Total': '$19,881.77', 'Proposal ID': '624732', 'Project ID': 'P1', Status: 'APPROVED', 'Customer Phone': '602-555-1234', 'Install Address': '17511 W Southgate Ave, Goodyear' }]),
   sheetSchedule: S([{ 'Booked At': '2026-11-10', 'Install Date': '2026-11-27', Customer: 'Camron & Bobbie Johnson', Status: 'BOOKED', 'Proposal ID': '624732', 'Lead Source': 'Outside Sales - Setter: Corbin Davis', 'Sales Rep': 'Jared Aguilar' }]),
   ghl: { opportunities: [{ id: 'o1', name: 'Camron & Bobbie Johnson', contact_id: 'c1', pipeline: 'Outside Sales', stage: 'Deal Reviewed', status: 'open', value: 19881.77, project_id: 'P1', install_date: '2026-11-27', contracts: 1, fields: { Address: '17511 W Southgate Ave, Goodyear AZ 85338', Setter: 'Corbin Davis', Closer: 'Jared Aguilar' } }], contacts: { c1: { id: 'c1', phone: '+16025551234', address: '17511 W Southgate Ave, Goodyear, AZ' } } },
-  calendarJobs: [{ jobNumber: 'J-1', ghlOpportunityId: 'o1', customer: { name: 'Camron Johnson', phone: '+16025551234', address: '17511 W Southgate Ave, Goodyear, AZ' }, installDate: '2026-11-27', value: 19881.77, contracts: [{ filename: 'x.pdf' }] }],
+  calendarJobs: [{ jobNumber: 'J-1', ghlOpportunityId: 'o1', ghlContactId: 'c1', customer: { name: 'Camron Johnson', phone: '+16025551234', address: '17511 W Southgate Ave, Goodyear, AZ' }, installDate: '2026-11-27', value: 19881.77, contracts: [{ filename: 'x.pdf' }] }],
   siteDeals: [{ project_id: 'P1', deal_name: 'Camron & Bobbie Johnson', status: 'Pending Install', job_price: 19881.77, install_date: '2026-11-27', setter: { name: 'Corbin Davis' }, closer: { name: 'Jared Aguilar' } }],
   events: [], alertStates: {}, worker: null, contractAudit: null,
 })
@@ -43,14 +43,15 @@ test('every mismatch kind is detected and commission is ignored', () => {
   assert.ok(!r.issues.some(i => i.kind === 'commission' || /commission field/i.test(i.detail)), 'commission never compared')
   assert.equal(r.issues[0].severity, 'high', 'worst first')
   const sms = eodSmsText(r)
-  assert.ok(sms.startsWith('Turf EOD 2026-11-13:')); assert.ok(sms.length <= 600); assert.match(sms, /price mismatch/); assert.match(sms, /Full list: \/api\/analyst\/eod\?day=2026-11-13/)
+  assert.ok(sms.startsWith('Turf Time end-of-day check, Nov 13.')); assert.match(sms, /PRICE DOES NOT MATCH \(\d\)/); assert.match(sms, /- Camron & Bobbie Johnson \(J-1\): Sheet \$19,881\.77 vs GHL value \$19,000\.00/)
+  assert.match(sms, /INSTALL DATE DOES NOT MATCH[^\n]*\n- Camron & Bobbie Johnson \(J-1\): schedule Nov 27 vs GHL Nov 28/); assert.match(sms, /Full list with every job: \/api\/analyst\/eod\?day=2026-11-13/)
 })
 
 test('a sale approved today with no GHL opportunity is the top finding', () => {
   const p = base(); p.ghl.opportunities = []
   p.sheetJobs.rows[0]['Approved Date'] = '2026-11-13'
   const r = buildEodReport(p)
-  assert.equal(r.issues[0].kind, 'missing_in_ghl_today'); assert.match(eodSmsText(r), /sale missing from GHL \(1\): Camron &/)
+  assert.equal(r.issues[0].kind, 'missing_in_ghl_today'); assert.match(eodSmsText(r), /SOLD TODAY BUT NOT IN GHL \(1\)[^\n]*\n- Camron & Bobbie Johnson: approved Nov 13 for \$19,881\.77 \(Jared Aguilar\): no GHL opportunity/)
 })
 
 test('calendar job linked to a website lead, blocked sale events, stuck worker, unsent text', () => {
@@ -75,16 +76,16 @@ test('reps the commission site never imports are not flagged as missing there; d
   assert.ok(buildEodReport(p).issues.some(i => i.kind === 'duplicate_opportunity'))
 })
 
-test('text stays within the limit with many issues', () => {
+test('many issues: each group is capped with an "and N more" line', () => {
   const p = base(); p.sheetJobs.rows = Array.from({ length: 60 }, (_, i) => ({ ...p.sheetJobs.rows[0], Customer: 'Customer Number' + i, 'Project ID': 'P' + i, 'Approved Date': '2026-11-13' })); p.ghl.opportunities = []
-  const sms = eodSmsText(buildEodReport(p)); assert.ok(sms.length <= 600, sms.length); assert.match(sms, /\+\d+/)
+  const sms = eodSmsText(buildEodReport(p)); assert.ok(sms.length <= 1500, sms.length); assert.match(sms, /SOLD TODAY BUT NOT IN GHL \(60\)/)
 })
 
 test('when a source failed to load, the report says so instead of flagging every job as missing', () => {
   const p = base(); p.sourceErrors = { sheet: 'Install sheet read failed (429)' }; p.sheetJobs = { headers: [], rows: [] }; p.sheetSchedule = { headers: [], rows: [] }
   const r = buildEodReport(p)
   assert.equal(r.checked, 0); assert.deepEqual(r.issues.map(i => i.kind), ['source_unavailable'])
-  assert.match(eodSmsText(r), /source unavailable/)
+  assert.match(eodSmsText(r), /A SOURCE DID NOT LOAD \(1\)[^\n]*\n- sheet: Install sheet read failed/)
   const q = base(); q.sourceErrors = { ghl: 'failed' }
   assert.deepEqual(buildEodReport(q).issues.map(i => i.kind), ['source_unavailable'])
 })
@@ -99,10 +100,36 @@ test('nicknames and one-letter typos are the same person; repeats carry first_se
   const p2 = base(); p2.day = '2026-11-14'; p2.ghl.opportunities[0].value = 19000; p2.previous = day1
   const day2 = buildEodReport(p2)
   assert.equal(day2.new_count, 0); assert.equal(day2.carried_count, 1); assert.equal(day2.issues[0].first_seen, '2026-11-13')
-  assert.match(eodSmsText(day2), /0 new issues \(\+1 still open from before\)/)
+  assert.match(eodSmsText(day2), /Nothing new today\. 1 item from earlier days still open/)
 })
 
 test('a sold job whose opportunity still carries the website-estimate name is NOT a lead opp once it has a Project ID', () => {
   const p = base(); p.ghl.opportunities[0].name = 'Camron Johnson · website estimate · turf'
   assert.ok(!buildEodReport(p).issues.some(i => i.kind === 'calendar_lead_opp'))
+})
+
+test('completed installs are skipped; the ignore list drops a job or just a kind; a -2 site id matches; a canceled site deal is its own finding', () => {
+  const done = base(); done.sheetSchedule.rows[0]['Install Date'] = '2026-11-01'; done.ghl.opportunities = []
+  const r1 = buildEodReport(done); assert.equal(r1.checked, 0); assert.equal(r1.skipped_completed, 1); assert.deepEqual(r1.issues, [])
+  const ig = base(); ig.ghl.opportunities[0].value = 1; ig.siteDeals[0].deal_name = 'Other Person'; ig.ignore = [{ match: 'Camron & Bobbie Johnson', kinds: ['name'] }]
+  const r2 = buildEodReport(ig); assert.ok(r2.issues.some(i => i.kind === 'price')); assert.ok(!r2.issues.some(i => i.kind === 'name'))
+  ig.ignore = ['Camron & Bobbie Johnson']; assert.deepEqual(buildEodReport(ig).issues, [])
+  const two = base(); two.siteDeals[0].project_id = 'P1-2'; assert.ok(!buildEodReport(two).issues.some(i => i.kind === 'missing_on_site'))
+  const cx = base(); cx.sheetJobs.rows[0]['Approved Date'] = '2026-11-10'; cx.siteDeals[0].status = 'Canceled'
+  assert.deepEqual(buildEodReport(cx).issues.map(i => i.kind), ['site_canceled'])
+})
+
+test('a booking cancelled on the Schedule tab is not compared, but a GHL opportunity still live is flagged once', () => {
+  const p = base(); p.sheetSchedule.rows[0].Status = 'CANCELLED'; p.sheetSchedule.rows[0].Notes = ' [cancelled by Keaton 11/06: Failed credit ]'; p.sheetSchedule.headers.push('Notes')
+  p.ghl.opportunities[0].value = 1   // would be a price mismatch if compared
+  const r = buildEodReport(p)
+  assert.deepEqual(r.issues.map(i => i.kind), ['canceled_but_open']); assert.match(r.issues[0].detail, /cancelled by Keaton 11\/06/); assert.equal(r.checked, 0)
+  p.ghl.opportunities[0].status = 'lost'; assert.deepEqual(buildEodReport(p).issues, [])
+})
+
+test('a calendar job for the same contact but another opportunity is reported as such, with both values', () => {
+  const p = base(); p.calendarJobs[0].ghlOpportunityId = 'old-opp'; p.calendarJobs[0].value = 6200
+  const r = buildEodReport(p)
+  const k = r.issues.find(i => i.kind === 'calendar_other_opp'); assert.ok(k); assert.equal(k.job, 'J-1'); assert.match(k.detail, /\$6,200\.00.*\$19,881\.77/)
+  assert.ok(!r.issues.some(i => i.kind === 'missing_calendar_job'))
 })
