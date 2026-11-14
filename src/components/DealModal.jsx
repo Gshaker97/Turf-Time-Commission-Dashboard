@@ -513,18 +513,15 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
 
   return (
     // Mobile: bottom sheet | Desktop: centered modal
-    <div className="fixed inset-0 z-50 flex flex-col justify-end md:justify-center md:items-center md:p-4">
+    // z-[60] so the sheet covers the mobile bottom nav (z-50) and its sticky Save bar sits on the real bottom edge.
+    <div className="fixed inset-0 z-[60] flex flex-col justify-end md:justify-center md:items-center md:p-4">
       <div className="absolute inset-0" style={{ background: 'rgba(0,0,0,0.62)', backdropFilter: 'blur(3px)' }} onClick={onClose} />
 
       <div
-        className="relative w-full md:max-w-2xl rounded-t-2xl md:rounded-2xl overflow-y-auto"
-        style={{ ...SURFACE.card, boxShadow: 'var(--card-shadow), 0 24px 60px rgba(0,0,0,0.55)', maxHeight: '95dvh', color: 'var(--tx)' }}
+        className="relative w-full md:max-w-2xl h-[100dvh] md:h-auto md:max-h-[95dvh] rounded-none md:rounded-2xl overflow-y-auto flex flex-col"
+        style={{ ...SURFACE.card, boxShadow: 'var(--card-shadow), 0 24px 60px rgba(0,0,0,0.55)', color: 'var(--tx)' }}
         role="dialog" aria-modal="true" aria-label={deal ? 'Edit Deal' : 'New Deal'}
       >
-        {/* Drag handle — mobile only */}
-        <div className="md:hidden flex justify-center pt-3 pb-1">
-          <div className="w-8 h-1 rounded-full" style={{ background: 'var(--line)' }} />
-        </div>
 
         {/* Header */}
         <div className="flex items-center justify-between px-4 md:px-6 py-3 md:py-4 sticky top-0 z-10"
@@ -533,8 +530,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
           <IconButton onClick={onClose} aria-label="Close"><X size={16} /></IconButton>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-4 md:p-6 space-y-4 md:space-y-5"
-          style={{ paddingBottom: 'max(24px, env(safe-area-inset-bottom))' }}>
+        <form onSubmit={handleSubmit} className="p-4 md:p-6 space-y-4 md:space-y-5 flex-1 flex flex-col">
 
           {/* Row 1 — single col on mobile, 2-col on sm+ */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4">
@@ -906,8 +902,9 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
 
           {deal?.id && <DealHistory dealId={deal.id} users={users} />}
 
-          {/* Actions */}
-          <div className="flex gap-3 pt-2">
+          {/* Actions — on phones this bar sticks to the bottom of the sheet */}
+          <div className="sticky bottom-0 -mx-4 md:mx-0 px-4 md:px-0 pt-3 pb-3 md:pb-0 mt-auto flex gap-3 md:static"
+            style={{ background: 'var(--card)', borderTop: '1px solid var(--line)', paddingBottom: 'max(12px, env(safe-area-inset-bottom))' }}>
             <PrimaryButton type="submit" disabled={saving} className="flex-1 py-3 text-[14px]">
               {saving ? 'Saving…' : deal ? 'Save Changes' : 'Create Deal'}
             </PrimaryButton>

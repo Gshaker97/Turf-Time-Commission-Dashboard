@@ -526,7 +526,7 @@ export default function Deals() {
         <KpiCard label="Revenue"
           value={fmt(kpis.baseline)}       valueLabel="Baseline"
           value2={fmt(kpis.totalJobPrice)} value2Label="Job Price" />
-        <KpiCard label="Commissions"   value={fmt(kpis.totalComm)} />
+        <KpiCard label="Commissions"   value={fmt(kpis.totalComm)} gold />
         <KpiCard label="Deals"         value={kpis.total}
           sub={kpis.canceled > 0 ? `${kpis.canceled} canceled · ${kpis.canceledPct.toFixed(kpis.canceledPct < 10 ? 1 : 0)}%` : undefined} />
         <KpiCard label="Avg Comm" value={fmt(kpis.avgComm)} sub={`${kpis.avgMarkupPct.toFixed(1)}% markup`} />

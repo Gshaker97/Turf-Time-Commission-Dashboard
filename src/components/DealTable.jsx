@@ -100,6 +100,12 @@ const COLS = [
   { key: 'notes',     label: 'Notes',      noSort: true, align: 'right' },
 ]
 
+// Every sort the desktop header menus offer, for the phone picker.
+const PHONE_SORTS = [
+  ['deal_name', 'Deal'], ['office', 'Office'], ['payment_method', 'Payment'], ['status', 'Status'],
+  ['setter', 'Setter'], ['sale_date', 'Sale date'], ['job_price', 'Revenue'], ['commission', 'Commission'],
+]
+
 function SortIcon({ col, sortKey, sortDir }) {
   if (sortKey !== col) return <ChevronsUpDown size={12} className="text-bank-fa ml-1 flex-shrink-0 opacity-70" />
   return sortDir === 'asc'
@@ -855,7 +861,7 @@ function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onToggleHidden, 
         className="w-full flex items-center gap-3 px-4 py-3 min-h-[56px] text-left hover:bg-bank-raise transition-colors">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 min-w-0">
-            <span className="text-[14px] font-semibold text-bank-tx truncate">{deal.deal_name}</span>
+            <span className={`text-[14px] font-semibold truncate ${isCanceled(deal) ? 'line-through text-bank-mu' : 'text-bank-tx'}`}>{deal.deal_name}</span>
             <NameFlags deal={deal} canEdit={false} dupeIds={dupeIds} staticAlert />
           </div>
           <p className="text-[13px] text-bank-mu truncate">{deal.project_id ? `${deal.project_id} · ` : ''}{subline(deal)}</p>
@@ -1038,7 +1044,7 @@ export default function DealTable({
                 <td className="px-3 py-3">
                   <div className="flex items-center gap-2">
                     <button onClick={() => toggleNotes(deal.id)} title="Notes"
-                      className="text-[13px] font-semibold text-bank-tx truncate max-w-[220px] text-left hover:text-bank-gold-tx transition-colors">
+                      className={`text-[13px] font-semibold truncate max-w-[220px] text-left hover:text-bank-gold-tx transition-colors ${isCanceled(deal) ? 'line-through text-bank-mu' : 'text-bank-tx'}`}>
                       {deal.deal_name}
                     </button>
                     <NameFlags deal={deal} canEdit={canEdit} onUpdate={onUpdate} onSplit={onSplit} dupeIds={dupeIds} />
@@ -1113,7 +1119,21 @@ export default function DealTable({
         </tbody>
       </table>
 
-      {/* Phone / tablet rows (below lg) — compact, each expands to the full record. */}
+      {/* Phone / tablet (below lg): the header menus live in the desktop table,
+          so the same sorts are offered here as a picker; filters (office,
+          payment, status, reps, dates) are the filter bar above the list. */}
+      <div className="lg:hidden flex items-center gap-2 px-4 py-2 border-b border-bank-line" style={{ background: 'var(--raise)' }}>
+        <label htmlFor="deal-sort" className="text-[13px] text-bank-fa whitespace-nowrap">Sort by</label>
+        <select id="deal-sort" value={sortKey} onChange={e => onSort(e.target.value, sortDir)}
+          className="text-[13px] px-2 py-2 min-h-[44px] rounded-lg text-bank-tx focus:outline-none flex-1 min-w-0" style={SURFACE.well}>
+          {PHONE_SORTS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+        </select>
+        <button type="button" onClick={() => onSort(sortKey, sortDir === 'asc' ? 'desc' : 'asc')}
+          aria-label={sortDir === 'asc' ? 'Sorted ascending — switch to descending' : 'Sorted descending — switch to ascending'}
+          className="inline-flex items-center gap-1 px-3 min-h-[44px] rounded-lg text-[13px] font-semibold text-bank-mu hover:text-bank-tx" style={SURFACE.well}>
+          {sortDir === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}{sortDir === 'asc' ? 'Asc' : 'Desc'}
+        </button>
+      </div>
       <div className="lg:hidden divide-y divide-bank-line">
         {deals.map(deal => (
           <DealCard key={deal.id} deal={deal} canEdit={canEdit} canVerify={canVerify}
