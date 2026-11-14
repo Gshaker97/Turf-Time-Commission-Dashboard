@@ -38,6 +38,11 @@ const MY_TEAM_NAV = { to: '/myteam', icon: Users, label: 'Bonus', short: 'Bonus'
 const isKeaton = (p) => p?.email?.toLowerCase() === 'keaton@turftime.com' || p?.name === 'Keaton Shaker'
 
 export default function Layout() {
+  // The window must not scroll while the shell is mounted (see h-dvh below).
+  useEffect(() => {
+    document.body.classList.add('app-shell')
+    return () => document.body.classList.remove('app-shell')
+  }, [])
   const { profile, isPreviewMode, clearPreview, isAdmin, isViewingAs, viewingAs, stopViewingAs } = useAuth()
   const { pathname } = useLocation()
   const role  = profile?.role ?? 'rep'
@@ -63,7 +68,13 @@ export default function Layout() {
   if (isAdmin || isKeaton(profile)) items.push(AUDIT_NAV)
 
   return (
-    <div className="flex flex-col h-screen" style={{ background: 'var(--bg)', color: 'var(--tx)' }}>
+    // h-dvh, not h-screen: on a phone, 100vh is the viewport WITH the browser
+    // bar hidden, so the shell was taller than the screen. The window itself
+    // then scrolled, pushing the header off the top, and the browser kept
+    // snapping back as its bar came and went (Garrison, Nov 14 2026). The
+    // dynamic unit tracks the visible height, and `app-shell` on <body> keeps
+    // the window from scrolling at all — <main> is the only scroller.
+    <div className="flex flex-col h-screen supports-[height:100dvh]:h-dvh" style={{ background: 'var(--bg)', color: 'var(--tx)' }}>
 
       {/* Viewing as someone else, for real — their session, read-only. Red,
           not amber: this is a borrowed identity, not a permissions preview,
@@ -155,7 +166,7 @@ export default function Layout() {
         </aside>
 
         {/* ── Main content ── */}
-        <main className="flex-1 overflow-y-auto p-3 md:p-5 lg:p-6 pb-24 md:pb-6">
+        <main className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-3 md:p-5 lg:p-6 pb-24 md:pb-6">
           <Suspense fallback={
             <div className="flex items-center justify-center py-24">
               <div className="w-6 h-6 border-2 border-bank-line border-t-bank-mu rounded-full animate-spin" />
