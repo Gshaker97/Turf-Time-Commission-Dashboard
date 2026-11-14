@@ -10,6 +10,7 @@ import { fetchUsers, fetchNotifications, markNotificationsRead } from '../lib/db
 const TITLES = {
   '/deals':       'Deals Pipeline',
   '/dashboard':   'Dashboard',
+  '/advanced':    'Advanced stats',
   '/commissions': 'Commissions',
   '/leads':       'Leads',
   '/myteam':      'Bonus',

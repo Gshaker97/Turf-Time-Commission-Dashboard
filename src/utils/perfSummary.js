@@ -46,7 +46,7 @@ const localToday = () => {
 }
 
 function newStats() {
-  return { revenue: 0, job: 0, deals: 0, selfGen: 0, leadCloses: 0, leadRevenue: 0, commission: 0, set: 0, setRan: 0, ran: 0, sgRan: 0, leadRan: 0, pastDue: 0, assigned: 0, closes: 0, activityRows: [] }
+  return { revenue: 0, job: 0, deals: 0, selfGen: 0, leadCloses: 0, leadRevenue: 0, commission: 0, set: 0, setRan: 0, ran: 0, sgRan: 0, leadRan: 0, pastDue: 0, assigned: 0, closes: 0, closesRevenue: 0, closesJob: 0, activityRows: [] }
 }
 
 // A deal-over-appointment rate, or null when it can't be read as a rate:
@@ -111,6 +111,9 @@ function finish(s) {
     // setters (profiles.sales_role); groups always read as a setting unit.
     assigned: s.assigned, closes: s.closes,
     closerCloseRate: rateOrNull(s.closes, s.assigned),
+    // Baseline and markup of the deals this person CLOSED (Advanced stats).
+    closesRevenue: s.closesRevenue,
+    closeMarkupPct: s.closesRevenue > 0 ? ((s.closesJob - s.closesRevenue) / s.closesRevenue) * 100 : null,
     doors: act.doors, knockDays: act.knockDays, doorsPerDay: act.doorsPerDay,
     firstKnock: act.firstKnock, lastKnock: act.lastKnock, fieldMinutes: act.fieldMinutes,
     hasActivity: act.rows > 0,
@@ -228,7 +231,7 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
     const closedBy = (d.closer_id && !out(d.closer_id)) ? d.closer_id : owner
     if (closedBy) {
       const kc = teamOf(closedBy, d.sale_date)
-      org.closes += 1; team(kc).totals.closes += 1; rep(kc, closedBy).closes += 1
+      for (const s of [org, team(kc).totals, rep(kc, closedBy)]) { s.closes += 1; s.closesRevenue += a.baseline; s.closesJob += a.job }
     }
     // Commission follows each rep's own share to each rep's own team — inside
     // the office as well as outside it, so the two never disagree.

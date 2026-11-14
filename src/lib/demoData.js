@@ -293,3 +293,16 @@ export const DEMO_LEADS = [
   lead(11, 1, 9,  'u-casey',    'u-casey',  'completed', 'Rossi',     '77 Yucca Way'),
   lead(12, 9, 11, null,         'u-ricky',  'completed', 'Walk-in',   '2 Main St'),
 ]
+
+// Demo door knocks (field_activity shape) so the Advanced stats setter view
+// has a door count to show. Setters only; closers do not knock.
+export const DEMO_FIELD_ACTIVITY = (() => {
+  const rows = []; let n = 0
+  const plan = { 'u-stephen': [42, 55, 38, 61, 47], 'u-charlieh': [30, 44, 28], 'u-bryan': [25, 33, 40, 36], 'u-jc': [20, 18], 'u-casey': [27] }
+  for (const [pid, days] of Object.entries(plan)) days.forEach((doors, i) => {
+    const u = DEMO_USERS.find(x => x.id === pid)
+    rows.push({ id: `fa-demo-${++n}`, source: 'repcard', profile_id: pid, rep_name: u?.name ?? null, rep_email: u?.email ?? null,
+      activity_date: daysAgo(i * 2 + 1), doors_knocked: doors, first_knock_at: null, last_knock_at: null, field_minutes: null, office: 'Tucson' })
+  })
+  return rows
+})()

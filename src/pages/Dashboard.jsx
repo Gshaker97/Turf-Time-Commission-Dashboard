@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, Fragment } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, useNavigate } from 'react-router-dom'
 import {
   format, subMonths, startOfWeek, endOfWeek, addDays, getDaysInMonth,
 } from 'date-fns'
@@ -83,7 +83,7 @@ const TD_SUB = 'block text-[13px] text-bank-fa font-normal'
 // One rep's deals, shown inline under the rep row in the team accordion (no
 // page shift). Mirrors the rep-scope deals table. Table on desktop, rows on
 // phones so nothing scrolls sideways.
-function RepDealsInline({ deals, repId }) {
+export function RepDealsInline({ deals, repId }) {
   return (
     <div className="rounded-xl overflow-hidden" style={SURFACE.well}>
       <table className="hidden md:table w-full text-[13px]">
@@ -270,6 +270,7 @@ export default function Dashboard() {
   // control replaces the old team dropdown AND the Performance page's team
   // sections, and it drives every block below — tiles, goal, funnel, table,
   // both charts.
+  const navigate = useNavigate()
   const [scope,        setScope]        = useState(() => scopeFromParam(searchParams.get('scope')))
   const [groupBy,      setGroupBy]      = useState('team')     // company level: team | office
   // Inside an OFFICE: team | rep. Kept separate from `groupBy` rather than
@@ -1048,7 +1049,13 @@ export default function Dashboard() {
                   {copiedBoard ? <Check size={12} /> : <Copy size={12} />}{copiedBoard ? 'Copied' : 'Copy table'}
                 </SecondaryButton>
               </div>
-            ) : null}
+            ) : (
+              /* Advanced stats (Garrison, Nov 14 2026): setters, closers, teams
+                 and one person at a time, with appointments and dispositions. */
+              <SecondaryButton onClick={() => navigate('/advanced')} title="Setters, closers, teams and individual profiles">
+                Advanced stats <ChevronRight size={13} />
+              </SecondaryButton>
+            )}
           </div>
 
           {isBoard ? (
