@@ -25,7 +25,7 @@ const ROLE_COLOR = {
   director: '#fb923c',
   manager:  '#fbbf24',
   rep:      '#60a5fa',
-  admin:    '#00b894',
+  admin:    '#a19e97',   // neutral (--mu): the admin tag is a role, not an accent
 }
 
 // Bell: in-app notifications (new deal-note replies, etc). Polls every 60s
