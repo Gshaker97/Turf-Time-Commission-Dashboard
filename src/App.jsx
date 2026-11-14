@@ -30,6 +30,7 @@ function lazyWithReload(factory) {
 // charting lib only ships with the Dashboard chunk), shrinking the initial load.
 const Deals       = lazyWithReload(() => import('./pages/Deals'))
 const Dashboard   = lazyWithReload(() => import('./pages/Dashboard'))
+const AdvancedStats = lazyWithReload(() => import('./pages/AdvancedStats'))
 const Commissions = lazyWithReload(() => import('./pages/Commissions'))
 const Goals       = lazyWithReload(() => import('./pages/Goals'))
 const Admin       = lazyWithReload(() => import('./pages/Admin'))
@@ -79,6 +80,7 @@ function AppRoutes() {
         <Route index element={<Navigate to="/home" replace />} />
         <Route path="deals"       element={<Deals />} />
         <Route path="dashboard"   element={<Dashboard />} />
+        <Route path="advanced"    element={<AdvancedStats />} />
         <Route path="commissions" element={<Commissions />} />
         <Route path="leads"       element={<Leads />} />
         {/* My Team: the page self-guards to the team lead or an admin (a lead is

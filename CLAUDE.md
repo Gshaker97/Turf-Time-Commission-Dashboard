@@ -1338,6 +1338,21 @@ in range, a rep who left) falls back to company rather than rendering empty.
 - The **weekly goal block renders at COMPANY SCOPE ONLY**: `weekly_goal` is one
   company-wide setting, so at team scope the bar would be that team's revenue
   against the company's target — precise-looking and meaningless.
+- **Advanced stats page (`/advanced`, `src/pages/AdvancedStats.jsx`, Garrison,
+  Nov 14 2026)**, reached from the "Advanced stats" button in the breakdown
+  header. Four doors: Setters (revenue closed from their sets · doors · appts
+  set · sets closed %), Closers (revenue of deals they closed · appts ran ·
+  closed · close rate = closed ÷ assigned · avg markup · commission), Teams
+  (team totals, expand to people), Individual (PersonPicker). A person's page
+  shows the setter group, the closer group, or both (by `sales_role`; unset =
+  both), then EVERY appointment involving them in range with status,
+  disposition and notes (tap to open), then their deals. Everything comes
+  from `buildPerformance` (new `closesRevenue` / `closeMarkupPct`) and
+  `repActivity`, so it cannot disagree with the Dashboard. **Doors are back on
+  this page only**, read from `field_activity` and labelled as the feed's
+  count — Keaton's note that RepCard's own door total never reconciled still
+  stands, which is why the Dashboard proper does not show them. Demo mode
+  carries `DEMO_FIELD_ACTIVITY` so the setter view has doors to show.
 - **Breakdown table columns are Revenue · Deals · Set · Close ratio · Markup ·
   Commission · Goal** (Garrison, Nov 14 2026). The "Appointments" box and the
   "+ Appointments" toggle are GONE; only its past-due warning line survives.

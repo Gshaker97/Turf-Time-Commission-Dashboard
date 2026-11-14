@@ -53,6 +53,13 @@ test('the two close ratios', () => {
   assert.equal(rep('B').setCloseRate, 100)
   assert.equal(Math.round(perf.org.setCloseRate), 50, 'company: 2 deals of 4 sets')
 })
+test('revenue of the deals a person closed', () => {
+  assert.equal(rep('C').closesRevenue, 1000)
+  assert.equal(rep('S').closesRevenue, 0)
+  assert.equal(rep('B').closesRevenue, 1000)
+  assert.equal(Math.round(rep('C').closeMarkupPct), 50)
+})
+
 test('deal counts are untouched by the new columns', () => {
   assert.equal(perf.org.deals, 2)
   assert.equal(rep('S').deals, 1)

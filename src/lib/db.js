@@ -71,6 +71,7 @@ import {
   DEMO_COMPETITIONS,
   DEMO_AUDIT_OVERRIDES,
   DEMO_LEADS,
+  DEMO_FIELD_ACTIVITY,
 } from './demoData'
 
 // Local mutable copies for demo CRUD
@@ -668,7 +669,7 @@ export async function upsertLeads(rows) {
 }
 
 // ── Field activity (door knocking, fed by the CRM — migration 048) ──
-let _fieldActivity = []   // demo store
+let _fieldActivity = DEMO_FIELD_ACTIVITY.map(r => ({ ...r }))   // demo store
 
 // Day rows (one per rep per Arizona day). Newest first; the Performance page
 // filters to its range client-side like every other aggregate here.
