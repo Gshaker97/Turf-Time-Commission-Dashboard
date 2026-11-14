@@ -23,7 +23,7 @@ import { onClickUnlessSelecting } from '../utils/selection'
 import { copyTable as copyRichTable } from '../lib/clipboard'
 import { getPresetRange, getPreviousRange } from '../utils/dateRanges'
 import DateRangeFilter from '../components/DateRangeFilter'
-import { SURFACE, WARN_BORDER, plural, Card, KpiFigure, Pill, PillGroup, SecondaryButton, Expandable, LoadingBlock, EmptyBlock } from '../components/ui'
+import { SURFACE, WARN_BORDER, plural, Card, KpiFigure, Pill, PillGroup, SecondaryButton, IconButton, Expandable, LoadingBlock, EmptyBlock } from '../components/ui'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
 
 const POS = 'var(--pos)', NEG = 'var(--neg)', WARN = 'var(--warn)'
@@ -559,6 +559,26 @@ export default function Dashboard() {
     try { localStorage.setItem('tt_records_open', next ? 'on' : 'off') } catch { /* ignore */ }
     return next
   })
+  // Dismissed records, per browser (Garrison, Nov 14 2026: "make it so I can
+  // click dismiss"). Keyed by the record id — scope + record type + the period
+  // being beaten — so a dismissed record stays gone for as long as THAT record
+  // keeps falling, and a genuinely new one (another period, another type, a
+  // higher mark on a new day) comes back on its own. Nothing is computed from
+  // this: it only filters what the card shows. The old tt_rec_dismissed store
+  // was retired in #295; this one keeps a v2 key so stale values never apply.
+  const [recsDismissed, setRecsDismissed] = useState(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem('tt_rec_dismissed_v2') || '{}')
+      return v && typeof v === 'object' && !Array.isArray(v) ? v : {}
+    } catch { return {} }
+  })
+  const dismissRecs = (ids) => setRecsDismissed(prev => {
+    const next = { ...prev }
+    const today = format(new Date(), 'yyyy-MM-dd')
+    for (const id of ids) next[id] = today
+    try { localStorage.setItem('tt_rec_dismissed_v2', JSON.stringify(next)) } catch { /* ignore */ }
+    return next
+  })
   const recordMoments = useMemo(() => {
     if (!deals.length) return []
     const today = format(new Date(), 'yyyy-MM-dd')
@@ -604,13 +624,16 @@ export default function Dashboard() {
     return [...scan(company, 'company'), ...scan(teams, 'team'), ...scan(reps, 'rep')]
   }, [deals, users, isAdmin, dataStartDate, usersById, headsSet, changesByProfile])
 
+  // What the card shows: every falling record this browser has not dismissed.
+  const visibleMoments = useMemo(() => recordMoments.filter(m => !recsDismissed[m.id]), [recordMoments, recsDismissed])
+
   // Grouped for display, keeping the company → team → rep order.
   const recordGroups = useMemo(() => {
     const meta = { company: ['Company', 'var(--tx)'], team: ['Team', 'var(--mu)'], rep: ['Rep', 'var(--pos)'] }
     return ['company', 'team', 'rep']
-      .map(s => ({ scope: s, label: meta[s][0], color: meta[s][1], rows: recordMoments.filter(m => m.scope === s) }))
+      .map(s => ({ scope: s, label: meta[s][0], color: meta[s][1], rows: visibleMoments.filter(m => m.scope === s) }))
       .filter(g => g.rows.length)
-  }, [recordMoments])
+  }, [visibleMoments])
 
   const monthlyGoal = useMemo(() => {
     const curKey = `${String(goalYear).padStart(4,'0')}-${String(goalMonth).padStart(2,'0')}`
@@ -783,21 +806,29 @@ export default function Dashboard() {
       </div>
 
       {/* ── Records falling right now — every one of them, collapsible ── */}
-      {recordMoments.length > 0 && (
+      {visibleMoments.length > 0 && (
         <Card padded={false} style={{ borderColor: WARN_BORDER }}>
           {/* The header is the toggle, and carries the count — so a collapsed
-              card still tells you something is happening. */}
-          <button onClick={toggleRecs} aria-expanded={recsOpen}
-            className="w-full flex items-center gap-2 px-4 py-3 min-h-[44px] text-left hover:bg-bank-raise transition-colors"
-            style={{ borderBottom: recsOpen ? '1px solid var(--line)' : 'none' }}>
-            <ChevronDown size={14} className={`flex-shrink-0 transition-transform ${recsOpen ? '' : '-rotate-90'}`} style={{ color: WARN }} />
-            <span className="text-[13px] font-bold" style={{ color: WARN }}>
-              🔥 {plural(recordMoments.length, 'record')} falling right now
-            </span>
-            <span className="ml-auto text-[13px] text-bank-mu whitespace-nowrap hidden sm:block">
-              {recordGroups.map(g => `${g.rows.length} ${g.scope}`).join(' · ')}
-            </span>
-          </button>
+              card still tells you something is happening. "Dismiss all" sits
+              beside it (not inside it: a button in a button is not clickable
+              on phones) and clears every record currently showing. */}
+          <div className="flex items-stretch" style={{ borderBottom: recsOpen ? '1px solid var(--line)' : 'none' }}>
+            <button onClick={toggleRecs} aria-expanded={recsOpen}
+              className="flex-1 min-w-0 flex items-center gap-2 px-4 py-3 min-h-[44px] text-left hover:bg-bank-raise transition-colors">
+              <ChevronDown size={14} className={`flex-shrink-0 transition-transform ${recsOpen ? '' : '-rotate-90'}`} style={{ color: WARN }} />
+              <span className="text-[13px] font-bold" style={{ color: WARN }}>
+                🔥 {plural(visibleMoments.length, 'record')} falling right now
+              </span>
+              <span className="ml-auto text-[13px] text-bank-mu whitespace-nowrap hidden sm:block">
+                {recordGroups.map(g => `${g.rows.length} ${g.scope}`).join(' · ')}
+              </span>
+            </button>
+            <button type="button" onClick={() => dismissRecs(visibleMoments.map(m => m.id))}
+              title="Hide these records on this device until a new one falls"
+              className="flex-shrink-0 px-4 min-h-[44px] text-[13px] font-semibold text-bank-mu hover:text-bank-tx hover:bg-bank-raise transition-colors border-l border-bank-line">
+              Dismiss all
+            </button>
+          </div>
 
           {recsOpen && recordGroups.map(g => (
             <div key={g.scope}>
@@ -806,16 +837,21 @@ export default function Dashboard() {
                 {g.label}
               </div>
               {g.rows.map(m => (
-                <div key={m.id} className="px-4 pt-1.5 pb-2 border-t border-bank-line">
-                  <div className="flex items-baseline justify-between gap-4">
-                    <p className="text-[13px] text-bank-tx min-w-0">
-                      {m.who && <b className="font-bold">{m.who}</b>}
-                      <span className="text-bank-mu">{m.who ? ` — ${m.kind.toLowerCase()}` : m.kind}</span>
-                      {!m.live && <span className="text-bank-fa"> · just set</span>}
-                    </p>
-                    <span className="text-[13px] font-bold tabular-nums whitespace-nowrap text-bank-tx">{m.value}</span>
+                <div key={m.id} className="pl-4 pr-2 pt-1.5 pb-2 border-t border-bank-line flex items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline justify-between gap-4">
+                      <p className="text-[13px] text-bank-tx min-w-0">
+                        {m.who && <b className="font-bold">{m.who}</b>}
+                        <span className="text-bank-mu">{m.who ? ` — ${m.kind.toLowerCase()}` : m.kind}</span>
+                        {!m.live && <span className="text-bank-fa"> · just set</span>}
+                      </p>
+                      <span className="text-[13px] font-bold tabular-nums whitespace-nowrap text-bank-tx">{m.value}</span>
+                    </div>
+                    <p className="text-[13px] text-bank-fa tabular-nums">{m.was}</p>
                   </div>
-                  <p className="text-[13px] text-bank-fa tabular-nums">{m.was}</p>
+                  {/* One record at a time. Per browser; it returns on its own when a new record falls. */}
+                  <IconButton onClick={() => dismissRecs([m.id])} aria-label={`Dismiss ${m.who ? m.who + ' ' : ''}${m.kind.toLowerCase()}`}
+                    title="Dismiss this record" className="flex-shrink-0 -mt-1"><X size={14} /></IconButton>
                 </div>
               ))}
             </div>
