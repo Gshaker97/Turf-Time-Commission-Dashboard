@@ -99,6 +99,19 @@ export const SPEC = [
     blocks: [['export default function SetPassword() {', '  const inputCls']],
     writers: ['updateOwnPassword(pwd)', 'pwd.length < 8', 'pwd !== pwd2'],
   },
+  // Step 10: My Card (main's rebuilt Home, merged in) — the rank boards, the
+  // repActivity row, the goal upsert and the drill-down data are all main's.
+  // Everything outside these blocks is markup, the share-canvas palette and
+  // the rate-tone helper.
+  {
+    file: 'src/pages/Home.jsx', fixture: 'home-my-card',
+    blocks: [
+      ['const money = (n) =>', '  return months;\n}'],
+      ['export default function Home() {', '  // Share: render the card to a PNG'],
+      ['  const soldDelta = ', '  return (\n'],
+    ],
+    writers: ['async function saveTarget', 'upsertPersonalGoal({', 'rep_id: me,', 'const ranks = useMemo', 'repActivity(leads, allDeals, {'],
+  },
 ]
 
 export function block(s, start, end) {

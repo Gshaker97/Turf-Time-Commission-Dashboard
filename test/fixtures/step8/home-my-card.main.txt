@@ -1,0 +1,316 @@
+const money = (n) => "$" + Math.round(Number(n) || 0).toLocaleString("en-US");
+const SELLER = (u) => ["rep", "manager", "director", "vp"].includes(u.role);
+// A rate over 100% measures the gap between two systems (appointments come
+// from RepCard, deals from the site), not performance — so it reads blank.
+// repActivity already applies that rule; this only formats what it returns.
+const pct = (r) => (r == null ? "—" : `${r.toFixed(0)}%`);
+// `capitalize` renders the vp role as "Vp". Spell the acronym out.
+const ROLE_LABEL = { rep: "Rep", manager: "Manager", director: "Director", vp: "VP", admin: "Admin" };
+
+function getMonths(n = 12) {
+  const months = [];
+  const now = new Date();
+  for (let i = 0; i < n; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const pad = (x) => String(x).padStart(2, "0");
+    months.push({
+      y: d.getFullYear(), m: d.getMonth() + 1,
+      key: `${d.getFullYear()}-${pad(d.getMonth() + 1)}`,
+      label: d.toLocaleString("en-US", { month: "long", year: "numeric" }),
+    });
+  }
+
+// ──── next block ────
+export default function Home() {
+  const { profile, isAdmin } = useAuth();
+  const months = useMemo(() => getMonths(12), []);
+  const [selected, setSelected] = useState(0);
+  const [allDeals, setAllDeals] = useState([]);
+  const [comps, setComps] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [weekly, setWeekly] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [shared, setShared] = useState("");
+  const [viewId, setViewId] = useState(null);   // admins can view another rep's card
+
+  const mr = months[selected];
+  const me = viewId || profile?.id;
+  const { dataStartDate, estimatesFrom } = useSettings();
+  const [leads, setLeads] = useState([]);
+  const todayISO = dfFormat(new Date(), "yyyy-MM-dd");
+
+  // Personal bests (owner-credited, completed periods) — the all-time marks.
+  const bests = useMemo(() => {
+    if (!me || !allDeals.length) return null;
+    return personalBests(allDeals, me, { dataStartDate, todayISO });
+  }, [allDeals, me, dataStartDate, todayISO]);
+  const viewUser = useMemo(() => users.find(u => u.id === me) || profile, [users, me, profile]);
+  const viewingOther = !!viewId && viewId !== profile?.id;
+
+  const [teamChanges, setTeamChanges] = useState([]);
+  useEffect(() => {
+    Promise.all([fetchDeals(), fetchCompetitions(), fetchUsers(), fetchWeeklyStats(), fetchLeads(), fetchTeamChanges()])
+      .then(([{ data: d }, { data: c }, { data: u }, { data: w }, { data: ld }, { data: tc }]) => {
+        setAllDeals((d ?? []).filter(countsInTotals));
+        setComps(c || []); setUsers(u || []); setWeekly(w || []);
+        setLeads(ld || []);
+        setTeamChanges(tc || []);
+        setLoading(false);
+      });
+  }, []);
+
+  // DOOR KNOCKS ARE NOT SHOWN HERE (per Keaton: "we can drop them for now").
+  // My Card was the last surface rendering them, and it read them from a THIRD
+  // source — RepCard's own /api/repcard/leaderboard, matched to reps BY NAME —
+  // while the Dashboard shows none and the rest of the site reads
+  // `field_activity`. The ingest, the table and the rollup trigger are all
+  // untouched, so nothing is lost and bringing doors back is re-adding a fetch.
+  // Do NOT reintroduce the name-matched leaderboard call: it was a third path
+  // to the same fact and could disagree with both of the others.
+
+  // Personal goals — the REAL commitments from `personal_goals`, the same rows
+  // the Goals page writes, so the targets on this card are the targets the rep
+  // set. This REPLACES Home's old auto-target ("trailing 3-month average
+  // +10%"), which was a second, invisible definition of a goal that the Goals
+  // page knew nothing about.
+  const [goalRows, setGoalRows] = useState([]);
+  const reloadGoals = () => fetchPersonalGoals().then(({ data }) => setGoalRows(data || []));
+  useEffect(() => { reloadGoals(); }, []);
+
+  const ghostIds = useMemo(() => new Set(users.filter(u => u.ghost).map(u => u.id)), [users]);
+  // Same date-effective team context the Competitions page scores with, so
+  // the "Your competitions" card can never show a different rank than the
+  // leaderboard it links to.
+  const teamCtx = useMemo(() => ({
+    usersById: Object.fromEntries(users.map(u => [u.id, u])),
+    heads: headIdSet(users),
+    changesByProfile: buildChangesByProfile(teamChanges),
+  }), [users, teamChanges]);
+  const monthDeals = useMemo(() => allDeals.filter(d => d.sale_date?.startsWith(mr.key)), [allDeals, mr.key]);
+
+  // ONE ROW of the by-rep board, for the viewed rep and the viewed month.
+  // set/ran come from the APPOINTMENT feed, closed/revenue from SIGNED DEALS —
+  // the same two-source split, and the same >100% blank rule, as that board.
+  // `Appts set` and `Run %` did not exist on this page before: it only had
+  // self-gen ESTIMATES (set AND ran by the same person), never the set → ran
+  // funnel.
+  const actFor = (key) => {
+    const { rows } = repActivity(leads, allDeals, {
+      users, from: `${key}-01`, to: `${key}-31`, onlyIds: me ? [me] : [],
+    });
+    return rows.find((r) => r.id === me) || null;
+  };
+  const EMPTY_ACT = { set: 0, ran: 0, closed: 0, leadsRan: 0, leadsClosed: 0, revenue: 0, leadRevenue: 0,
+    ranRate: null, closeRate: null, leadsCloseRate: null };
+  const act = useMemo(() => actFor(mr.key) || EMPTY_ACT, [leads, allDeals, users, mr.key, me]);
+  // REVENUE SOLD = everything they sold, owner-credited revenue plus the
+  // baseline of the leads they closed for someone else. A PER-PERSON figure:
+  // never sum it across people, since a deal whose setter and closer are both
+  // on the team would count twice (same rule as the Dashboard leaderboard's
+  // Total Revenue column).
+  const sold = act.revenue + act.leadRevenue;
+  const prevSold = useMemo(() => {
+    const pm = months[selected + 1];
+    if (!pm) return null;
+    const a = actFor(pm.key);
+    return a ? a.revenue + a.leadRevenue : 0;
+  }, [leads, allDeals, users, months, selected, me]);
+
+  const commission = useMemo(() => getUserCommission(monthDeals, me), [monthDeals, me]);
+
+  // Owner-credited revenue for a month — the SAME credit rule as `act.revenue`
+  // and the Dashboard leaderboard. It used to be `setter_id === me`, which
+  // silently disagreed with both whenever a deal had no setter recorded.
+  const ownerRevForMonth = (key) => allDeals
+    .filter(d => d.sale_date?.startsWith(key) && saleOwnerId(d) === me)
+    .reduce((s, d) => s + (parseFloat(d.baseline_revenue) || 0), 0);
+
+  // TWO RANKS, EACH NAMING ITS OWN UNIT (per Keaton: "can we have a rank for
+  // self-gen rev + total rev?"). One rank under a "Revenue sold" headline was
+  // ambiguous: ranked on owner revenue, the "$X to pass <name>" line sat
+  // directly beneath a figure that meant something else — two definitions in
+  // one box, the fault this whole rework exists to remove. Naming both is the
+  // fix: each row carries its own rank AND its own gap, in its own unit.
+  //   • Revenue sold = owner-credited revenue + the baseline of deals they
+  //     CLOSED for another setter (the hero figure, and the Dashboard
+  //     leaderboard's `Total Revenue`).
+  //   • Self-gen    = owner-credited revenue alone (the site's one definition
+  //     of "revenue" everywhere else, and that leaderboard's `Revenue`).
+  // A deal counts ONCE per person on either board, so neither double-counts a
+  // self-gen; `Revenue sold` is a PER-PERSON figure and is never summed here.
+  const ranks = useMemo(() => {
+    const own = {}, lead = {};
+    for (const d of monthDeals) {
+      const v = parseFloat(d.baseline_revenue) || 0;
+      const owner = saleOwnerId(d);
+      if (owner) own[owner] = (own[owner] || 0) + v;
+      if (d.closer_id && d.closer_id !== owner) lead[d.closer_id] = (lead[d.closer_id] || 0) + v;
+    }
+    const board = (value) => {
+      const rows = users
+        .filter(u => SELLER(u) && (isAdmin || !u.ghost))
+        .map(u => ({ id: u.id, name: u.name, revenue: value(u.id) }))
+        .filter(r => r.revenue > 0)
+        .sort((a, b) => b.revenue - a.revenue);
+      const idx = rows.findIndex(r => r.id === me);
+      if (idx === -1) return { ranked: false, total: rows.length };
+      const ahead = idx > 0 ? rows[idx - 1] : null;
+      const behind = rows[idx + 1] || null;
+      return {
+        ranked: true, rank: idx + 1, total: rows.length, myRev: rows[idx].revenue,
+        ahead, gapAhead: ahead ? ahead.revenue - rows[idx].revenue : 0,
+        behind, leadBehind: behind ? rows[idx].revenue - behind.revenue : 0,
+      };
+    };
+    return {
+      sold:    board(id => (own[id] || 0) + (lead[id] || 0)),
+      selfgen: board(id => own[id] || 0),
+    };
+  }, [monthDeals, users, me, isAdmin]);
+  // The share image prints one rank; it is the one the headline describes.
+  const rank = ranks.sold;
+
+  // Personal best month across the last 12, on the same owner-credited rule.
+  const best = useMemo(() => {
+    let bk = null, bl = null, br = 0;
+    for (const m of months) { const r = ownerRevForMonth(m.key); if (r > br) { br = r; bk = m.key; bl = m.label; } }
+    return br > 0 ? { key: bk, label: bl, rev: br } : null;
+  }, [allDeals, me, months]);
+  const isBest = best && best.key === mr.key && act.revenue > 0;
+
+  // ── Goals ────────────────────────────────────────────────────────────────
+  // The rep's own commitments, resolved for the CURRENT week and month (a
+  // period with no row of its own inherits the latest earlier one — the
+  // "carried" rule the Goals page already uses). Editing a target here writes
+  // the same `personal_goals` row that page writes.
+  //
+  // THESE ALWAYS TRACK THE CURRENT PERIOD, not the month picker above —
+  // a goal is a live commitment, and measuring August's production against
+  // this month's target would be two periods in one card. The row labels say
+  // which period they mean, and a note appears when you're looking at an
+  // older month.
+  const periods = useMemo(() => currentPeriods(todayISO), [todayISO]);
+  const myGoals = useMemo(() => ({
+    week:  resolveGoal(goalRows, me, "week",  periods.week.start),
+    month: resolveGoal(goalRows, me, "month", periods.month.start),
+  }), [goalRows, me, periods]);
+  const prod = useMemo(() => ({
+    week:  repProduction(allDeals, weekly, me, periods.week,  { leads, estimatesFrom }),
+    month: repProduction(allDeals, weekly, me, periods.month, { leads, estimatesFrom }),
+  }), [allDeals, weekly, me, periods, leads, estimatesFrom]);
+
+  const goalLines = useMemo(() => {
+    const line = (period, field, label, target, value, format) => ({
+      key: `${period}:${field}`, period, field, label, target, value, format,
+      prog: metricProgress(value, target, periodElapsed(periods[period], todayISO)),
+    });
+    return [
+      line("month", "revenue", "Revenue this month", myGoals.month?.revenue_target, prod.month.revenue, money),
+      line("month", "deals",   "Deals this month",   myGoals.month?.deals_target,   prod.month.deals,   String),
+      line("week",  "est",     "Estimates this week", myGoals.week?.est_target,     prod.week.sgEst,    String),
+    ];
+  }, [myGoals, prod, periods, todayISO]);
+
+  // Admins set anyone's goals; a rep sets their own (the Goals-page rule).
+  const canEditGoals = !viewingOther || isAdmin;
+  const [editGoal, setEditGoal] = useState(null);   // "month:revenue"
+  const [editVal, setEditVal] = useState("");
+  const [savingGoal, setSavingGoal] = useState(null);
+  // Escape unmounts the input, which can fire its own blur — without this the
+  // cancel would save the very value it was cancelling.
+  const goalCancelled = useRef(false);
+
+  // Saving one target keeps the other two on that row — upsert writes the whole
+  // row, so sending only the edited field would blank the rest.
+  async function saveTarget(period, field, value) {
+    const raw = String(value).replace(/[$,\s]/g, "");
+    const n = raw === "" ? null : Number(raw);
+    if (n != null && !Number.isFinite(n)) { toast.error("That target isn't a number."); return; }
+    const base = myGoals[period] || {};
+    setSavingGoal(`${period}:${field}`);
+    const res = await upsertPersonalGoal({
+      rep_id: me,
+      period,
+      period_start: periods[period].start,
+      est_target:     field === "est"     ? n : (base.est_target     ?? null),
+      deals_target:   field === "deals"   ? n : (base.deals_target   ?? null),
+      revenue_target: field === "revenue" ? n : (base.revenue_target ?? null),
+    }, profile?.id);
+    setSavingGoal(null);
+    setEditGoal(null);
+    if (res?.error) { toast.error("Could not save that target: " + (res.error.message || "unknown error")); return; }
+    reloadGoals();
+  }
+
+  // Active competitions the rep is entered in.
+  const myComps = useMemo(() => {
+    const hiddenIds = isAdmin ? null : ghostIds;
+    // Team Average rows match by the viewer's RESOLVED team key (same grouping
+    // the engine scores by); a rep left out of the contest isn't in it.
+    const myTeamKey = viewUser ? teamKeyFor(viewUser, teamCtx.heads) : null;
+    return comps
+      .filter(c => competitionStatus(c, todayISO) === "active")
+      .map(c => {
+        const standings = competitionStandings(c, allDeals, users, { hiddenIds, teamCtx });
+        const mine = standings.find(e => e.id === me
+          || (c.type === "team" && e.id === viewUser?.manager_id)
+          || (c.type === "team_avg" && e.id === myTeamKey && !(c.excluded_ids || []).includes(me)));
+        if (!mine) return null;
+        const ahead = mine.rank > 1 ? standings[mine.rank - 2] : null;
+        return { comp: c, mine, count: standings.length, leader: standings[0], ahead, gap: ahead ? ahead.score - mine.score : 0 };
+      })
+      .filter(Boolean);
+  }, [comps, allDeals, users, me, viewUser, isAdmin, ghostIds, teamCtx, todayISO]);
+
+  // Tap-to-view breakdown for a stat.
+  const [drill, setDrill] = useState(null);
+  const toggleDrill = (k) => setDrill(d => d === k ? null : k);
+  const drillData = useMemo(() => {
+    if (!drill) return null;
+    const fmtD = (d) => d ? dfFormat(new Date(d + "T12:00:00"), "MMM d") : "—";
+    const byDate = (arr) => arr.slice().sort((a, b) => (b.sale_date || "").localeCompare(a.sale_date || ""));
+    // OWNER-credited, the same rule `act` counts by — listing `setter_id === me`
+    // here would make the drill-down disagree with the figure it explains.
+    const ownDeals  = byDate(monthDeals.filter(d => saleOwnerId(d) === me));
+    const leadDeals = byDate(monthDeals.filter(d => d.closer_id === me && saleOwnerId(d) !== me));
+    const dealRows = (arr) => arr.map(d => ({ id: d.id, name: d.deal_name, sub: `${fmtD(d.sale_date)} · ${d.status}`, value: money(parseFloat(d.baseline_revenue) || 0) }));
+
+    if (drill === "self")
+      return { title: "Self gens", total: `${act.closed} deals · ${money(act.revenue)}`, rows: dealRows(ownDeals) };
+    if (drill === "leads")
+      return { title: "Leads", total: `${act.leadsClosed} deals · ${money(act.leadRevenue)}`, rows: dealRows(leadDeals) };
+    if (drill === "commission") {
+      const rows = monthDeals.map(d => ({ d, amt: getUserCommission([d], me) })).filter(x => x.amt > 0)
+        .sort((a, b) => b.amt - a.amt)
+        .map(({ d, amt }) => {
+          const roles = [];
+          if (saleOwnerId(d) === me) roles.push("Self-gen");
+          if (d.closer_id === me && d.closer_id !== d.setter_id) roles.push("Closer");
+          if (d.manager_id === me || d.director_id === me || d.vp_id === me) roles.push("Override");
+          return { id: d.id, name: d.deal_name, sub: `${fmtD(d.sale_date)} · ${[...new Set(roles)].join(", ") || "—"}`, value: money(amt) };
+        });
+      return { title: "Commission", total: `${money(commission)} total`, rows };
+    }
+    return null;
+  }, [drill, monthDeals, me, act, commission]);
+
+  // Ghosts keep their "(ghost)" tag, as the old select showed, so an admin can
+  // still tell them apart; the picker is admin-only, so nobody else sees it.
+  const viewablePeople = useMemo(() => users.filter(SELLER)
+    .map(u => (u.ghost ? { ...u, name: `${u.name} (ghost)` } : u)), [users]);
+
+  const firstName = (viewUser?.name || "").split(" ")[0] || "there";
+  const initials = (viewUser?.name || "?").split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase();
+  const myTeam = useMemo(() => {
+    const headId = viewUser ? teamKeyFor(viewUser, teamCtx.heads) : null;
+    const head = headId ? users.find(u => u.id === headId) : null;
+    return head ? teamLabel(head) : null;
+  }, [viewUser, users, teamCtx]);
+
+
+// ──── next block ────
+  const soldDelta = prevSold == null ? null : sold - prevSold;
+  // THE LEADS GROUP IS GONE ENTIRELY when the rep has run none (per Keaton:
+  // "so it doesn't take up space") — not a row of dashes.
+  const hasLeads = act.leadsRan > 0 || act.leadsClosed > 0;
+

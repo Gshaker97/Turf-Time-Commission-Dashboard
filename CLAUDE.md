@@ -377,7 +377,7 @@ setup + deploy steps.
   shared with a counting teammate still counts via that teammate. The head
   counts as a rep by default; exclude them via the same chips if they don't
   sell. Membership is DATE-EFFECTIVE via `teamOfSale` when `opts.teamCtx`
-  is passed (Competitions page AND Home's "my competitions" card — Home
+  is passed (Competitions page AND My Card's "Contests you're in" — My Card
   fetches `team_changes` too so the two never disagree on rank); without a
   teamCtx the fallback is the CURRENT grouping via `teamKeyFor` — never raw
   `manager_id`, which put a manager who reports to a director on both
@@ -491,7 +491,7 @@ appointments they set or run; admins edit).
   everywhere. Credit goes to whoever RAN the appointment — set it AND ran it
   = self-gen estimate, someone else set it = lead estimate. Consumers:
   `repProduction`/`estimateStreak`/`suggestFromRevenue` (Goals + Home, via
-  `opts.leads`/`opts.estimatesFrom`) and Home's month tiles. The rebuilt
+  `opts.leads`/`opts.estimatesFrom`) and My Card's goal block. The rebuilt
   Performance page shows appointment counts (Set / Ran / Sold) straight from
   the feed regardless of the cutover — it is the feed's page. There is NO
   UI left for hand-entering `weekly_stats` (it went with the old Performance
@@ -915,12 +915,193 @@ still surfaces the month they beat themselves.
 
 Surfaces: **Competitions page** bottom = the
 "📖 Record Book" card (company tiles gold, rep tiles teal, live watch/new
-chips); **Home card** = "Personal bests" tile row + a flame nudge when the
+chips); **My Card** = a "Your best ever" row + a flame nudge when the
 current month is within 80% of (or beating) the rep's best; **Dashboard** =
 gold record-moment banners for COMPANY, TEAM, and REP records (in-progress
 records + records set in the last 7 days, `prev` required so a first-ever
 period never banners; company → team → rep priority, max 3 shown; dismissals
 stick per record+period in `tt_rec_dismissed` localStorage).
+
+## My Card — the rep's own page (`src/pages/Home.jsx`, route `/home`)
+
+**Renamed from "Home" and rebuilt** (per Keaton, from an approved phone-width
+mockup): nav label **My Card**, short label **Card**, lucide **`Contact`**
+icon (0.378 has no `IdCard`), and it is now the **DEFAULT LANDING SPOT** —
+`/` and a fresh login both redirect to `/home`. **The ROUTE stays `/home`** so
+every existing link, bookmark and redirect keeps working; only the label moved.
+The product already called it "My card" in the admin dropdown and on the Share
+button, so the name was already half-adopted.
+
+Drawn at phone size on purpose — reps are in the field. On a laptop the same
+single column just gets wider.
+
+**It renders ONE ROW of `repActivity` (`src/utils/repActivity.js`), the same
+engine as the Leads "By rep" board.** That is the whole point: set / ran /
+closed / leads can never disagree between the two pages. `repActivity` gained
+`revenue` (owner-credited) and `leadRevenue` (baseline of deals the rep CLOSED
+for another setter) for this; **never sum those two columns across people** — a
+deal whose setter and closer are both on one team would count twice.
+`Appts set` and `Run %` did not exist on this page before: it only had
+self-gen ESTIMATES (set AND ran by the same person), never the set → ran
+funnel.
+
+- **Hero = Revenue sold + commission + TWO ranks.** `Revenue sold` =
+  `revenue + leadRevenue` (per Keaton: "hero stays as revenue sold").
+- **TWO COMPANY RANKS, EACH NAMING ITS OWN UNIT** (per Keaton: "can we have a
+  rank for self-gen rev + total rev?"). One rank under a "Revenue sold"
+  headline was ambiguous: ranked on owner revenue, the "$X to pass <name>"
+  line sat directly beneath a figure that meant something else — two
+  definitions in one box, the exact fault the Dashboard/Performance merge
+  exists to prevent. Naming both is the fix, and each row carries its own
+  rank AND its own gap in its own unit:
+  **`Revenue sold`** (= the leaderboard's `Total Revenue`) and **`Self-gen`**
+  (= owner-credited `revenue`, the site's one definition of revenue
+  everywhere else). **THE TWO BOARDS HAVE DIFFERENT POPULATIONS and that is
+  correct** — a pure closer with no owned deals is on the sold board and not
+  on the self-gen one, so the denominators differ ("#1 / 8 Revenue sold ·
+  #2 / 6 Self-gen" is a real demo case). A deal counts ONCE per person on
+  either board, so neither double-counts a self-gen.
+- **RANK IS OWNER-CREDITED, not `setter_id`.** It used to build its board from
+  `setter_id === me`, which matched neither `act.revenue` on the same card nor
+  the Dashboard leaderboard — a deal with no setter recorded made the two
+  pages report different ranks for the same rep. The drill-down lists
+  owner-credited deals for the same reason.
+- **A HAIRLINE SEAM MARKS WHERE APPOINTMENTS STOP AND DEALS START** (`Seam`
+  in Home.jsx). Left of it the figures are APPOINTMENTS from RepCard, right
+  of it SIGNED DEALS from the site — two systems in one row, and with nothing
+  marking the join Keaton read "10 Ran" as ten sales on his own card within
+  minutes of the page going live. Same hairline the Leads by-rep board
+  already uses, so the two pages show the split alike. **The labels carry the
+  unit too** — `Appts set` · `Appts ran` · `Deals closed` — because a 1px
+  line vanishes in a screenshot, and this card gets screenshotted. Two other
+  shapes were mocked: divider alone, and a caption over each half (rejected —
+  it costs a line on every card and is exactly what Keaton had removed from
+  the Leads board for being noisy).
+  **`Appts ran` is the SET COHORT**: of the appointments they BOOKED in
+  range, how many have happened, INCLUDING any another rep sat (asserted:
+  "caleb: set one, sat none, ran 1"). Bare "Ran" said neither the unit nor
+  that. Keaton kept the group heading "Self Gens" knowing it is looser here
+  than the Dashboard leaderboard's `Self-Gen` (set AND closed by one person)
+  — the labels carry the precision instead.
+- **A TRUNCATED NUMBER IS WORSE THAN NO NUMBER, and the layout must make it
+  impossible.** Four equal cells across a 430px phone left ~90px for money and
+  clipped `$35,334` to **"$35,3…"** on Keaton's phone — which reads as a real,
+  smaller figure. `StatRow` now stacks the two halves on a phone and **turns
+  the seam HORIZONTAL**, so each cell gets ~half the screen and the split
+  lands exactly where it means something: appointments above, deals below.
+  One row with a vertical seam returns at `md`. Each half's flex-grow is its
+  CELL COUNT, so a half holding two stats gets twice the width of one holding
+  one. The Leads card also carried an **empty fourth `flex-1` spacer** to pad
+  itself out to Self Gens' width — that is what handed a quarter of the row to
+  nothing and squeezed Revenue until it clipped; never add a filler cell to
+  make two cards line up.
+  Proved by a stress pass, not by eye: every value element in both cards, on
+  all 23 cards, at 320 / 360 / 390 / 430 / 768 / 1400 px, measured
+  `scrollWidth <= clientWidth` **both as rendered and with `$1,234,567`
+  forced in** — a card that fits this month's numbers can still clip next
+  month's.
+- **`Stat` is `self-start`, because a stretched `<button>` VERTICALLY CENTRES
+  its own content.** Revenue has no rate sub-line, so it stretched to its
+  taller neighbours and its text was centred — putting the label 7px below
+  every other label in the row. Found by measuring `getBoundingClientRect`,
+  not by looking.
+- **A COUNT IS NEVER COLOURED BY ITS RATE.** `Deals closed` used to render
+  the COUNT in `rateColor(closeRate)`, so a rep with a 10% close rate got an
+  orange `1` — the number read as an error when it is just a count, and the
+  verdict belongs to the rate under it (Keaton: "why is the deals # orange?").
+  `Stat` takes `subColor`; the rate line is coloured, the count stays plain.
+- **Self Gens group**: Appts set · Appts ran (+Run %) · Deals closed
+  (+Closing %) · Revenue. **Leads group**: Appts ran · Deals closed (+%) ·
+  Revenue — and the group is
+  **removed from the DOM entirely when the rep has neither a lead ran nor a
+  lead close** (per Keaton: "so it doesn't take up space"), never a row of
+  dashes. Note it is gated on `leadsRan > 0 || leadsClosed > 0`, not on
+  `leadsRan` alone: the appointment feed is incomplete, so a rep can have 0
+  leads ran and 2 lead closes worth real money (a live demo case), and hiding
+  that would delete revenue from their card.
+- Every rate blanks above 100% (`rateOrNull`) — appointments come from
+  RepCard, deals from the site, so a rep can close with no appointment
+  logged. Never cap it at 100%.
+- **GOALS ARE THE REAL `personal_goals` ROWS, EDITED IN PLACE.** Tapping a
+  target swaps it for an input (Enter or blur saves, Esc cancels — Esc sets a
+  ref first, because unmounting the input fires its own blur and the cancel
+  would otherwise save the value it was cancelling). The upsert writes the
+  WHOLE row, so one field's save carries the other two forward. No "Change"
+  button (per Keaton). Admins edit anyone's; a rep edits their own.
+  This REPLACES Home's old auto-target ("trailing 3-month average +10%") —
+  a second, invisible definition of a goal that the Goals page knew nothing
+  about.
+  **The goal block always tracks the CURRENT week and month, never the month
+  picker**, via `repProduction` on `currentPeriods`. A goal is a live
+  commitment; measuring August's production against this month's target would
+  put two periods in one card. Each row names its period, and a note appears
+  when an older month is selected.
+- **REMOVED, deliberately**: the momentum strip (win streak + last sale), the
+  combined-earnings tiles (Commission + Avg Deal — commission moved into the
+  hero), the auto-pace block, the per-stat tag lines and the estimate-goal
+  streak (all per Keaton), and **door knocks**. My Card was the LAST surface
+  rendering doors, and it read them from a THIRD source — RepCard's own
+  `/api/repcard/leaderboard`, matched to reps BY NAME — while the Dashboard
+  shows none and the rest of the site reads `field_activity`. The ingest, the
+  table and the rollup trigger are untouched, so bringing doors back is
+  re-adding a fetch; **do NOT reintroduce the name-matched leaderboard call**.
+- **The 🔥 Personal best badge rides INLINE beside the "Revenue sold" label**,
+  never `absolute top-3 right-3`. Commission now occupies the hero's top
+  right, and the absolutely-positioned badge printed straight on top of the
+  figure at laptop width (Keaton hit it live). It describes the revenue, so
+  it belongs next to that label, where it cannot collide with anything.
+- **"VIEW ANOTHER CARD" USES `PersonPicker`, NOT A NATIVE `<select>`** — the
+  same type-to-search control the DealModal uses, now EXPORTED from
+  DealModal.jsx rather than copied (per Keaton: "the drop down… is very
+  cheap. the pop up expands too far, especially on the website from a
+  computer, and there's no search filter"). A 23-person roster in a native
+  select opens a list most of the height of a laptop screen with no way to
+  filter it. The panel is capped at 208px and scrolls. **There is no "My
+  card" sentinel option**: the picker's value is `viewId || profile.id`, so
+  it always names who you are looking at, and picking YOURSELF is your own
+  card (`setViewId(id === profile.id ? null : id)`). An X beside it clears
+  back. Ghosts keep their "(ghost)" tag, as the old select showed; the
+  control is admin-only so nobody else sees it.
+- **A GOAL WITH NO TARGET GETS A REAL BUTTON — "◎ Set a goal"** (per Keaton:
+  "'set one' also feels cheap… more obvious its for setting a goal"). The
+  old dashed-underline "set one" read as a scrap of a sentence, not a
+  control. A target that EXISTS stays inline-editable, now with a small
+  pencil beside it instead of a dashed underline. The production figure
+  stays visible either way (`$10,600 · [Set a goal]`) — a row showing only a
+  button hides what the rep has actually done. The "tap a target to change
+  it" hint went with the change: it existed to explain the underline idiom
+  that real buttons replaced.
+- **The drill-down titles carry NO tagline** — "Self gens", "Leads",
+  "Commission", never "Self gens — the deals you own" (per Keaton: "we dont
+  need an explanation"). The panel's own sub-line already prints the month,
+  the count and the total.
+- `ROLE_LABEL` spells the acronym: Tailwind's `capitalize` rendered the vp
+  role as "Vp".
+- The header sub-line is the rep's **team name** (`teamLabel`), falling back
+  to their role.
+- **Option 2 (a role-aware admin worklist at the same route) was mocked and
+  KILLED** (per Keaton: "No need for option 2"). One page, one face, every
+  role. Do not rebuild it.
+- **The DEAL-SIDE figures were audited against an independent recompute**
+  (`revenue sold`, self-gen closed/revenue, leads closed/revenue, both ranks,
+  the Leads-group gate, and commission with no double-count): 160 figures
+  across all 22 demo cards, every one matching rules written from scratch
+  against the raw rows rather than through `repActivity`. **Demo's lead store
+  starts EMPTY (`_leads = []` in db.js), so the appointment side cannot be
+  exercised there** — `Appts set` and `Ran` read 0 on every demo card. Those
+  definitions are pinned by `test/repActivity.test.mjs` instead.
+- **`Ran` under "Self Gens" is the SET COHORT: of the appointments they
+  BOOKED in range, how many have happened — including ones ANOTHER rep sat**
+  (asserted: "caleb: set one, sat none, ran 1"). So the group heading uses
+  "self gen" more loosely than the Dashboard leaderboard does, where
+  `Self-Gen` means set AND closed by one person. Keep that in mind before
+  adding anything else to this card that leans on the word.
+- Verified by a BROWSER pass, not just a build (27 assertions): the default
+  landing, the nav rename, every section present, the removed blocks absent,
+  both ranks on one card, the Leads group actually hiding, inline goal editing
+  saving and re-rendering, the month picker, all 23 cards via view-as with no
+  crash, and `getComputedStyle` on every leaf node to prove nothing renders
+  near-black on a dark background (the contrast bug from the By-rep board).
 
 ## Dashboard — the ONE reporting page (`src/pages/Dashboard.jsx`)
 
@@ -1295,9 +1476,16 @@ and the gap tallies are all still exactly as written:
     "fine" instead of checking `getComputedStyle` — which is the only
     evidence that settles a colour question. The panel root now carries
     `text-white` and `Stat` falls back to an explicit `FG`, belt and braces.
-  - 37 engine assertions (`test/repActivity.test.mjs`), mutation-checked:
-    breaking the distinct count, the self-gen/lead separation or the rate
-    blanking each fails a named test. Browser pass on view switching, the
+  - **`revenue` + `leadRevenue` ride on every row** (added for My Card, which
+    renders one row of this engine): owner-credited baseline, and the
+    baseline of deals the rep CLOSED for another setter. Baseline, never
+    `job_price` (convention #1). They are PER-PERSON figures — summing both
+    columns across a team double-counts a deal whose setter and closer are
+    both on it.
+  - 45 engine assertions (`test/repActivity.test.mjs`), mutation-checked:
+    breaking the distinct count, the self-gen/lead separation, the rate
+    blanking, the revenue side it lands on, or swapping `job_price` for
+    `baseline_revenue` each fails a named test. Browser pass on view switching, the
     drill-down, and a cross-team lead surviving the team filter.
   - `src/utils/estimates.js` now imports `./dateRanges.js` with the
     extension so the chain resolves under bare node for tests — the same
@@ -1655,8 +1843,9 @@ save materializes the full current-period row)/`repProduction`/
 `periodElapsed`/`metricProgress`/`suggestFromRevenue`/`estimateStreak`. Store
 = `personal_goals` (migration 040; `fetchPersonalGoals`/`upsertPersonalGoal`
 in db.js); saving a MONTHLY revenue goal also mirrors into `rep_goals` so the
-Performance page's rep-goal fallback stays in sync. The Home "My Card" shows
-a read-only "My goals" mirror (same engine) + a "Set goals →" link. Legacy
+Performance page's rep-goal fallback stays in sync. **My Card's goal block is
+NOT read-only any more** — it resolves the same rows and writes them back
+inline (see "My Card" below). Legacy
 `rep_goals` (024) remains for team-scope goals + Performance fallbacks. The
 Dashboard's goal is the company-wide revenue goal (separate `monthly_goals`
 table, admin-only).

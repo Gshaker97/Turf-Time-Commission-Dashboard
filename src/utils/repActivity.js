@@ -43,6 +43,12 @@ export const rateOrNull = (top, bottom) => {
 const newRow = (u) => ({
   id: u.id, name: u.name, ghost: !!u.ghost, role: u.role, active: u.active !== false,
   set: 0, ran: 0, closed: 0, leadsRan: 0, leadsClosed: 0,
+  // REVENUE is baseline (convention #1), never job_price. Two figures, never
+  // summed across people: `revenue` is owner-credited (the deals they own),
+  // `leadRevenue` is the baseline of deals they CLOSED for another setter.
+  // One sale therefore puts revenue on the setter and leadRevenue on the
+  // closer — add the two columns together and you have counted it twice.
+  revenue: 0, leadRevenue: 0,
   // who ran what this rep booked / whose leads this rep sat — Maps keyed by
   // the other person's id ('' when nobody is recorded), each { ran, closed }
   ranBy: new Map(), leadFrom: new Map(),
@@ -143,9 +149,12 @@ export function repActivity(leads = [], deals = [], opts = {}) {
     const closer = d.closer_id
     let any = false
 
+    const baseline = Number(d.baseline_revenue) || 0
+
     if (wanted(owner)) {
       const r = row(owner)
       r.closed += 1
+      r.revenue += baseline
       // Who closed what this rep booked. A deal with no distinct closer was
       // closed by the owner themselves.
       bump(r.ranBy, (closer && closer !== owner) ? closer : owner, 'closed')
@@ -154,6 +163,7 @@ export function repActivity(leads = [], deals = [], opts = {}) {
     if (closer && closer !== owner && wanted(closer)) {
       const r = row(closer)
       r.leadsClosed += 1
+      r.leadRevenue += baseline
       bump(r.leadFrom, d.setter_id || '', 'closed')
       any = true
     }
@@ -175,6 +185,7 @@ export function repActivity(leads = [], deals = [], opts = {}) {
   const totals = {
     set: sum('set'), ran: sum('ran'), closed: sum('closed'),
     leadsRan: sum('leadsRan'), leadsClosed: sum('leadsClosed'),
+    revenue: sum('revenue'), leadRevenue: sum('leadRevenue'),
   }
   totals.ranRate        = rateOrNull(totals.ran, totals.set)
   totals.closeRate      = rateOrNull(totals.closed, totals.ran)

@@ -69,12 +69,14 @@ function AppRoutes() {
   if (loading) return <Spinner />
   return (
     <Routes>
-      <Route path="/login" element={user ? <Navigate to="/dashboard" replace /> : <Login />} />
+      <Route path="/login" element={user ? <Navigate to="/home" replace /> : <Login />} />
       {/* Invite + password-reset email links land here (tokens in the URL
           hash sign the user in; the page then sets their chosen password). */}
       <Route path="/set-password" element={<SetPassword />} />
       <Route path="/" element={<Guard><Layout /></Guard>}>
-        <Route index element={<Navigate to="/dashboard" replace />} />
+        {/* My Card is the default landing spot (per Keaton). The route stays
+            /home so every existing link and bookmark keeps working. */}
+        <Route index element={<Navigate to="/home" replace />} />
         <Route path="deals"       element={<Deals />} />
         <Route path="dashboard"   element={<Dashboard />} />
         <Route path="commissions" element={<Commissions />} />
