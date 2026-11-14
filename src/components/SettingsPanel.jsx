@@ -10,25 +10,28 @@ import { useSettings } from '../contexts/SettingsContext'
 import { DEMO_MODE } from '../lib/supabase'
 import { fetchUsers } from '../lib/db'
 import { headIdSet, teamLabel } from '../utils/team'
+import { SURFACE, GOLD_WASH, Card, PrimaryButton, SecondaryButton, IconButton, inputCls as sharedInputCls } from '../components/ui'
 
-const card = { background: '#242424', border: '1px solid #2e2e2e' }
-const inputStyle = { background: '#1a1a1a', border: '1px solid #3a3a3a' }
-const inputCls = 'px-3 py-2 rounded-lg text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-teal/40 transition-colors'
+const inputStyle = SURFACE.well
+const inputCls = sharedInputCls
+const NEG = 'var(--neg)', POS = 'var(--pos)'
+const h3 = 'text-[14px] font-bold text-bank-tx'
+const HINT = 'text-[13px] text-bank-mu mt-0.5'
+const sub = 'text-[13px] font-semibold text-bank-fa uppercase tracking-wide mb-1'
+const ERR_BOX = { color: NEG, background: 'rgba(217,140,128,0.10)', border: '1px solid rgba(217,140,128,0.35)' }
 
 function SaveBar({ dirty, saving, saved, error, onSave }) {
   return (
     <div className="space-y-2 pt-1">
-      <div className="flex items-center gap-3">
-        <button onClick={onSave} disabled={!dirty || saving}
-          className="px-4 py-2 rounded-xl text-[12px] font-bold text-dark bg-teal disabled:opacity-40 transition-colors">
+      <div className="flex items-center gap-3 flex-wrap">
+        <PrimaryButton onClick={onSave} disabled={!dirty || saving} className="px-4 py-2 min-h-[44px] md:min-h-0">
           {saving ? 'Saving…' : 'Save changes'}
-        </button>
-        {saved && <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-emerald-400"><Check size={13} /> Saved</span>}
-        {dirty && !saving && !saved && !error && <span className="text-[11px] text-white/30">Unsaved changes</span>}
+        </PrimaryButton>
+        {saved && <span className="inline-flex items-center gap-1 text-[13px] font-semibold" style={{ color: POS }} role="status"><Check size={13} /> Saved</span>}
+        {dirty && !saving && !saved && !error && <span className="text-[13px] text-bank-mu">Unsaved changes</span>}
       </div>
       {error && (
-        <div className="rounded-lg px-3 py-2 flex items-start gap-2 text-[12px] text-red-300"
-          style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)' }}>
+        <div className="rounded-lg px-3 py-2 flex items-start gap-2 text-[13px]" role="alert" style={ERR_BOX}>
           <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
           <span>{error}{!DEMO_MODE && ' — make sure migration 006_settings.sql has been run on your database.'}</span>
         </div>
@@ -60,30 +63,28 @@ function StatusEditor() {
   }
 
   return (
-    <div className="rounded-xl p-4 md:p-5 space-y-3" style={card}>
+    <Card className="space-y-3">
       <div>
-        <h3 className="text-[13px] font-bold text-white">Deal Statuses</h3>
-        <p className="text-[11px] text-white/40 mt-0.5">These drive the status dropdowns, filters, and pipeline colors everywhere.</p>
+        <h3 className={h3}>Deal Statuses</h3>
+        <p className={HINT}>These drive the status dropdowns, filters, and pipeline colors everywhere.</p>
       </div>
       <div className="space-y-2">
         {rows.map((r, i) => (
           <div key={i} className="flex items-center gap-2">
-            <GripVertical size={14} className="text-white/15 flex-shrink-0" />
-            <input type="color" value={r.color} onChange={e => update(i, { color: e.target.value })}
-              className="w-9 h-9 rounded-lg bg-transparent border border-white/10 cursor-pointer flex-shrink-0" />
-            <input value={r.label} onChange={e => update(i, { label: e.target.value })}
+            <GripVertical size={14} className="text-bank-fa flex-shrink-0" />
+            <input type="color" value={r.color} onChange={e => update(i, { color: e.target.value })} aria-label="Status colour"
+              className="w-11 h-11 md:w-9 md:h-9 rounded-lg bg-transparent border border-bank-line cursor-pointer flex-shrink-0" />
+            <input value={r.label} onChange={e => update(i, { label: e.target.value })} aria-label="Status name"
               style={inputStyle} className={`${inputCls} flex-1`} placeholder="Status name" />
-            <button onClick={() => remove(i)} className="p-2 rounded-lg text-white/30 hover:text-red-400 hover:bg-red-500/10 transition-colors flex-shrink-0">
+            <IconButton onClick={() => remove(i)} aria-label="Remove status" className="hover:!text-bank-neg flex-shrink-0">
               <Trash2 size={14} />
-            </button>
+            </IconButton>
           </div>
         ))}
       </div>
-      <button onClick={add} className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-teal hover:text-teal-light">
-        <Plus size={14} /> Add status
-      </button>
+      <SecondaryButton onClick={add}><Plus size={14} /> Add status</SecondaryButton>
       <SaveBar dirty={dirty} saving={saving} saved={saved} error={error} onSave={onSave} />
-    </div>
+    </Card>
   )
 }
 
@@ -113,29 +114,27 @@ function ListEditor({ title, hint, settingKey, placeholder, fallback }) {
   }
 
   return (
-    <div className="rounded-xl p-4 md:p-5 space-y-3" style={card}>
+    <Card className="space-y-3">
       <div>
-        <h3 className="text-[13px] font-bold text-white">{title}</h3>
-        {hint && <p className="text-[11px] text-white/40 mt-0.5">{hint}</p>}
+        <h3 className={h3}>{title}</h3>
+        {hint && <p className={HINT}>{hint}</p>}
       </div>
       <div className="space-y-2">
         {rows.map((r, i) => (
           <div key={i} className="flex items-center gap-2">
-            <GripVertical size={14} className="text-white/15 flex-shrink-0" />
-            <input value={r} onChange={e => update(i, e.target.value)}
+            <GripVertical size={14} className="text-bank-fa flex-shrink-0" />
+            <input value={r} onChange={e => update(i, e.target.value)} aria-label={title}
               style={inputStyle} className={`${inputCls} flex-1`} placeholder={placeholder} />
-            <button onClick={() => remove(i)} className="p-2 rounded-lg text-white/30 hover:text-red-400 hover:bg-red-500/10 transition-colors flex-shrink-0">
+            <IconButton onClick={() => remove(i)} aria-label="Remove" className="hover:!text-bank-neg flex-shrink-0">
               <Trash2 size={14} />
-            </button>
+            </IconButton>
           </div>
         ))}
-        {rows.length === 0 && <p className="text-[12px] text-white/30">None yet — add one below.</p>}
+        {rows.length === 0 && <p className="text-[13px] text-bank-mu">None yet — add one below.</p>}
       </div>
-      <button onClick={add} className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-teal hover:text-teal-light">
-        <Plus size={14} /> Add option
-      </button>
+      <SecondaryButton onClick={add}><Plus size={14} /> Add option</SecondaryButton>
       <SaveBar dirty={dirty} saving={saving} saved={saved} error={error} onSave={onSave} />
-    </div>
+    </Card>
   )
 }
 
@@ -214,53 +213,48 @@ function LogoEditor() {
   }
 
   return (
-    <div className="rounded-xl p-4 md:p-5 space-y-3" style={card}>
+    <Card className="space-y-3">
       <div>
-        <h3 className="text-[13px] font-bold text-white">Logo</h3>
-        <p className="text-[11px] text-white/40 mt-0.5">
+        <h3 className={h3}>Logo</h3>
+        <p className={HINT}>
           Shown in the header across the site. PNG with a transparent background looks best.
           (The login screen is pre-sign-in, so it keeps the default unless a logo file is added to the code.)
         </p>
       </div>
-      <div className="flex items-center gap-4">
-        <div className="w-14 h-14 rounded-xl flex items-center justify-center overflow-hidden"
-          style={{ background: '#1a1a1a', border: '1px solid #333' }}>
+      <div className="flex items-center gap-4 flex-wrap">
+        <div className="w-14 h-14 rounded-xl flex items-center justify-center overflow-hidden" style={SURFACE.well}>
           {current
             ? <img src={current} alt="Logo" className="max-w-full max-h-full object-contain" />
-            : <span className="text-[10px] text-white/25 text-center px-1">default mark</span>}
+            : <span className="text-[12px] text-bank-fa text-center px-1">default mark</span>}
         </div>
         <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <label className="px-3 py-2 rounded-xl text-[12px] font-bold text-dark bg-teal cursor-pointer">
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="inline-flex items-center justify-center px-4 py-2 min-h-[44px] md:min-h-0 rounded-xl text-[13px] font-bold cursor-pointer hover:brightness-105"
+              style={{ background: 'var(--gold)', color: 'var(--gold-ink)' }}>
               {current ? 'Replace logo' : 'Upload logo'}
               <input type="file" accept="image/*" onChange={onPick} className="hidden" />
             </label>
             {current && (
-              <button onClick={() => apply(null)} disabled={saving}
-                className="px-3 py-2 rounded-xl text-[12px] font-semibold text-white/50 hover:text-white transition-colors"
-                style={{ border: '1px solid #3a3a3a' }}>
-                Remove
-              </button>
+              <SecondaryButton onClick={() => apply(null)} disabled={saving}>Remove</SecondaryButton>
             )}
           </div>
-          <label className="flex items-center gap-2 text-[12px] text-white/55 cursor-pointer select-none">
+          <label className="flex items-center gap-2 text-[13px] text-bank-mu cursor-pointer select-none min-h-[44px] md:min-h-0">
             <input type="checkbox" checked={stripBg} onChange={e => setStripBg(e.target.checked)}
-              className="accent-teal w-3.5 h-3.5" />
+              className="accent-[#bfa46c] w-4 h-4" />
             Make white background transparent
-            <span className="text-white/25">(applied on upload — re-upload to change)</span>
+            <span className="text-bank-fa">(applied on upload — re-upload to change)</span>
           </label>
         </div>
       </div>
-      {saving && <p className="text-[11px] text-white/30">Saving…</p>}
-      {saved && <p className="text-[11px] text-emerald-400 flex items-center gap-1"><Check size={12} /> Saved — live everywhere now</p>}
+      {saving && <p className="text-[13px] text-bank-mu" role="status">Saving…</p>}
+      {saved && <p className="text-[13px] flex items-center gap-1" style={{ color: POS }} role="status"><Check size={12} /> Saved — live everywhere now</p>}
       {error && (
-        <div className="rounded-lg px-3 py-2 flex items-start gap-2 text-[12px] text-red-300"
-          style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)' }}>
+        <div className="rounded-lg px-3 py-2 flex items-start gap-2 text-[13px]" role="alert" style={ERR_BOX}>
           <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
           <span>{error}</span>
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -284,15 +278,15 @@ function TextSetting({ title, hint, settingKey, placeholder }) {
   }
 
   return (
-    <div className="rounded-xl p-4 md:p-5 space-y-3" style={card}>
+    <Card className="space-y-3">
       <div>
-        <h3 className="text-[13px] font-bold text-white">{title}</h3>
-        {hint && <p className="text-[11px] text-white/40 mt-0.5">{hint}</p>}
+        <h3 className={h3}>{title}</h3>
+        {hint && <p className={HINT}>{hint}</p>}
       </div>
-      <input value={value} onChange={e => setValue(e.target.value)} placeholder={placeholder}
-        style={inputStyle} className={`${inputCls} w-full max-w-sm`} />
+      <input value={value} onChange={e => setValue(e.target.value)} placeholder={placeholder} aria-label={title}
+        style={inputStyle} className={`${inputCls} max-w-sm`} />
       <SaveBar dirty={dirty} saving={saving} saved={saved} error={error} onSave={onSave} />
-    </div>
+    </Card>
   )
 }
 
@@ -336,35 +330,35 @@ function DashboardFlagsEditor() {
   }
 
   return (
-    <div className="rounded-xl p-4 md:p-5 space-y-3" style={card}>
+    <Card className="space-y-3">
       <div>
-        <h3 className="text-[13px] font-bold text-white">Dashboard: Red-Flag Floors</h3>
-        <p className="text-[11px] text-white/40 mt-0.5">
+        <h3 className={h3}>Dashboard: Red-Flag Floors</h3>
+        <p className={HINT}>
           A rep below this turns red on the Dashboard's rep rows, with the
           appointments columns showing.
         </p>
       </div>
       <div className="flex flex-wrap gap-4">
-        <label className="text-[12px] text-white/60">
+        <label className="text-[13px] text-bank-mu">
           <span className="block mb-1">Appointments set</span>
           <input type="number" min="0" value={setFloor} onChange={e => setSetFloor(e.target.value)}
-            style={inputStyle} className={`${inputCls} w-28`} />
+            style={inputStyle} className={`${inputCls} !w-28`} />
         </label>
       </div>
       <div>
-        <p className="text-[12px] text-white/60 mb-1">Default team for unassigned</p>
-        <p className="text-[11px] text-white/35 mb-1.5">
+        <p className="text-[13px] text-bank-mu mb-1">Default team for unassigned</p>
+        <p className="text-[13px] text-bank-fa mb-1.5">
           Deals with no team owner, and reps on no team, are filed under this lead instead
           of a separate "Unassigned" row.
         </p>
-        <select value={team} onChange={e => setTeam(e.target.value)}
-          style={inputStyle} className={`${inputCls} w-full max-w-sm appearance-none`}>
+        <select value={team} onChange={e => setTeam(e.target.value)} aria-label="Default team for unassigned"
+          style={inputStyle} className={`${inputCls} max-w-sm appearance-none`}>
           <option value="">Keep a separate "Unassigned" row</option>
           {heads.map(h => <option key={h.id} value={h.id}>{teamLabel(h)}</option>)}
         </select>
       </div>
       <SaveBar dirty={dirty} saving={saving} saved={saved} error={error} onSave={onSave} />
-    </div>
+    </Card>
   )
 }
 
@@ -388,15 +382,15 @@ function DateSetting({ title, hint, settingKey, fallback }) {
   }
 
   return (
-    <div className="rounded-xl p-4 md:p-5 space-y-3" style={card}>
+    <Card className="space-y-3">
       <div>
-        <h3 className="text-[13px] font-bold text-white">{title}</h3>
-        {hint && <p className="text-[11px] text-white/40 mt-0.5">{hint}</p>}
+        <h3 className={h3}>{title}</h3>
+        {hint && <p className={HINT}>{hint}</p>}
       </div>
-      <input type="date" value={value} onChange={e => setValue(e.target.value)}
-        style={inputStyle} className={`${inputCls} w-full max-w-[12rem]`} />
+      <input type="date" value={value} onChange={e => setValue(e.target.value)} aria-label={title}
+        style={{ ...inputStyle, colorScheme: 'dark' }} className={`${inputCls} max-w-[12rem]`} />
       <SaveBar dirty={dirty} saving={saving} saved={saved} error={error} onSave={onSave} />
-    </div>
+    </Card>
   )
 }
 
@@ -444,61 +438,56 @@ function OverrideRatesEditor() {
     setSaved(true); setTimeout(() => setSaved(false), 1800)
   }
 
-  const numInp = (value, onChange) => (
-    <input type="number" min="0" step="0.01" value={value ?? ''} onChange={onChange}
-      style={inputStyle} className={`${inputCls} w-20 text-center`} />
+  const numInp = (value, onChange, label) => (
+    <input type="number" min="0" step="0.01" value={value ?? ''} onChange={onChange} aria-label={label}
+      style={inputStyle} className={`${inputCls} !w-20 text-center`} />
   )
 
   return (
-    <div className="rounded-xl p-4 md:p-5 space-y-3" style={card}>
+    <Card className="space-y-3">
       <div>
-        <h3 className="text-[13px] font-bold text-white">Override Rates</h3>
-        <p className="text-[11px] text-white/40 mt-0.5">
+        <h3 className={h3}>Override Rates</h3>
+        <p className={HINT}>
           The default Manager / Director / VP override % stamped on new deals (and used when a deal has no
-          explicit %). Each row takes effect for deals <span className="text-white/60">closed on or after</span> its
+          explicit %). Each row takes effect for deals <span className="text-bank-tx">closed on or after</span> its
           effective date — older deals keep the rates in force when they closed. A deal's own edited % always wins.
         </p>
       </div>
       <div className="space-y-3">
         {rows.map((r, i) => (
-          <div key={i} className="rounded-lg p-3 space-y-2" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+          <div key={i} className="rounded-xl p-3 space-y-2" style={SURFACE.raise}>
             <div className="flex items-end gap-3 flex-wrap">
               <div>
-                <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1">Effective from</p>
-                <input type="date" value={r.effective || ''} onChange={e => setEra(i, { effective: e.target.value })}
-                  style={{ ...inputStyle, colorScheme: 'dark' }} className={`${inputCls} w-40`} />
+                <p className={sub}>Effective from</p>
+                <input type="date" value={r.effective || ''} onChange={e => setEra(i, { effective: e.target.value })} aria-label="Effective from"
+                  style={{ ...inputStyle, colorScheme: 'dark' }} className={`${inputCls} !w-40`} />
               </div>
               <div>
-                <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1">Manager %</p>
-                {numInp(r.manager, e => setEra(i, { manager: e.target.value }))}
+                <p className={sub}>Manager %</p>
+                {numInp(r.manager, e => setEra(i, { manager: e.target.value }), 'Manager %')}
               </div>
               {offices.map(o => (
                 <div key={o}>
-                  <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1">Dir/VP % · {o}</p>
-                  {numInp(r.byOffice?.[o.toLowerCase()] ?? r.default, e => setOffice(i, o, e.target.value))}
+                  <p className={sub}>Dir/VP % · {o}</p>
+                  {numInp(r.byOffice?.[o.toLowerCase()] ?? r.default, e => setOffice(i, o, e.target.value), `Dir/VP % ${o}`)}
                 </div>
               ))}
               <div>
-                <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1">Dir/VP % · other</p>
-                {numInp(r.default, e => setEra(i, { default: e.target.value }))}
+                <p className={sub}>Dir/VP % · other</p>
+                {numInp(r.default, e => setEra(i, { default: e.target.value }), 'Dir/VP % other')}
               </div>
               {rows.length > 1 && (
-                <button onClick={() => setRows(rs => rs.filter((_, x) => x !== i))}
-                  className="p-2 rounded-lg text-white/25 hover:text-red-400 hover:bg-red-500/10 transition-colors mb-0.5" title="Remove this rate era">
+                <IconButton onClick={() => setRows(rs => rs.filter((_, x) => x !== i))} className="hover:!text-bank-neg mb-0.5" title="Remove this rate era" aria-label="Remove this rate era">
                   <Trash2 size={14} />
-                </button>
+                </IconButton>
               )}
             </div>
           </div>
         ))}
       </div>
-      <button onClick={addEra}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold text-white/60 hover:text-white transition-colors"
-        style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-        <Plus size={13} /> Add a rate change
-      </button>
+      <SecondaryButton onClick={addEra}><Plus size={13} /> Add a rate change</SecondaryButton>
       <SaveBar dirty={dirty} saving={saving} saved={saved} error={error} onSave={onSave} />
-    </div>
+    </Card>
   )
 }
 
@@ -527,32 +516,32 @@ function PayDateRuleEditor() {
   const dayName = (WEEKDAYS.find(([v]) => v === Number(day)) || [5, 'Friday'])[1]
   const weeksN = Math.max(0, Number(weeks) || 0)
   return (
-    <div className="rounded-xl p-4 md:p-5 space-y-3" style={card}>
+    <Card className="space-y-3">
       <div>
-        <h3 className="text-[13px] font-bold text-white">Pay Date Rule</h3>
-        <p className="text-[11px] text-white/40 mt-0.5">
+        <h3 className={h3}>Pay Date Rule</h3>
+        <p className={HINT}>
           When a deal's install date is set, its pay date is auto-filled by this rule. Changing it only affects
           installs set/changed from now on — existing pay dates don't move. Pay dates can always be edited per deal.
         </p>
       </div>
       <div className="flex items-end gap-3 flex-wrap">
         <div>
-          <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1">Pay day</p>
-          <select value={day} onChange={e => setDay(e.target.value)} style={inputStyle} className={`${inputCls} w-36`}>
+          <p className={sub}>Pay day</p>
+          <select value={day} onChange={e => setDay(e.target.value)} aria-label="Pay day" style={inputStyle} className={`${inputCls} !w-36`}>
             {WEEKDAYS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
           </select>
         </div>
         <div>
-          <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1">Weeks after install week</p>
-          <input type="number" min="0" max="8" value={weeks} onChange={e => setWeeks(e.target.value)}
-            style={inputStyle} className={`${inputCls} w-24 text-center`} />
+          <p className={sub}>Weeks after install week</p>
+          <input type="number" min="0" max="8" value={weeks} onChange={e => setWeeks(e.target.value)} aria-label="Weeks after install week"
+            style={inputStyle} className={`${inputCls} !w-24 text-center`} />
         </div>
       </div>
-      <p className="text-[11px] text-white/40">
-        Rule: <span className="text-white/70">{dayName}</span> of {weeksN === 0 ? 'the install week itself' : weeksN === 1 ? 'the week after install' : `${weeksN} weeks after the install week`}.
+      <p className="text-[13px] text-bank-mu">
+        Rule: <span className="text-bank-tx">{dayName}</span> of {weeksN === 0 ? 'the install week itself' : weeksN === 1 ? 'the week after install' : `${weeksN} weeks after the install week`}.
       </p>
       <SaveBar dirty={dirty} saving={saving} saved={saved} error={error} onSave={onSave} />
-    </div>
+    </Card>
   )
 }
 
@@ -575,21 +564,21 @@ function NoteNotifyEditor() {
     setSaved(true); setTimeout(() => setSaved(false), 1800)
   }
   const Toggle = ({ k, label, hint }) => (
-    <button type="button" onClick={() => setCfg(c => ({ ...c, [k]: !c[k] }))}
-      className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg text-[13px] transition-colors w-full sm:w-auto sm:min-w-[190px]"
-      style={{ background: '#1a1a1a', border: '1px solid #3a3a3a', color: cfg[k] ? '#00b894' : 'rgba(255,255,255,0.6)' }}>
-      <span>{label}<span className="block text-[10px] text-white/30">{hint}</span></span>
+    <button type="button" onClick={() => setCfg(c => ({ ...c, [k]: !c[k] }))} aria-pressed={!!cfg[k]}
+      className={`flex items-center justify-between gap-3 px-3 py-2 min-h-[44px] rounded-lg text-[13px] transition-colors w-full sm:w-auto sm:min-w-[190px] ${cfg[k] ? 'text-bank-gold-tx' : 'text-bank-mu'}`}
+      style={cfg[k] ? GOLD_WASH : SURFACE.well}>
+      <span>{label}<span className="block text-[13px] text-bank-fa">{hint}</span></span>
       <span className="w-9 h-5 rounded-full flex items-center px-0.5 flex-shrink-0 transition-colors"
-        style={{ background: cfg[k] ? '#00b894' : '#3a3a3a', justifyContent: cfg[k] ? 'flex-end' : 'flex-start' }}>
-        <span className="w-4 h-4 rounded-full bg-white block" />
+        style={{ background: cfg[k] ? 'var(--gold)' : 'var(--line)', justifyContent: cfg[k] ? 'flex-end' : 'flex-start' }}>
+        <span className="w-4 h-4 rounded-full block" style={{ background: cfg[k] ? 'var(--gold-ink)' : 'var(--tx)' }} />
       </span>
     </button>
   )
   return (
-    <div className="rounded-xl p-4 md:p-5 space-y-3" style={card}>
+    <Card className="space-y-3">
       <div>
-        <h3 className="text-[13px] font-bold text-white">Deal Note Notifications</h3>
-        <p className="text-[11px] text-white/40 mt-0.5">
+        <h3 className={h3}>Deal Note Notifications</h3>
+        <p className={HINT}>
           Who gets a bell notification when someone posts a note on a deal (the author never notifies themselves).
           Everyone on the deal can still read the thread either way.
         </p>
@@ -601,7 +590,7 @@ function NoteNotifyEditor() {
         <Toggle k="admins"  label="Admins"   hint="every admin" />
       </div>
       <SaveBar dirty={dirty} saving={saving} saved={saved} error={error} onSave={onSave} />
-    </div>
+    </Card>
   )
 }
 
@@ -696,56 +685,54 @@ function FeedEditor({ title, blurb, path, fields, mapKey, lastKey, resultKey, wi
   const LEAD_FIELDS = fields
 
   return (
-    <div className="rounded-xl p-4 md:p-5 space-y-4" style={card}>
+    <Card className="space-y-4">
       <div>
-        <h3 className="text-[14px] font-semibold text-white">{title}</h3>
-        <p className="text-[11px] text-white/40 mt-0.5">{blurb}</p>
+        <h3 className={h3}>{title}</h3>
+        <p className={HINT}>{blurb}</p>
       </div>
 
       {/* Endpoint */}
       <div>
-        <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1.5">Webhook URL · POST</p>
+        <p className={`${sub} mb-1.5`}>Webhook URL · POST</p>
         <div className="flex items-center gap-2">
-          <code className="flex-1 min-w-0 truncate px-3 py-2 rounded-lg text-[12px] text-teal" style={inputStyle}>{url}</code>
-          <button onClick={() => { navigator.clipboard?.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 1600) }}
-            className="px-3 py-2 rounded-lg text-[12px] font-semibold text-white/60 hover:text-white whitespace-nowrap"
-            style={inputStyle}>{copied ? 'Copied' : 'Copy'}</button>
+          <code className="flex-1 min-w-0 truncate px-3 py-2 min-h-[44px] md:min-h-0 rounded-lg text-[13px] text-bank-tx flex items-center" style={inputStyle}>{url}</code>
+          <SecondaryButton onClick={() => { navigator.clipboard?.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 1600) }} className="whitespace-nowrap">
+            {copied ? 'Copied' : 'Copy'}
+          </SecondaryButton>
         </div>
-        <p className="text-[10.5px] text-white/30 mt-1.5">
-          Send header <code className="text-white/50">Authorization: Bearer &lt;LEADS_INGEST_SECRET&gt;</code> — the secret lives in the site's Railway variables, never here.
+        <p className="text-[13px] text-bank-fa mt-1.5">
+          Send header <code className="text-bank-mu">Authorization: Bearer &lt;LEADS_INGEST_SECRET&gt;</code> — the secret lives in the site's Railway variables, never here.
         </p>
       </div>
 
       {/* What the CRM last sent */}
       <div>
-        <div className="flex items-baseline justify-between gap-2 mb-1.5">
-          <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest">Last received</p>
+        <div className="flex items-baseline justify-between gap-2 mb-1.5 flex-wrap">
+          <p className={`${sub} mb-0`}>Last received</p>
           <div className="flex items-baseline gap-2">
-            {last?.at && <p className="text-[10px] text-white/25">{new Date(last.at).toLocaleString()}</p>}
+            {last?.at && <p className="text-[13px] text-bank-fa">{new Date(last.at).toLocaleString()}</p>}
             {/* Copy the WHOLE payload — the list below truncates and can't be
                 drag-selected on a phone, which is exactly when you need to
                 send it to someone to diagnose a mis-mapped field. */}
             {last && (
-              <button
+              <SecondaryButton
                 onClick={() => {
                   navigator.clipboard?.writeText(JSON.stringify(last.sample ?? last.fields ?? last, null, 2))
                   setCopiedPayload(true); setTimeout(() => setCopiedPayload(false), 1600)
-                }}
-                className="px-2 py-0.5 rounded-md text-[10px] font-semibold text-white/50 hover:text-white"
-                style={inputStyle}>{copiedPayload ? 'Copied' : 'Copy payload'}</button>
+                }}>{copiedPayload ? 'Copied' : 'Copy payload'}</SecondaryButton>
             )}
           </div>
         </div>
         {incoming.length === 0 ? (
-          <p className="text-[12px] text-white/35 rounded-lg px-3 py-2.5" style={inputStyle}>
+          <p className="text-[13px] text-bank-mu rounded-lg px-3 py-2.5" style={inputStyle}>
             Nothing yet. Fire a test from your CRM — the fields it sends will appear here to map.
           </p>
         ) : (
           <div className="rounded-lg px-3 py-2.5 max-h-40 overflow-y-auto space-y-0.5" style={inputStyle}>
             {incoming.map(f => (
-              <p key={f} className="text-[11px] text-white/50 break-words">
-                <span className="text-teal">{f}</span>
-                <span className="text-white/25"> = {String(last.fields[f] ?? '')}</span>
+              <p key={f} className="text-[13px] text-bank-mu break-words">
+                <span className="text-bank-tx">{f}</span>
+                <span className="text-bank-fa"> = {String(last.fields[f] ?? '')}</span>
               </p>
             ))}
           </div>
@@ -756,36 +743,36 @@ function FeedEditor({ title, blurb, path, fields, mapKey, lastKey, resultKey, wi
       {result && (
         <div>
           <div className="flex items-baseline justify-between gap-2 mb-1.5">
-            <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest">Last result</p>
-            {result.at && <p className="text-[10px] text-white/25">{new Date(result.at).toLocaleString()}</p>}
+            <p className={`${sub} mb-0`}>Last result</p>
+            {result.at && <p className="text-[13px] text-bank-fa">{new Date(result.at).toLocaleString()}</p>}
           </div>
           <div className="rounded-lg px-3 py-2.5 space-y-1" style={inputStyle}>
             {result.ok === false ? (
-              <p className="text-[12px] text-red-300">Failed: {result.error}</p>
+              <p className="text-[13px]" style={{ color: NEG }}>Failed: {result.error}</p>
             ) : (
               <>
-                <p className="text-[12px] text-white/70">
+                <p className="text-[13px] text-bank-tx">
                   Received {result.received ?? '?'}
-                  {result.knocks != null && <> · <span className="text-teal font-semibold">{result.knocks} door knock{result.knocks === 1 ? '' : 's'}</span></>}
-                  {result.appointments != null && <> · <span className="text-teal font-semibold">{result.appointments} appointment{result.appointments === 1 ? '' : 's'}</span></>}
+                  {result.knocks != null && <> · <span className="font-semibold">{result.knocks} door knock{result.knocks === 1 ? '' : 's'}</span></>}
+                  {result.appointments != null && <> · <span className="font-semibold">{result.appointments} appointment{result.appointments === 1 ? '' : 's'}</span></>}
                   {result.summaries ? <> · {result.summaries} day summar{result.summaries === 1 ? 'y' : 'ies'}</> : null}
-                  {result.skipped?.length ? <> · <span className="text-amber-300">skipped: {result.skipped.join('; ')}</span></> : null}
+                  {result.skipped?.length ? <> · <span style={{ color: 'var(--warn)' }}>skipped: {result.skipped.join('; ')}</span></> : null}
                 </p>
                 {result.routed && (
-                  <p className="text-[11px] text-white/35">
+                  <p className="text-[13px] text-bank-fa">
                     The site sorts each event by its shape, so one webhook URL handles both feeds — this call was read as{' '}
                     {result.routed.knocks} door knock{result.routed.knocks === 1 ? '' : 's'} and {result.routed.appointments} appointment{result.routed.appointments === 1 ? '' : 's'}.
                   </p>
                 )}
                 {(result.unmatched_people?.length > 0) && (
-                  <p className="text-[11px] text-amber-300">Not on the roster (landed by name only): {result.unmatched_people.join(', ')}</p>
+                  <p className="text-[13px]" style={{ color: 'var(--warn)' }}>Not on the roster (landed by name only): {result.unmatched_people.join(', ')}</p>
                 )}
                 {(result.detail || []).map((d, i) => (
-                  <p key={i} className="text-[11px] text-white/50">
-                    <span className="text-white/75">{d.who}</span> — {d.did}
+                  <p key={i} className="text-[13px] text-bank-mu">
+                    <span className="text-bank-tx">{d.who}</span> — {d.did}
                     {d.day ? ` on ${d.day}` : ''}{d.doors != null ? ` (${d.doors} doors)` : ''}
-                    {d.matched === false ? <span className="text-amber-300"> · no roster match</span> : ''}
-                    {d.why ? <span className="text-amber-300"> · {d.why}</span> : ''}
+                    {d.matched === false ? <span style={{ color: 'var(--warn)' }}> · no roster match</span> : ''}
+                    {d.why ? <span style={{ color: 'var(--warn)' }}> · {d.why}</span> : ''}
                   </p>
                 ))}
               </>
@@ -796,22 +783,22 @@ function FeedEditor({ title, blurb, path, fields, mapKey, lastKey, resultKey, wi
 
       {/* Field mapping */}
       <div>
-        <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-2">Field mapping</p>
+        <p className={`${sub} mb-2`}>Field mapping</p>
         <div className="space-y-1.5">
           {LEAD_FIELDS.map(f => (
             <div key={f.key} className="flex items-center gap-2">
-              <div className="w-[150px] flex-shrink-0">
-                <p className="text-[12px] text-white/70 truncate">{f.label}</p>
-                {f.hint && <p className="text-[9.5px] text-white/25 truncate">{f.hint}</p>}
+              <div className="w-[130px] sm:w-[150px] flex-shrink-0">
+                <p className="text-[13px] text-bank-tx truncate">{f.label}</p>
+                {f.hint && <p className="text-[12px] text-bank-fa truncate">{f.hint}</p>}
               </div>
-              <span className="text-white/20 text-[12px]">←</span>
+              <span className="text-bank-fa text-[13px]">←</span>
               {/* Combobox: pick a field from the last payload, or type two
                   space-separated ones to join them (first name + last name). */}
-              <input value={map[f.key] || ''} onChange={e => setField(f.key, e.target.value)}
+              <input value={map[f.key] || ''} onChange={e => setField(f.key, e.target.value)} aria-label={f.label}
                 list={incoming.length ? `leadfields-${f.key}` : undefined}
                 placeholder={incoming.length ? 'pick or type a field…' : 'their field name'}
                 style={inputStyle}
-                className="flex-1 min-w-0 px-2 py-1.5 rounded-lg text-[12px] text-white placeholder-white/20 focus:outline-none" />
+                className={`${inputCls} flex-1 min-w-0`} />
               {incoming.length > 0 && (
                 <datalist id={`leadfields-${f.key}`}>
                   {incoming.map(i => <option key={i} value={i} />)}
@@ -820,29 +807,29 @@ function FeedEditor({ title, blurb, path, fields, mapKey, lastKey, resultKey, wi
             </div>
           ))}
         </div>
-        <p className="text-[10.5px] text-white/30 mt-2">
-          Click a box to pick from what the CRM sent, or type it. Nested values use dots (<code className="text-white/45">resource.firstName</code>),
-          and <span className="text-white/45">two fields separated by a space</span> get joined — e.g.{' '}
-          <code className="text-white/45">resource.firstName resource.lastName</code> for a full name. Unmapped fields fall back to a same-named field.
+        <p className="text-[13px] text-bank-fa mt-2">
+          Click a box to pick from what the CRM sent, or type it. Nested values use dots (<code className="text-bank-mu">resource.firstName</code>),
+          and <span className="text-bank-mu">two fields separated by a space</span> get joined — e.g.{' '}
+          <code className="text-bank-mu">resource.firstName resource.lastName</code> for a full name. Unmapped fields fall back to a same-named field.
         </p>
       </div>
 
-      {footnote && <p className="text-[10.5px] text-white/30">{footnote}</p>}
+      {footnote && <p className="text-[13px] text-bank-fa">{footnote}</p>}
 
       {/* Disposition mapping (leads feed only) */}
       {withStatusMap && (
       <div>
-        <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1.5">Their dispositions → our lifecycle</p>
-        <p className="text-[10.5px] text-white/30 mb-2">
-          Only needed for wording we don't already recognize. <span className="text-white/45">Ran</span> and <span className="text-white/45">Sold</span> are what count as an estimate.
+        <p className={`${sub} mb-1.5`}>Their dispositions → our lifecycle</p>
+        <p className="text-[13px] text-bank-fa mb-2">
+          Only needed for wording we don't already recognize. <span className="text-bank-mu">Ran</span> and <span className="text-bank-mu">Sold</span> are what count as an estimate.
         </p>
         <div className="space-y-1.5">
           {knownDispositions.map(d => (
             <div key={d} className="flex items-center gap-2">
-              <code className="w-[150px] flex-shrink-0 truncate text-[12px] text-white/70">{d}</code>
-              <span className="text-white/20 text-[12px]">→</span>
-              <select value={statusMap[d] || ''} onChange={e => setStatus(d, e.target.value)}
-                style={inputStyle} className="flex-1 min-w-0 px-2 py-1.5 rounded-lg text-[12px] text-white focus:outline-none">
+              <code className="w-[130px] sm:w-[150px] flex-shrink-0 truncate text-[13px] text-bank-tx">{d}</code>
+              <span className="text-bank-fa text-[13px]">→</span>
+              <select value={statusMap[d] || ''} onChange={e => setStatus(d, e.target.value)} aria-label={`Lifecycle for ${d}`}
+                style={inputStyle} className={`${inputCls} flex-1 min-w-0`}>
                 <option value="">— auto-detect —</option>
                 {LEAD_LIFECYCLE.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
@@ -854,7 +841,7 @@ function FeedEditor({ title, blurb, path, fields, mapKey, lastKey, resultKey, wi
       )}
 
       <SaveBar dirty={dirty} saving={saving} saved={saved} error={error} onSave={onSave} />
-    </div>
+    </Card>
   )
 }
 
@@ -878,20 +865,18 @@ function AddDisposition({ onAdd, existing }) {
   const add = () => { const t = v.trim(); if (t && !existing.includes(t)) { onAdd(t); setV('') } }
   return (
     <div className="flex items-center gap-2 pt-1">
-      <input value={v} onChange={e => setV(e.target.value)} placeholder="Add a disposition you use…"
+      <input value={v} onChange={e => setV(e.target.value)} placeholder="Add a disposition you use…" aria-label="Add a disposition"
         onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add() } }}
-        style={inputStyle} className="w-[150px] px-2 py-1.5 rounded-lg text-[12px] text-white placeholder-white/20 focus:outline-none" />
-      <button onClick={add} className="flex items-center gap-1 text-[11px] font-semibold text-teal hover:underline">
-        <Plus size={12} /> Add
-      </button>
+        style={inputStyle} className={`${inputCls} !w-[180px]`} />
+      <SecondaryButton onClick={add}><Plus size={12} /> Add</SecondaryButton>
     </div>
   )
 }
 
 export default function SettingsPanel() {
   return (
-    <div className="space-y-4">
-      <p className="text-[12px] text-white/40">
+    <div className="space-y-4" style={{ color: 'var(--tx)' }}>
+      <p className="text-[13px] text-bank-mu">
         Changes here apply across the site immediately for everyone — no redeploy needed.
       </p>
       <LogoEditor />

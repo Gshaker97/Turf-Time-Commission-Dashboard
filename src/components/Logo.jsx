@@ -33,9 +33,9 @@ export default function Logo({ size = 28 }) {
       className="rounded-lg flex items-center justify-center flex-shrink-0 font-bold tracking-tight"
       style={{
         width: size, height: size,
-        background: 'linear-gradient(135deg, #0e3b35, #145247)',
-        border: '1px solid #1c5a50',
-        color: '#2dd4bf',
+        background: 'linear-gradient(135deg, #1c1e21, #23262a)',
+        border: '1px solid rgba(191,164,108,0.45)',
+        color: '#cdb684',
         fontSize: Math.round(size * 0.42),
       }}
     >

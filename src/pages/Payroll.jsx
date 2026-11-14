@@ -14,8 +14,14 @@ import { confirmDialog, promptDialog } from '../lib/dialog'
 import { saveDealFields } from '../lib/dealWrite'
 import DeductionModal from '../components/DeductionModal'
 import { buildLedger, openDebts, ledgerTotals, suggestedTake, wouldGoNegative, recoveryLine, STATUS_LABEL } from '../utils/deductions'
+import { SURFACE, WARN_BORDER, KpiFigure, Eyebrow, Pill, PillGroup, PrimaryButton, SecondaryButton, IconButton, LoadingBlock, EmptyBlock, Select, inputCls } from '../components/ui'
 
-// LOCAL date, never UTC — .toISOString() rolls to tomorrow at 5pm Arizona.
+// Palette shorthands. Differences and deductions read in rose, flags in
+// amber, done states in sage; the run total is the page's one gold number.
+const POS = 'var(--pos)', WARN = 'var(--warn)', NEG = 'var(--neg)'
+const chip = (color) => ({ color, border: `1px solid ${color}66` })
+const head = 'text-[13px] font-semibold uppercase tracking-wide text-bank-fa'
+
 const todayISO = () => format(new Date(), 'yyyy-MM-dd')
 const fmtDay   = (iso) => iso ? format(new Date(iso + 'T12:00:00'), 'EEE, MMM d, yyyy') : null
 // Compact form for the run list's Install column — the full date is in the
@@ -50,14 +56,9 @@ function downloadCsv(name, rows) {
   URL.revokeObjectURL(url)
 }
 
-function Card({ label, value, color = '#fff', sub }) {
-  return (
-    <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12 }} className="p-3 md:p-4">
-      <div className="text-[9px] md:text-[11px] uppercase tracking-wider text-white/30 font-semibold mb-1.5">{label}</div>
-      <div className="text-[16px] md:text-2xl font-bold truncate" style={{ color }}>{value}</div>
-      {sub && <div className="text-[10px] text-white/30 mt-0.5">{sub}</div>}
-    </div>
-  )
+function Card({ label, value, color, sub }) {
+  // Deductions-tab summary tile — the shared KPI block under the old local name.
+  return <KpiFigure label={label} value={value} color={color} sub={sub} />
 }
 
 // Per-deal payout breakdown — who earns what on a single deal.
@@ -712,8 +713,9 @@ export default function Payroll() {
       : finalized >= total             ? 'Approved — ready to pay'
       : paid > 0                       ? 'Paying'
                                        : 'In review'
-    const color = runLock ? '#00b894' : (finalized > 0 && paid >= finalized) ? '#00b894'
-                : finalized >= total && total > 0 ? '#fbbf24' : '#fdcb6e'
+    // Done = sage; anything still moving = amber. (Palette tokens; the stage
+    // maths above is unchanged.)
+    const color = runLock ? POS : (finalized > 0 && paid >= finalized) ? POS : WARN
     return { total, verified, finalized, paid, segments, label, color }
   }, [shownDeals, runLock])
 
@@ -1066,88 +1068,76 @@ export default function Payroll() {
   }
 
   return (
-    <div style={{ background: '#1a1a1a', color: '#fff', minHeight: '100%' }}>
+    <div className="pb-8 max-w-[1400px] mx-auto" style={{ color: 'var(--tx)' }}>
       {/* Header */}
-      <div className="mb-3 flex items-start justify-between gap-3">
+      <div className="mb-3 flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-lg md:text-xl font-bold text-white flex items-center gap-2">
-            <Wallet size={18} className="text-teal" /> Payroll
+          <h1 className="text-lg md:text-xl font-bold text-bank-tx flex items-center gap-2">
+            <Wallet size={18} className="text-bank-mu" /> Payroll
           </h1>
-          <p className="text-[12px] text-white/40 mt-0.5">Review deals due for pay, approve them, and track deductions.</p>
+          <p className="text-[13px] text-bank-mu mt-0.5">Review deals due for pay, approve them, and track deductions.</p>
         </div>
         {tab === 'run' && (
-          <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
             {/* Always here, not only inside the outstanding tray — that only
                 renders once something is owed, so logging the FIRST deduction
                 used to mean switching tabs (per Keaton). */}
             {isAdmin && (
-              <button onClick={() => setDedModal({})} title="Log a deduction against any job, even one that already paid out"
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold text-white/70 hover:text-white transition-colors"
-                style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-                <MinusCircle size={14} className="text-red-400/80" /> Log a deduction
-              </button>
+              <SecondaryButton onClick={() => setDedModal({})} title="Log a deduction against any job, even one that already paid out">
+                <MinusCircle size={14} style={{ color: NEG }} /> Log a deduction
+              </SecondaryButton>
             )}
-            <button onClick={exportCsv} disabled={!shownDeals.length}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold text-white/70 hover:text-white disabled:opacity-40 transition-colors"
-              style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+            <SecondaryButton onClick={exportCsv} disabled={!shownDeals.length}>
               <Download size={14} /> Export CSV
-            </button>
+            </SecondaryButton>
           </div>
         )}
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-4 p-1 rounded-xl w-fit" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+      <PillGroup className="mb-4" role="tablist" aria-label="Payroll sections">
         {[['run', 'Pay run'], ['deductions', `Deductions${deductionTotals.count ? ` (${deductionTotals.count})` : ''}`]].map(([k, label]) => (
-          <button key={k} onClick={() => setTab(k)}
-            className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors ${tab === k ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
-            {label}
-          </button>
+          <Pill key={k} role="tab" aria-selected={tab === k} active={tab === k} onClick={() => setTab(k)}>{label}</Pill>
         ))}
-      </div>
+      </PillGroup>
 
       {tab === 'run' && (<>
       {/* Pay-date navigator */}
       <div className="flex items-center gap-2 mb-3 flex-wrap">
-        <button onClick={() => idx > 0 && setView(payDates[idx - 1])} disabled={view === 'overdue' || idx <= 0}
-          className="p-2 rounded-lg text-white/50 hover:text-white disabled:opacity-30" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+        <IconButton onClick={() => idx > 0 && setView(payDates[idx - 1])} disabled={view === 'overdue' || idx <= 0} aria-label="Previous pay date" style={SURFACE.raise}>
           <ChevronLeft size={16} />
-        </button>
-        <select value={view === 'overdue' ? '' : (view || '')} onChange={e => setView(e.target.value)}
-          className="px-3 py-2 rounded-lg text-[13px] font-semibold text-white flex-1 min-w-[180px] focus:outline-none"
-          style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+        </IconButton>
+        <Select value={view === 'overdue' ? '' : (view || '')} onChange={e => setView(e.target.value)} aria-label="Pay date"
+          className="flex-1 min-w-[180px] !w-auto font-semibold">
           {view === 'overdue' && <option value="">Overdue (unpaid)</option>}
           {payDates.map(d => <option key={d} value={d}>{fmtDay(d)}</option>)}
           {!payDates.length && <option value="">No pay dates yet</option>}
-        </select>
-        <button onClick={() => idx < payDates.length - 1 && setView(payDates[idx + 1])} disabled={view === 'overdue' || idx < 0 || idx >= payDates.length - 1}
-          className="p-2 rounded-lg text-white/50 hover:text-white disabled:opacity-30" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+        </Select>
+        <IconButton onClick={() => idx < payDates.length - 1 && setView(payDates[idx + 1])} disabled={view === 'overdue' || idx < 0 || idx >= payDates.length - 1} aria-label="Next pay date" style={SURFACE.raise}>
           <ChevronRight size={16} />
-        </button>
+        </IconButton>
         {overdueDeals.length > 0 && (
-          <button onClick={() => setView('overdue')}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold transition-colors"
-            style={{ background: view === 'overdue' ? '#f59e0b22' : '#1e1e1e', border: `1px solid ${view === 'overdue' ? '#f59e0b60' : '#2a2a2a'}`, color: '#f59e0b' }}>
-            <AlertTriangle size={13} /> {overdueDeals.length} overdue
-          </button>
+          <SecondaryButton onClick={() => setView('overdue')} active={view === 'overdue'} style={view === 'overdue' ? undefined : { borderColor: WARN_BORDER }}>
+            <AlertTriangle size={13} style={{ color: WARN }} /> {overdueDeals.length} overdue
+          </SecondaryButton>
         )}
       </div>
 
       {loading ? (
-        <div className="py-16 text-center text-white/30 text-sm">Loading…</div>
+        <LoadingBlock text="Loading payroll…" />
       ) : !payDates.length ? (
-        <div className="rounded-xl p-10 text-center text-white/40 text-[13px]" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-          No deals have a pay date yet. Set install dates (which auto-fill pay dates) or run the pay-date backfill.
+        <div className="rounded-2xl" style={SURFACE.card}>
+          <EmptyBlock className="py-10">No deals have a pay date yet. Set install dates (which auto-fill pay dates) or run the pay-date backfill.</EmptyBlock>
         </div>
       ) : (
         <>
           {/* Locked-run banner */}
           {runLock && (
-            <div className="mb-3 rounded-xl p-3 flex items-center gap-3 flex-wrap" style={{ background: '#00b89412', border: '1px solid #00b89440' }}>
-              <Lock size={14} className="text-teal flex-shrink-0" />
+            <div className="mb-3 rounded-2xl p-3 flex items-center gap-3 flex-wrap" style={{ ...SURFACE.card, borderColor: 'rgba(169,196,178,0.45)' }}>
+              <Lock size={14} className="flex-shrink-0" style={{ color: POS }} />
               <div className="min-w-0 flex-1">
-                <p className="text-[12px] font-semibold text-teal">This pay run is locked</p>
-                <p className="text-[11px] text-white/40">
+                <p className="text-[13px] font-semibold" style={{ color: POS }}>This pay run is locked</p>
+                <p className="text-[13px] text-bank-mu">
                   {runLock.snapshot?.auto ? 'Auto-locked (pay date passed with every deal Paid)' : 'Locked'}
                   {runLock.locked_at ? ` ${format(new Date(runLock.locked_at), 'MMM d, yyyy · h:mmaaa')}` : ''}
                   {runLock.locked_by ? ` by ${users.find(u => u.id === runLock.locked_by)?.name || 'an admin'}` : ''}
@@ -1156,20 +1146,20 @@ export default function Payroll() {
                 {/* Overrides are the one thing that gets past the freeze, so
                     the lock banner is where they have to be readable (057). */}
                 {overrides.length > 0 && (
-                  <div className="mt-2 pt-2 border-t border-white/10">
-                    <button onClick={() => setShowOverrides(v => !v)}
-                      className="text-[11px] font-bold text-amber-300 hover:text-amber-200 transition-colors">
+                  <div className="mt-2 pt-2 border-t border-bank-line">
+                    <button onClick={() => setShowOverrides(v => !v)} aria-expanded={showOverrides}
+                      className="text-[13px] font-bold transition-colors min-h-[44px] md:min-h-0" style={{ color: WARN }}>
                       {overrides.length} admin override{overrides.length === 1 ? '' : 's'} on this run {showOverrides ? '▴' : '▾'}
                     </button>
                     {showOverrides && (
                       <ul className="mt-1.5 space-y-1">
                         {overrides.map(o => (
-                          <li key={o.id} className="text-[11px] text-white/50 leading-relaxed">
-                            <span className="text-white/75 font-semibold">{dealById[o.deal_id]?.deal_name || 'a deleted deal'}</span>
+                          <li key={o.id} className="text-[13px] text-bank-mu leading-relaxed">
+                            <span className="text-bank-tx font-semibold">{dealById[o.deal_id]?.deal_name || 'a deleted deal'}</span>
                             {' · '}{users.find(u => u.id === o.profile_id)?.name || 'an admin'}
                             {' · '}{format(new Date(o.created_at), 'MMM d, h:mmaaa')}
                             {' · changed '}{Object.keys(o.patch || {}).join(', ') || '—'}
-                            <span className="block text-white/35">“{o.reason}”</span>
+                            <span className="block text-bank-fa">“{o.reason}”</span>
                           </li>
                         ))}
                       </ul>
@@ -1178,11 +1168,7 @@ export default function Payroll() {
                 )}
               </div>
               {isAdmin && (
-                <button onClick={unlockRun}
-                  className="px-3 py-1.5 rounded-lg text-[11px] font-bold text-white/60 hover:text-white transition-colors flex-shrink-0"
-                  style={{ background: '#1e1e1e', border: '1px solid #2e2e2e' }}>
-                  Unlock
-                </button>
+                <SecondaryButton onClick={unlockRun} className="flex-shrink-0">Unlock</SecondaryButton>
               )}
             </div>
           )}
@@ -1192,16 +1178,17 @@ export default function Payroll() {
               page used to show four flat tiles that never said which stage
               you were at. "Deals 2/19" was a progress bar pretending to be a
               statistic; this is the progress bar. */}
-          <div className="mb-3 rounded-xl p-4" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+          <div className="mb-3 rounded-2xl p-4" style={SURFACE.card}>
             <div className="flex flex-wrap items-start gap-x-8 gap-y-4">
               <div className="min-w-[190px]">
-                <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/35">
+                <p className={head}>
                   {filtered ? 'Rep payout' : 'Total payout'}
                 </p>
-                <p className="text-[26px] font-extrabold text-teal mt-1 leading-none tabular-nums">{fmt(summary.total)}</p>
-                <p className="text-[11px] text-white/40 mt-1.5">
+                {/* The one gold number on this page. */}
+                <p className="text-[26px] md:text-[30px] font-extrabold mt-1 leading-none tabular-nums" style={{ color: 'var(--gold-tx)' }}>{fmt(summary.total)}</p>
+                <p className="text-[13px] text-bank-mu mt-1.5">
                   {summary.adjTotal ? (
-                    <span className={summary.adjTotal < 0 ? 'text-red-400/90' : 'text-emerald-400/90'}>
+                    <span style={{ color: summary.adjTotal < 0 ? NEG : POS }}>
                       incl. {summary.adjTotal < 0 ? '−' : '+'}{fmt(Math.abs(summary.adjTotal))} adjustments ·{' '}
                     </span>
                   ) : null}
@@ -1209,36 +1196,36 @@ export default function Payroll() {
                 </p>
               </div>
 
-              <div className="flex-1 min-w-[280px]">
+              <div className="flex-1 min-w-[260px]">
                 <div className="flex items-center justify-between gap-3 mb-2">
-                  <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/35">Run progress</p>
-                  <span className="text-[11.5px] font-bold" style={{ color: runStage.color }}>{runStage.label}</span>
+                  <p className={head}>Run progress</p>
+                  <span className="text-[13px] font-bold" style={{ color: runStage.color }}>{runStage.label}</span>
                 </div>
                 {/* One segment per stage, aligned with the three counts
                     below it, so a fully-verified fully-approved run doesn't
                     read as zero progress. */}
                 <div className="flex gap-1">
                   {runStage.segments.map(seg => (
-                    <div key={seg.key} className="flex-1 h-[7px] rounded-full overflow-hidden" style={{ background: '#262626' }}>
+                    <div key={seg.key} className="flex-1 h-[7px] rounded-full overflow-hidden" style={{ background: 'var(--raise)' }}>
                       <div style={{
                         width: `${Math.round(seg.fill * 100)}%`, height: '100%',
-                        background: seg.fill >= 1 ? '#00b894' : runStage.color,
+                        background: seg.fill >= 1 ? POS : runStage.color,
                         transition: 'width .3s',
                       }} />
                     </div>
                   ))}
                 </div>
-                <div className="flex items-center justify-between gap-3 flex-wrap mt-2 text-[11px]">
-                  <span className={runStage.verified >= runStage.total && runStage.total > 0 ? 'text-emerald-400/90' : 'text-white/40'}>
+                <div className="flex items-center justify-between gap-3 flex-wrap mt-2 text-[13px] tabular-nums">
+                  <span style={{ color: runStage.verified >= runStage.total && runStage.total > 0 ? POS : 'var(--mu)' }}>
                     {runStage.verified}/{runStage.total} verified
                   </span>
-                  <span className={runStage.finalized >= runStage.total && runStage.total > 0 ? 'text-emerald-400/90' : 'text-white/40'}>
+                  <span style={{ color: runStage.finalized >= runStage.total && runStage.total > 0 ? POS : 'var(--mu)' }}>
                     {runStage.finalized}/{runStage.total} approved
                   </span>
-                  <span className={runStage.paid >= runStage.finalized && runStage.finalized > 0 ? 'text-emerald-400/90' : 'text-amber-300'}>
+                  <span style={{ color: runStage.paid >= runStage.finalized && runStage.finalized > 0 ? POS : WARN }}>
                     {runStage.paid}/{runStage.finalized} paid
                   </span>
-                  <span className="text-white/40">
+                  <span className="text-bank-mu">
                     {summary.remaining > 0 ? `${fmt(summary.remaining)} remaining` : runLock ? 'locked' : 'nothing outstanding'}
                   </span>
                 </div>
@@ -1248,55 +1235,49 @@ export default function Payroll() {
             {/* Deals carrying this pay date that aren't finalized aren't being
                 paid, so they stay out of the total above. */}
             {summary.pending > 0 && (
-              <p className="text-[11px] text-white/35 mt-3 pt-3 border-t border-white/5">
+              <p className="text-[13px] text-bank-mu mt-3 pt-3 border-t border-bank-line">
                 + {fmt(summary.pending)} across {summary.pendingCount} deal{summary.pendingCount === 1 ? '' : 's'} not yet finalized — excluded from the total until they reach “{APPROVED}”.
               </p>
             )}
           </div>
 
           {/* ── Before you pay (per Keaton's review) ─────────────────────
-              This replaced THREE separate amber banners (unassigned
-              commission, missing office, not gold-checked) that had identical
-              construction and stacked into one wall of yellow, plus the
-              standalone deductions tray. One card, one line per problem,
-              each expanding to the same chips as before. A clean run says so
-              in a single green line rather than rendering nothing, which
-              reads as reassurance instead of absence. */}
+              One card, one line per problem, each expanding to the same
+              chips as before. A clean run says so in a single sage line
+              rather than rendering nothing. */}
           {(checks.length > 0 || openLedger.length > 0) ? (
-            <div className="mb-3 rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid rgba(245,158,11,0.38)' }}>
+            <div className="mb-3 rounded-2xl overflow-hidden" style={{ ...SURFACE.card, borderColor: WARN_BORDER }}>
               <div className="flex items-center gap-3 flex-wrap px-4 py-2.5"
-                style={{ background: 'rgba(245,158,11,0.07)', borderBottom: '1px solid rgba(245,158,11,0.22)' }}>
-                <AlertTriangle size={14} className="text-amber-300 flex-shrink-0" />
-                <span className="text-[12.5px] font-bold text-amber-300">
+                style={{ background: 'rgba(210,160,116,0.07)', borderBottom: `1px solid ${WARN_BORDER}` }}>
+                <AlertTriangle size={14} className="flex-shrink-0" style={{ color: WARN }} />
+                <span className="text-[13px] font-bold" style={{ color: WARN }}>
                   Before you pay — {checkCount} thing{checkCount === 1 ? '' : 's'} to look at
                 </span>
                 <span className="flex-1" />
-                <span className="text-[11px] text-white/35">none of these block payment</span>
+                <span className="text-[13px] text-bank-fa">none of these block payment</span>
               </div>
 
               {/* Deal-level problems */}
               {checks.map(c => (
-                <div key={c.key} className="border-t border-white/5">
-                  <div className="flex items-center gap-3 px-4 py-2.5">
-                    <span className="w-[76px] flex-shrink-0 text-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide"
-                      style={{ color: '#fcd34d', background: 'rgba(245,158,11,0.13)', border: '1px solid rgba(245,158,11,0.35)' }}>
+                <div key={c.key} className="border-t border-bank-line">
+                  <div className="flex items-center gap-3 px-4 py-2.5 flex-wrap">
+                    <span className="w-[76px] flex-shrink-0 text-center px-2 py-0.5 rounded text-[12px] font-bold uppercase tracking-wide tabular-nums"
+                      style={{ ...chip(WARN), background: 'rgba(210,160,116,0.12)' }}>
                       {c.deals.length} deal{c.deals.length === 1 ? '' : 's'}
                     </span>
-                    <span className="flex-1 min-w-0 text-[12.5px] text-white/75">{c.label}</span>
-                    <button onClick={() => toggleCheck(c.key)}
-                      className="px-3 h-8 rounded-lg text-[11.5px] font-bold text-white/55 hover:text-white transition-colors flex-shrink-0"
-                      style={{ border: '1px solid #333' }}>
+                    <span className="flex-1 min-w-[160px] text-[13px] text-bank-tx">{c.label}</span>
+                    <SecondaryButton onClick={() => toggleCheck(c.key)} active={openChecks.has(c.key)} aria-expanded={openChecks.has(c.key)} className="flex-shrink-0">
                       {openChecks.has(c.key) ? 'Hide' : 'Show'}
-                    </button>
+                    </SecondaryButton>
                   </div>
                   {openChecks.has(c.key) && (
                     <div className="px-4 pb-3 -mt-0.5">
-                      <p className="text-[11px] text-white/35 mb-2">{c.hint}</p>
+                      <p className="text-[13px] text-bank-mu mb-2">{c.hint}</p>
                       <div className="flex flex-wrap gap-1.5">
                         {c.deals.map(d => (
                           <button key={d.id} onClick={() => openEdit(d)}
-                            className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-white/80 hover:text-white transition-colors"
-                            style={{ background: '#171717', border: '1px solid #f59e0b40' }}>
+                            className="px-2.5 py-1 min-h-[44px] md:min-h-0 rounded-lg text-[13px] font-semibold text-bank-tx hover:text-bank-gold-tx transition-colors"
+                            style={{ background: 'var(--bg)', border: `1px solid ${WARN_BORDER}` }}>
                             {d.deal_name}
                           </button>
                         ))}
@@ -1309,20 +1290,18 @@ export default function Payroll() {
               {/* Deductions owed (migration 050) — now a row of this card
                   rather than its own block above the money. */}
               {openLedger.length > 0 && (
-                <div className="border-t border-white/5">
-                  <div className="flex items-center gap-3 px-4 py-2.5">
-                    <span className="w-[76px] flex-shrink-0 text-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide tabular-nums"
-                      style={{ color: '#fcd34d', background: 'rgba(245,158,11,0.13)', border: '1px solid rgba(245,158,11,0.35)' }}>
+                <div className="border-t border-bank-line">
+                  <div className="flex items-center gap-3 px-4 py-2.5 flex-wrap">
+                    <span className="w-[76px] flex-shrink-0 text-center px-2 py-0.5 rounded text-[12px] font-bold uppercase tracking-wide tabular-nums"
+                      style={{ ...chip(WARN), background: 'rgba(210,160,116,0.12)' }}>
                       {fmt(owedTotals.owed)}
                     </span>
-                    <span className="flex-1 min-w-0 text-[12.5px] text-white/75">
+                    <span className="flex-1 min-w-[160px] text-[13px] text-bank-tx">
                       in deductions owed — {onThisRun} of {owedTotals.count} {onThisRun === 1 ? 'is a rep' : 'are reps'} getting paid on this run
                     </span>
-                    <button onClick={() => toggleCheck('deductions')}
-                      className={`px-3 h-8 rounded-lg text-[11.5px] font-bold transition-colors flex-shrink-0 ${openChecks.has('deductions') ? 'text-teal' : 'text-white/55 hover:text-white'}`}
-                      style={{ border: `1px solid ${openChecks.has('deductions') ? 'rgba(0,184,148,0.4)' : '#333'}` }}>
+                    <SecondaryButton onClick={() => toggleCheck('deductions')} active={openChecks.has('deductions')} aria-expanded={openChecks.has('deductions')} className="flex-shrink-0">
                       {openChecks.has('deductions') ? 'Hide' : 'Show'}
-                    </button>
+                    </SecondaryButton>
                   </div>
 
                   {openChecks.has('deductions') && openLedger.map(d => {
@@ -1332,40 +1311,35 @@ export default function Payroll() {
                     const typed = open ? (parseFloat(applyAmt) || 0) : 0
                     const negative = open && wouldGoNegative(typed, pay)
                     return (
-                      <div key={d.id} className="px-4 py-2.5 border-t border-white/5" style={has ? undefined : { opacity: 0.68 }}>
+                      <div key={d.id} className="px-4 py-2.5 border-t border-bank-line" style={has ? undefined : { opacity: 0.68 }}>
                         <div className="flex items-center gap-3 flex-wrap">
                           <div className="w-[150px] flex-shrink-0 min-w-0">
-                            <p className="text-[12.5px] font-semibold text-white truncate">{userById[d.payee_id]?.name || 'Unknown rep'}</p>
-                            <p className="text-[10.5px] text-white/40">{has ? `on this run · ${fmt(pay)}` : 'no pay on this run'}</p>
+                            <p className="text-[13px] font-semibold text-bank-tx truncate">{userById[d.payee_id]?.name || 'Unknown rep'}</p>
+                            <p className="text-[13px] text-bank-mu">{has ? `on this run · ${fmt(pay)}` : 'no pay on this run'}</p>
                           </div>
                           <div className="w-[82px] flex-shrink-0 text-right">
-                            <span className="text-[14.5px] font-extrabold text-red-400 tabular-nums">−{fmt(d.remaining)}</span>
-                            {d.recovered > 0 && <p className="text-[10px] text-white/35 tabular-nums">of {fmt(d.owed)}</p>}
+                            <span className="text-[14.5px] font-extrabold tabular-nums" style={{ color: NEG }}>−{fmt(d.remaining)}</span>
+                            {d.recovered > 0 && <p className="text-[13px] text-bank-fa tabular-nums">of {fmt(d.owed)}</p>}
                           </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-[12px] text-white/70 truncate">
+                          <div className="flex-1 min-w-[160px]">
+                            <p className="text-[13px] text-bank-tx truncate">
                               {dealById[d.deal_id]?.deal_name || 'No job'}
-                              {d.note ? <span className="text-white/45"> · {d.note}</span> : null}
+                              {d.note ? <span className="text-bank-mu"> · {d.note}</span> : null}
                             </p>
-                            <p className="text-[10.5px] text-white/35">
+                            <p className="text-[13px] text-bank-fa">
                               logged {d.created_at ? format(new Date(d.created_at), 'MMM d') : '—'}
                               {d.recovered > 0 ? ` · ${fmt(d.recovered)} already recovered` : ''}
                             </p>
                           </div>
                           {isAdmin && !runLock && !open && (
-                            <span className="flex items-center gap-1.5 flex-shrink-0">
-                              <button onClick={() => { setApplyFor(d.id); setApplyAmt(String(suggestedTake(d.remaining, pay) || d.remaining)) }}
-                                className="px-3 h-8 rounded-lg text-[11.5px] font-bold transition-colors"
-                                style={{ background: 'rgba(0,184,148,0.12)', border: '1px solid rgba(0,184,148,0.4)', color: '#00b894' }}>
+                            <span className="flex items-center gap-1 flex-shrink-0 flex-wrap">
+                              <SecondaryButton onClick={() => { setApplyFor(d.id); setApplyAmt(String(suggestedTake(d.remaining, pay) || d.remaining)) }}>
                                 Take from this run
-                              </button>
-                              <button onClick={() => setDedModal({ edit: d })} title="Edit"
-                                className="p-1.5 rounded-lg text-white/30 hover:text-teal hover:bg-teal/10"><Pencil size={13} /></button>
-                              <button onClick={() => writeOff(d)} title="Write it off — stops it appearing, keeps the record"
-                                className="p-1.5 rounded-lg text-white/30 hover:text-amber-400 hover:bg-amber-500/10"><Ban size={13} /></button>
+                              </SecondaryButton>
+                              <IconButton onClick={() => setDedModal({ edit: d })} title="Edit" aria-label="Edit deduction"><Pencil size={13} /></IconButton>
+                              <IconButton onClick={() => writeOff(d)} title="Write it off — stops it appearing, keeps the record" aria-label="Write it off" className="hover:!text-bank-warn"><Ban size={13} /></IconButton>
                               {!d.recoveries.length && (
-                                <button onClick={() => deleteDebt(d)} title="Delete"
-                                  className="p-1.5 rounded-lg text-white/25 hover:text-red-400 hover:bg-red-500/10"><Trash2 size={13} /></button>
+                                <IconButton onClick={() => deleteDebt(d)} title="Delete" aria-label="Delete deduction" className="hover:!text-bank-neg"><Trash2 size={13} /></IconButton>
                               )}
                             </span>
                           )}
@@ -1373,22 +1347,21 @@ export default function Payroll() {
 
                         {/* How much comes out — Keaton types the number. */}
                         {open && (
-                          <div className="mt-2 ml-[150px] flex items-center gap-2 flex-wrap">
-                            <label htmlFor={`take-${d.id}`} className="text-[11px] text-white/45">Take</label>
+                          <div className="mt-2 md:ml-[150px] flex items-center gap-2 flex-wrap">
+                            <label htmlFor={`take-${d.id}`} className="text-[13px] text-bank-mu">Take</label>
                             <input id={`take-${d.id}`} autoFocus type="number" step="0.01" min="0" value={applyAmt}
                               onChange={e => setApplyAmt(e.target.value)}
                               onKeyDown={e => { if (e.key === 'Enter') applyDeduction(d, applyAmt); if (e.key === 'Escape') setApplyFor('') }}
-                              className="w-24 h-8 px-2 rounded-lg text-[12.5px] text-white tabular-nums focus:outline-none"
-                              style={{ background: '#1a1a1a', border: '1px solid rgba(0,184,148,0.45)' }} />
-                            <span className="text-[11px] text-white/35">of {fmt(d.remaining)} owed</span>
-                            <button onClick={() => applyDeduction(d, applyAmt)}
-                              className="px-3 h-8 rounded-lg text-[11.5px] font-bold bg-teal text-dark">Take it</button>
-                            <button onClick={() => setApplyFor('')} className="px-2 h-8 rounded-lg text-[11.5px] text-white/45 hover:text-white">Cancel</button>
+                              className={`${inputCls} !w-28 tabular-nums`}
+                              style={{ ...SURFACE.well, borderColor: 'rgba(191,164,108,0.5)' }} />
+                            <span className="text-[13px] text-bank-fa">of {fmt(d.remaining)} owed</span>
+                            <SecondaryButton onClick={() => applyDeduction(d, applyAmt)} active>Take it</SecondaryButton>
+                            <button onClick={() => setApplyFor('')} className="px-2 min-h-[44px] md:min-h-0 md:h-8 rounded-lg text-[13px] text-bank-mu hover:text-bank-tx">Cancel</button>
                             {typed > 0 && typed < d.remaining && (
-                              <span className="text-[11px] text-amber-300">leaves {fmt(d.remaining - typed)} owed — carries to the next run</span>
+                              <span className="text-[13px]" style={{ color: WARN }}>leaves {fmt(d.remaining - typed)} owed — carries to the next run</span>
                             )}
                             {negative && (
-                              <span className="text-[11px] text-red-400">more than the {fmt(pay)} they earn this run — their cheque would go negative</span>
+                              <span className="text-[13px]" style={{ color: NEG }}>more than the {fmt(pay)} they earn this run — their cheque would go negative</span>
                             )}
                           </div>
                         )}
@@ -1399,30 +1372,26 @@ export default function Payroll() {
               )}
             </div>
           ) : shownDeals.length > 0 && (
-            <div className="mb-3 rounded-xl px-4 py-2.5 flex items-center gap-2.5"
-              style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.28)' }}>
-              <CheckCircle2 size={14} className="text-emerald-400 flex-shrink-0" />
-              <span className="text-[12.5px] text-emerald-300/90">
+            <div className="mb-3 rounded-2xl px-4 py-2.5 flex items-center gap-2.5"
+              style={{ ...SURFACE.card, borderColor: 'rgba(169,196,178,0.4)' }}>
+              <CheckCircle2 size={14} className="flex-shrink-0" style={{ color: POS }} />
+              <span className="text-[13px]" style={{ color: POS }}>
                 Everything checks out — all deals verified, offices set, every share assigned, nothing owed.
               </span>
             </div>
           )}
 
-          {/* Who gets paid — the run's workspace (per Keaton's review).
-              Everything you actually DO lives in here (copy a statement, add
-              an adjustment, take a deduction), so the rep filter and the bulk
-              actions moved into its header instead of sitting in two more
-              strips above it. */}
+          {/* Who gets paid — the run's workspace (per Keaton's review). */}
           {shownPayees.length > 0 && (
-            <div className="mb-4 rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-              <div className="flex items-center gap-2 flex-wrap px-4 py-2.5 border-b border-white/5">
-                <button onClick={() => setShowPayees(s => !s)}
-                  className="flex items-center gap-2 text-left hover:opacity-80 transition-opacity">
-                  <ChevronDown size={14} className={`text-white/30 transition-transform ${showPayees ? 'rotate-180' : ''}`} />
-                  <span className="text-[11px] uppercase tracking-wider text-white/40 font-semibold">
+            <div className="mb-4 rounded-2xl overflow-hidden" style={SURFACE.card}>
+              <div className="flex items-center gap-2 flex-wrap px-4 py-2.5 border-b border-bank-line">
+                <button onClick={() => setShowPayees(s => !s)} aria-expanded={showPayees}
+                  className="flex items-center gap-2 text-left hover:opacity-80 transition-opacity min-h-[44px] md:min-h-0">
+                  <ChevronDown size={14} className={`text-bank-fa transition-transform ${showPayees ? 'rotate-180' : ''}`} />
+                  <span className={head}>
                     Who gets paid · {shownPayees.length} {shownPayees.length === 1 ? 'person' : 'people'}
                   </span>
-                  <span className="text-[13px] font-bold text-teal">{fmt(summary.total)}</span>
+                  <span className="text-[13px] font-bold text-bank-tx tabular-nums">{fmt(summary.total)}</span>
                 </button>
                 <span className="flex-1" />
                 {payees.length > 1 && (
@@ -1431,55 +1400,35 @@ export default function Payroll() {
                 {view !== 'overdue' && shownDeals.length > 0 && (
                   <>
                     {canApprove && (
-                      <button onClick={() => markAll(APPROVED)}
-                        className="px-3 py-1.5 rounded-lg text-[11.5px] font-semibold text-white/70 hover:text-white transition-colors"
-                        style={{ background: '#1a1a1a', border: '1px solid #2e2e2e' }}>
-                        Approve all
-                      </button>
+                      <SecondaryButton onClick={() => markAll(APPROVED)}>Approve all</SecondaryButton>
                     )}
                     {canPay && (
-                      <button onClick={() => markAll(PAID)}
-                        className="px-3 py-1.5 rounded-lg text-[11.5px] font-bold text-dark transition-colors"
-                        style={{ background: '#00b894' }}>
-                        Mark all paid
-                      </button>
+                      <PrimaryButton onClick={() => markAll(PAID)} className="px-3 py-1.5 min-h-[44px] md:min-h-0">Mark all paid</PrimaryButton>
                     )}
                     {isAdmin && !runLock && (
-                      <button onClick={() => setAddPayOpen(o => !o)}
-                        title="Pay someone who has no deal on this run — an incentive, a spiff, anything owed"
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11.5px] font-semibold transition-colors"
-                        style={addPayOpen
-                          ? { background: 'rgba(0,184,148,0.12)', border: '1px solid rgba(0,184,148,0.5)', color: '#00b894' }
-                          : { background: '#1a1a1a', border: '1px solid #2e2e2e', color: 'rgba(255,255,255,0.6)' }}>
+                      <SecondaryButton onClick={() => setAddPayOpen(o => !o)} active={addPayOpen} aria-expanded={addPayOpen}
+                        title="Pay someone who has no deal on this run — an incentive, a spiff, anything owed">
                         <Plus size={12} /> Add pay
-                      </button>
+                      </SecondaryButton>
                     )}
                     {isAdmin && !runLock && (
-                      <button onClick={lockRun} title="Freeze this run — its deals and adjustments become read-only until unlocked"
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11.5px] font-semibold text-white/60 hover:text-white transition-colors"
-                        style={{ background: '#1a1a1a', border: '1px solid #2e2e2e' }}>
+                      <SecondaryButton onClick={lockRun} title="Freeze this run — its deals and adjustments become read-only until unlocked">
                         <Lock size={12} /> Lock run
-                      </button>
+                      </SecondaryButton>
                     )}
                   </>
                 )}
               </div>
               {showPayees && (
                 <>
-                  {/* "Add pay" form — a person who has no deal on this run.
-                      The write is an ordinary dated payroll_adjustment, so the
-                      run total, the payee row, the pay statement, the CSV
-                      export and the lock guard all handle it with no change:
-                      `payees` has always been able to build a row from an
-                      adjustment alone. */}
+                  {/* "Add pay" form — a person who has no deal on this run. */}
                   {isAdmin && addPayOpen && view !== 'overdue' && !runLock && (
-                    <div className="px-4 py-3 border-b border-white/10" style={{ background: '#1a1a1a' }}>
+                    <div className="px-4 py-3 border-b border-bank-line" style={{ background: 'var(--raise)' }}>
                       <div className="flex items-end gap-2 flex-wrap">
                         <label className="flex flex-col gap-1 min-w-[180px] flex-1">
-                          <span className="text-[9px] font-bold uppercase tracking-[0.1em] text-white/30">Who</span>
+                          <span className={head}>Who</span>
                           <select autoFocus value={addPayId} onChange={e => setAddPayId(e.target.value)}
-                            className="h-8 px-2 rounded-lg text-[12px] text-white focus:outline-none appearance-none"
-                            style={{ background: '#242424', border: '1px solid #333' }}>
+                            className={`${inputCls} appearance-none`} style={SURFACE.well}>
                             <option value="">Pick a person…</option>
                             {payUsers.map(u => (
                               <option key={u.id} value={u.id}>
@@ -1489,51 +1438,42 @@ export default function Payroll() {
                           </select>
                         </label>
                         <label className="flex flex-col gap-1">
-                          <span className="text-[9px] font-bold uppercase tracking-[0.1em] text-white/30">Amount</span>
+                          <span className={head}>Amount</span>
                           <input type="number" step="0.01" value={addPayAmt} onChange={e => setAddPayAmt(e.target.value)}
                             onKeyDown={e => { if (e.key === 'Enter') saveAddPay(); if (e.key === 'Escape') closeAddPay() }}
-                            placeholder="$" className="h-8 w-24 px-2 rounded-lg text-[12px] text-white focus:outline-none"
-                            style={{ background: '#242424', border: '1px solid rgba(0,184,148,0.4)' }} />
+                            placeholder="$" className={`${inputCls} !w-28 tabular-nums`}
+                            style={{ ...SURFACE.well, borderColor: 'rgba(191,164,108,0.5)' }} />
                         </label>
                         <label className="flex flex-col gap-1 flex-[2] min-w-[200px]">
-                          <span className="text-[9px] font-bold uppercase tracking-[0.1em] text-white/30">What for</span>
+                          <span className={head}>What for</span>
                           <input value={addPayNote} onChange={e => setAddPayNote(e.target.value)}
                             onKeyDown={e => { if (e.key === 'Enter') saveAddPay(); if (e.key === 'Escape') closeAddPay() }}
                             placeholder="e.g. Door-knock contest — 2nd place"
-                            className="h-8 px-2 rounded-lg text-[12px] text-white focus:outline-none"
-                            style={{ background: '#242424', border: '1px solid #333' }} />
+                            className={inputCls} style={SURFACE.well} />
                         </label>
-                        <button onClick={saveAddPay} disabled={!addPayId || !parseFloat(addPayAmt) || !addPayNote.trim() || addPaySaving}
-                          className="h-8 px-4 rounded-lg text-[12px] font-bold text-dark transition-opacity disabled:opacity-35"
-                          style={{ background: '#00b894' }}>
+                        <SecondaryButton onClick={saveAddPay} disabled={!addPayId || !parseFloat(addPayAmt) || !addPayNote.trim() || addPaySaving} active>
                           {addPaySaving ? 'Adding…' : 'Add to this run'}
-                        </button>
-                        <button onClick={closeAddPay} className="h-8 px-2 rounded-lg text-white/40 hover:text-white transition-colors">
-                          <X size={14} />
-                        </button>
+                        </SecondaryButton>
+                        <IconButton onClick={closeAddPay} aria-label="Close"><X size={14} /></IconButton>
                       </div>
-                      <p className="text-[10.5px] text-white/35 mt-2">
-                        Paid on <b className="text-white/60">{fmtDay(view)}</b> and listed with everyone else.
+                      <p className="text-[13px] text-bank-mu mt-2">
+                        Paid on <b className="text-bank-tx">{fmtDay(view)}</b> and listed with everyone else.
                         {' '}The note is what the rep sees on their pay statement, so say what it is for.
                         {' '}A negative amount takes money off — though a deduction tied to a job belongs in
-                        {' '}<b className="text-white/60">Log a deduction</b>, which tracks what is still owed.
+                        {' '}<b className="text-bank-tx">Log a deduction</b>, which tracks what is still owed.
                       </p>
                     </div>
                   )}
 
-                  {/* Column headings. Deliberately the same shape as the
-                      "Deals in this run" table below, so the page reads as one
-                      thing. The old layout was a TWO-COLUMN grid, which went
-                      ragged because each person carries a different number of
-                      adjustment lines — nothing aligned across the gutter and
-                      the order snaked (biggest top-left, second top-RIGHT). */}
-                  <div className="hidden sm:flex items-center gap-2.5 px-4 py-1.5 border-b border-white/10" style={{ background: '#1a1a1a' }}>
+                  {/* Column headings (desktop). Phones show person + net pay and
+                      open the row for the rest. */}
+                  <div className="hidden md:flex items-center gap-2.5 px-4 py-1.5 border-b border-bank-line" style={{ background: 'var(--raise)' }}>
                     <span className="w-[12px] flex-shrink-0" />
-                    <span style={PCOL.person} className="min-w-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Person</span>
-                    <span style={PCOL.deals} className="text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30 text-right">Deals</span>
-                    <span style={PCOL.money} className="text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30 text-right">Deal pay</span>
-                    <span style={PCOL.adj} className="hidden lg:block min-w-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Adjustments</span>
-                    <span style={PCOL.net} className="text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30 text-right">Net pay</span>
+                    <span style={PCOL.person} className={`min-w-0 ${head}`}>Person</span>
+                    <span style={PCOL.deals} className={`${head} text-right`}>Deals</span>
+                    <span style={PCOL.money} className={`${head} text-right`}>Deal pay</span>
+                    <span style={PCOL.adj} className={`hidden lg:block min-w-0 ${head}`}>Adjustments</span>
+                    <span style={PCOL.net} className={`${head} text-right`}>Net pay</span>
                     <span style={PCOL.act} className="flex-shrink-0" />
                   </div>
 
@@ -1541,40 +1481,40 @@ export default function Payroll() {
                     const why = adjSummary(p.adjustments, dealById)
                     const isOpen = openPayees.has(p.id)
                     return (
-                      <div key={p.id} className="border-t border-white/5 first:border-t-0">
+                      <div key={p.id} className="border-t border-bank-line first:border-t-0">
                         {/* Click anywhere to expand; the buttons stop it. */}
-                        <div onClick={onClickUnlessSelecting(() => togglePayee(p.id))}
-                          className="flex items-center gap-2.5 px-4 py-2 cursor-pointer hover:bg-white/[0.02] transition-colors"
-                          style={isOpen ? { background: 'rgba(255,255,255,0.02)' } : undefined}>
+                        <div onClick={onClickUnlessSelecting(() => togglePayee(p.id))} role="button" tabIndex={0} aria-expanded={isOpen}
+                          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePayee(p.id) } }}
+                          className="flex items-center gap-2.5 px-4 py-2 min-h-[44px] cursor-pointer hover:bg-bank-raise transition-colors"
+                          style={isOpen ? { background: 'var(--raise)' } : undefined}>
                           <ChevronDown size={12}
-                            className={`text-white/25 flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-                          <span style={PCOL.person} className="min-w-0 text-[12.5px] font-semibold text-white truncate" title={p.name}>{p.name}</span>
-                          <span style={PCOL.deals} className="text-[11.5px] text-white/35 text-right tabular-nums">{p.dealIds.size || '—'}</span>
-                          <span style={PCOL.money} className="text-[12px] text-white/60 text-right tabular-nums">{fmt(p.dealPay)}</span>
+                            className={`text-bank-fa flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                          <span style={PCOL.person} className="min-w-0 text-[13px] font-semibold text-bank-tx truncate" title={p.name}>{p.name}</span>
+                          <span style={PCOL.deals} className="hidden md:block text-[13px] text-bank-mu text-right tabular-nums">{p.dealIds.size || '—'}</span>
+                          <span style={PCOL.money} className="hidden md:block text-[13px] text-bank-mu text-right tabular-nums">{fmt(p.dealPay)}</span>
                           <span style={PCOL.adj} className="hidden lg:flex items-center gap-2 min-w-0">
                             {p.adjustments.length === 0 ? (
-                              <span className="text-[12px] text-white/25">—</span>
+                              <span className="text-[13px] text-bank-fa">—</span>
                             ) : (
                               <>
-                                <span className={`text-[12px] font-bold tabular-nums flex-shrink-0 ${p.adjTotal < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                                <span className="text-[13px] font-bold tabular-nums flex-shrink-0" style={{ color: p.adjTotal < 0 ? NEG : POS }}>
                                   {p.adjTotal < 0 ? '−' : '+'}{fmt(Math.abs(p.adjTotal))}
                                 </span>
-                                <span className="text-[11px] text-white/35 truncate" title={why}>{why}</span>
+                                <span className="text-[13px] text-bank-mu truncate" title={why}>{why}</span>
                               </>
                             )}
                           </span>
-                          <span style={PCOL.net} className="text-[13px] font-bold text-teal text-right tabular-nums">{fmt(p.total)}</span>
-                          <span style={PCOL.act} className="flex items-center justify-end gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                          <span style={PCOL.net} className="text-[13px] font-bold text-bank-tx text-right tabular-nums">{fmt(p.total)}</span>
+                          <span style={PCOL.act} className="flex items-center justify-end gap-0.5 flex-shrink-0" onClick={e => e.stopPropagation()}>
                             {isAdmin && view !== 'overdue' && !runLock && (
-                              <button onClick={() => { setAdjFor(adjFor === p.id ? '' : p.id); setAdjAmt(''); setAdjNote('') }}
-                                title="Add a payroll adjustment (+/−)"
-                                className="p-1 rounded text-white/30 hover:text-teal hover:bg-teal/10 transition-colors"><Plus size={13} /></button>
+                              <IconButton onClick={() => { setAdjFor(adjFor === p.id ? '' : p.id); setAdjAmt(''); setAdjNote('') }}
+                                title="Add a payroll adjustment (+/−)" aria-label="Add a payroll adjustment" className="md:!p-1"><Plus size={13} /></IconButton>
                             )}
                             {isAdmin && (
-                              <button onClick={() => copyPayee(p)} title="Copy this rep's pay statement to email"
-                                className={`p-1 rounded transition-colors ${copiedId === p.id ? 'text-emerald-400' : 'text-white/30 hover:text-teal hover:bg-teal/10'}`}>
+                              <IconButton onClick={() => copyPayee(p)} title="Copy this rep's pay statement to email" aria-label="Copy pay statement"
+                                tone={copiedId === p.id ? POS : undefined} className="md:!p-1">
                                 {copiedId === p.id ? <Check size={13} /> : <Copy size={13} />}
-                              </button>
+                              </IconButton>
                             )}
                           </span>
                         </div>
@@ -1582,22 +1522,31 @@ export default function Payroll() {
                         {/* Expanded — the deals behind the payout, then the
                             adjustments in full with their delete buttons. */}
                         {isOpen && (
-                          <div className="pl-8 pr-4 pb-2.5" style={{ background: '#161717' }}>
+                          <div className="pl-8 pr-4 pb-2.5" style={{ background: 'var(--bg)' }}>
+                            {/* Phones: the three columns the row hides. */}
+                            <div className="md:hidden grid grid-cols-3 gap-3 pt-2 text-[13px]">
+                              <div><p className="text-bank-fa text-[12px] uppercase">Deals</p><p className="text-bank-tx tabular-nums">{p.dealIds.size || '—'}</p></div>
+                              <div><p className="text-bank-fa text-[12px] uppercase">Deal pay</p><p className="text-bank-tx tabular-nums">{fmt(p.dealPay)}</p></div>
+                              <div><p className="text-bank-fa text-[12px] uppercase">Adjustments</p>
+                                <p className="tabular-nums" style={{ color: p.adjustments.length === 0 ? 'var(--fa)' : p.adjTotal < 0 ? NEG : POS }}>
+                                  {p.adjustments.length === 0 ? '—' : `${p.adjTotal < 0 ? '−' : '+'}${fmt(Math.abs(p.adjTotal))}`}
+                                </p></div>
+                            </div>
                             {p.lines.length > 0 && (
                               <>
-                                <p className="text-[9px] font-bold uppercase tracking-[0.1em] text-white/25 pt-2 pb-1">
+                                <p className={`${head} pt-2 pb-1`}>
                                   {p.dealIds.size} deal{p.dealIds.size === 1 ? '' : 's'}
                                 </p>
                                 {p.lines.map((l, i) => (
                                   <div key={i} className="py-[3px]">
                                     <div className="flex items-center justify-between gap-3">
-                                      <span className="text-[11.5px] text-white/65 truncate">
-                                        {l.deal}<span className="text-white/30"> · {l.selfGen ? 'Self-Gen' : l.role}</span>
+                                      <span className="text-[13px] text-bank-mu truncate">
+                                        {l.deal}<span className="text-bank-fa"> · {l.selfGen ? 'Self-Gen' : l.role}</span>
                                       </span>
-                                      <span className="text-[11.5px] text-white/80 whitespace-nowrap tabular-nums">{fmt(l.amount)}</span>
+                                      <span className="text-[13px] text-bank-tx whitespace-nowrap tabular-nums">{fmt(l.amount)}</span>
                                     </div>
                                     {l.ded > 0 && (
-                                      <p className="text-[10px] text-red-400/80 truncate">− {l.note || 'deduction'} · {fmt(l.ded)}</p>
+                                      <p className="text-[13px] truncate" style={{ color: NEG }}>− {l.note || 'deduction'} · {fmt(l.ded)}</p>
                                     )}
                                   </div>
                                 ))}
@@ -1606,7 +1555,7 @@ export default function Payroll() {
 
                             {p.adjustments.length > 0 && (
                               <>
-                                <p className="text-[9px] font-bold uppercase tracking-[0.1em] text-white/25 pt-2.5 pb-1">Adjustments</p>
+                                <p className={`${head} pt-2.5 pb-1`}>Adjustments</p>
                                 {p.adjustments.map(a => {
                                   // A RECOVERY (migration 050) names its job and, when it's a
                                   // partial take, says how much is still owed — per Keaton,
@@ -1616,22 +1565,23 @@ export default function Payroll() {
                                   return (
                                     <div key={a.id} className="py-[3px]">
                                       <div className="flex items-center justify-between gap-3">
-                                        <span className="text-[11.5px] text-white/65 truncate">
-                                          {debt && dealById[a.deal_id] ? <span className="text-white/80">{dealById[a.deal_id].deal_name} · </span> : null}
+                                        <span className="text-[13px] text-bank-mu truncate">
+                                          {debt && dealById[a.deal_id] ? <span className="text-bank-tx">{dealById[a.deal_id].deal_name} · </span> : null}
                                           {a.note || (debt ? 'Deduction' : 'Adjustment')}
                                         </span>
                                         <span className="flex items-center gap-1.5 flex-shrink-0">
-                                          <span className={`text-[11.5px] font-semibold whitespace-nowrap tabular-nums ${Number(a.amount) < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                                          <span className="text-[13px] font-semibold whitespace-nowrap tabular-nums" style={{ color: Number(a.amount) < 0 ? NEG : POS }}>
                                             {Number(a.amount) < 0 ? '−' : '+'}{fmt(Math.abs(Number(a.amount)))}
                                           </span>
                                           {isAdmin && !runLock && (
-                                            <button onClick={() => removeAdjustment(a.id)}
+                                            <IconButton onClick={() => removeAdjustment(a.id)}
                                               title={debt ? 'Undo this recovery — the balance goes back to outstanding' : 'Remove adjustment'}
-                                              className="p-0.5 rounded text-white/25 hover:text-red-400"><Trash2 size={11} /></button>
+                                              aria-label={debt ? 'Undo this recovery' : 'Remove adjustment'}
+                                              className="hover:!text-bank-neg md:!p-0.5"><Trash2 size={11} /></IconButton>
                                           )}
                                         </span>
                                       </div>
-                                      {line?.detail && <p className="text-[10px] text-amber-300/80">{line.detail}</p>}
+                                      {line?.detail && <p className="text-[13px]" style={{ color: WARN }}>{line.detail}</p>}
                                     </div>
                                   )
                                 })}
@@ -1639,7 +1589,7 @@ export default function Payroll() {
                             )}
 
                             {p.lines.length === 0 && p.adjustments.length === 0 && (
-                              <p className="text-[11px] text-white/30 py-2">Nothing on this run.</p>
+                              <p className="text-[13px] text-bank-mu py-2">Nothing on this run.</p>
                             )}
                           </div>
                         )}
@@ -1649,14 +1599,14 @@ export default function Payroll() {
                           <div className="flex items-center gap-1.5 pl-8 pr-4 pb-2.5 flex-wrap">
                             <input autoFocus type="number" step="0.01" value={adjAmt} onChange={e => setAdjAmt(e.target.value)}
                               onKeyDown={e => { if (e.key === 'Enter') saveAdjustment(p.id); if (e.key === 'Escape') setAdjFor('') }}
-                              placeholder="± $" className="w-20 rounded px-2 py-1 text-[12px] text-white focus:outline-none"
-                              style={{ background: '#1a1a1a', border: '1px solid rgba(0,184,148,0.4)' }} />
+                              placeholder="± $" aria-label="Adjustment amount" className={`${inputCls} !w-24 tabular-nums`}
+                              style={{ ...SURFACE.well, borderColor: 'rgba(191,164,108,0.5)' }} />
                             <input value={adjNote} onChange={e => setAdjNote(e.target.value)}
                               onKeyDown={e => { if (e.key === 'Enter') saveAdjustment(p.id); if (e.key === 'Escape') setAdjFor('') }}
-                              placeholder="note (e.g. missed deduction)" className="flex-1 min-w-[160px] rounded px-2 py-1 text-[12px] text-white focus:outline-none"
-                              style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }} />
-                            <button onClick={() => saveAdjustment(p.id)} className="p-1 rounded text-emerald-400 hover:bg-emerald-400/10"><Check size={14} /></button>
-                            <button onClick={() => setAdjFor('')} className="p-1 rounded text-white/30 hover:bg-white/5"><X size={14} /></button>
+                              placeholder="note (e.g. missed deduction)" aria-label="Adjustment note" className={`${inputCls} flex-1 min-w-[160px] !w-auto`}
+                              style={SURFACE.well} />
+                            <IconButton onClick={() => saveAdjustment(p.id)} aria-label="Save adjustment" tone={POS}><Check size={14} /></IconButton>
+                            <IconButton onClick={() => setAdjFor('')} aria-label="Cancel"><X size={14} /></IconButton>
                           </div>
                         )}
                       </div>
@@ -1667,34 +1617,34 @@ export default function Payroll() {
                       figure becomes something you can CHECK rather than
                       trust (per Keaton's review). */}
                   {shownPayees.length > 0 && (
-                    <div className="hidden sm:flex items-center gap-2.5 px-4 py-2 border-t border-white/10" style={{ background: '#1a1a1a' }}>
+                    <div className="flex items-center gap-2.5 px-4 py-2 border-t border-bank-line" style={{ background: 'var(--raise)' }}>
                       <span className="w-[12px] flex-shrink-0" />
-                      <span style={PCOL.person} className="min-w-0 text-[9px] font-bold uppercase tracking-[0.1em] text-white/35">Run total</span>
-                      <span style={PCOL.deals} className="text-[11.5px] text-white/35 text-right tabular-nums"
+                      <span style={PCOL.person} className={`min-w-0 ${head}`}>Run total</span>
+                      <span style={PCOL.deals} className="hidden md:block text-[13px] text-bank-mu text-right tabular-nums"
                         title="Finalized deals on this run — a deal pays several people, so this is not the sum of the column">
                         {summary.finalizedCount}
                       </span>
-                      <span style={PCOL.money} className="text-[12px] font-bold text-white/80 text-right tabular-nums">{fmt(payTotals.dealPay)}</span>
+                      <span style={PCOL.money} className="hidden md:block text-[13px] font-bold text-bank-tx text-right tabular-nums">{fmt(payTotals.dealPay)}</span>
                       <span style={PCOL.adj} className="hidden lg:flex items-center gap-2 min-w-0">
                         {payTotals.adj === 0 ? (
-                          <span className="text-[12px] text-white/25">—</span>
+                          <span className="text-[13px] text-bank-fa">—</span>
                         ) : (
                           <>
-                            <span className={`text-[12px] font-bold tabular-nums flex-shrink-0 ${payTotals.adj < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                            <span className="text-[13px] font-bold tabular-nums flex-shrink-0" style={{ color: payTotals.adj < 0 ? NEG : POS }}>
                               {payTotals.adj < 0 ? '−' : '+'}{fmt(Math.abs(payTotals.adj))}
                             </span>
-                            <span className="text-[11px] text-white/35 truncate">
+                            <span className="text-[13px] text-bank-mu truncate">
                               across {payTotals.people} {payTotals.people === 1 ? 'person' : 'people'}
                             </span>
                           </>
                         )}
                       </span>
-                      <span style={PCOL.net} className="text-[13.5px] font-extrabold text-teal text-right tabular-nums">{fmt(payTotals.net)}</span>
+                      <span style={PCOL.net} className="text-[13.5px] font-extrabold text-bank-tx text-right tabular-nums">{fmt(payTotals.net)}</span>
                       <span style={PCOL.act} className="flex-shrink-0" />
                     </div>
                   )}
                   {shownPayees.length > 0 && Math.abs(summary.total - payTotals.net) > 0.005 && (
-                    <p className="px-4 py-1.5 text-[11px] text-amber-300/90" style={{ background: '#1a1a1a' }}>
+                    <p className="px-4 py-1.5 text-[13px]" style={{ background: 'var(--raise)', color: WARN }}>
                       {fmt(summary.total - payTotals.net)} of this run&rsquo;s total reaches nobody — a deal has commission with no rep assigned, so it is in the headline figure but on no pay statement.
                     </p>
                   )}
@@ -1704,43 +1654,37 @@ export default function Payroll() {
           )}
 
           {/* Deals in this run — ONE list. A row expands in place to the full
-              payout card; the deal NAME still opens the editor. Approving a
-              deal collapses it again so the run works top-to-bottom. */}
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">Deals in this run</p>
+              payout card; the deal NAME still opens the editor. */}
+          <div className="flex items-center justify-between mb-2 gap-3 flex-wrap">
+            <Eyebrow>Deals in this run</Eyebrow>
             <div className="flex items-center gap-3">
-              <span className="text-[11px] text-white/30">{shownDeals.length} deal{shownDeals.length === 1 ? '' : 's'}</span>
+              <span className="text-[13px] text-bank-mu">{shownDeals.length} deal{shownDeals.length === 1 ? '' : 's'}</span>
               {shownDeals.length > 0 && (
                 <button
                   onClick={() => setExpanded(expanded.size ? new Set() : new Set(shownDeals.map(d => d.id)))}
-                  className="text-[11px] font-semibold text-white/40 hover:text-teal transition-colors">
+                  className="text-[13px] font-semibold text-bank-mu hover:text-bank-gold-tx transition-colors min-h-[44px] md:min-h-0">
                   {expanded.size ? 'Collapse all' : 'Expand all'}
                 </button>
               )}
             </div>
           </div>
 
-          <div className="rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-            {/* Column headings — the row used to be a name and ~600px of
-                nothing, and the INSTALL DATE, which is what the list is sorted
-                by so it reads against the calendar, was hidden in the
-                expander (per Keaton). Columns drop as the window narrows:
-                below xl the office/overrides/baseline go, below lg the
-                people, below md everything but name/commission/actions. */}
+          <div className="rounded-2xl overflow-hidden" style={SURFACE.card}>
+            {/* Column headings — columns drop as the window narrows. */}
             {shownDeals.length > 0 && (
-              <div className="hidden md:flex items-center gap-2.5 px-3 md:px-4 py-1.5 border-b border-white/10"
-                style={{ background: '#1a1a1a' }}>
+              <div className="hidden md:flex items-center gap-2.5 px-3 md:px-4 py-1.5 border-b border-bank-line"
+                style={{ background: 'var(--raise)' }}>
                 <span className="w-[13px] flex-shrink-0" />
                 <span className="w-2 flex-shrink-0" />
-                <span style={COL.deal} className="min-w-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Deal</span>
-                <span className="w-[56px] flex-shrink-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Install</span>
-                <span className="hidden xl:block w-[62px] flex-shrink-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Office</span>
-                <span style={COL.person} className="hidden lg:block min-w-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Setter</span>
-                <span style={COL.person} className="hidden lg:block min-w-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Closer</span>
-                <span className="hidden xl:block w-[86px] flex-shrink-0 text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Overrides</span>
-                <span className="hidden xl:block w-[76px] flex-shrink-0 text-right text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Baseline</span>
-                <span className="w-[86px] flex-shrink-0 text-right text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Commission</span>
-                <span style={colStatus} className="hidden sm:block text-[8.5px] font-bold uppercase tracking-[0.1em] text-white/30">Status</span>
+                <span style={COL.deal} className={`min-w-0 ${head}`}>Deal</span>
+                <span className={`w-[56px] flex-shrink-0 ${head}`}>Install</span>
+                <span className={`hidden xl:block w-[62px] flex-shrink-0 ${head}`}>Office</span>
+                <span style={COL.person} className={`hidden lg:block min-w-0 ${head}`}>Setter</span>
+                <span style={COL.person} className={`hidden lg:block min-w-0 ${head}`}>Closer</span>
+                <span className={`hidden xl:block w-[86px] flex-shrink-0 ${head}`}>Overrides</span>
+                <span className={`hidden xl:block w-[76px] flex-shrink-0 text-right ${head}`}>Baseline</span>
+                <span className={`w-[86px] flex-shrink-0 text-right ${head}`}>Commission</span>
+                <span style={colStatus} className={`hidden sm:block ${head}`}>Status</span>
                 <span style={COL.act} />
               </div>
             )}
@@ -1753,145 +1697,127 @@ export default function Payroll() {
               const payouts = isOpen ? dealPayouts(d, userById) : []
               const f = rowFacts(d, a, userById)
               return (
-                <div key={d.id} className="border-b border-white/5 last:border-0">
+                <div key={d.id} className="border-b border-bank-line last:border-0">
                   {/* Row — click anywhere (except the name/actions) to expand */}
-                  <div onClick={onClickUnlessSelecting(() => toggleExpanded(d.id))}
-                    className="flex items-center gap-2.5 px-3 md:px-4 py-2 hover:bg-white/[0.02] transition-colors cursor-pointer"
-                    style={isOpen ? { background: 'rgba(255,255,255,0.02)' } : undefined}>
+                  <div onClick={onClickUnlessSelecting(() => toggleExpanded(d.id))} role="button" tabIndex={0} aria-expanded={isOpen}
+                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleExpanded(d.id) } }}
+                    className="flex items-center gap-2.5 px-3 md:px-4 py-2 min-h-[44px] hover:bg-bank-raise transition-colors cursor-pointer"
+                    style={isOpen ? { background: 'var(--raise)' } : undefined}>
                     <ChevronDown size={13}
-                      className={`text-white/25 flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                      className={`text-bank-fa flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
                     <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} title={d.status} />
-                    {/* The wrapper takes the free space (clicking it expands the
-                        row); the button hugs the text so only the NAME edits. */}
                     <div style={COL.deal} className="min-w-0">
                       <button onClick={e => { e.stopPropagation(); openEdit(d) }}
-                        className="block w-fit max-w-full text-[13px] font-semibold text-white truncate text-left hover:text-teal transition-colors"
+                        className="block w-fit max-w-full text-[13px] font-semibold text-bank-tx truncate text-left hover:text-bank-gold-tx transition-colors"
                         title={`${d.deal_name} — click the name to edit this deal`}>
                         {d.deal_name}
                       </button>
-                      {/* Phones get the two facts the columns can't show. */}
-                      <p className="md:hidden text-[10.5px] text-white/35 truncate">
-                        {[fmtShort(d.install_date) || 'No install date', f.setter].filter(Boolean).join(' · ')}
+                      {/* Phones get the facts the columns can't show. */}
+                      <p className="md:hidden text-[13px] text-bank-mu truncate">
+                        {[fmtShort(d.install_date) || 'No install date', f.setter, d.status].filter(Boolean).join(' · ')}
                       </p>
                     </div>
 
-                    <span className={`hidden md:block w-[56px] flex-shrink-0 text-[11.5px] truncate ${d.install_date ? 'text-white/60' : 'text-amber-400/80'}`}>
+                    <span className="hidden md:block w-[56px] flex-shrink-0 text-[13px] truncate" style={{ color: d.install_date ? 'var(--mu)' : WARN }}>
                       {fmtShort(d.install_date) || 'TBD'}
                     </span>
-                    <span className={`hidden xl:block w-[62px] flex-shrink-0 text-[11.5px] truncate ${d.office ? 'text-white/60' : 'text-amber-400/80'}`}
+                    <span className="hidden xl:block w-[62px] flex-shrink-0 text-[13px] truncate" style={{ color: d.office ? 'var(--mu)' : WARN }}
                       title={d.office || 'No office set — the override rate may be wrong'}>
                       {d.office || '—'}
                     </span>
-                    <span style={COL.person} className={`hidden lg:block min-w-0 text-[11.5px] truncate ${f.setterUnassigned ? 'text-amber-400' : 'text-white/60'}`}
+                    <span style={{ ...COL.person, color: f.setterUnassigned ? WARN : 'var(--mu)' }} className="hidden lg:block min-w-0 text-[13px] truncate"
                       title={f.setter || ''}>
                       {f.setter || (f.setterUnassigned ? 'Unassigned' : '—')}
                     </span>
-                    <span style={COL.person} className={`hidden lg:block min-w-0 text-[11.5px] truncate ${f.closerUnassigned ? 'text-amber-400' : f.closerSolo ? 'text-white/30' : 'text-white/60'}`}
+                    <span style={{ ...COL.person, color: f.closerUnassigned ? WARN : f.closerSolo ? 'var(--fa)' : 'var(--mu)' }} className="hidden lg:block min-w-0 text-[13px] truncate"
                       title={f.closer || (f.closerSolo ? 'The setter closed it themselves' : '')}>
                       {f.closer || (f.closerUnassigned ? 'Unassigned' : 'self-gen')}
                     </span>
-                    <span className="hidden xl:block w-[86px] flex-shrink-0 text-[11.5px] text-white/50 truncate"
+                    <span className="hidden xl:block w-[86px] flex-shrink-0 text-[13px] text-bank-mu truncate tabular-nums"
                       title={f.overrideCount ? `Manager / director / VP overrides — ${fmt(f.overrideTotal)}. Open the row for the breakdown.` : 'No overrides on this deal'}>
                       {f.overrideCount ? `${f.overrideCount} · ${fmt(f.overrideTotal)}` : '—'}
                     </span>
-                    <span className="hidden xl:block w-[76px] flex-shrink-0 text-right text-[11.5px] text-white/60 tabular-nums">{fmt(a.baseline)}</span>
+                    <span className="hidden xl:block w-[76px] flex-shrink-0 text-right text-[13px] text-bank-mu tabular-nums">{fmt(a.baseline)}</span>
 
-                    <span className="text-[13px] font-bold text-teal flex-shrink-0 w-[86px] text-right tabular-nums">
+                    <span className="text-[13px] font-bold text-bank-tx flex-shrink-0 w-[86px] text-right tabular-nums">
                       {fmt(a.totalCommission)}
                       {a.deduction > 0 && (
-                        <span className="block text-[9.5px] font-semibold text-red-400/90">−{fmt(a.deduction)}</span>
+                        <span className="block text-[12px] font-semibold" style={{ color: NEG }}>−{fmt(a.deduction)}</span>
                       )}
                     </span>
                     <span style={colStatus} className="hidden sm:flex items-center gap-1">
-                      {d.commission_verified === true && <BadgeCheck size={12} className="flex-shrink-0" style={{ color: '#fbbf24' }} title="Commission verified" />}
-                      <span className="text-[11px] whitespace-nowrap" style={{ color }}>{d.status}</span>
+                      {d.commission_verified === true && <BadgeCheck size={12} className="flex-shrink-0" style={{ color: 'var(--gold-tx)' }} title="Commission verified" />}
+                      <span className="text-[13px] whitespace-nowrap" style={{ color }}>{d.status}</span>
                     </span>
                     <div style={COL.act} className="flex items-center justify-end gap-1" onClick={e => e.stopPropagation()}>
-                      {dealLocked && <Lock size={13} className="text-white/30" title={`The ${fmtDay(d.pay_date)} pay run is locked`} />}
+                      {dealLocked && <Lock size={13} className="text-bank-fa" title={`The ${fmtDay(d.pay_date)} pay run is locked`} />}
                       {canApprove && !dealLocked && !isPaid && d.status !== APPROVED && (
-                        <button onClick={() => approveAndCollapse(d.id)} title={`Move to ${APPROVED}`}
-                          className="px-2 py-1 rounded-lg text-[10px] font-semibold text-white/60 hover:text-white transition-colors"
-                          style={{ border: '1px solid #3a3a3a' }}>
+                        <SecondaryButton onClick={() => approveAndCollapse(d.id)} title={`Move to ${APPROVED}`} className="px-2 md:py-1 text-[12px]">
                           Approve
-                        </button>
+                        </SecondaryButton>
                       )}
                       {canPay && (isPaid ? (
-                        <span className="flex items-center text-teal px-1" title="Paid"><CheckCircle2 size={14} /></span>
+                        <span className="flex items-center px-1" style={{ color: POS }} title="Paid"><CheckCircle2 size={14} /><span className="sr-only">Paid</span></span>
                       ) : (!dealLocked || d.status === APPROVED) && (
-                        <button onClick={() => approveAndCollapse(d.id, PAID)} title="Mark paid"
-                          className="px-2 py-1 rounded-lg text-[10px] font-bold text-dark transition-colors" style={{ background: '#00b894' }}>
+                        <SecondaryButton onClick={() => approveAndCollapse(d.id, PAID)} title="Mark paid" active className="px-2 md:py-1 text-[12px]">
                           Paid
-                        </button>
+                        </SecondaryButton>
                       ))}
                     </div>
                   </div>
 
                   {/* Expanded — the full payout card, inline */}
                   {isOpen && (
-                    <div className="px-3 md:px-4 pb-3 pt-1">
-                      <p className="text-[11px] text-white/40 mb-2">
+                    <div className="px-3 md:px-4 pb-3 pt-1" style={{ background: 'var(--bg)' }}>
+                      <p className="text-[13px] text-bank-mu mb-2 pt-2">
                         {[d.office, d.payment_method].filter(Boolean).join(' · ') || 'No office / payment set'}
                       </p>
 
-                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-4 gap-y-2 text-[12px]">
-                        <div><p className="text-white/30 text-[10px] uppercase">Sold</p><p className="text-white/80">{fmtDay(d.sale_date) || '—'}</p></div>
-                        <div><p className="text-white/30 text-[10px] uppercase">Baseline</p><p className="text-white/80">{fmt(a.baseline)}</p></div>
-                        <div><p className="text-white/30 text-[10px] uppercase">Job price</p><p className="text-white/80">{fmt(a.job)}</p></div>
-                        <div><p className="text-white/30 text-[10px] uppercase">Rep pool</p><p className={a.job - a.baseline < 0 ? 'text-red-400' : 'text-white/80'}>{fmt(a.job - a.baseline)}</p></div>
-                        <div><p className="text-white/30 text-[10px] uppercase">Install</p><p className="text-white/80">{fmtDay(d.install_date) || 'TBD'}</p></div>
-                        <div><p className="text-white/30 text-[10px] uppercase">Pay date</p><p className="text-white/80">{fmtDay(d.pay_date) || 'TBD'}</p></div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-4 gap-y-2 text-[13px]">
+                        <div><p className="text-bank-fa text-[12px] uppercase">Sold</p><p className="text-bank-tx">{fmtDay(d.sale_date) || '—'}</p></div>
+                        <div><p className="text-bank-fa text-[12px] uppercase">Baseline</p><p className="text-bank-tx tabular-nums">{fmt(a.baseline)}</p></div>
+                        <div><p className="text-bank-fa text-[12px] uppercase">Job price</p><p className="text-bank-tx tabular-nums">{fmt(a.job)}</p></div>
+                        <div><p className="text-bank-fa text-[12px] uppercase">Rep pool</p><p className="tabular-nums" style={{ color: a.job - a.baseline < 0 ? NEG : 'var(--tx)' }}>{fmt(a.job - a.baseline)}</p></div>
+                        <div><p className="text-bank-fa text-[12px] uppercase">Install</p><p className="text-bank-tx">{fmtDay(d.install_date) || 'TBD'}</p></div>
+                        <div><p className="text-bank-fa text-[12px] uppercase">Pay date</p><p className="text-bank-tx">{fmtDay(d.pay_date) || 'TBD'}</p></div>
                       </div>
 
                       {/* Who gets paid on this deal */}
-                      <div className="mt-3 rounded-lg overflow-hidden" style={{ background: '#171717', border: '1px solid #262626' }}>
+                      <div className="mt-3 rounded-xl overflow-hidden" style={SURFACE.raise}>
                         {payouts.length === 0 ? (
-                          <div className="px-3 py-2 text-[12px] text-white/30">No payouts on this deal.</div>
+                          <div className="px-3 py-2 text-[13px] text-bank-mu">No payouts on this deal.</div>
                         ) : payouts.map((p, i) => (
-                          <div key={i} className="flex items-center justify-between px-3 py-1.5 text-[12px] border-b border-white/5 last:border-0">
+                          <div key={i} className="flex items-center justify-between px-3 py-1.5 text-[13px] border-b border-bank-line last:border-0">
                             {p.unassigned ? (
-                              <span className="text-amber-400 truncate mr-2 flex items-center gap-1.5">
-                                <AlertTriangle size={11} /> Unassigned <span className="text-amber-400/60">· {p.role} — set the {p.role.toLowerCase()} on the deal</span>
+                              <span className="truncate mr-2 flex items-center gap-1.5" style={{ color: WARN }}>
+                                <AlertTriangle size={11} /> Unassigned <span style={{ opacity: 0.7 }}>· {p.role} — set the {p.role.toLowerCase()} on the deal</span>
                               </span>
                             ) : (
-                              <span className="text-white/70 truncate mr-2">
+                              <span className="text-bank-tx truncate mr-2">
                                 {p.name}
-                                <span className="text-white/30"> · {p.selfGen ? 'Self-Gen' : p.role}</span>
-                                {/* amount ÷ baseline, for EVERY role (per
-                                    Keaton: "next to setter and closer, can we
-                                    add the % for the reps like you have next
-                                    to leadership"). One unit down the whole
-                                    list, and the same figure the pay statement
-                                    and the CSV export have always printed for
-                                    setter/closer — the card was the odd one
-                                    out. For mgmt it is the EFFECTIVE override
-                                    rate, so exclusions read e.g. 2.7% not 3%;
-                                    for a rep it is what they NET, so a deal
-                                    carrying a deduction reads lower than its
-                                    split would suggest. Deliberately NOT their
-                                    share of the rep pool — that is a % of a
-                                    different denominator and would sit one row
-                                    above a figure that means something else. */}
+                                <span className="text-bank-fa"> · {p.selfGen ? 'Self-Gen' : p.role}</span>
+                                {/* amount ÷ baseline, for EVERY role (per Keaton) — the
+                                    same figure the pay statement and the CSV print. */}
                                 {a.baseline > 0 && (
-                                  <span className="text-white/25"> · {asPct(p.amount / a.baseline)}</span>
+                                  <span className="text-bank-fa"> · {asPct(p.amount / a.baseline)}</span>
                                 )}
                               </span>
                             )}
-                            <span className={`font-semibold whitespace-nowrap ${p.unassigned ? 'text-amber-400' : 'text-white'}`}>{fmt(p.amount)}</span>
+                            <span className="font-semibold whitespace-nowrap tabular-nums" style={{ color: p.unassigned ? WARN : 'var(--tx)' }}>{fmt(p.amount)}</span>
                           </div>
                         ))}
                       </div>
 
                       {a.deduction > 0 && (
-                        <p className="text-[11px] text-red-400/90 mt-2 flex items-center gap-1.5">
+                        <p className="text-[13px] mt-2 flex items-center gap-1.5" style={{ color: NEG }}>
                           <AlertTriangle size={12} /> {fmt(a.deduction)} deduction — {deductionLabel(d, a)}
                         </p>
                       )}
 
                       <div className="flex items-center justify-end gap-1.5 mt-3">
-                        <button onClick={() => openEdit(d)}
-                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-white/50 hover:text-teal hover:bg-teal/10 transition-colors">
+                        <SecondaryButton onClick={() => openEdit(d)}>
                           <Pencil size={13} /> Edit deal
-                        </button>
+                        </SecondaryButton>
                       </div>
                     </div>
                   )}
@@ -1899,9 +1825,9 @@ export default function Payroll() {
               )
             })}
             {shownDeals.length === 0 && (
-              <div className="px-4 py-6 text-white/30 text-sm text-center">
+              <EmptyBlock>
                 {filtered ? 'No deals for the selected rep(s) in this run.' : 'No deals in this run.'}
-              </div>
+              </EmptyBlock>
             )}
           </div>
         </>
@@ -1910,89 +1836,74 @@ export default function Payroll() {
 
       {tab === 'deductions' && (
         <>
-          {/* ── Logged deductions (the ledger, migration 050) ───────────────
-              What people OWE, separate from the deductions priced into a deal.
-              A debt here never altered its job's commission — it rides on a
-              future cheque instead. */}
-          <div className="mb-4 rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-            <div className="flex items-center gap-3 flex-wrap px-4 py-3 border-b border-white/5">
-              <span className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">Logged after payout</span>
+          {/* ── Logged deductions (the ledger, migration 050) ─────────────── */}
+          <div className="mb-4 rounded-2xl overflow-hidden" style={SURFACE.card}>
+            <div className="flex items-center gap-3 flex-wrap px-4 py-3 border-b border-bank-line">
+              <Eyebrow>Logged after payout</Eyebrow>
               {owedTotals.count > 0 && (
-                <span className="text-[11px] font-bold text-amber-300">{fmt(owedTotals.owed)} owed across {owedTotals.people} {owedTotals.people === 1 ? 'person' : 'people'}</span>
+                <span className="text-[13px] font-bold tabular-nums" style={{ color: WARN }}>{fmt(owedTotals.owed)} owed across {owedTotals.people} {owedTotals.people === 1 ? 'person' : 'people'}</span>
               )}
               <span className="flex-1" />
-              <span className="flex gap-1">
+              <PillGroup role="group" aria-label="Which deductions">
                 {[['open', 'Outstanding'], ['all', 'All']].map(([k, label]) => (
-                  <button key={k} onClick={() => setDedFilter(k)}
-                    className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors ${dedFilter === k ? 'bg-teal/15 text-teal border border-teal/30' : 'text-white/45 hover:text-white border border-transparent'}`}>
-                    {label}
-                  </button>
+                  <Pill key={k} active={dedFilter === k} onClick={() => setDedFilter(k)}>{label}</Pill>
                 ))}
-              </span>
+              </PillGroup>
               {isAdmin && (
-                <button onClick={() => setDedModal({})}
-                  className="px-3 py-1.5 rounded-lg text-[11.5px] font-bold bg-teal text-dark">+ Log a deduction</button>
+                <PrimaryButton onClick={() => setDedModal({})} className="px-3 py-1.5 min-h-[44px] md:min-h-0">+ Log a deduction</PrimaryButton>
               )}
             </div>
             {(() => {
               const rows = dedFilter === 'open' ? openLedger : ledger
               if (!rows.length) {
-                return <p className="px-4 py-8 text-center text-white/30 text-sm">
+                return <EmptyBlock>
                   {dedFilter === 'open' ? 'Nothing owed — every logged deduction has been recovered or written off.' : 'No deductions logged yet.'}
-                </p>
+                </EmptyBlock>
               }
               return rows.map(d => (
-                <div key={d.id} className="px-4 py-3 border-b border-white/5 last:border-0"
+                <div key={d.id} className="px-4 py-3 border-b border-bank-line last:border-0"
                   style={d.status === 'open' || d.status === 'partial' ? undefined : { opacity: 0.66 }}>
                   <div className="flex items-start gap-3 flex-wrap">
                     <div className="w-[150px] flex-shrink-0 min-w-0">
-                      <p className="text-[13px] font-semibold text-white truncate">{userById[d.payee_id]?.name || 'Unknown rep'}</p>
-                      <p className="text-[10.5px] text-white/35">logged {d.created_at ? format(new Date(d.created_at), 'MMM d, yyyy') : '—'}</p>
+                      <p className="text-[13px] font-semibold text-bank-tx truncate">{userById[d.payee_id]?.name || 'Unknown rep'}</p>
+                      <p className="text-[13px] text-bank-fa">logged {d.created_at ? format(new Date(d.created_at), 'MMM d, yyyy') : '—'}</p>
                     </div>
                     <div className="w-[96px] flex-shrink-0 text-right">
-                      <p className="text-[13.5px] font-extrabold text-red-400 tabular-nums">{fmt(d.remaining)}</p>
-                      <p className="text-[10px] text-white/35 tabular-nums">of {fmt(d.owed)}</p>
+                      <p className="text-[13.5px] font-extrabold tabular-nums" style={{ color: NEG }}>{fmt(d.remaining)}</p>
+                      <p className="text-[13px] text-bank-fa tabular-nums">of {fmt(d.owed)}</p>
                     </div>
                     <div className="flex-1 min-w-[180px]">
-                      <p className="text-[12.5px] text-white/75 truncate">
+                      <p className="text-[13px] text-bank-tx truncate">
                         {dealById[d.deal_id]?.deal_name || 'No job'}
-                        {d.note ? <span className="text-white/45"> · {d.note}</span> : null}
+                        {d.note ? <span className="text-bank-mu"> · {d.note}</span> : null}
                       </p>
                       {d.recoveries.length > 0 && (
-                        <div className="mt-1.5 pl-3 border-l-2 border-white/10 space-y-0.5">
+                        <div className="mt-1.5 pl-3 border-l-2 border-bank-line space-y-0.5">
                           {d.recoveries.map(r => (
-                            <p key={r.id} className="text-[11px] text-white/45 tabular-nums">
+                            <p key={r.id} className="text-[13px] text-bank-mu tabular-nums">
                               {fmt(Math.abs(Number(r.amount)))} came out {fmtDay(r.pay_date)}
                             </p>
                           ))}
-                          {d.remaining > 0 && <p className="text-[11px] text-amber-300 tabular-nums">{fmt(d.remaining)} rolls to their next run</p>}
+                          {d.remaining > 0 && <p className="text-[13px] tabular-nums" style={{ color: WARN }}>{fmt(d.remaining)} rolls to their next run</p>}
                         </div>
                       )}
                       {d.writtenOff && d.written_off_note && (
-                        <p className="text-[11px] text-white/35 mt-1">written off — {d.written_off_note}</p>
+                        <p className="text-[13px] text-bank-fa mt-1">written off — {d.written_off_note}</p>
                       )}
                     </div>
-                    <span className="flex items-center gap-1.5 flex-shrink-0">
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide"
-                        style={d.status === 'settled'
-                          ? { color: '#6ee7b7', background: 'rgba(16,185,129,0.13)', border: '1px solid rgba(16,185,129,0.35)' }
-                          : d.status === 'written_off'
-                          ? { color: 'rgba(255,255,255,0.55)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.18)' }
-                          : { color: '#fcd34d', background: 'rgba(245,158,11,0.13)', border: '1px solid rgba(245,158,11,0.35)' }}>
+                    <span className="flex items-center gap-1 flex-shrink-0">
+                      <span className="px-2 py-0.5 rounded text-[12px] font-bold uppercase tracking-wide"
+                        style={d.status === 'settled' ? chip(POS) : d.status === 'written_off' ? chip('var(--mu)') : chip(WARN)}>
                         {STATUS_LABEL[d.status]}
                       </span>
                       {isAdmin && d.status !== 'settled' && (
                         d.writtenOff
-                          ? <button onClick={() => reopen(d)} title="Reopen — it starts showing on runs again"
-                              className="p-1.5 rounded-lg text-white/30 hover:text-teal hover:bg-teal/10"><CheckCircle2 size={13} /></button>
+                          ? <IconButton onClick={() => reopen(d)} title="Reopen — it starts showing on runs again" aria-label="Reopen deduction"><CheckCircle2 size={13} /></IconButton>
                           : <>
-                              <button onClick={() => setDedModal({ edit: d })} title="Edit"
-                                className="p-1.5 rounded-lg text-white/30 hover:text-teal hover:bg-teal/10"><Pencil size={13} /></button>
-                              <button onClick={() => writeOff(d)} title="Write it off"
-                                className="p-1.5 rounded-lg text-white/30 hover:text-amber-400 hover:bg-amber-500/10"><Ban size={13} /></button>
+                              <IconButton onClick={() => setDedModal({ edit: d })} title="Edit" aria-label="Edit deduction"><Pencil size={13} /></IconButton>
+                              <IconButton onClick={() => writeOff(d)} title="Write it off" aria-label="Write it off" className="hover:!text-bank-warn"><Ban size={13} /></IconButton>
                               {!d.recoveries.length && (
-                                <button onClick={() => deleteDebt(d)} title="Delete"
-                                  className="p-1.5 rounded-lg text-white/25 hover:text-red-400 hover:bg-red-500/10"><Trash2 size={13} /></button>
+                                <IconButton onClick={() => deleteDebt(d)} title="Delete" aria-label="Delete deduction" className="hover:!text-bank-neg"><Trash2 size={13} /></IconButton>
                               )}
                             </>
                       )}
@@ -2004,49 +1915,46 @@ export default function Payroll() {
           </div>
 
           {/* Deduction summary */}
-          <div className="grid grid-cols-3 gap-2 md:gap-3 mb-4">
-            <Card label="Total deductions" value={fmt(deductionTotals.total)} color="#f87171" sub={`${deductionTotals.count} total`} />
-            <Card label="Pending" value={fmt(deductionTotals.pending)} color="#fdcb6e" sub={`${deductionTotals.pendingCount} not yet paid`} />
-            <Card label="Applied" value={fmt(deductionTotals.applied)} color="#74b9ff" sub="on paid deals" />
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 md:gap-3 mb-4">
+            <Card label="Total deductions" value={fmt(deductionTotals.total)} color={NEG} sub={`${deductionTotals.count} total`} />
+            <Card label="Pending" value={fmt(deductionTotals.pending)} color={WARN} sub={`${deductionTotals.pendingCount} not yet paid`} />
+            <Card label="Applied" value={fmt(deductionTotals.applied)} sub="on paid deals" />
           </div>
 
-          <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12, overflow: 'hidden' }}>
-            <div className="px-4 py-3 border-b border-white/5">
-              <span className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">All deductions · present & past</span>
+          <div className="rounded-2xl overflow-hidden" style={SURFACE.card}>
+            <div className="px-4 py-3 border-b border-bank-line">
+              <Eyebrow>All deductions · present &amp; past</Eyebrow>
             </div>
             {loading ? (
-              <div className="px-4 py-8 text-center text-white/30 text-sm">Loading…</div>
+              <EmptyBlock>Loading…</EmptyBlock>
             ) : deductions.length === 0 ? (
-              <div className="px-4 py-8 text-center text-white/30 text-sm">No deductions on any deal.</div>
+              <EmptyBlock>No deductions on any deal.</EmptyBlock>
             ) : deductions.map(x => (
-              <div key={x.id} className="flex items-start justify-between gap-3 px-4 py-3 border-b border-white/5 last:border-0">
+              <div key={x.id} className="flex items-start justify-between gap-3 px-4 py-3 border-b border-bank-line last:border-0">
                 <div className="min-w-0">
                   <button onClick={() => openEdit(x.deal)}
-                    className="text-[13px] font-semibold text-white/90 truncate text-left hover:text-teal transition-colors" title="Click to edit this deal">
+                    className="text-[13px] font-semibold text-bank-tx truncate text-left hover:text-bank-gold-tx transition-colors min-h-[44px] md:min-h-0" title="Click to edit this deal">
                     {x.name}
                   </button>
-                  <p className="text-[11px] text-white/40 mt-0.5">
-                    From <span className="text-white/60">{x.absorbedBy}</span>
+                  <p className="text-[13px] text-bank-mu mt-0.5">
+                    From <span className="text-bank-tx">{x.absorbedBy}</span>
                     {x.office ? ` · ${x.office}` : ''}
                     {x.payDate ? ` · pays ${fmtDay(x.payDate)}` : ' · pay date TBD'}
                   </p>
                   {x.dealerFee > 0 && (
-                    <p className="text-[11px] text-white/40 mt-0.5">
+                    <p className="text-[13px] text-bank-mu mt-0.5 tabular-nums">
                       Dealer fee −{fmt(x.dealerFee)}{x.manual > 0 ? ` · other −${fmt(x.manual)}` : ''}
                     </p>
                   )}
-                  {x.note && <p className="text-[11px] text-white/50 mt-1 italic">“{x.note}”</p>}
+                  {x.note && <p className="text-[13px] text-bank-mu mt-1 italic">“{x.note}”</p>}
                 </div>
                 <div className="text-right flex-shrink-0 flex flex-col items-end gap-1">
-                  <span className="text-[15px] font-bold text-red-400">−{fmt(x.amount)}</span>
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
-                    style={x.applied
-                      ? { color: '#74b9ff', border: '1px solid #74b9ff40' }
-                      : { color: '#fdcb6e', border: '1px solid #fdcb6e40' }}>
+                  <span className="text-[15px] font-bold tabular-nums" style={{ color: NEG }}>−{fmt(x.amount)}</span>
+                  <span className="text-[12px] font-semibold px-2 py-0.5 rounded-full" style={x.applied ? chip('var(--tx)') : chip(WARN)}>
                     {x.applied ? 'Applied' : 'Pending'}
                   </span>
                   <button onClick={() => openEdit(x.deal)}
-                    className="text-[11px] text-white/40 hover:text-teal transition-colors flex items-center gap-1">
+                    className="text-[13px] text-bank-mu hover:text-bank-gold-tx transition-colors flex items-center gap-1 min-h-[44px] md:min-h-0">
                     <Pencil size={11} /> Edit
                   </button>
                 </div>

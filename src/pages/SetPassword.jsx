@@ -4,6 +4,7 @@ import { Eye, EyeOff, Lock } from 'lucide-react'
 import { supabase, DEMO_MODE } from '../lib/supabase'
 import { updateOwnPassword } from '../lib/db'
 import Logo from '../components/Logo'
+import { SURFACE, PrimaryButton, inputCls as sharedInputCls, inputStyle as sharedInputStyle } from '../components/ui'
 
 // Where invite + password-reset email links land. The link carries auth
 // tokens in the URL hash; the Supabase client picks them up and signs the
@@ -47,70 +48,70 @@ export default function SetPassword() {
     navigate('/dashboard', { replace: true })
   }
 
-  const inputCls = 'w-full px-4 py-3 rounded-xl text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-teal/60 transition-colors'
-  const inputStyle = { background: '#171717', border: '1px solid #343434' }
+  const inputCls = `${sharedInputCls} !min-h-[44px] !h-11 px-4`
+  const inputStyle = sharedInputStyle
+  const label = 'block text-[13px] font-semibold text-bank-fa uppercase tracking-wide mb-1.5'
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden" style={{ background: '#161616' }}>
+    <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden" style={{ background: 'var(--bg)', color: 'var(--tx)' }}>
       <div aria-hidden className="absolute inset-0 pointer-events-none"
-        style={{ background: 'radial-gradient(600px 320px at 50% -60px, rgba(0,184,148,0.14), transparent 70%)' }} />
+        style={{ background: 'radial-gradient(600px 320px at 50% -60px, rgba(191,164,108,0.12), transparent 70%)' }} />
 
-      <div className="relative w-full max-w-[380px] rounded-2xl p-8 shadow-2xl"
-        style={{ background: '#1f1f1f', border: '1px solid #2c2c2c' }}>
+      <div className="relative w-full max-w-[380px] rounded-2xl p-6 md:p-8"
+        style={{ ...SURFACE.card, boxShadow: 'var(--card-shadow), 0 24px 60px rgba(0,0,0,0.45)' }}>
         <div className="flex flex-col items-center mb-7">
           <Logo size={48} />
-          <p className="text-[10px] font-bold tracking-[0.3em] text-teal mt-4">TURF TIME</p>
-          <h1 className="text-[17px] font-bold text-white mt-1">
+          <p className="text-[13px] font-bold tracking-[0.3em] text-bank-gold-tx mt-4">TURF TIME</p>
+          <h1 className="text-[17px] font-bold text-bank-tx mt-1">
             {hasSession ? 'Create your password' : 'Set password'}
           </h1>
         </div>
 
         {!ready ? (
-          <p className="text-[13px] text-white/40 text-center py-6">Checking your link…</p>
+          <p className="text-[13px] text-bank-mu text-center py-6" role="status">Checking your link…</p>
         ) : !hasSession ? (
           <div className="space-y-4">
-            <div className="rounded-xl px-4 py-3 text-[13px] text-amber-300"
-              style={{ background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)' }}>
+            <div className="rounded-xl px-4 py-3 text-[13px]"
+              style={{ color: 'var(--warn)', background: 'rgba(210,160,116,0.10)', border: '1px solid rgba(210,160,116,0.4)' }}>
               This link is invalid or has expired. Invite and reset links only work once and for a limited time.
             </div>
-            <p className="text-[12px] text-white/40 text-center">
-              Use “Forgot password?” on the <Link to="/login" className="text-teal hover:underline">sign-in page</Link> to
+            <p className="text-[13px] text-bank-mu text-center">
+              Use “Forgot password?” on the <Link to="/login" className="text-bank-gold-tx hover:underline">sign-in page</Link> to
               get a fresh link, or ask an admin to resend your invite.
             </p>
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
-            <p className="text-[12px] text-white/45 text-center -mt-2 mb-2">
+            <p className="text-[13px] text-bank-mu text-center -mt-2 mb-2">
               Choose the password you'll use to sign in from now on.
             </p>
             {error && (
-              <div className="rounded-xl px-4 py-3 text-[13px] text-red-400"
-                style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)' }}>
+              <div className="rounded-xl px-4 py-3 text-[13px]" role="alert"
+                style={{ color: 'var(--neg)', background: 'rgba(217,140,128,0.10)', border: '1px solid rgba(217,140,128,0.35)' }}>
                 {error}
               </div>
             )}
             <div>
-              <label className="block text-[10px] font-semibold text-white/35 uppercase tracking-widest mb-1.5">New password</label>
+              <label className={label} htmlFor="new-password">New password</label>
               <div className="relative">
-                <input type={show ? 'text' : 'password'} required autoFocus autoComplete="new-password"
+                <input id="new-password" type={show ? 'text' : 'password'} required autoFocus autoComplete="new-password"
                   value={pwd} onChange={e => setPwd(e.target.value)} placeholder="At least 8 characters"
-                  style={inputStyle} className={`${inputCls} pr-10`} />
-                <button type="button" onClick={() => setShow(v => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60 transition-colors">
+                  style={inputStyle} className={`${inputCls} pr-12`} />
+                <button type="button" onClick={() => setShow(v => !v)} aria-label={show ? 'Hide password' : 'Show password'}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg text-bank-fa hover:text-bank-tx transition-colors">
                   {show ? <EyeOff size={15} /> : <Eye size={15} />}
                 </button>
               </div>
             </div>
             <div>
-              <label className="block text-[10px] font-semibold text-white/35 uppercase tracking-widest mb-1.5">Confirm password</label>
-              <input type={show ? 'text' : 'password'} required autoComplete="new-password"
+              <label className={label} htmlFor="confirm-password">Confirm password</label>
+              <input id="confirm-password" type={show ? 'text' : 'password'} required autoComplete="new-password"
                 value={pwd2} onChange={e => setPwd2(e.target.value)} placeholder="Type it again"
                 style={inputStyle} className={inputCls} />
             </div>
-            <button type="submit" disabled={saving}
-              className="w-full h-11 rounded-xl text-[13px] font-bold text-dark bg-teal hover:bg-teal-dark disabled:opacity-50 transition-colors flex items-center justify-center gap-2">
+            <PrimaryButton type="submit" disabled={saving} className="w-full h-11">
               <Lock size={14} /> {saving ? 'Saving…' : 'Set password & sign in'}
-            </button>
+            </PrimaryButton>
           </form>
         )}
       </div>

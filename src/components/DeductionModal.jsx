@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { X, Search } from 'lucide-react'
 import { dealAmounts } from '../utils/commission'
+import { SURFACE, GOLD_WASH, PrimaryButton, SecondaryButton, IconButton, inputCls } from '../components/ui'
 
 // ── Log (or edit) a deduction ────────────────────────────────────────────
 // Records what is OWED. It never touches deals.deduction_amount — that column
@@ -12,10 +13,12 @@ import { dealAmounts } from '../utils/commission'
 // option that did not exist before: it stores a debt with no pay date, which
 // then follows the rep from run to run until it is recovered.
 
-const card  = { background: '#1e1e1e', border: '1px solid #333' }
-const field = { background: '#171717', border: '1px solid #3a3a3a' }
-const fieldCls = 'w-full h-10 px-3 rounded-lg text-[13.5px] text-white placeholder-white/25 focus:outline-none focus:border-teal/60'
-const lbl = 'block text-[10px] font-bold uppercase tracking-[0.11em] text-white/45 mb-1.5'
+const field = SURFACE.well
+const fieldCls = `${inputCls} !min-h-[44px] !h-11 text-[13.5px]`
+const lbl = 'block text-[13px] font-bold uppercase tracking-wide text-bank-fa mb-1.5'
+const WARN = 'var(--warn)', NEG = 'var(--neg)'
+// Option tiles (who absorbs it, when it comes out): gold wash when picked.
+const tile = (on) => (on ? GOLD_WASH : { border: '1px solid var(--line)' })
 
 const money = (v) => '$' + Math.abs(Number(v) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const fmtDay = (iso) => (iso ? new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', d: undefined, day: 'numeric', year: 'numeric' }) : '')
@@ -172,80 +175,84 @@ export default function DeductionModal({ deal: fixedDeal, deals = [], users = []
     const pending = pay?.pending || 0
     const short = share > 0 && share > net
     return (
-      <span className={`block text-[10.5px] tabular-nums ${short ? 'text-amber-400' : 'text-white/40'}`}>
+      <span className="block text-[13px] tabular-nums" style={{ color: short ? WARN : 'var(--mu)' }}>
         {shortDay(runDate)} pay {money(net)}
-        {pending > 0 && <span className="text-white/30"> · {money(pending)} pending</span>}
+        {pending > 0 && <span className="text-bank-fa"> · {money(pending)} pending</span>}
       </span>
     )
   }
 
   const Radio = ({ id, value, title, sub }) => (
     <label htmlFor={id}
-      className={`flex items-start gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${when === value ? 'bg-teal/10 border border-teal/45' : 'border border-white/10 hover:border-white/20'}`}>
+      className="flex items-start gap-2.5 px-3 py-2.5 min-h-[44px] rounded-lg cursor-pointer transition-colors"
+      style={tile(when === value)}>
       <input id={id} type="radio" name="ded-when" checked={when === value} onChange={() => setWhen(value)}
-        className="mt-0.5 w-[15px] h-[15px] flex-shrink-0 accent-teal" />
+        className="mt-0.5 w-[15px] h-[15px] flex-shrink-0 accent-[#bfa46c]" />
       <span className="min-w-0">
-        <span className={`block text-[13px] ${when === value ? 'font-bold text-white' : 'font-semibold text-white/80'}`}>{title}</span>
-        <span className="block mt-0.5 text-[11.5px] text-white/50">{sub}</span>
+        <span className={`block text-[13px] ${when === value ? 'font-bold text-bank-gold-tx' : 'font-semibold text-bank-tx'}`}>{title}</span>
+        <span className="block mt-0.5 text-[13px] text-bank-mu">{sub}</span>
       </span>
     </label>
   )
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 md:p-8" style={{ background: 'rgba(0,0,0,0.65)' }}>
-      <div className="w-full max-w-[620px] rounded-2xl overflow-hidden shadow-2xl" style={card}>
+    <div className="fixed inset-0 z-[60] flex items-end md:items-start md:justify-center md:overflow-y-auto md:p-8">
+      <div className="absolute inset-0" style={{ background: 'rgba(0,0,0,0.62)', backdropFilter: 'blur(3px)' }} />
+      <div className="relative w-full md:max-w-[620px] h-[100dvh] md:h-auto rounded-none md:rounded-2xl overflow-y-auto md:overflow-visible flex flex-col"
+        style={{ ...SURFACE.card, boxShadow: 'var(--card-shadow), 0 24px 60px rgba(0,0,0,0.55)', color: 'var(--tx)' }}
+        role="dialog" aria-modal="true" aria-label={edit ? 'Edit deduction' : 'Log a deduction'}>
 
-        <div className="flex items-start gap-3 px-5 py-4 border-b border-white/10">
+        <div className="flex items-start gap-3 px-5 py-3 border-b border-bank-line sticky top-0 z-10" style={{ background: 'var(--card)' }}>
           <div className="min-w-0 flex-1">
-            <h2 className="text-[16px] font-extrabold text-white">{edit ? 'Edit deduction' : 'Log a deduction'}</h2>
-            <p className="text-[11.5px] text-white/50 mt-1">
+            <h2 className="text-[16px] font-extrabold text-bank-tx">{edit ? 'Edit deduction' : 'Log a deduction'}</h2>
+            <p className="text-[13px] text-bank-mu mt-1">
               Records what is owed. It never changes the deal&rsquo;s own numbers or a run that has already gone out.
             </p>
           </div>
-          <button onClick={onClose} aria-label="Close" className="p-1.5 rounded-lg text-white/40 hover:text-white hover:bg-white/5"><X size={17} /></button>
+          <IconButton onClick={onClose} aria-label="Close"><X size={17} /></IconButton>
         </div>
 
-        <div className="px-5 py-4 space-y-4">
+        <div className="px-5 py-4 space-y-4 flex-1">
 
           {/* which job */}
           <div>
             <span className={lbl}>Which job?</span>
             {deal ? (
-              <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg" style={{ background: 'rgba(0,184,148,0.09)', border: '1px solid rgba(0,184,148,0.4)' }}>
+              <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg" style={GOLD_WASH}>
                 <div className="min-w-0 flex-1">
-                  <p className="text-[13px] font-semibold text-white truncate">{deal.deal_name}</p>
-                  <p className="text-[11px] text-white/55 truncate">
+                  <p className="text-[13px] font-semibold text-bank-tx truncate">{deal.deal_name}</p>
+                  <p className="text-[13px] text-bank-mu truncate">
                     {money(deal.baseline_revenue)} baseline · sold {deal.sale_date || '—'}
                     {' · installed '}{deal.install_date || 'not set'}
                     {deal.status ? ` · ${deal.status}` : ''}
                   </p>
                 </div>
                 {!fixedDeal && (
-                  <button onClick={() => { setDealId(''); setPayeeId('') }} className="text-[11.5px] text-white/45 hover:text-white flex-shrink-0">Change</button>
+                  <button onClick={() => { setDealId(''); setPayeeId('') }} className="text-[13px] text-bank-mu hover:text-bank-tx flex-shrink-0 min-h-[44px] px-2">Change</button>
                 )}
               </div>
             ) : (
               <>
                 <div className="relative">
-                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/25 pointer-events-none" />
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-bank-fa pointer-events-none" />
                   <input id="ded-deal-search" value={q} onChange={e => setQ(e.target.value)} autoFocus
                     placeholder="Search every deal by customer name…"
                     style={field} className={`${fieldCls} pl-9`} />
                 </div>
                 {matches.length > 0 && (
-                  <div className="mt-1.5 rounded-lg overflow-hidden" style={{ background: '#171717', border: '1px solid #2e2e2e' }}>
+                  <div className="mt-1.5 rounded-lg overflow-hidden" style={SURFACE.raise}>
                     {matches.map(d => (
                       <button key={d.id} onClick={() => pickDeal(d)}
-                        className="w-full text-left px-3 py-2 border-b border-white/5 last:border-0 hover:bg-white/5 transition-colors">
-                        <p className="text-[12.5px] text-white/85 truncate">{d.deal_name}</p>
-                        <p className="text-[10.5px] text-white/40 truncate">
+                        className="w-full text-left px-3 py-2 min-h-[44px] border-b border-bank-line last:border-0 hover:bg-bank-card transition-colors">
+                        <p className="text-[13px] text-bank-tx truncate">{d.deal_name}</p>
+                        <p className="text-[13px] text-bank-mu truncate">
                           {money(d.baseline_revenue)} baseline · sold {d.sale_date || '—'} · installed {d.install_date || 'not set'} · {d.status || '—'}
                         </p>
                       </button>
                     ))}
                   </div>
                 )}
-                <p className="text-[11px] text-white/40 mt-1.5">Leave blank if it isn&rsquo;t tied to a job — a tool, an advance, a uniform.</p>
+                <p className="text-[13px] text-bank-mu mt-1.5">Leave blank if it isn&rsquo;t tied to a job — a tool, an advance, a uniform.</p>
               </>
             )}
           </div>
@@ -255,23 +262,23 @@ export default function DeductionModal({ deal: fixedDeal, deals = [], users = []
             <div className="w-[150px]">
               <label htmlFor="ded-amount" className={lbl}>Amount owed</label>
               <input id="ded-amount" type="number" step="0.01" min="0" value={amount} onChange={e => setAmount(e.target.value)}
-                placeholder="0.00" style={field} className={`${fieldCls} text-red-400 font-bold tabular-nums`} />
+                placeholder="0.00" style={{ ...field, color: NEG }} className={`${fieldCls} font-bold tabular-nums`} />
             </div>
             <div className="flex-1 min-w-[240px]">
               <span className={lbl}>Who absorbs it</span>
               {people.length > 0 ? (
-                <div className="flex gap-1.5">
+                <div className="flex gap-1.5 flex-wrap">
                   {people.map(p => {
                     const on = mode === 'one' && effectivePayee === p.id
                     return (
-                      <button key={p.id} onClick={() => { setMode('one'); setPayeeId(p.id) }}
-                        className={`flex-1 rounded-lg py-1.5 px-2 text-left transition-colors min-w-0 ${on ? 'bg-teal/15 border border-teal/50' : 'border border-white/10 hover:border-white/25'}`}>
-                        <span className={`block text-[12.5px] font-semibold truncate ${on ? 'text-teal' : 'text-white/70'}`}>
+                      <button key={p.id} onClick={() => { setMode('one'); setPayeeId(p.id) }} aria-pressed={on}
+                        className="flex-1 rounded-lg py-1.5 px-2 min-h-[44px] text-left transition-colors min-w-0" style={tile(on)}>
+                        <span className={`block text-[13px] font-semibold truncate ${on ? 'text-bank-gold-tx' : 'text-bank-tx'}`}>
                           {p.role} · {p.name.split(' ')[0]}
                         </span>
                         {/* What they EARNED on this job — so you can see whether
                             the deduction fits inside their pay for it. */}
-                        <span className={`block text-[10.5px] tabular-nums ${amt > p.earned && amt > 0 ? 'text-amber-400/90' : 'text-white/40'}`}>
+                        <span className="block text-[13px] tabular-nums" style={{ color: amt > p.earned && amt > 0 ? WARN : 'var(--mu)' }}>
                           earned {money(p.earned)}
                         </span>
                         {/* …and what their WHOLE cheque is on the run this
@@ -281,8 +288,9 @@ export default function DeductionModal({ deal: fixedDeal, deals = [], users = []
                     )
                   })}
                   {canSplit && (
-                    <button onClick={() => setMode('split')}
-                      className={`rounded-lg py-1.5 px-3 text-[12.5px] font-semibold transition-colors flex-shrink-0 ${mode === 'split' ? 'bg-teal/15 border border-teal/50 text-teal' : 'border border-white/10 text-white/60 hover:text-white'}`}>
+                    <button onClick={() => setMode('split')} aria-pressed={mode === 'split'}
+                      className={`rounded-lg py-1.5 px-3 min-h-[44px] text-[13px] font-semibold transition-colors flex-shrink-0 ${mode === 'split' ? 'text-bank-gold-tx' : 'text-bank-mu hover:text-bank-tx'}`}
+                      style={tile(mode === 'split')}>
                       Split
                     </button>
                   )}
@@ -301,28 +309,28 @@ export default function DeductionModal({ deal: fixedDeal, deals = [], users = []
               {mode === 'split' && splitRows ? (
                 <div className="mt-2.5">
                   <div className="flex items-center gap-2.5">
-                    <span className="text-[11px] text-white/50 w-24 text-right shrink-0 truncate">
+                    <span className="text-[13px] text-bank-mu w-24 text-right shrink-0 truncate">
                       {setterPerson.name.split(' ')[0]} {splitPct}%
                     </span>
-                    <input type="range" min="0" max="100" step="1" value={splitPct}
-                      onChange={e => setSplitPct(Number(e.target.value))} className="flex-1 accent-teal" />
-                    <span className="text-[11px] text-white/50 w-24 shrink-0 truncate">
+                    <input type="range" min="0" max="100" step="1" value={splitPct} aria-label="Setter share"
+                      onChange={e => setSplitPct(Number(e.target.value))} className="flex-1 accent-[#bfa46c] min-h-[44px]" />
+                    <span className="text-[13px] text-bank-mu w-24 shrink-0 truncate">
                       {closerPerson.name.split(' ')[0]} {100 - splitPct}%
                     </span>
                   </div>
-                  <p className="text-[11px] mt-1.5 text-white/55">
+                  <p className="text-[13px] mt-1.5 text-bank-mu">
                     {splitRows.map(r => `${r.who.name.split(' ')[0]} owes ${money(r.amount)}`).join(' · ')}
-                    <span className="text-white/35"> — two separate balances, each coming off that rep&rsquo;s own next cheque.</span>
+                    <span className="text-bank-fa"> — two separate balances, each coming off that rep&rsquo;s own next cheque.</span>
                   </p>
                 </div>
               ) : deal && people.length > 1 ? (
-                <p className="text-[11px] text-white/40 mt-1.5">Pre-picked from how this deal already splits deductions.</p>
+                <p className="text-[13px] text-bank-mu mt-1.5">Pre-picked from how this deal already splits deductions.</p>
               ) : null}
 
               {overshoot.length > 0 && (
-                <p className="text-[11px] text-amber-400 mt-1.5">
+                <p className="text-[13px] mt-1.5" style={{ color: WARN }}>
                   {overshoot.map(o => `${o.name} is ${money(o.by)} short`).join(' · ')} on {shortDay(runDate)}
-                  <span className="text-amber-400/60">
+                  <span style={{ opacity: 0.75 }}>
                     {when === 'hold'
                       ? ' — it waits, then comes out across however many runs it takes.'
                       : ' — “Hold until they have pay” takes what fits and carries the rest.'}
@@ -337,11 +345,11 @@ export default function DeductionModal({ deal: fixedDeal, deals = [], users = []
             <label htmlFor="ded-note" className={lbl}>What was it</label>
             <input id="ded-note" value={note} onChange={e => setNote(e.target.value)}
               placeholder="e.g. turf seam repair — office email 9/18" style={field} className={fieldCls} />
-            <p className="text-[11px] text-white/40 mt-1.5">This is what the rep reads on their pay statement, so write it for them.</p>
+            <p className="text-[13px] text-bank-mu mt-1.5">This is what the rep reads on their pay statement, so write it for them.</p>
           </div>
 
           {/* when */}
-          <div className="rounded-xl p-3.5" style={{ background: '#171717', border: '1px solid #2e2e2e' }}>
+          <div className="rounded-xl p-3.5" style={SURFACE.raise}>
             <span className={lbl}>When does it come out</span>
             <div className="space-y-1.5">
               <Radio id="ded-when-hold" value="hold"
@@ -355,7 +363,7 @@ export default function DeductionModal({ deal: fixedDeal, deals = [], users = []
                 sub="When you already know which cheque it belongs on." />
             </div>
             {when === 'pick' && (
-              <select id="ded-pick-date" value={pickDate} onChange={e => setPickDate(e.target.value)}
+              <select id="ded-pick-date" value={pickDate} onChange={e => setPickDate(e.target.value)} aria-label="Pay run"
                 style={field} className={`${fieldCls} mt-2.5 appearance-none`}>
                 {payDates.map(d => <option key={d} value={d}>{fmtDay(d)}</option>)}
                 {!payDates.length && <option value="">No pay runs yet</option>}
@@ -364,12 +372,12 @@ export default function DeductionModal({ deal: fixedDeal, deals = [], users = []
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-white/10" style={{ background: '#1a1a1a' }}>
-          <button onClick={onClose} className="h-9 px-4 rounded-lg text-[13px] font-semibold text-white/65 hover:text-white border border-white/15">Cancel</button>
-          <button onClick={save} disabled={!canSave}
-            className="h-9 px-5 rounded-lg text-[13px] font-extrabold bg-teal text-dark disabled:opacity-40 disabled:cursor-not-allowed">
+        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-bank-line sticky bottom-0 md:static"
+          style={{ background: 'var(--card)', paddingBottom: 'max(12px, env(safe-area-inset-bottom))' }}>
+          <SecondaryButton onClick={onClose} className="px-4 min-h-[44px]">Cancel</SecondaryButton>
+          <PrimaryButton onClick={save} disabled={!canSave} className="px-5 py-2">
             {saving ? 'Saving…' : edit ? 'Save changes' : 'Log deduction'}
-          </button>
+          </PrimaryButton>
         </div>
       </div>
     </div>

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { X, Loader2 } from 'lucide-react'
 import { fetchNullManagerDeals, updateDeal } from '../lib/db'
 import { dealAmounts, fmt } from '../utils/commission'
+import { SURFACE, PrimaryButton, SecondaryButton, IconButton } from '../components/ui'
 
 // Shown after a manager-less rep is assigned to a manager. Lists that rep's
 // PAST deals with no manager, and the manager override each WOULD create if the
@@ -37,39 +38,44 @@ export default function ManagerBackfillModal({ rep, manager, onClose }) {
   }
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)' }}>
-      <div className="w-full max-w-lg rounded-xl overflow-hidden flex flex-col" style={{ background: '#1e1e1e', border: '1px solid #2e2e2e', maxHeight: '85vh' }}>
-        <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: '#2e2e2e' }}>
-          <div>
-            <h3 className="text-[14px] font-bold text-white">Backfill manager on past deals</h3>
-            <p className="text-[11px] text-white/45 mt-0.5">
+    <div className="fixed inset-0 z-[60] flex items-end md:items-center md:justify-center md:p-4">
+      <div className="absolute inset-0" style={{ background: 'rgba(0,0,0,0.62)', backdropFilter: 'blur(3px)' }} />
+      <div className="relative w-full md:max-w-lg h-[100dvh] md:h-auto md:max-h-[85vh] rounded-none md:rounded-2xl overflow-hidden flex flex-col"
+        style={{ ...SURFACE.card, boxShadow: 'var(--card-shadow), 0 24px 60px rgba(0,0,0,0.55)', color: 'var(--tx)' }}
+        role="dialog" aria-modal="true" aria-label="Backfill manager on past deals">
+        <div className="flex items-start justify-between gap-3 px-5 py-3 border-b border-bank-line">
+          <div className="min-w-0">
+            <h3 className="text-[15px] font-bold text-bank-tx">Backfill manager on past deals</h3>
+            <p className="text-[13px] text-bank-mu mt-0.5">
               {rep.name} → {manager.name}. Tick the deals that should get {manager.name} as manager. Nothing changes unless ticked.
             </p>
           </div>
-          <button onClick={() => onClose(0)} className="p-1 text-white/40 hover:text-white"><X size={18} /></button>
+          <IconButton onClick={() => onClose(0)} aria-label="Close"><X size={16} /></IconButton>
         </div>
 
-        <div className="overflow-y-auto px-4 py-2 flex-1">
+        <div className="overflow-y-auto px-5 py-2 flex-1">
           {deals === null ? (
-            <div className="flex items-center gap-2 text-[12px] text-white/40 py-6"><Loader2 size={14} className="animate-spin" /> Loading…</div>
+            <div className="flex items-center gap-2 text-[13px] text-bank-mu py-6" role="status"><Loader2 size={14} className="animate-spin" /> Loading…</div>
           ) : deals.length === 0 ? (
-            <p className="text-[12px] text-white/50 py-6">No past deals without a manager — nothing to backfill.</p>
+            <p className="text-[13px] text-bank-mu py-6">No past deals without a manager — nothing to backfill.</p>
           ) : (
-            <ul className="divide-y" style={{ borderColor: '#2a2a2a' }}>
+            <ul>
               {deals.map(d => {
                 const amt = projected(d)
                 return (
-                  <li key={d.id} className="flex items-center gap-3 py-2">
-                    <input type="checkbox" checked={!!picked[d.id]}
-                      onChange={e => setPicked(p => ({ ...p, [d.id]: e.target.checked }))}
-                      className="accent-teal w-4 h-4 flex-shrink-0" />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[12px] text-white/85 truncate">{d.deal_name}</p>
-                      <p className="text-[10px] text-white/35">{d.sale_date || '—'}</p>
-                    </div>
-                    <span className={`text-[12px] font-semibold tabular-nums ${amt > 0 ? 'text-teal' : 'text-white/30'}`}>
-                      {amt > 0 ? '+' + fmt(amt) : '$0'}
-                    </span>
+                  <li key={d.id} className="border-t border-bank-line first:border-0">
+                    <label className="flex items-center gap-3 py-2 min-h-[44px] cursor-pointer">
+                      <input type="checkbox" checked={!!picked[d.id]}
+                        onChange={e => setPicked(p => ({ ...p, [d.id]: e.target.checked }))}
+                        className="accent-[#bfa46c] w-4 h-4 flex-shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[13px] text-bank-tx truncate">{d.deal_name}</p>
+                        <p className="text-[13px] text-bank-fa">{d.sale_date || '—'}</p>
+                      </div>
+                      <span className={`text-[13px] font-semibold tabular-nums ${amt > 0 ? 'text-bank-tx' : 'text-bank-fa'}`}>
+                        {amt > 0 ? '+' + fmt(amt) : '$0'}
+                      </span>
+                    </label>
                   </li>
                 )
               })}
@@ -77,16 +83,16 @@ export default function ManagerBackfillModal({ rep, manager, onClose }) {
           )}
         </div>
 
-        <div className="flex items-center justify-between gap-2 px-4 py-3 border-t" style={{ borderColor: '#2e2e2e' }}>
-          <span className="text-[11px] text-white/45">
-            {chosen.length} selected · <span className="text-teal font-semibold">{fmt(chosenTotal)}</span> in overrides
+        <div className="flex items-center justify-between gap-2 px-5 py-3 border-t border-bank-line flex-wrap"
+          style={{ background: 'var(--card)', paddingBottom: 'max(12px, env(safe-area-inset-bottom))' }}>
+          <span className="text-[13px] text-bank-mu">
+            {chosen.length} selected · <span className="text-bank-tx font-semibold tabular-nums">{fmt(chosenTotal)}</span> in overrides
           </span>
           <div className="flex items-center gap-2">
-            <button onClick={() => onClose(0)} className="px-3 py-1.5 rounded-lg text-[12px] text-white/60 hover:text-white">Skip</button>
-            <button onClick={run} disabled={!chosen.length || saving}
-              className="px-3 py-1.5 rounded-lg text-[12px] font-bold text-dark bg-teal disabled:opacity-40">
+            <SecondaryButton onClick={() => onClose(0)}>Skip</SecondaryButton>
+            <PrimaryButton onClick={run} disabled={!chosen.length || saving} className="px-4 py-2 min-h-[44px] md:min-h-0">
               {saving ? 'Saving…' : `Backfill ${chosen.length || ''}`.trim()}
-            </button>
+            </PrimaryButton>
           </div>
         </div>
       </div>
