@@ -188,3 +188,33 @@ export function ErrorBlock({ title = "Something went wrong", message, className 
     </div>
   )
 }
+
+// ── Form controls ───────────────────────────────────────────────────────────
+// Shared input / select / textarea look. 44px tall on phones, 36px on desktop.
+export const inputCls = 'w-full px-3 py-2 min-h-[44px] md:min-h-0 md:h-9 rounded-lg text-[13px] text-bank-tx placeholder-bank-fa focus:outline-none transition-colors disabled:opacity-40'
+export const inputStyle = SURFACE.raise
+export function Input({ className = '', style, ...rest }) {
+  return <input {...rest} style={{ ...inputStyle, ...style }} className={`${inputCls} ${className}`} />
+}
+export function Select({ className = '', style, children, ...rest }) {
+  return <select {...rest} style={{ ...inputStyle, ...style }} className={`${inputCls} ${className}`}>{children}</select>
+}
+export function TextArea({ className = '', style, ...rest }) {
+  return <textarea {...rest} style={{ ...inputStyle, ...style }} className={`w-full px-3 py-2 rounded-lg text-[13px] text-bank-tx placeholder-bank-fa focus:outline-none resize-y ${className}`} />
+}
+// Label above a form control.
+export function FieldLabel({ children, className = '', htmlFor }) {
+  return <label htmlFor={htmlFor} className={`block text-[13px] font-semibold text-bank-fa uppercase tracking-wide mb-1.5 ${className}`}>{children}</label>
+}
+// Small round icon button (row actions, close buttons). 44px on phones.
+export function IconButton({ className = '', tone, children, style, ...rest }) {
+  return (
+    <button type="button"
+      className={`inline-flex items-center justify-center rounded-lg min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 md:p-1.5 text-bank-mu hover:text-bank-tx hover:bg-bank-raise transition-colors disabled:opacity-40 ${className}`}
+      style={{ color: tone, ...style }} {...rest}>
+      {children}
+    </button>
+  )
+}
+// Popover panel surface (header menus, pickers, tags).
+export const POPOVER = { ...SURFACE.card, borderRadius: 12 }

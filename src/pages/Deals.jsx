@@ -19,6 +19,7 @@ import { getPresetRange } from '../utils/dateRanges'
 import { toast } from '../lib/toast'
 import { confirmDialog, promptDialog } from '../lib/dialog'
 import { saveDealFields, isLockError } from '../lib/dealWrite'
+import { SURFACE, Pill, PillGroup, SecondaryButton } from '../components/ui'
 
 // Build + download a CSV from an array of rows (first row = header).
 function downloadCsv(name, rows) {
@@ -40,7 +41,7 @@ const PAGE_SIZE_KEY = 'tt_deals_page_size'
 
 function Pager({ page, pageCount, pageSize, setPage, setPageSize, from, to, total }) {
   if (total === 0) return null
-  const btn = 'h-7 min-w-7 px-2 rounded-lg text-[12px] font-semibold transition-colors disabled:opacity-30 disabled:cursor-default text-white/60 hover:text-white hover:bg-white/5'
+  const btn = 'h-11 min-w-[44px] md:h-8 md:min-w-8 px-2 rounded-lg text-[13px] font-semibold transition-colors disabled:opacity-30 disabled:cursor-default text-bank-mu hover:text-bank-tx hover:bg-bank-raise'
   // Window of page numbers around the current one, first/last always shown.
   const nums = []
   for (let p = 1; p <= pageCount; p++) {
@@ -49,25 +50,26 @@ function Pager({ page, pageCount, pageSize, setPage, setPageSize, from, to, tota
   }
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1">
-      <p className="text-[11.5px] text-white/40 tabular-nums">
-        Showing <span className="text-white/70">{from.toLocaleString()}–{to.toLocaleString()}</span> of <span className="text-white/70">{total.toLocaleString()}</span>
+      <p className="text-[13px] text-bank-mu tabular-nums">
+        Showing <span className="text-bank-tx">{from.toLocaleString()}–{to.toLocaleString()}</span> of <span className="text-bank-tx">{total.toLocaleString()}</span>
       </p>
       <div className="flex items-center gap-3 flex-wrap">
         {pageCount > 1 && (
-          <div className="flex items-center gap-0.5 p-0.5 rounded-xl" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+          <div className="flex items-center gap-0.5 p-0.5 rounded-xl" style={SURFACE.well}>
             <button onClick={() => setPage(page - 1)} disabled={page <= 1} className={btn} aria-label="Previous page"><ChevronLeft size={14} /></button>
             {nums.map((n, i) => n === '…'
-              ? <span key={`e${i}`} className="px-1 text-[11px] text-white/25">…</span>
+              ? <span key={`e${i}`} className="px-1 text-[13px] text-bank-fa">…</span>
               : <button key={n} onClick={() => setPage(n)} aria-current={n === page ? 'page' : undefined}
-                  className={`${btn} tabular-nums ${n === page ? 'bg-teal text-dark hover:bg-teal hover:text-dark' : ''}`}>{n}</button>)}
+                  className={`${btn} tabular-nums ${n === page ? 'text-bank-gold-tx' : ''}`}
+                  style={n === page ? SURFACE.raise : undefined}>{n}</button>)}
             <button onClick={() => setPage(page + 1)} disabled={page >= pageCount} className={btn} aria-label="Next page"><ChevronRight size={14} /></button>
           </div>
         )}
-        <label className="flex items-center gap-1.5 text-[11px] text-white/40">
+        <label className="flex items-center gap-1.5 text-[13px] text-bank-mu">
           Per page
           <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))}
-            className="h-7 px-1.5 rounded-lg text-[12px] text-white/80 focus:outline-none"
-            style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+            className="h-11 md:h-8 px-2 rounded-lg text-[13px] text-bank-tx focus:outline-none"
+            style={SURFACE.raise}>
             {PAGE_SIZES.map(n => <option key={n} value={n}>{n}</option>)}
           </select>
         </label>
@@ -504,7 +506,7 @@ export default function Deals() {
   }
 
   return (
-    <div className="space-y-3 pb-32 md:pb-20">
+    <div className="space-y-3 pb-32 md:pb-20 max-w-[1400px] mx-auto" style={{ color: 'var(--tx)' }}>
       {!onReview && <FilterBar
         users={pickUsers}
         repFilters={repFilters}       setRepFilters={setRepFilters}
@@ -520,7 +522,7 @@ export default function Deals() {
       />}
 
       {/* KPI row — 2-col on mobile */}
-      <div className="grid grid-cols-2 gap-2 md:flex md:gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
         <KpiCard label="Revenue"
           value={fmt(kpis.baseline)}       valueLabel="Baseline"
           value2={fmt(kpis.totalJobPrice)} value2Label="Job Price" />
@@ -528,7 +530,7 @@ export default function Deals() {
         <KpiCard label="Deals"         value={kpis.total}
           sub={kpis.canceled > 0 ? `${kpis.canceled} canceled · ${kpis.canceledPct.toFixed(kpis.canceledPct < 10 ? 1 : 0)}%` : undefined} />
         <KpiCard label="Avg Comm" value={fmt(kpis.avgComm)} sub={`${kpis.avgMarkupPct.toFixed(1)}% markup`} />
-        <div className="col-span-2 md:flex-1">
+        <div className="sm:col-span-2 md:col-span-1">
           <KpiCard label="Avg Deal"
             value={fmt(kpis.avgBaseline)} valueLabel="Baseline"
             value2={fmt(kpis.avgDeal)}    value2Label="Job Price" />
@@ -540,24 +542,21 @@ export default function Deals() {
           All deals. */}
       {canStage && (
         <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex gap-1 p-1 rounded-xl w-fit" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-            <button onClick={() => setReviewTab('review')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors ${reviewTab === 'review' ? 'bg-amber-400 text-dark' : 'text-white/50 hover:text-white'}`}>
+          <PillGroup role="tablist">
+            <Pill onClick={() => setReviewTab('review')} active={reviewTab === 'review'} className="flex items-center gap-1.5">
               Needs review
               {needsReview.length > 0 && (
-                <span className={`px-1.5 rounded-full text-[10px] font-bold ${reviewTab === 'review' ? 'bg-dark/20 text-dark' : 'bg-amber-400/20 text-amber-400'}`}>
+                <span className="px-1.5 py-0.5 rounded-full text-[12px] font-bold"
+                  style={{ background: 'rgba(210,160,116,0.16)', color: 'var(--warn)', border: '1px solid rgba(210,160,116,0.4)' }}>
                   {needsReview.length}
                 </span>
               )}
-            </button>
-            <button onClick={() => setReviewTab('all')}
-              className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors ${reviewTab === 'all' ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
-              All deals
-            </button>
-          </div>
+            </Pill>
+            <Pill onClick={() => setReviewTab('all')} active={reviewTab === 'all'}>All deals</Pill>
+          </PillGroup>
           {reviewTab === 'review' && <AuditControls audit={audit} canAudit={canAudit} />}
           {reviewTab === 'review' && (
-            <span className="text-[11px] text-white/40">
+            <span className="text-[13px] text-bank-mu">
               {needsReview.length
                 ? 'Every deal needing anything — unverified, flagged ❗, or missing info. Search & filters don’t apply here.'
                 : '🎉 Nothing to review — every deal is verified and complete.'}
@@ -567,15 +566,13 @@ export default function Deals() {
       )}
 
       <div ref={tableTopRef} className="flex items-center justify-between gap-3 flex-wrap scroll-mt-4">
-        <p className="text-[11.5px] text-white/40 tabular-nums">
-          {shownDeals.length > 0 && <>Showing <span className="text-white/70">{pagerProps.from.toLocaleString()}–{pagerProps.to.toLocaleString()}</span> of <span className="text-white/70">{shownDeals.length.toLocaleString()}</span></>}
+        <p className="text-[13px] text-bank-mu tabular-nums">
+          {shownDeals.length > 0 && <>Showing <span className="text-bank-tx">{pagerProps.from.toLocaleString()}–{pagerProps.to.toLocaleString()}</span> of <span className="text-bank-tx">{shownDeals.length.toLocaleString()}</span></>}
         </p>
-        <button onClick={exportDeals} disabled={!shownDeals.length}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold text-white/70 hover:text-white transition-colors disabled:opacity-40"
-          style={{ background: '#1e1e1e', border: '1px solid #2e2e2e' }}
+        <SecondaryButton onClick={exportDeals} disabled={!shownDeals.length}
           title={`Export all ${shownDeals.length.toLocaleString()} deals in view to a CSV — every page, not just this one`}>
           <Download size={14} /> Export CSV
-        </button>
+        </SecondaryButton>
       </div>
 
       <DealTable
@@ -611,9 +608,11 @@ export default function Deals() {
       {isAdmin && (
         <button
           onClick={() => { setEditDeal(null); setModal(true) }}
-          className="fixed bottom-20 right-4 md:bottom-8 md:right-8 w-12 h-12 md:w-14 md:h-14 rounded-full bg-teal hover:bg-teal-dark flex items-center justify-center shadow-xl shadow-teal/30 hover:scale-105 transition-all z-40"
+          aria-label="New deal" title="New deal"
+          className="fixed bottom-20 right-4 md:bottom-8 md:right-8 w-14 h-14 rounded-full flex items-center justify-center hover:brightness-105 hover:scale-105 transition-all z-40"
+          style={{ background: 'var(--gold)', color: 'var(--gold-ink)', boxShadow: '0 18px 40px rgba(0,0,0,0.45)' }}
         >
-          <Plus size={20} className="text-dark" strokeWidth={2.5} />
+          <Plus size={22} strokeWidth={2.5} />
         </button>
       )}
 

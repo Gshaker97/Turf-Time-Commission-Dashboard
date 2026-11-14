@@ -7,18 +7,24 @@ import { calcDealCommissions, fmt, fmtPct, officeOverrideRate, managerDefaultRat
 import { payDateFromInstall } from '../utils/dateRanges'
 import { dealManagerId } from '../utils/team'
 import { useSettings } from '../contexts/SettingsContext'
+import { SURFACE, POPOVER, GOLD_WASH, FieldLabel, Input, Select, PrimaryButton, SecondaryButton, IconButton } from './ui'
 
 const Field = ({ label, children }) => (
   <div>
-    <label className="block text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1.5">{label}</label>
+    <FieldLabel>{label}</FieldLabel>
     {children}
   </div>
 )
 
-const inputCls = 'w-full px-3 py-2 rounded-lg text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-teal/40 transition-colors'
-const inputStyle = { background: '#1a1a1a', border: '1px solid #3a3a3a' }
-const Inp = (props) => <input {...props} style={inputStyle} className={inputCls} />
-const Sel = ({ children, ...props }) => <select {...props} style={inputStyle} className={inputCls}>{children}</select>
+// Shared Private Bank form controls (44px tall on phones).
+const inputStyle = SURFACE.well
+const Inp = (props) => <Input {...props} style={inputStyle} />
+const Sel = ({ children, ...props }) => <Select {...props} style={inputStyle}>{children}</Select>
+const PANEL = { ...SURFACE.well, borderRadius: 14 }
+const eyebrow = 'text-[13px] font-bold text-bank-fa uppercase tracking-wide'
+const smallInput = 'px-2 py-2 min-h-[44px] md:min-h-0 rounded-lg text-[13px] text-bank-tx focus:outline-none disabled:opacity-40'
+const SLIDER = 'flex-1 accent-[#bfa46c] min-h-[44px] md:min-h-0'
+
 
 // Type-to-search person picker — replaces the setter/closer dropdowns, which
 // got unusable as the roster grew. Shows the selected name; typing filters;
@@ -34,10 +40,9 @@ function PersonPicker({ value, users = [], onChange, placeholder = 'Search rep�
   const pick = (id) => { onChange(id); setOpen(false); setQuery('') }
   return (
     <div className="relative">
-      <input
+      <Input
         type="text"
         style={inputStyle}
-        className={inputCls}
         placeholder={placeholder}
         value={open ? query : (selected?.name || '')}
         onFocus={() => { setOpen(true); setQuery('') }}
@@ -51,16 +56,16 @@ function PersonPicker({ value, users = [], onChange, placeholder = 'Search rep�
       {/* native required validation without blocking typing */}
       {required && <input tabIndex={-1} aria-hidden className="absolute inset-0 opacity-0 pointer-events-none" required value={value || ''} onChange={() => {}} />}
       {open && (
-        <div className="absolute left-0 right-0 z-50 mt-1 rounded-lg shadow-2xl overflow-y-auto"
-          style={{ background: '#242424', border: '1px solid #3a3a3a', maxHeight: 208 }}>
+        <div className="absolute left-0 right-0 z-50 mt-1 overflow-y-auto"
+          style={{ ...POPOVER, maxHeight: 240 }}>
           {matches.length === 0 ? (
-            <p className="px-3 py-2 text-[12px] text-white/30">No one matches “{query}”.</p>
+            <p className="px-3 py-2 text-[13px] text-bank-mu">No one matches “{query}”.</p>
           ) : matches.map(u => (
             <button key={u.id} type="button"
               onMouseDown={e => { e.preventDefault(); pick(u.id) }}
-              className="w-full text-left px-3 py-1.5 text-[13px] hover:bg-white/[0.06] transition-colors flex items-center justify-between gap-2">
-              <span className={u.id === value ? 'text-teal font-semibold' : 'text-white/85'}>{u.name}</span>
-              <span className="text-[10px] text-white/30 uppercase">{u.role}</span>
+              className="w-full text-left px-3 py-2 min-h-[44px] md:min-h-0 text-[13px] hover:bg-bank-raise transition-colors flex items-center justify-between gap-2">
+              <span className={u.id === value ? 'text-bank-gold-tx font-semibold' : 'text-bank-tx'}>{u.name}</span>
+              <span className="text-[12px] text-bank-fa uppercase">{u.role}</span>
             </button>
           ))}
         </div>
@@ -136,36 +141,36 @@ function DealHistory({ dealId, users }) {
   }
 
   return (
-    <div className="rounded-xl overflow-hidden" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
-      <button type="button" onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-white/[0.02] transition-colors">
-        <span className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-white/40 font-semibold">
+    <div className="rounded-xl overflow-hidden" style={PANEL}>
+      <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
+        className="w-full flex items-center justify-between px-3 py-2.5 min-h-[44px] hover:bg-bank-raise transition-colors">
+        <span className={`flex items-center gap-2 ${eyebrow}`}>
           <History size={13} /> Edit history
         </span>
-        <ChevronDown size={14} className={`text-white/30 transition-transform ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown size={14} className={`text-bank-fa transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
         <div className="px-3 pb-3 max-h-56 overflow-y-auto">
           {rows === null ? (
-            <p className="text-[12px] text-white/30 py-2">Loading…</p>
+            <p className="text-[13px] text-bank-mu py-2">Loading…</p>
           ) : rows.length === 0 ? (
-            <p className="text-[12px] text-white/30 py-2">No history yet. (Changes are recorded once migration 019 is run.)</p>
+            <p className="text-[13px] text-bank-mu py-2">No history yet. (Changes are recorded once migration 019 is run.)</p>
           ) : rows.map(r => (
-            <div key={r.id} className="py-2 border-t border-white/5 first:border-0">
-              <p className="text-[11px] text-white/40">
+            <div key={r.id} className="py-2 border-t border-bank-line first:border-0">
+              <p className="text-[13px] text-bank-mu">
                 {format(new Date(r.changed_at), 'MMM d, yyyy · h:mm a')}
-                <span className="text-white/60 font-semibold"> · {who(r.changed_by)}</span>
+                <span className="text-bank-tx font-semibold"> · {who(r.changed_by)}</span>
               </p>
               {r.changes?._event === 'created' ? (
-                <p className="text-[12px] text-white/60 mt-0.5">Deal created</p>
+                <p className="text-[13px] text-bank-mu mt-0.5">Deal created</p>
               ) : (
                 <div className="mt-0.5 space-y-0.5">
                   {Object.entries(r.changes || {}).map(([k, c]) => (
-                    <p key={k} className="text-[12px] text-white/60">
-                      <span className="text-white/40">{H_LABELS[k] || k}:</span>{' '}
-                      <span className="text-white/45 line-through">{val(k, c?.from)}</span>
-                      <span className="text-white/30"> → </span>
-                      <span className="text-white/85">{val(k, c?.to)}</span>
+                    <p key={k} className="text-[13px] text-bank-mu">
+                      <span className="text-bank-fa">{H_LABELS[k] || k}:</span>{' '}
+                      <span className="text-bank-fa line-through">{val(k, c?.from)}</span>
+                      <span className="text-bank-fa"> → </span>
+                      <span className="text-bank-tx">{val(k, c?.to)}</span>
                     </p>
                   ))}
                 </div>
@@ -509,24 +514,23 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
   return (
     // Mobile: bottom sheet | Desktop: centered modal
     <div className="fixed inset-0 z-50 flex flex-col justify-end md:justify-center md:items-center md:p-4">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0" style={{ background: 'rgba(0,0,0,0.62)', backdropFilter: 'blur(3px)' }} onClick={onClose} />
 
       <div
-        className="relative w-full md:max-w-2xl rounded-t-2xl md:rounded-2xl overflow-y-auto shadow-2xl"
-        style={{ background: '#242424', border: '1px solid #333', maxHeight: '95dvh' }}
+        className="relative w-full md:max-w-2xl rounded-t-2xl md:rounded-2xl overflow-y-auto"
+        style={{ ...SURFACE.card, boxShadow: 'var(--card-shadow), 0 24px 60px rgba(0,0,0,0.55)', maxHeight: '95dvh', color: 'var(--tx)' }}
+        role="dialog" aria-modal="true" aria-label={deal ? 'Edit Deal' : 'New Deal'}
       >
         {/* Drag handle — mobile only */}
         <div className="md:hidden flex justify-center pt-3 pb-1">
-          <div className="w-8 h-1 rounded-full bg-white/20" />
+          <div className="w-8 h-1 rounded-full" style={{ background: 'var(--line)' }} />
         </div>
 
         {/* Header */}
         <div className="flex items-center justify-between px-4 md:px-6 py-3 md:py-4 sticky top-0 z-10"
-          style={{ background: '#242424', borderBottom: '1px solid #2e2e2e' }}>
-          <h2 className="text-[15px] font-semibold text-white">{deal ? 'Edit Deal' : 'New Deal'}</h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg text-white/30 hover:text-white hover:bg-white/10 transition-colors">
-            <X size={16} />
-          </button>
+          style={{ background: 'var(--card)', borderBottom: '1px solid var(--line)' }}>
+          <h2 className="text-[15px] font-bold text-bank-tx">{deal ? 'Edit Deal' : 'New Deal'}</h2>
+          <IconButton onClick={onClose} aria-label="Close"><X size={16} /></IconButton>
         </div>
 
         <form onSubmit={handleSubmit} className="p-4 md:p-6 space-y-4 md:space-y-5"
@@ -537,8 +541,8 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
             <Field label="Deal Name *">
               <Inp required value={form.deal_name} onChange={e => set('deal_name', e.target.value)} placeholder="Smith Residence" />
               {duplicate && (
-                <p className="text-[11px] text-amber-400 mt-1 flex items-center gap-1">
-                  <AlertTriangle size={11} className="flex-shrink-0" /> A deal named “{duplicate.deal_name}” already exists{duplicate.sale_date ? ` (${duplicate.sale_date})` : ''}.
+                <p className="text-[13px] mt-1 flex items-center gap-1" style={{ color: 'var(--warn)' }}>
+                  <AlertTriangle size={12} className="flex-shrink-0" /> A deal named “{duplicate.deal_name}” already exists{duplicate.sale_date ? ` (${duplicate.sale_date})` : ''}.
                 </p>
               )}
             </Field>
@@ -587,40 +591,37 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
 
           {/* Split % */}
           {form.setter_id && form.closer_id && form.setter_id !== form.closer_id && (
-            <div className="rounded-xl px-4 py-3 space-y-2" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
-              <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest">Commission Split</p>
+            <div className="px-4 py-3 space-y-2" style={{ ...SURFACE.raise, borderRadius: 14 }}>
+              <p className={eyebrow}>Commission Split</p>
               <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
-                <span className="text-[11px] text-white/50 sm:w-20 sm:text-right shrink-0">
+                <span className="text-[13px] text-bank-mu sm:w-20 sm:text-right shrink-0">
                   Setter {splitPct.toFixed(0)}%
                 </span>
-                <input type="range" min="0" max="100" step="1" value={splitPct}
-                  onChange={e => set('setter_split_pct', e.target.value)} className="flex-1 accent-teal" />
-                <span className="text-[11px] text-white/50 sm:w-20 shrink-0">
+                <input type="range" min="0" max="100" step="1" value={splitPct} aria-label="Setter split percent"
+                  onChange={e => set('setter_split_pct', e.target.value)} className={SLIDER} />
+                <span className="text-[13px] text-bank-mu sm:w-20 shrink-0">
                   Closer {(100-splitPct).toFixed(0)}%
                 </span>
-                <input type="number" min="0" max="100" step="any" value={form.setter_split_pct}
+                <input type="number" min="0" max="100" step="any" value={form.setter_split_pct} aria-label="Setter split percent"
                   onChange={e => set('setter_split_pct', e.target.value)} placeholder="50"
-                  className="px-2 py-2 rounded-lg text-[13px] text-white text-center focus:outline-none w-16 shrink-0"
-                  style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }} />
+                  className={`${smallInput} text-center w-16 shrink-0`} style={inputStyle} />
               </div>
               {/* Or type the dollar amount — the slider/% follow */}
               <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
-                <span className="text-[11px] text-white/40 sm:w-20 sm:text-right shrink-0">Setter $</span>
-                <input type="number" step="any" min="0" value={moneyValue('setter', setterDollars)}
+                <span className="text-[13px] text-bank-mu sm:w-20 sm:text-right shrink-0">Setter $</span>
+                <input type="number" step="any" min="0" value={moneyValue('setter', setterDollars)} aria-label="Setter dollars"
                   onChange={e => setSplitFromDollars('setter', e.target.value)}
                   onFocus={e => e.target.select()} onBlur={() => setMoneyEdit(null)}
                   placeholder="—" disabled={repPoolForm <= 0}
-                  className="flex-1 px-2 py-2 rounded-lg text-[13px] text-white focus:outline-none disabled:opacity-40"
-                  style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }} />
-                <span className="text-[11px] text-white/40 sm:w-20 sm:text-right shrink-0">Closer $</span>
-                <input type="number" step="any" min="0" value={moneyValue('closer', closerDollars)}
+                  className={`${smallInput} flex-1`} style={inputStyle} />
+                <span className="text-[13px] text-bank-mu sm:w-20 sm:text-right shrink-0">Closer $</span>
+                <input type="number" step="any" min="0" value={moneyValue('closer', closerDollars)} aria-label="Closer dollars"
                   onChange={e => setSplitFromDollars('closer', e.target.value)}
                   onFocus={e => e.target.select()} onBlur={() => setMoneyEdit(null)}
                   placeholder="—" disabled={repPoolForm <= 0}
-                  className="flex-1 px-2 py-2 rounded-lg text-[13px] text-white focus:outline-none disabled:opacity-40"
-                  style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }} />
+                  className={`${smallInput} flex-1`} style={inputStyle} />
               </div>
-              <p className="text-[10px] text-white/30">
+              <p className="text-[13px] text-bank-mu">
                 Type either $ amount — the other rep gets the rest of the {fmt(repPoolForm)} rep pool and the split % updates.
               </p>
             </div>
@@ -640,8 +641,8 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
 
           {/* Commission preview */}
           {showPreview && (
-            <div className="rounded-xl p-3 md:p-4" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
-              <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-3">Commission Preview</p>
+            <div className="p-3 md:p-4" style={{ ...SURFACE.raise, borderRadius: 14 }}>
+              <p className={`${eyebrow} mb-3`}>Commission Preview</p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 md:gap-3 text-center">
                 {[
                   ['Gross Comm', fmt(preview.repCommission)],
@@ -650,22 +651,22 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                   ['Rep Comm %', fmtPct(preview.commPct)],
                 ].map(([lbl, val]) => (
                   <div key={lbl}>
-                    <p className="text-[10px] text-white/30 mb-0.5 leading-tight">{lbl}</p>
-                    <p className="text-[14px] md:text-[15px] font-bold text-teal">{val}</p>
+                    <p className="text-[13px] text-bank-fa mb-0.5 leading-tight">{lbl}</p>
+                    <p className="text-[15px] md:text-[16px] font-bold text-bank-tx tabular-nums">{val}</p>
                   </div>
                 ))}
               </div>
               {(preview.managerAmt > 0 || preview.directorAmt > 0 || preview.vpAmt > 0) && (
-                <div className="mt-3 pt-3 border-t border-white/5">
+                <div className="mt-3 pt-3 border-t border-bank-line">
                   <div className="flex items-center justify-between mb-2">
-                    <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest">Overrides</p>
-                    <span className="text-[12px] font-bold text-white/70">Gross {fmt(preview.overrides)}</span>
+                    <p className={eyebrow}>Overrides</p>
+                    <span className="text-[13px] font-bold text-bank-tx tabular-nums">Gross {fmt(preview.overrides)}</span>
                   </div>
                   <div className="grid grid-cols-3 gap-2 text-center">
                     {[['Mgr', preview.managerAmt], ['Dir', preview.directorAmt], ['VP', preview.vpAmt]].map(([lbl, val]) => (
                       <div key={lbl}>
-                        <p className="text-[10px] text-white/30 mb-0.5">{lbl} Override</p>
-                        <p className="text-[13px] font-semibold text-white/60">{fmt(val)}</p>
+                        <p className="text-[13px] text-bank-fa mb-0.5">{lbl} Override</p>
+                        <p className="text-[13px] font-semibold text-bank-mu tabular-nums">{fmt(val)}</p>
                       </div>
                     ))}
                   </div>
@@ -675,11 +676,11 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
           )}
 
           {/* Deduction */}
-          <div className="rounded-xl px-4 py-3 space-y-3" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+          <div className="px-4 py-3 space-y-3" style={{ ...SURFACE.raise, borderRadius: 14 }}>
             <div className="flex items-center justify-between">
-              <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest">Deduction</p>
+              <p className={eyebrow}>Deduction</p>
               {totalDeduction > 0 && (
-                <span className="text-[12px] font-bold text-red-400">−{fmt(totalDeduction)}</span>
+                <span className="text-[13px] font-bold tabular-nums" style={{ color: 'var(--neg)' }}>−{fmt(totalDeduction)}</span>
               )}
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] gap-3">
@@ -694,8 +695,8 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
             </div>
 
             {/* Dealer fee — a % of the financed amount */}
-            <div className="pt-3 border-t border-white/5">
-              <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-2">Dealer Fee</p>
+            <div className="pt-3 border-t border-bank-line">
+              <p className={`${eyebrow} mb-2`}>Dealer Fee</p>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <Field label="Financed amount ($)">
                   <Inp type="number" min="0" step="0.01" value={form.financed_amount}
@@ -706,8 +707,8 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                     onChange={e => set('dealer_fee_pct', e.target.value)} placeholder="0" />
                 </Field>
                 <Field label="Dealer fee">
-                  <div className="px-3 py-2 rounded-lg text-[13px] font-semibold" style={inputStyle}>
-                    <span style={{ color: dealerFee > 0 ? '#f87171' : 'rgba(255,255,255,0.3)' }}>
+                  <div className="px-3 py-2 min-h-[44px] md:min-h-0 md:h-9 flex items-center rounded-lg text-[13px] font-semibold tabular-nums" style={inputStyle}>
+                    <span style={{ color: dealerFee > 0 ? 'var(--neg)' : 'var(--fa)' }}>
                       {dealerFee > 0 ? `−${fmt(dealerFee)}` : '—'}
                     </span>
                   </div>
@@ -717,25 +718,26 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
 
             {/* Who pays the deduction — split deals only */}
             {isSplitDeal && totalDeduction > 0 && (
-              <div className="pt-3 border-t border-white/5">
-                <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-2">Who pays the deduction?</p>
-                <div className="inline-flex w-full rounded-lg overflow-hidden border border-white/10">
+              <div className="pt-3 border-t border-bank-line">
+                <p className={`${eyebrow} mb-2`}>Who pays the deduction?</p>
+                <div className="inline-flex w-full rounded-lg overflow-hidden p-1 gap-1" style={SURFACE.well} role="group" aria-label="Who pays the deduction">
                   {[['closer', closerName], ['setter', setterName], ['split', 'Split']].map(([v, label]) => (
-                    <button key={v} type="button" onClick={() => set('deduction_paid_by', v)}
-                      className={`flex-1 px-2 py-2 text-[12px] font-semibold truncate transition-colors ${form.deduction_paid_by === v ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
+                    <button key={v} type="button" onClick={() => set('deduction_paid_by', v)} aria-pressed={form.deduction_paid_by === v}
+                      className={`flex-1 px-2 py-2 min-h-[44px] md:min-h-0 rounded-md text-[13px] font-semibold truncate transition-colors ${form.deduction_paid_by === v ? 'text-bank-gold-tx' : 'text-bank-mu hover:text-bank-tx'}`}
+                      style={form.deduction_paid_by === v ? GOLD_WASH : undefined}>
                       {label}
                     </button>
                   ))}
                 </div>
                 {form.deduction_paid_by === 'split' && (
                   <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mt-3">
-                    <span className="text-[11px] text-white/50 sm:w-28 sm:text-right shrink-0 truncate">{setterName} {dedSplit}%</span>
-                    <input type="range" min="0" max="100" step="1" value={dedSplit}
-                      onChange={e => set('deduction_split_pct', e.target.value)} className="flex-1 accent-teal" />
-                    <span className="text-[11px] text-white/50 sm:w-28 shrink-0 truncate">{closerName} {100 - dedSplit}%</span>
+                    <span className="text-[13px] text-bank-mu sm:w-28 sm:text-right shrink-0 truncate">{setterName} {dedSplit}%</span>
+                    <input type="range" min="0" max="100" step="1" value={dedSplit} aria-label="Deduction split percent"
+                      onChange={e => set('deduction_split_pct', e.target.value)} className={SLIDER} />
+                    <span className="text-[13px] text-bank-mu sm:w-28 shrink-0 truncate">{closerName} {100 - dedSplit}%</span>
                   </div>
                 )}
-                <p className="text-[11px] text-white/40 mt-1.5">
+                <p className="text-[13px] text-bank-mu mt-1.5">
                   {form.deduction_paid_by === 'split'
                     ? `${setterName} pays ${fmt(totalDeduction * dedSplit / 100)} · ${closerName} pays ${fmt(totalDeduction * (100 - dedSplit) / 100)}`
                     : `${form.deduction_paid_by === 'setter' ? setterName : closerName} pays the full ${fmt(totalDeduction)}`}
@@ -746,7 +748,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
 
           {/* Override chain */}
           <div>
-            <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-3">Override Chain</p>
+            <p className={`${eyebrow} mb-3`}>Override Chain</p>
             <div className="space-y-3">
               {overrideRows.map(({ label, idKey, pctKey, list, role }) => {
                 // When a bonus pulls from this role, show its net (post-bonus) take.
@@ -770,7 +772,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                         placeholder="0" />
                     </Field>
                     {give > 0 && (
-                      <p className="text-[10px] text-amber-400 mt-1 leading-tight">
+                      <p className="text-[13px] mt-1 leading-tight" style={{ color: 'var(--warn)' }}>
                         −{fmt(give)} bonus → nets {fmt(netAmt)} ({netPct.toFixed(2)}%)
                       </p>
                     )}
@@ -785,8 +787,8 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
               Pergolas…) whose price earns no override. Baseline/job price
               stay the same; overrides compute off baseline − these amounts. */}
           <div>
-            <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-1">Override Exclusions <span className="text-white/20 normal-case font-medium">· subcontracted items, no override on these</span></p>
-            <p className="text-[11px] text-white/35 mb-3">Baseline &amp; job price don't change — the override % just applies to baseline minus these amounts.</p>
+            <p className={`${eyebrow} mb-1`}>Override Exclusions <span className="text-bank-fa normal-case font-medium">· subcontracted items, no override on these</span></p>
+            <p className="text-[13px] text-bank-mu mb-3">Baseline &amp; job price don't change — the override % just applies to baseline minus these amounts.</p>
             <div className="space-y-2">
               {exRows.map((r, i) => (
                 <div key={i} className="flex items-center gap-2">
@@ -795,27 +797,24 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                     {overrideExclusionItems.map(it => <option key={it} value={it}>{it}</option>)}
                     {r.item && !overrideExclusionItems.includes(r.item) && <option value={r.item}>{r.item}</option>}
                   </Sel>
-                  <input type="number" min="0" step="0.01" value={r.amount} placeholder="Price $"
+                  <Input type="number" min="0" step="0.01" value={r.amount} placeholder="Price $" aria-label="Excluded item price"
                     onChange={e => setExRows(rs => rs.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))}
-                    style={inputStyle} className={`${inputCls} !w-32 flex-shrink-0`} />
-                  <button type="button" onClick={() => setExRows(rs => rs.filter((_, j) => j !== i))}
-                    className="p-2 rounded-lg text-white/25 hover:text-red-400 hover:bg-red-500/10 transition-colors flex-shrink-0" title="Remove item">
+                    style={inputStyle} className="!w-32 flex-shrink-0" />
+                  <IconButton onClick={() => setExRows(rs => rs.filter((_, j) => j !== i))} title="Remove item" aria-label="Remove item" className="flex-shrink-0">
                     <X size={14} />
-                  </button>
+                  </IconButton>
                 </div>
               ))}
             </div>
-            <button type="button" onClick={() => setExRows(rs => [...rs, { item: '', amount: '' }])}
-              className="mt-2 px-3 py-1.5 rounded-lg text-[12px] font-semibold text-white/60 hover:text-white transition-colors"
-              style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+            <SecondaryButton type="button" onClick={() => setExRows(rs => [...rs, { item: '', amount: '' }])} className="mt-2">
               + Add excluded item
-            </button>
+            </SecondaryButton>
             {exclusionsTotal > 0 && (
-              <p className="text-[11px] text-white/45 mt-2">
-                Override base: <span className="text-white/70 font-semibold">{fmt(overrideBaseForm)}</span>
-                <span className="text-white/30"> (baseline {fmt(baseForBonus)} − {fmt(exclusionsTotal)} excluded)</span>
+              <p className="text-[13px] text-bank-mu mt-2">
+                Override base: <span className="text-bank-tx font-semibold">{fmt(overrideBaseForm)}</span>
+                <span className="text-bank-fa"> (baseline {fmt(baseForBonus)} − {fmt(exclusionsTotal)} excluded)</span>
                 {baseForBonus > 0 && (
-                  <span className="text-amber-400/90"> · effective: {['manager', 'director', 'vp'].map(role => {
+                  <span style={{ color: 'var(--warn)' }}> · effective: {['manager', 'director', 'vp'].map(role => {
                     const entered = parseFloat(form[`${role}_override_pct`]) || 0
                     return entered > 0 && form[`${role}_id`] ? `${role === 'vp' ? 'VP' : role[0].toUpperCase() + role.slice(1)} ${(entered * overrideBaseForm / baseForBonus).toFixed(2)}%` : null
                   }).filter(Boolean).join(' · ') || '—'}</span>
@@ -828,7 +827,7 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
               pulled from their override; 'Company' is an extra from nobody. */}
           <div>
             <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
-              <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest">Rep Bonus <span className="text-white/20 normal-case font-medium">· optional, chip in from anyone</span></p>
+              <p className={eyebrow}>Rep Bonus <span className="text-bank-fa normal-case font-medium">· optional, chip in from anyone</span></p>
               <div className="flex items-end gap-2">
                 <Field label="Enter as">
                   <Sel value={form.bonus_mode} onChange={e => setBonusMode(e.target.value)}>
@@ -856,17 +855,17 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                 const over = role !== 'company' && id && bonus$[role] > gross + 0.005
                 return (
                   <div key={key} className="flex items-center gap-2">
-                    <span className="w-16 text-[12px] font-medium text-white/60 flex-shrink-0">{label}</span>
+                    <span className="w-16 text-[13px] font-medium text-bank-mu flex-shrink-0">{label}</span>
                     <div className="w-24 flex-shrink-0">
                       <Inp type="number" min="0" step="any" value={form[key]} disabled={!id}
                         onChange={e => set(key, e.target.value)} placeholder="0" />
                     </div>
-                    <span className="text-[11px] text-white/40 min-w-0 flex-1">
+                    <span className="text-[13px] text-bank-mu min-w-0 flex-1">
                       {role === 'company'
-                        ? (give > 0 ? <span>extra <span className="text-teal font-semibold">+{fmt(give)}</span> (from nobody)</span> : 'an extra on top, from nobody')
+                        ? (give > 0 ? <span>extra <span className="text-bank-tx font-semibold">+{fmt(give)}</span> (from nobody)</span> : 'an extra on top, from nobody')
                         : !id ? 'no one assigned'
-                        : <>override {fmt(gross)} {give > 0 && <span className="text-white/55">→ {fmt(Math.max(0, gross - give))} ({netPct.toFixed(1)}%)</span>}
-                            {over && <span className="text-amber-400"> · only has {fmt(gross)}; capped</span>}</>}
+                        : <>override {fmt(gross)} {give > 0 && <span className="text-bank-tx">→ {fmt(Math.max(0, gross - give))} ({netPct.toFixed(1)}%)</span>}
+                            {over && <span style={{ color: 'var(--warn)' }}> · only has {fmt(gross)}; capped</span>}</>}
                     </span>
                   </div>
                 )
@@ -876,30 +875,30 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
                 splits read and behave identically. Setter on the left. */}
             {bonusIsSplit && (
               <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
-                <span className="text-[11px] text-white/50 sm:w-28 sm:text-right shrink-0 truncate">{setterName} {bonusSplit}%</span>
-                <input type="range" min="0" max="100" step="1" value={bonusSplit}
-                  onChange={e => set('bonus_split_pct', e.target.value)} className="flex-1 accent-teal" />
-                <span className="text-[11px] text-white/50 sm:w-28 shrink-0 truncate">{closerName} {100 - bonusSplit}%</span>
+                <span className="text-[13px] text-bank-mu sm:w-28 sm:text-right shrink-0 truncate">{setterName} {bonusSplit}%</span>
+                <input type="range" min="0" max="100" step="1" value={bonusSplit} aria-label="Bonus split percent"
+                  onChange={e => set('bonus_split_pct', e.target.value)} className={SLIDER} />
+                <span className="text-[13px] text-bank-mu sm:w-28 shrink-0 truncate">{closerName} {100 - bonusSplit}%</span>
               </div>
             )}
             {bonusDollars > 0 && (
-              <div className="mt-2.5 pt-2.5 border-t border-white/5 space-y-1">
-                <p className="text-[12px]">
+              <div className="mt-2.5 pt-2.5 border-t border-bank-line space-y-1">
+                <p className="text-[13px]">
                   {bonusIsSplit ? (
                     <>
-                      <span className="text-white/50">Total bonus:</span> <span className="font-bold text-teal">+{fmt(bonusDollars)}</span>
-                      <span className="text-white/50"> · {setterName} </span><span className="font-semibold text-white/80">+{fmt(preview.bonusSetter)}</span>
-                      <span className="text-white/50"> · {closerName} </span><span className="font-semibold text-white/80">+{fmt(preview.bonusCloser)}</span>
+                      <span className="text-bank-mu">Total bonus:</span> <span className="font-bold text-bank-tx">+{fmt(bonusDollars)}</span>
+                      <span className="text-bank-mu"> · {setterName} </span><span className="font-semibold text-bank-tx">+{fmt(preview.bonusSetter)}</span>
+                      <span className="text-bank-mu"> · {closerName} </span><span className="font-semibold text-bank-tx">+{fmt(preview.bonusCloser)}</span>
                     </>
                   ) : (
-                    <><span className="text-white/50">Total bonus to {recipName}:</span> <span className="font-bold text-teal">+{fmt(bonusDollars)}</span></>
+                    <><span className="text-bank-mu">Total bonus to {recipName}:</span> <span className="font-bold text-bank-tx">+{fmt(bonusDollars)}</span></>
                   )}
                 </p>
-                <p className="text-[12px]">
-                  <span className="text-white/50">Total mgmt override:</span>{' '}
-                  <span className="text-white/40 line-through">{fmt(overrideGross.manager + overrideGross.director + overrideGross.vp)}</span>{' '}
-                  <span className="font-bold text-white/80">→ {fmt(preview.manager + preview.director + preview.vp)}</span>
-                  <span className="text-amber-400"> (−{fmt(preview.bonusFrom.manager + preview.bonusFrom.director + preview.bonusFrom.vp)})</span>
+                <p className="text-[13px]">
+                  <span className="text-bank-mu">Total mgmt override:</span>{' '}
+                  <span className="text-bank-fa line-through">{fmt(overrideGross.manager + overrideGross.director + overrideGross.vp)}</span>{' '}
+                  <span className="font-bold text-bank-tx">→ {fmt(preview.manager + preview.director + preview.vp)}</span>
+                  <span style={{ color: 'var(--warn)' }}> (−{fmt(preview.bonusFrom.manager + preview.bonusFrom.director + preview.bonusFrom.vp)})</span>
                 </p>
               </div>
             )}
@@ -909,15 +908,12 @@ export default function DealModal({ deal, users = [], existingDeals = [], onSave
 
           {/* Actions */}
           <div className="flex gap-3 pt-2">
-            <button type="submit" disabled={saving}
-              className="flex-1 py-3 rounded-xl text-[14px] font-bold text-dark bg-teal hover:bg-teal-dark disabled:opacity-50 transition-colors">
+            <PrimaryButton type="submit" disabled={saving} className="flex-1 py-3 text-[14px]">
               {saving ? 'Saving…' : deal ? 'Save Changes' : 'Create Deal'}
-            </button>
-            <button type="button" onClick={onClose}
-              className="px-6 py-3 rounded-xl text-[13px] font-medium text-white/50 hover:text-white transition-colors"
-              style={{ border: '1px solid #3a3a3a' }}>
+            </PrimaryButton>
+            <SecondaryButton type="button" onClick={onClose} className="px-6 min-h-[44px]">
               Cancel
-            </button>
+            </SecondaryButton>
           </div>
         </form>
       </div>

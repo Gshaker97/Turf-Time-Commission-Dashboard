@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import { RepPickList } from './RepMultiSelect'
 import { ChevronUp, ChevronDown, ChevronsUpDown, Pencil, Trash2, Check, X, MessageSquare, BadgeCheck, AlertCircle, EyeOff, RefreshCw } from 'lucide-react'
+import { SURFACE, POPOVER, GOLD_WASH, IconButton, PrimaryButton, SecondaryButton, EmptyBlock, LoadingBlock } from './ui'
 import { calcDealCommissions, fmt, fmtPct, isCanceled, isHidden, countsInTotals, officeOverrideRate, deductionBreakdown } from '../utils/commission'
 import { payDateFromInstall } from '../utils/dateRanges'
 import { useSettings } from '../contexts/SettingsContext'
@@ -51,12 +52,12 @@ export const officeChangePatch = (deal, office) => {
 }
 
 // Red ✕ next to the name of a canceled deal (pairs with the dimmed row).
+const MARK = 'w-[22px] h-[22px] rounded-full flex items-center justify-center flex-shrink-0'
 function HiddenMark() {
   return (
-    <span className="w-[22px] h-[22px] rounded-full flex items-center justify-center flex-shrink-0"
-      style={{ background: '#ffffff12', border: '1px solid #ffffff2b' }}
+    <span className={MARK} style={SURFACE.raise}
       title="Hidden — counts toward nothing (revenue, payroll, leaderboards, competitions)">
-      <EyeOff size={12} strokeWidth={2.5} className="text-white/55" />
+      <EyeOff size={12} strokeWidth={2.5} className="text-bank-mu" />
     </span>
   )
 }
@@ -67,8 +68,8 @@ function HiddenMark() {
 // imports both and flags the pair here (see duplicateDealIds).
 function DupeMark({ other }) {
   return (
-    <span className="w-[22px] h-[22px] rounded-full flex items-center justify-center flex-shrink-0 text-[9px] font-extrabold"
-      style={{ background: '#f59e0b18', border: '1px solid #f59e0b55', color: '#fbbf24' }}
+    <span className={`${MARK} text-[11px] font-extrabold`}
+      style={{ background: 'rgba(210,160,116,0.14)', border: '1px solid rgba(210,160,116,0.45)', color: 'var(--warn)' }}
       title={`Possible duplicate — same customer, baseline and closing date as ${other} other deal${other === 1 ? '' : 's'}. If the job was re-signed under a new Project ID, hide the one you don't want.`}>
       2x
     </span>
@@ -77,38 +78,39 @@ function DupeMark({ other }) {
 
 function CanceledMark() {
   return (
-    <span className="w-[22px] h-[22px] rounded-full flex items-center justify-center flex-shrink-0"
-      style={{ background: '#ef444418', border: '1px solid #ef444455' }} title="Canceled">
-      <X size={13} strokeWidth={3} className="text-red-400" />
+    <span className={MARK} style={{ background: 'rgba(217,140,128,0.14)', border: '1px solid rgba(217,140,128,0.45)' }} title="Canceled">
+      <X size={13} strokeWidth={3} style={{ color: 'var(--neg)' }} />
     </span>
   )
 }
 
-// Consolidated columns — related fields are stacked inside one cell so the
-// whole table fits on screen without horizontal scrolling.
+// Columns, grouped so the row scans left to right: the deal (name, ID, office,
+// payment), its status, the people, the dates, the money, then the audit and
+// notes flags. Office and payment live under the deal name; their filters and
+// sorts stay reachable from the Deal header menu.
 const COLS = [
-  { key: 'deal_name',      label: 'Deal' },
-  { key: 'office',         label: 'Office',     filter: 'office' },
-  { key: 'payment_method', label: 'Payment',    filter: 'payment' },
-  { key: 'status',         label: 'Status',     filter: 'status' },
-  { key: 'setter',         label: 'People',     filter: 'rep',  sortAccessor: d => d.setter?.name ?? '' },
-  { key: 'sale_date',      label: 'Dates',      filter: 'date', menuWidth: 300 },
-  { key: 'job_price',      label: 'Revenue',    align: 'right' },
-  { key: 'commission',     label: 'Commission', align: 'right', sortAccessor: d => calcDealCommissions(d).repCommission },
+  { key: 'deal_name', label: 'Deal', filter: 'deal', menuWidth: 260,
+    extraSorts: [{ key: 'office', label: 'Office' }, { key: 'payment_method', label: 'Payment' }] },
+  { key: 'status',    label: 'Status',     filter: 'status' },
+  { key: 'setter',    label: 'People',     filter: 'rep',  sortAccessor: d => d.setter?.name ?? '' },
+  { key: 'sale_date', label: 'Dates',      filter: 'date', menuWidth: 300 },
+  { key: 'job_price', label: 'Revenue',    align: 'right' },
+  { key: 'commission',label: 'Commission', align: 'right', sortAccessor: d => calcDealCommissions(d).repCommission },
+  { key: 'audit',     label: 'Audit',      noSort: true, onlyWithAudit: true },
+  { key: 'notes',     label: 'Notes',      noSort: true, align: 'right' },
 ]
 
 function SortIcon({ col, sortKey, sortDir }) {
-  if (sortKey !== col) return <ChevronsUpDown size={12} className="text-dark/40 ml-1 flex-shrink-0" />
+  if (sortKey !== col) return <ChevronsUpDown size={12} className="text-bank-fa ml-1 flex-shrink-0 opacity-70" />
   return sortDir === 'asc'
-    ? <ChevronUp size={12} className="text-dark ml-1 flex-shrink-0" />
-    : <ChevronDown size={12} className="text-dark ml-1 flex-shrink-0" />
+    ? <ChevronUp size={12} className="text-bank-tx ml-1 flex-shrink-0" />
+    : <ChevronDown size={12} className="text-bank-tx ml-1 flex-shrink-0" />
 }
 
 // ── Column-header menu ────────────────────────────────────────
-// A clickable header that opens a dark popover with Sort (asc/desc) and, when
-// the column declares one, an inline filter (status / office / payment / rep /
-// date). Replaces the separate top filter bar on the desktop table — click a
-// header to decide how to slice that column.
+// A clickable header that opens a popover with Sort (asc/desc) and, when the
+// column declares one, an inline filter (status / office / payment / rep /
+// date). Click a header to decide how to slice that column.
 function HeaderMenu({ col, sortKey, sortDir, onSort, active, renderFilter }) {
   const [open, setOpen] = useState(false)
   const [pos, setPos]   = useState({ top: 0, left: 0 })
@@ -147,37 +149,47 @@ function HeaderMenu({ col, sortKey, sortDir, onSort, active, renderFilter }) {
     setOpen(o => !o)
   }
 
-  const sortBtn = (dir, label) => {
-    const on = sortKey === col.key && sortDir === dir
+  const sortBtn = (key, dir, label) => {
+    const on = sortKey === key && sortDir === dir
     return (
-      <button type="button" onClick={() => onSort(col.key, dir)}
-        className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg text-left hover:bg-white/[0.04] transition-colors">
-        <span className="flex items-center gap-1.5 text-[12px]" style={{ color: on ? '#2dd4bf' : 'rgba(255,255,255,0.8)' }}>
+      <button key={`${key}-${dir}`} type="button" onClick={() => onSort(key, dir)}
+        className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg text-left hover:bg-bank-raise transition-colors">
+        <span className={`flex items-center gap-1.5 text-[13px] ${on ? 'text-bank-gold-tx font-semibold' : 'text-bank-tx'}`}>
           {dir === 'asc' ? <ChevronUp size={13} /> : <ChevronDown size={13} />} {label}
         </span>
-        {on && <Check size={12} className="text-teal" />}
+        {on && <Check size={12} className="text-bank-gold-tx" />}
       </button>
     )
   }
+  const menuLabel = (t) => <div className="px-2 py-1 text-[13px] font-bold uppercase tracking-wide text-bank-fa">{t}</div>
+
+  if (col.noSort) return <span className={`flex items-center ${col.align === 'right' ? 'justify-end w-full' : ''}`}>{col.label}</span>
 
   return (
     <>
-      <button ref={btnRef} type="button" onClick={openMenu}
-        className={`flex items-center hover:opacity-80 transition-opacity ${col.align === 'right' ? 'justify-end w-full' : ''}`}>
+      <button ref={btnRef} type="button" onClick={openMenu} aria-expanded={open}
+        className={`flex items-center hover:text-bank-tx transition-colors ${col.align === 'right' ? 'justify-end w-full' : ''}`}>
         {col.label}
         <SortIcon col={col.key} sortKey={sortKey} sortDir={sortDir} />
-        {active && <span className="w-1.5 h-1.5 rounded-full bg-dark ml-1 flex-shrink-0" />}
+        {active && <span className="w-1.5 h-1.5 rounded-full ml-1 flex-shrink-0" style={{ background: 'var(--gold)' }} />}
       </button>
       {open && createPortal(
-        <div ref={popRef} className="fixed z-[60] rounded-xl shadow-2xl p-1.5"
-          style={{ top: pos.top, left: pos.left, width, background: '#242424', border: '1px solid #3a3a3a' }}>
-          <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-white/40">Sort</div>
-          {sortBtn('asc',  'Ascending')}
-          {sortBtn('desc', 'Descending')}
+        <div ref={popRef} className="fixed z-[60] p-1.5"
+          style={{ ...POPOVER, top: pos.top, left: pos.left, width }}>
+          {menuLabel('Sort')}
+          {sortBtn(col.key, 'asc',  'Ascending')}
+          {sortBtn(col.key, 'desc', 'Descending')}
+          {col.extraSorts?.map(x => (
+            <div key={x.key} className="border-t border-bank-line mt-1 pt-1">
+              {menuLabel(`Sort by ${x.label.toLowerCase()}`)}
+              {sortBtn(x.key, 'asc', 'Ascending')}
+              {sortBtn(x.key, 'desc', 'Descending')}
+            </div>
+          ))}
           {renderFilter && (
             <>
-              <div className="border-t border-white/5 my-1" />
-              <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-white/40">Filter</div>
+              <div className="border-t border-bank-line my-1" />
+              {menuLabel('Filter')}
               {renderFilter()}
             </>
           )}
@@ -191,10 +203,10 @@ function HeaderMenu({ col, sortKey, sortDir, onSort, active, renderFilter }) {
 // One selectable row inside a filter popover.
 function FilterRow({ label, active, onClick }) {
   return (
-    <button type="button" onClick={onClick}
-      className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg text-left hover:bg-white/[0.04] transition-colors">
-      <span className="text-[12px] truncate" style={{ color: active ? '#2dd4bf' : 'rgba(255,255,255,0.85)' }}>{label}</span>
-      {active && <Check size={12} className="text-teal flex-shrink-0" />}
+    <button type="button" onClick={onClick} aria-pressed={active}
+      className="w-full flex items-center justify-between gap-2 px-2 py-1.5 min-h-[44px] lg:min-h-0 rounded-lg text-left hover:bg-bank-raise transition-colors">
+      <span className={`text-[13px] truncate ${active ? 'text-bank-gold-tx font-semibold' : 'text-bank-tx'}`}>{label}</span>
+      {active && <Check size={12} className="text-bank-gold-tx flex-shrink-0" />}
     </button>
   )
 }
@@ -218,12 +230,12 @@ function DateFilterPanel({ dateField, setDateField, dateFrom, dateTo, datePreset
   return (
     <div className="px-1 pb-1 space-y-2">
       <div className="relative">
-        <select value={dateField} onChange={e => setDateField(e.target.value)}
-          style={{ background: '#1e1e1e', border: '1px solid #333' }}
-          className="h-8 w-full rounded-lg text-[12px] text-white px-2 pr-7 focus:outline-none focus:border-teal/50 appearance-none">
+        <select value={dateField} onChange={e => setDateField(e.target.value)} aria-label="Which date the range applies to"
+          style={SURFACE.raise}
+          className="h-9 w-full rounded-lg text-[13px] text-bank-tx px-2 pr-7 focus:outline-none appearance-none">
           {DATE_FIELDS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
         </select>
-        <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-white/30 pointer-events-none" />
+        <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-bank-fa pointer-events-none" />
       </div>
       <DateRangeFilter from={dateFrom} to={dateTo} preset={datePreset}
         onChange={({ from, to, preset }) => setDateRange(from, to, preset)} />
@@ -235,30 +247,32 @@ function DateField({ label, value, field, dealId, canEdit, onUpdate, deriveExtra
   // flagMissing → an empty date for a field we expect (install / pay) is shown
   // amber so it's obvious it still needs filling in.
   const missing = flagMissing && !value
+  const tone = missing ? 'var(--warn)' : undefined
   return (
     <div className="flex items-center gap-1.5">
-      <span className={`text-[10px] uppercase tracking-wide w-8 flex-shrink-0 ${missing ? 'text-amber-400' : 'text-white/30'}`}>{label}</span>
+      <span className={`text-[12px] uppercase tracking-wide w-9 flex-shrink-0 ${missing ? '' : 'text-bank-fa'}`} style={{ color: tone }}>{label}</span>
       {canEdit ? (
         <span className="flex items-center gap-0.5">
           <input
             key={value ?? 'empty'}
             type="date"
+            aria-label={`${label} date`}
             defaultValue={value ?? ''}
             onChange={e => {
               const v = e.target.value || null
               onUpdate(dealId, { [field]: v, ...(deriveExtra ? deriveExtra(v) : null) })
             }}
-            className={`text-[12px] border-0 outline-none cursor-pointer hover:text-white focus:text-white transition-colors w-[104px] rounded ${missing ? 'text-amber-400' : 'bg-transparent text-white/55'}`}
-            style={missing ? { colorScheme: 'dark', background: '#f59e0b18' } : { colorScheme: 'dark' }}
+            className={`text-[13px] border-0 outline-none cursor-pointer hover:text-bank-tx focus:text-bank-tx transition-colors w-[112px] min-h-[44px] lg:min-h-0 rounded px-1 ${missing ? '' : 'bg-transparent text-bank-mu'}`}
+            style={missing ? { colorScheme: 'dark', color: 'var(--warn)', background: 'rgba(210,160,116,0.12)' } : { colorScheme: 'dark' }}
           />
           {value && (
-            <button type="button" title={`Clear ${label.toLowerCase()} date`}
+            <button type="button" title={`Clear ${label.toLowerCase()} date`} aria-label={`Clear ${label.toLowerCase()} date`}
               onClick={() => onUpdate(dealId, { [field]: null, ...(deriveExtra ? deriveExtra(null) : null) })}
-              className="text-white/25 hover:text-red-400 transition-colors leading-none px-0.5">×</button>
+              className="text-bank-fa hover:text-bank-neg transition-colors leading-none px-1 min-w-[28px] min-h-[44px] lg:min-h-0 lg:min-w-0">×</button>
           )}
         </span>
       ) : (
-        <span className={`text-[12px] ${missing ? 'text-amber-400' : 'text-white/55'}`}>{value ?? '— missing'}</span>
+        <span className={`text-[13px] ${missing ? '' : 'text-bank-mu'}`} style={{ color: tone }}>{value ?? '— missing'}</span>
       )}
     </div>
   )
@@ -266,9 +280,9 @@ function DateField({ label, value, field, dealId, canEdit, onUpdate, deriveExtra
 
 function PeopleCell({ deal }) {
   return (
-    <div className="flex flex-col gap-0.5 text-[12px]">
-      <span className="text-white/80 whitespace-nowrap"><span className="text-white/30 text-[10px] uppercase mr-1.5">Set</span>{deal.setter?.name ?? '—'}</span>
-      <span className="text-white/60 whitespace-nowrap"><span className="text-white/30 text-[10px] uppercase mr-1.5">Cls</span>{deal.closer?.name ?? '—'}</span>
+    <div className="flex flex-col gap-0.5 text-[13px]">
+      <span className="text-bank-tx whitespace-nowrap"><span className="text-bank-fa text-[12px] uppercase mr-1.5">Set</span>{deal.setter?.name ?? '—'}</span>
+      <span className="text-bank-mu whitespace-nowrap"><span className="text-bank-fa text-[12px] uppercase mr-1.5">Cls</span>{deal.closer?.name ?? '—'}</span>
     </div>
   )
 }
@@ -276,8 +290,8 @@ function PeopleCell({ deal }) {
 function RevenueCell({ baseline, jobPrice }) {
   return (
     <div className="flex flex-col items-end leading-tight">
-      <span className="text-[13px] font-semibold text-white">{fmt(jobPrice)}</span>
-      <span className="text-[11px] text-white/40">base {fmt(baseline)}</span>
+      <span className="text-[13px] font-semibold text-bank-tx tabular-nums">{fmt(jobPrice)}</span>
+      <span className="text-[13px] text-bank-mu tabular-nums">base {fmt(baseline)}</span>
     </div>
   )
 }
@@ -308,7 +322,8 @@ function DeductionTag({ amount, deal }) {
       <button
         ref={btnRef}
         onClick={openPopover}
-        className="text-[11px] font-bold text-red-400 hover:text-red-300 hover:underline"
+        className="text-[13px] font-bold hover:underline tabular-nums min-h-[44px] lg:min-h-0"
+        style={{ color: 'var(--neg)' }}
         title="View deduction reason"
       >
         −{fmt(amount)}
@@ -316,15 +331,15 @@ function DeductionTag({ amount, deal }) {
       {open && createPortal(
         <>
           <div className="fixed inset-0 z-[59]" onClick={() => setOpen(false)} />
-          <div className="fixed z-[60] rounded-lg p-2.5 text-left shadow-2xl"
-            style={{ top: pos.top, left: pos.left, width: WIDTH, background: '#2a2a2a', border: '1px solid #3a3a3a' }}>
-            <p className="text-[9px] font-bold uppercase tracking-wider text-red-400/80 mb-1">Deduction · {fmt(amount)}</p>
+          <div className="fixed z-[60] p-2.5 text-left"
+            style={{ ...POPOVER, top: pos.top, left: pos.left, width: WIDTH }}>
+            <p className="text-[13px] font-bold uppercase tracking-wide mb-1" style={{ color: 'var(--neg)' }}>Deduction · {fmt(amount)}</p>
             {parts.length === 0 ? (
-              <p className="text-[12px] text-white/80 leading-snug">No description provided.</p>
+              <p className="text-[13px] text-bank-tx leading-snug">No description provided.</p>
             ) : parts.map((x, i) => (
               <div key={i} className="flex items-start justify-between gap-2 py-0.5">
-                <span className="text-[12px] text-white/80 leading-snug">{x.label}</span>
-                <span className="text-[12px] font-semibold text-red-400 whitespace-nowrap">−{fmt(x.amount)}</span>
+                <span className="text-[13px] text-bank-tx leading-snug">{x.label}</span>
+                <span className="text-[13px] font-semibold whitespace-nowrap tabular-nums" style={{ color: 'var(--neg)' }}>−{fmt(x.amount)}</span>
               </div>
             ))}
           </div>
@@ -349,7 +364,7 @@ function ChangeAlertTag({ deal, canEdit, onUpdate, onSplit }) {
   // EST_H must cover the TALLEST panel — with the split button there are three
   // actions, and an under-measured height stopped the last one flipping above
   // the icon on a bottom row, which is how Dismiss became unreachable before.
-  const WIDTH = 256, EST_H = canEdit && onSplit ? 330 : 262
+  const WIDTH = 272, EST_H = canEdit && onSplit ? 360 : 280
   // The popover renders in a portal with fixed positioning — inside the row it
   // gets clipped by the table's scroll container (the Dismiss button became
   // unreachable on bottom rows). Flip above the icon when there's no room below.
@@ -365,23 +380,23 @@ function ChangeAlertTag({ deal, canEdit, onUpdate, onSplit }) {
   }
   return (
     <div className="relative flex-shrink-0">
-      <button ref={btnRef} onClick={openPopover} title="New agreement on the sheet — click for details"
-        className="flex items-center hover:opacity-80 transition-opacity">
-        <AlertCircle size={14} style={{ color: '#f59e0b' }} />
+      <button ref={btnRef} onClick={openPopover} title="New agreement on the sheet — click for details" aria-label="New agreement on the sheet — click for details"
+        className="flex items-center hover:opacity-80 transition-opacity min-w-[28px] min-h-[28px] justify-center">
+        <AlertCircle size={15} style={{ color: 'var(--warn)' }} />
       </button>
       {open && createPortal(
         <>
           <div className="fixed inset-0 z-[59]" onClick={() => setOpen(false)} />
-          <div className="fixed z-[60] rounded-lg p-2.5 text-left shadow-2xl"
-            style={{ top: pos.top, left: pos.left, width: WIDTH, background: '#2a2a2a', border: '1px solid #3a3a3a' }}>
-            <p className="text-[9px] font-bold uppercase tracking-wider mb-1" style={{ color: '#f59e0b' }}>
+          <div className="fixed z-[60] p-3 text-left"
+            style={{ ...POPOVER, top: pos.top, left: pos.left, width: WIDTH }}>
+            <p className="text-[13px] font-bold uppercase tracking-wide mb-1" style={{ color: 'var(--warn)' }}>
               New agreement on the sheet{ca.at ? ` · ${new Date(ca.at).toLocaleDateString()}` : ''}
             </p>
-            <div className="text-[12px] text-white/80 leading-snug space-y-0.5">
-              <p>Baseline {money(ca.prev_baseline)} → <b className="text-white">{money(ca.baseline)}</b></p>
-              <p>Sale price {money(ca.prev_job_price)} → <b className="text-white">{money(ca.job_price)}</b></p>
+            <div className="text-[13px] text-bank-tx leading-snug space-y-0.5">
+              <p>Baseline {money(ca.prev_baseline)} → <b className="text-bank-tx">{money(ca.baseline)}</b></p>
+              <p>Sale price {money(ca.prev_job_price)} → <b className="text-bank-tx">{money(ca.job_price)}</b></p>
             </div>
-            <p className="text-[10px] text-white/40 mt-1.5 leading-snug">
+            <p className="text-[13px] text-bank-mu mt-1.5 leading-snug">
               Nothing on the deal was changed yet.
             </p>
             {canEdit && (
@@ -416,8 +431,8 @@ function ChangeAlertTag({ deal, canEdit, onUpdate, onSplit }) {
                     })
                     setOpen(false)
                   }}
-                  className="w-full py-1.5 rounded-lg text-[11px] font-bold text-dark transition-opacity hover:opacity-90"
-                  style={{ background: '#f59e0b' }}>
+                  className="w-full py-2 min-h-[44px] rounded-lg text-[13px] font-bold transition-opacity hover:opacity-90"
+                  style={{ background: 'var(--warn)', color: 'var(--gold-ink)' }}>
                   Apply new numbers to the deal
                 </button>
                 <button onClick={async () => {
@@ -432,8 +447,8 @@ function ChangeAlertTag({ deal, canEdit, onUpdate, onSplit }) {
                     })) return
                     onUpdate?.(deal.id, { change_alert: null }); setOpen(false)
                   }}
-                  className="w-full py-1.5 rounded-lg text-[11px] font-semibold transition-colors hover:bg-white/5"
-                  style={{ color: '#f59e0b', border: '1px solid rgba(245,158,11,0.45)' }}>
+                  className="w-full py-2 min-h-[44px] rounded-lg text-[13px] font-semibold transition-colors hover:bg-bank-raise"
+                  style={{ color: 'var(--warn)', border: '1px solid rgba(210,160,116,0.5)' }}>
                   Dismiss — deal is already right
                 </button>
                 {/* CREATE AS A NEW DEAL (per Keaton) — the third answer, for
@@ -444,13 +459,11 @@ function ChangeAlertTag({ deal, canEdit, onUpdate, onSplit }) {
                     clear the alert) — see utils/splitDeal.js. */}
                 {onSplit && (
                   <>
-                    <div className="h-px my-0.5" style={{ background: '#3a3a3a' }} />
-                    <button onClick={async () => { if (await onSplit(deal)) setOpen(false) }}
-                      className="w-full py-1.5 rounded-lg text-[11px] font-semibold text-white/70 transition-colors hover:bg-white/5"
-                      style={{ border: '1px solid #3a3a3a' }}>
+                    <div className="h-px my-0.5" style={{ background: 'var(--line)' }} />
+                    <SecondaryButton onClick={async () => { if (await onSplit(deal)) setOpen(false) }} className="w-full min-h-[44px]">
                       Create as a separate deal
-                    </button>
-                    <p className="text-[9px] text-white/35 leading-snug">
+                    </SecondaryButton>
+                    <p className="text-[13px] text-bank-mu leading-snug">
                       For a second job sold under the same project ID — this deal is left untouched.
                     </p>
                   </>
@@ -465,16 +478,17 @@ function ChangeAlertTag({ deal, canEdit, onUpdate, onSplit }) {
   )
 }
 
-// Leadership sign-off seal next to the commission. Distinct from the name's
-// progress ring: a BadgeCheck that lights up green once the commission is
-// confirmed. Toggleable by VP/admin; read-only (shown only if verified) to others.
+// Leadership sign-off seal next to the commission — the "gold check". A
+// BadgeCheck that lights up gold once the commission is confirmed. Toggleable
+// by VP/admin; read-only (shown only if verified) to others.
 function VerifySeal({ verified, canVerify, onToggle }) {
   if (!verified && !canVerify) return null
-  if (!canVerify) return <BadgeCheck size={15} className="flex-shrink-0" style={{ color: '#fbbf24' }} title="Commission checked" />
+  if (!canVerify) return <BadgeCheck size={15} className="flex-shrink-0" style={{ color: 'var(--gold-tx)' }} title="Commission checked" />
   return (
-    <button type="button" onClick={onToggle} className="flex-shrink-0 hover:opacity-80 transition-opacity"
+    <button type="button" onClick={onToggle} className="flex-shrink-0 hover:opacity-80 transition-opacity min-w-[28px] min-h-[28px] flex items-center justify-center"
+      aria-pressed={verified}
       title={verified ? 'Commission checked — click to unmark' : 'Mark commission as checked'}>
-      <BadgeCheck size={16} className={verified ? '' : 'text-white/20 hover:text-white/50'} style={verified ? { color: '#fbbf24' } : undefined} />
+      <BadgeCheck size={16} className={verified ? '' : 'text-bank-fa hover:text-bank-mu'} style={verified ? { color: 'var(--gold-tx)' } : undefined} />
     </button>
   )
 }
@@ -486,6 +500,12 @@ function CommissionCell({ deal, canVerify, onUpdate }) {
   // leadership and are tracked on the Payroll page, not in this column. The % is
   // the rep commission as a share of the deal's BASELINE.
   const repPct = baseline > 0 ? repCommission / baseline : 0
+  const amt = (n) => ({ color: n < 0 ? 'var(--neg)' : 'var(--tx)' })
+  const initial = (name, fallback) => (
+    <span className="text-[10px] font-bold text-bank-fa w-[14px] h-[14px] rounded-full flex items-center justify-center leading-none" style={SURFACE.raise}>
+      {name?.[0]?.toUpperCase() ?? fallback}
+    </span>
+  )
 
   return (
     <div className="flex items-center justify-end gap-2">
@@ -494,22 +514,20 @@ function CommissionCell({ deal, canVerify, onUpdate }) {
       <div className="flex flex-col items-end gap-1 leading-tight">
       {!split ? (
         <div className="flex flex-col items-end">
-          <span className={`text-[13px] font-bold ${repCommission < 0 ? 'text-red-400' : 'text-teal'}`}>{fmt(repCommission)}</span>
-          <span className="text-[11px] text-white/30">{fmtPct(repPct)}</span>
+          <span className="text-[13px] font-bold tabular-nums" style={amt(repCommission)}>{fmt(repCommission)}</span>
+          <span className="text-[13px] text-bank-fa">{fmtPct(repPct)}</span>
         </div>
       ) : (
         <div className="flex flex-col items-end gap-0.5">
           <div className="flex items-center gap-1.5">
-            <span className="text-[10px] font-bold text-white/30 w-[11px] h-[11px] rounded-full bg-white/10 flex items-center justify-center leading-none"
-              style={{ fontSize: 8 }}>{deal.setter?.name?.[0]?.toUpperCase() ?? 'S'}</span>
-            <span className={`text-[12px] font-semibold ${setterAmt < 0 ? 'text-red-400' : 'text-teal/80'}`}>{fmt(setterAmt)}</span>
+            {initial(deal.setter?.name, 'S')}
+            <span className="text-[13px] font-semibold tabular-nums" style={amt(setterAmt)}>{fmt(setterAmt)}</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="text-[10px] font-bold text-white/30 w-[11px] h-[11px] rounded-full bg-white/10 flex items-center justify-center leading-none"
-              style={{ fontSize: 8 }}>{deal.closer?.name?.[0]?.toUpperCase() ?? 'C'}</span>
-            <span className={`text-[12px] font-semibold ${closerAmt < 0 ? 'text-red-400' : 'text-teal'}`}>{fmt(closerAmt)}</span>
+            {initial(deal.closer?.name, 'C')}
+            <span className="text-[13px] font-semibold tabular-nums" style={amt(closerAmt)}>{fmt(closerAmt)}</span>
           </div>
-          <span className="text-[10px] text-white/20">{fmtPct(repPct)}</span>
+          <span className="text-[13px] text-bank-fa">{fmtPct(repPct)}</span>
         </div>
       )}
       {deduction > 0 && <DeductionTag amount={deduction} deal={deal} />}
@@ -519,11 +537,11 @@ function CommissionCell({ deal, canVerify, onUpdate }) {
 }
 
 export function StatusBadge({ status, color = '#94a3b8' }) {
-  if (!status) return <span className="text-white/20 text-[11px]">—</span>
+  if (!status) return <span className="text-bank-fa text-[13px]">—</span>
   return (
     <span
-      className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap"
-      style={{ color, border: `1px solid ${color}40`, background: 'transparent' }}
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[13px] font-medium whitespace-nowrap"
+      style={{ color, border: `1px solid ${color}55`, background: 'transparent' }}
     >
       <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: color }} />
       {status}
@@ -531,14 +549,13 @@ export function StatusBadge({ status, color = '#94a3b8' }) {
   )
 }
 
-// Office badge colors — drawn from the app's existing accent palette so they
-// fit the rest of the UI. Phoenix = warm orange, Tucson = violet. Any other
-// office falls back to the neutral slate used elsewhere for unset badges.
+// Office badge tones on the palette: Phoenix = warm amber, Tucson = sage. Any
+// other office falls back to the neutral used elsewhere for unset badges.
 const OFFICE_COLORS = {
-  Phoenix: '#fb923c',
-  Tucson:  '#a78bfa',
+  Phoenix: '#d2a074',
+  Tucson:  '#a9c4b2',
 }
-const officeColor = (name) => OFFICE_COLORS[name] || '#94a3b8'
+const officeColor = (name) => OFFICE_COLORS[name] || '#a19e97'
 
 // Inline-editable cell backed by a settings list (office, payment method).
 // An invisible <select> overlay handles the edit. Uncontrolled (defaultValue +
@@ -551,22 +568,23 @@ function InlineSelectCell({ value, options, field, canEdit, dealId, onUpdate, co
   const display = colorFor
     ? (value
         ? <StatusBadge status={value} color={colorFor(value)} />
-        : <span className="text-[12px] text-white/30">—</span>)
+        : <span className="text-[13px] text-bank-fa">—</span>)
     : value
-      ? <span className={`text-[12px] whitespace-nowrap transition-colors text-white/70 ${canEdit ? 'hover:text-white cursor-pointer' : ''}`}>{value}</span>
-      : <span className="text-[12px] whitespace-nowrap font-semibold px-1.5 py-0.5 rounded"
-          style={{ color: '#f59e0b', background: '#f59e0b18', border: '1px dashed #f59e0b66' }}>
+      ? <span className={`text-[13px] whitespace-nowrap transition-colors text-bank-mu ${canEdit ? 'hover:text-bank-tx cursor-pointer' : ''}`}>{value}</span>
+      : <span className="text-[13px] whitespace-nowrap font-semibold px-1.5 py-0.5 rounded"
+          style={{ color: 'var(--warn)', background: 'rgba(210,160,116,0.12)', border: '1px dashed rgba(210,160,116,0.6)' }}>
           + {missingLabel || 'set'}
         </span>
 
   if (!canEdit) return display
 
   return (
-    <div className="relative inline-block cursor-pointer">
+    <div className="relative inline-block cursor-pointer min-h-[44px] lg:min-h-0 flex items-center">
       {display}
       <select
         key={value ?? ''}
         defaultValue={value ?? ''}
+        aria-label={`Edit ${missingLabel || field}`}
         onChange={e => { const v = e.target.value || null; onUpdate(dealId, { [field]: v, ...(deriveExtra ? deriveExtra(v) : null) }) }}
         className="absolute inset-0 opacity-0 cursor-pointer w-full"
         title="Click to edit"
@@ -585,6 +603,7 @@ function StatusCell({ status, color, options, canEdit, dealId, onUpdate }) {
       <StatusBadge status={status} color={color} />
       <select
         value={status ?? ''}
+        aria-label="Change status"
         onChange={e => onUpdate(dealId, { status: e.target.value })}
         className="absolute inset-0 opacity-0 cursor-pointer w-full"
         title="Change status"
@@ -598,28 +617,25 @@ function StatusCell({ status, color, options, canEdit, dealId, onUpdate }) {
 function ActionButtons({ deal, onEdit, onDelete, onToggleHidden }) {
   const hidden = isHidden(deal)
   return (
-    <div className="flex gap-1.5 justify-end">
-      <button onClick={() => onEdit(deal)}
-        className="p-1.5 rounded text-white/30 hover:text-teal hover:bg-teal/10 transition-colors">
-        <Pencil size={13} />
-      </button>
+    <div className="flex gap-1 justify-end">
+      <IconButton onClick={() => onEdit(deal)} title="Edit deal" aria-label="Edit deal">
+        <Pencil size={14} />
+      </IconButton>
       {/* Hide, NOT delete — the row has to survive or the sheet sync
           re-creates it within the minute (see migration 052). */}
       {onToggleHidden && (
-        <button onClick={() => onToggleHidden(deal)}
+        <IconButton onClick={() => onToggleHidden(deal)}
           title={hidden
             ? 'Un-hide — this job counts again everywhere'
             : 'Hide — keep the record but count it toward nothing'}
-          className={`p-1.5 rounded transition-colors ${hidden
-            ? 'text-amber-300/80 hover:text-amber-300 hover:bg-amber-400/10'
-            : 'text-white/30 hover:text-amber-300 hover:bg-amber-400/10'}`}>
-          <EyeOff size={13} />
-        </button>
+          aria-label={hidden ? 'Un-hide deal' : 'Hide deal'}
+          tone={hidden ? 'var(--warn)' : undefined}>
+          <EyeOff size={14} />
+        </IconButton>
       )}
-      <button onClick={() => onDelete(deal.id)}
-        className="p-1.5 rounded text-white/30 hover:text-red-400 hover:bg-red-500/10 transition-colors">
-        <Trash2 size={13} />
-      </button>
+      <IconButton onClick={() => onDelete(deal.id)} title="Delete deal" aria-label="Delete deal" className="hover:!text-bank-neg">
+        <Trash2 size={14} />
+      </IconButton>
     </div>
   )
 }
@@ -693,36 +709,38 @@ function NotesThread({ deal, profile, users, onCountChange }) {
     reload()
   }
 
+  const textarea = 'w-full px-3 py-2 rounded-lg text-[13px] text-bank-tx placeholder-bank-fa focus:outline-none resize-y'
+
   return (
     <div className="space-y-2">
       {/* Legacy single-note text, if this deal has one */}
       {deal.notes && (
-        <div className="rounded-lg px-3 py-2" style={{ background: '#171717', border: '1px dashed #2e2e2e' }}>
-          <p className="text-[10px] uppercase tracking-wide text-white/25 mb-0.5">Original note</p>
-          <p className="text-[12px] text-white/60 whitespace-pre-wrap">{deal.notes}</p>
+        <div className="rounded-lg px-3 py-2" style={{ background: 'var(--bg)', border: '1px dashed var(--line)' }}>
+          <p className="text-[12px] uppercase tracking-wide text-bank-fa mb-0.5">Original note</p>
+          <p className="text-[13px] text-bank-mu whitespace-pre-wrap">{deal.notes}</p>
         </div>
       )}
 
       {notes === null ? (
-        <p className="text-[12px] text-white/30 py-1">Loading…</p>
+        <p className="text-[13px] text-bank-mu py-1">Loading…</p>
       ) : notes.length === 0 && !deal.notes ? (
-        <p className="text-[12px] text-white/30 italic py-1">No notes yet — start the thread below.</p>
+        <p className="text-[13px] text-bank-mu italic py-1">No notes yet — start the thread below.</p>
       ) : (
         notes.map(n => {
           const mine = n.author_id === profile?.id
           const editCount = (n.edits || []).length
           return (
             <div key={n.id} className="rounded-lg px-3 py-2"
-              style={{ background: mine ? '#0e3b3555' : '#171717', border: `1px solid ${mine ? '#1c5a50' : '#2a2a2a'}` }}>
+              style={mine ? GOLD_WASH : SURFACE.well}>
               <div className="flex items-start justify-between gap-2">
-                <p className="text-[11px] mb-0.5">
-                  <span className="font-semibold" style={{ color: mine ? '#2dd4bf' : 'rgba(255,255,255,0.75)' }}>
+                <p className="text-[13px] mb-0.5">
+                  <span className={`font-semibold ${mine ? 'text-bank-gold-tx' : 'text-bank-tx'}`}>
                     {n.author?.name || users?.find(u => u.id === n.author_id)?.name || '—'}
                   </span>
-                  <span className="text-white/25"> · {fmtWhen(n.created_at)}</span>
+                  <span className="text-bank-fa"> · {fmtWhen(n.created_at)}</span>
                   {editCount > 0 && (
                     <button onClick={() => setShowLog(showLog === n.id ? null : n.id)}
-                      className="text-white/30 hover:text-white/60 italic ml-1">
+                      className="text-bank-fa hover:text-bank-mu italic ml-1">
                       · edited{editCount > 1 ? ` ×${editCount}` : ''}
                     </button>
                   )}
@@ -730,12 +748,10 @@ function NotesThread({ deal, profile, users, onCountChange }) {
                 {editId !== n.id && (
                   <div className="flex items-center gap-1 flex-shrink-0">
                     {mine && (
-                      <button onClick={() => { setEditId(n.id); setEditText(n.body) }} title="Edit"
-                        className="p-1 rounded text-white/25 hover:text-teal hover:bg-teal/10 transition-colors"><Pencil size={12} /></button>
+                      <IconButton onClick={() => { setEditId(n.id); setEditText(n.body) }} title="Edit" aria-label="Edit note"><Pencil size={12} /></IconButton>
                     )}
                     {isAdmin && (
-                      <button onClick={() => removeNote(n.id)} title="Delete (admin)"
-                        className="p-1 rounded text-white/25 hover:text-red-400 hover:bg-red-500/10 transition-colors"><Trash2 size={12} /></button>
+                      <IconButton onClick={() => removeNote(n.id)} title="Delete (admin)" aria-label="Delete note" className="hover:!text-bank-neg"><Trash2 size={12} /></IconButton>
                     )}
                   </div>
                 )}
@@ -743,26 +759,24 @@ function NotesThread({ deal, profile, users, onCountChange }) {
 
               {editId === n.id ? (
                 <div className="space-y-1.5 mt-1">
-                  <textarea value={editText} onChange={e => setEditText(e.target.value)} rows={2}
-                    className="w-full px-2.5 py-1.5 rounded-lg text-[12px] text-white focus:outline-none resize-y"
-                    style={{ background: '#0f0f0f', border: '1px solid #2a2a2a' }} />
+                  <textarea value={editText} onChange={e => setEditText(e.target.value)} rows={2} aria-label="Edit note"
+                    className={textarea} style={SURFACE.raise} />
                   <div className="flex items-center gap-2">
-                    <button onClick={() => saveEdit(n.id)} disabled={!editText.trim() || editText.trim() === n.body}
-                      className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-dark bg-teal disabled:opacity-40 transition-colors">Save</button>
+                    <PrimaryButton onClick={() => saveEdit(n.id)} disabled={!editText.trim() || editText.trim() === n.body} className="px-3 py-1.5">Save</PrimaryButton>
                     <button onClick={() => { setEditId(null); setEditText('') }}
-                      className="text-[11px] text-white/40 hover:text-white">Cancel</button>
+                      className="text-[13px] text-bank-mu hover:text-bank-tx min-h-[44px] lg:min-h-0 px-1">Cancel</button>
                   </div>
                 </div>
               ) : (
-                <p className="text-[12px] text-white/80 whitespace-pre-wrap">{n.body}</p>
+                <p className="text-[13px] text-bank-tx whitespace-pre-wrap">{n.body}</p>
               )}
 
               {showLog === n.id && editCount > 0 && (
-                <div className="mt-2 pt-2 border-t border-white/5 space-y-1">
-                  <p className="text-[10px] uppercase tracking-wide text-white/25">Edit history</p>
+                <div className="mt-2 pt-2 border-t border-bank-line space-y-1">
+                  <p className="text-[12px] uppercase tracking-wide text-bank-fa">Edit history</p>
                   {(n.edits || []).slice().reverse().map((e, i) => (
-                    <p key={i} className="text-[11px] text-white/40">
-                      <span className="text-white/25">{fmtWhen(e.at)} — previously:</span> <span className="line-through">{e.body}</span>
+                    <p key={i} className="text-[13px] text-bank-mu">
+                      <span className="text-bank-fa">{fmtWhen(e.at)} — previously:</span> <span className="line-through">{e.body}</span>
                     </p>
                   ))}
                 </div>
@@ -773,15 +787,13 @@ function NotesThread({ deal, profile, users, onCountChange }) {
       )}
 
       <div className="flex items-end gap-2 pt-1">
-        <textarea value={draft} onChange={e => setDraft(e.target.value)} rows={2}
+        <textarea value={draft} onChange={e => setDraft(e.target.value)} rows={2} aria-label="Write a reply"
           placeholder="Write a reply… (everyone on this deal gets notified)"
           onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) post() }}
-          className="flex-1 px-3 py-2 rounded-lg text-[12px] text-white placeholder-white/20 focus:outline-none resize-y"
-          style={{ background: '#171717', border: '1px solid #2a2a2a' }} />
-        <button onClick={post} disabled={posting || !draft.trim()}
-          className="px-3 py-2 rounded-lg text-[11px] font-bold text-dark bg-teal disabled:opacity-40 transition-colors flex-shrink-0">
+          className={`${textarea} flex-1`} style={SURFACE.well} />
+        <PrimaryButton onClick={post} disabled={posting || !draft.trim()} className="flex-shrink-0 px-3">
           {posting ? 'Posting…' : 'Post'}
-        </button>
+        </PrimaryButton>
       </div>
     </div>
   )
@@ -789,76 +801,136 @@ function NotesThread({ deal, profile, users, onCountChange }) {
 
 const subline = (deal) => [deal.office, deal.payment_method].filter(Boolean).join(' · ') || '—'
 
-// ── Mobile card (below lg) ────────────────────────────────────
-function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onToggleHidden, onUpdate, onSplit, dupeIds, statusColor, statusLabels, profile, users, noteCount, onCountChange, audit = null, canAudit = false }) {
+// The flags that ride next to a deal's name everywhere it appears.
+// `staticAlert` draws the ❗ as a plain icon (no popover button) — used inside
+// the phone row's header, which is itself a button; the live alert with its
+// actions renders once the row is open.
+function NameFlags({ deal, canEdit, onUpdate, onSplit, dupeIds, staticAlert = false }) {
+  return (
+    <>
+      {staticAlert
+        ? (deal.change_alert ? <span className="flex-shrink-0 flex items-center" title="New agreement on the sheet"><AlertCircle size={15} style={{ color: 'var(--warn)' }} /></span> : null)
+        : <ChangeAlertTag deal={deal} canEdit={canEdit} onUpdate={onUpdate} onSplit={onSplit} />}
+      {isCanceled(deal) && <CanceledMark />}
+      {isHidden(deal) && <HiddenMark />}
+      {dupeIds?.has(deal.id) && <DupeMark other={dupeIds.get(deal.id)} />}
+    </>
+  )
+}
+
+// Notes button: the bubble + count; opens the thread.
+function NotesButton({ count, hasLegacy, open, onClick, compact = false }) {
+  const any = hasLegacy || count > 0
+  return (
+    <button onClick={onClick} title="Notes" aria-label="Notes" aria-expanded={open}
+      className={`inline-flex items-center gap-1 rounded-lg transition-colors ${compact ? 'min-w-[44px] min-h-[44px] justify-center' : 'px-2 py-1 min-h-[44px] lg:min-h-0'} ${any ? 'text-bank-tx' : 'text-bank-fa'} hover:text-bank-gold-tx hover:bg-bank-raise`}>
+      <MessageSquare size={14} />
+      {count > 0 && <span className="text-[13px] font-semibold tabular-nums">{count}</span>}
+    </button>
+  )
+}
+
+function NotesPanel({ deal, profile, users, onCountChange }) {
+  return (
+    <div className="rounded-xl p-3" style={SURFACE.raise}>
+      <p className="text-[13px] font-bold uppercase tracking-wide text-bank-fa mb-2">Notes — {deal.deal_name}</p>
+      <NotesThread deal={deal} profile={profile} users={users} onCountChange={onCountChange} />
+    </div>
+  )
+}
+
+// ── Phone card (below lg): a compact row that expands to the full record ──
+function DealCard({ deal, canEdit, canVerify, onEdit, onDelete, onToggleHidden, onUpdate, onSplit, dupeIds, statusColor, statusLabels, offices, paymentMethods, profile, users, noteCount, onCountChange, audit = null, canAudit = false, defaultOpen = false }) {
   const baseline = parseFloat(deal.baseline_revenue) || 0
   const jobPrice = parseFloat(deal.job_price)        || 0
-  const [showNotes, setShowNotes] = useState(false)
+  const [open, setOpen] = useState(defaultOpen)
+  const [showNotes, setShowNotes] = useState(defaultOpen)
+  useEffect(() => { if (defaultOpen) { setOpen(true); setShowNotes(true) } }, [defaultOpen])
+  const a = audit?.byId[deal.id]
+  const dimmed = !countsInTotals(deal)
   return (
-    <div className={`p-4 ${countsInTotals(deal) ? '' : 'opacity-50'}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <button onClick={() => setShowNotes(s => !s)} className="text-[14px] font-semibold text-white truncate text-left">{deal.deal_name}</button>
-            <ChangeAlertTag deal={deal} canEdit={canEdit} onUpdate={onUpdate} onSplit={onSplit} />
-            {audit?.byId[deal.id] && <AuditBadge done={audit.byId[deal.id].done} total={audit.byId[deal.id].total} reviewed={audit.byId[deal.id].reviewed} />}
-            {(deal.notes || noteCount > 0) && (
-              <span className="flex items-center gap-0.5 text-teal/70 flex-shrink-0">
-                <MessageSquare size={12} />
-                {noteCount > 0 && <span className="text-[10px] font-semibold">{noteCount}</span>}
-              </span>
-            )}
-            {isCanceled(deal) && <CanceledMark />}
-            {isHidden(deal) && <HiddenMark />}
-                    {dupeIds?.has(deal.id) && <DupeMark other={dupeIds.get(deal.id)} />}
+    <div className={dimmed ? 'opacity-60' : ''}>
+      {/* Compact row: name + ID, status, revenue */}
+      <button onClick={() => setOpen(o => !o)} aria-expanded={open}
+        className="w-full flex items-center gap-3 px-4 py-3 min-h-[56px] text-left hover:bg-bank-raise transition-colors">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[14px] font-semibold text-bank-tx truncate">{deal.deal_name}</span>
+            <NameFlags deal={deal} canEdit={false} dupeIds={dupeIds} staticAlert />
           </div>
-          <p className="text-[11px] text-white/40 truncate">{subline(deal)}</p>
+          <p className="text-[13px] text-bank-mu truncate">{deal.project_id ? `${deal.project_id} · ` : ''}{subline(deal)}</p>
         </div>
-        <StatusCell status={deal.status} color={statusColor(deal.status)} options={statusLabels}
-          canEdit={canEdit} onUpdate={onUpdate} dealId={deal.id} />
-      </div>
+        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+          <StatusBadge status={deal.status} color={statusColor(deal.status)} />
+          <span className="text-[13px] font-semibold text-bank-tx tabular-nums">{fmt(jobPrice)}</span>
+        </div>
+        <ChevronDown size={16} className={`text-bank-fa flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
 
-      <div className="grid grid-cols-2 gap-x-4 gap-y-2 mt-3">
-        <PeopleCell deal={deal} />
-        <div className="flex flex-col items-end justify-center">
-          <RevenueCell baseline={baseline} jobPrice={jobPrice} />
-        </div>
-        <div className="flex flex-col gap-0.5">
-          <DateField label="Sale" value={deal.sale_date}    field="sale_date"    dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
-          <DateField label="Inst" value={deal.install_date} field="install_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} flagMissing
-            deriveExtra={v => ({ pay_date: v ? payDateFromInstall(v) : null })} />
-          <DateField key={`pay-${deal.pay_date ?? ''}`} label="Pay" value={deal.pay_date} field="pay_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} flagMissing />
-        </div>
-        <div className="flex items-end justify-end">
-          <CommissionCell deal={deal} canVerify={canVerify} onUpdate={onUpdate} />
-        </div>
-      </div>
+      {open && (
+        <div className="px-4 pb-4 space-y-3" style={{ background: 'var(--bg)' }}>
+          {/* Flags that need a tap (alert) + inline office / payment / status editors */}
+          <div className="flex items-center gap-2 flex-wrap pt-3">
+            <NameFlags deal={deal} canEdit={canEdit} onUpdate={onUpdate} onSplit={onSplit} dupeIds={null} />
+            {a && <AuditBadge done={a.done} total={a.total} reviewed={a.reviewed} />}
+            <NotesButton count={noteCount} hasLegacy={!!deal.notes} open={showNotes} onClick={() => setShowNotes(s => !s)} />
+          </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+            <div>
+              <p className="text-[13px] text-bank-fa mb-1">Status</p>
+              <StatusCell status={deal.status} color={statusColor(deal.status)} options={statusLabels}
+                canEdit={canEdit} onUpdate={onUpdate} dealId={deal.id} />
+            </div>
+            <div>
+              <p className="text-[13px] text-bank-fa mb-1">Office</p>
+              <InlineSelectCell value={deal.office} options={offices} colorFor={officeColor}
+                field="office" canEdit={canEdit} dealId={deal.id} onUpdate={onUpdate} missingLabel="office"
+                deriveExtra={v => officeChangePatch(deal, v)} />
+            </div>
+            <div>
+              <p className="text-[13px] text-bank-fa mb-1">Payment</p>
+              <InlineSelectCell value={deal.payment_method} options={paymentMethods}
+                field="payment_method" canEdit={canEdit} dealId={deal.id} onUpdate={onUpdate} missingLabel="payment" />
+            </div>
+            <div>
+              <p className="text-[13px] text-bank-fa mb-1">People</p>
+              <PeopleCell deal={deal} />
+            </div>
+            <div>
+              <p className="text-[13px] text-bank-fa mb-1">Dates</p>
+              <div className="flex flex-col gap-0.5">
+                <DateField label="Sale" value={deal.sale_date}    field="sale_date"    dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} />
+                <DateField label="Inst" value={deal.install_date} field="install_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} flagMissing
+                  deriveExtra={v => ({ pay_date: v ? payDateFromInstall(v) : null })} />
+                <DateField key={`pay-${deal.pay_date ?? ''}`} label="Pay" value={deal.pay_date} field="pay_date" dealId={deal.id} canEdit={canEdit} onUpdate={onUpdate} flagMissing />
+              </div>
+            </div>
+            <div className="flex flex-col items-end gap-3">
+              <div><p className="text-[13px] text-bank-fa mb-1 text-right">Revenue</p><RevenueCell baseline={baseline} jobPrice={jobPrice} /></div>
+              <div><p className="text-[13px] text-bank-fa mb-1 text-right">Commission</p><CommissionCell deal={deal} canVerify={canVerify} onUpdate={onUpdate} /></div>
+            </div>
+          </div>
 
-      {audit?.byId[deal.id] && (
-        <div className="mt-3">
-          {canAudit && (
-            <div className="flex justify-end mb-1.5">
-              <button onClick={() => audit.rerun(deal.id)} disabled={audit.busy[deal.id]}
-                className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-white/50 hover:text-white disabled:opacity-40"
-                style={{ background: '#1e1e1e', border: '1px solid #2e2e2e' }}>
-                <RefreshCw size={11} className={audit.busy[deal.id] ? 'animate-spin' : ''} /> Re-run
-              </button>
+          {a && (
+            <div>
+              {canAudit && (
+                <div className="flex justify-end mb-1.5">
+                  <SecondaryButton onClick={() => audit.rerun(deal.id)} disabled={audit.busy[deal.id]}>
+                    <RefreshCw size={12} className={audit.busy[deal.id] ? 'animate-spin' : ''} /> Re-run
+                  </SecondaryButton>
+                </div>
+              )}
+              <AuditStrip deal={deal} audit={audit} canAudit={canAudit} />
             </div>
           )}
-          <AuditStrip deal={deal} audit={audit} canAudit={canAudit} />
-        </div>
-      )}
 
-      {showNotes && (
-        <div className="mt-3 rounded-lg p-3" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-          <p className="text-[10px] font-bold uppercase tracking-wider text-white/30 mb-2">Notes</p>
-          <NotesThread deal={deal} profile={profile} users={users} onCountChange={onCountChange} />
-        </div>
-      )}
+          {showNotes && <NotesPanel deal={deal} profile={profile} users={users} onCountChange={onCountChange} />}
 
-      {canEdit && (
-        <div className="mt-3 pt-3 border-t border-white/5">
-          <ActionButtons deal={deal} onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} />
+          {canEdit && (
+            <div className="pt-3 border-t border-bank-line">
+              <ActionButtons deal={deal} onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} />
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -892,15 +964,15 @@ export default function DealTable({
   const [noteCounts, setNoteCounts] = useState({})
   useEffect(() => { fetchDealNoteCounts().then(({ data }) => setNoteCounts(data || {})) }, [])
   const setNoteCount = (dealId, count) => setNoteCounts(m => ({ ...m, [dealId]: count }))
-  const colCount = COLS.length + (canEdit ? 1 : 0)
+  const cols = COLS.filter(c => !c.onlyWithAudit || !!audit)
+  const colCount = cols.length + (canEdit ? 1 : 0)
 
   const reps = users.filter(u => ['rep', 'manager', 'director', 'vp'].includes(u.role))
 
   // Whether a given column currently has a filter applied (drives the header dot).
   const colActive = (col) => ({
+    deal:    !!officeFilter || !!paymentFilter,
     status:  !!statusFilter,
-    office:  !!officeFilter,
-    payment: !!paymentFilter,
     rep:     repFilters.length > 0,
     date:    !!(dateFrom || dateTo),
   }[col.filter] || false)
@@ -908,9 +980,14 @@ export default function DealTable({
   // The filter UI rendered inside a column's header popover, if any.
   const colFilter = (col) => {
     switch (col.filter) {
+      case 'deal':    return () => (
+        <div className="space-y-1">
+          <div className="px-2 pt-0.5 text-[13px] text-bank-mu">Office</div>
+          <OptionFilter value={officeFilter}  options={offices}        onChange={setOfficeFilter}  allLabel="All offices" />
+          <div className="px-2 pt-1 text-[13px] text-bank-mu border-t border-bank-line">Payment</div>
+          <OptionFilter value={paymentFilter} options={paymentMethods} onChange={setPaymentFilter} allLabel="All payments" />
+        </div>)
       case 'status':  return () => <OptionFilter value={statusFilter}  options={statusLabels}  onChange={setStatusFilter}  allLabel="All statuses" />
-      case 'office':  return () => <OptionFilter value={officeFilter}  options={offices}        onChange={setOfficeFilter}  allLabel="All offices" />
-      case 'payment': return () => <OptionFilter value={paymentFilter} options={paymentMethods} onChange={setPaymentFilter} allLabel="All payments" />
       case 'rep':     return () => <RepPickList users={reps} value={repFilters} onChange={setRepFilters} />
       case 'date':    return () => <DateFilterPanel dateField={dateField} setDateField={setDateField}
                                      dateFrom={dateFrom} dateTo={dateTo} datePreset={datePreset} setDateRange={setDateRange} />
@@ -918,84 +995,62 @@ export default function DealTable({
     }
   }
 
-  if (loading) return (
-    <div className="rounded-xl p-16 text-center text-white/30 text-[13px]"
-      style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
-      Loading deals…
-    </div>
-  )
+  if (loading) return <LoadingBlock text="Loading deals…" className="py-16" />
 
   if (!deals.length) return (
-    <div className="rounded-xl p-16 text-center text-white/30 text-[13px]"
-      style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
-      No deals match your filters.
+    <div className="rounded-2xl" style={SURFACE.card}>
+      <EmptyBlock className="py-16">No deals match your filters.</EmptyBlock>
     </div>
   )
 
-  return (
-    <div className="rounded-xl overflow-hidden"
-      style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
+  const TH = 'px-3 py-3 text-[13px] font-semibold text-bank-fa uppercase tracking-wide select-none whitespace-nowrap'
+  const rowBg = (i) => (i % 2 === 0 ? 'var(--card)' : 'var(--bg)')
 
-      {/* Desktop table (lg+) — auto layout: each column sizes to its content,
-          a trailing spacer column soaks up any leftover width on the right. */}
+  return (
+    <div className="rounded-2xl overflow-hidden" style={{ ...SURFACE.card, color: 'var(--tx)' }}>
+
+      {/* Desktop table (lg+) — auto layout: each column sizes to its content. */}
       <table className="w-full hidden lg:table">
         <thead>
-          <tr style={{ background: '#00b894' }}>
-            {COLS.map(col => (
-              <th key={col.key}
-                className={`px-3 py-3 text-[11px] font-bold text-dark uppercase tracking-wider select-none whitespace-nowrap ${
-                  col.align === 'right' ? 'text-right' : 'text-left'
-                }`}>
+          <tr style={{ background: 'var(--raise)', borderBottom: '1px solid var(--line)' }}>
+            {cols.map(col => (
+              <th key={col.key} className={`${TH} ${col.align === 'right' ? 'text-right' : 'text-left'}`}>
                 <HeaderMenu col={col} sortKey={sortKey} sortDir={sortDir} onSort={onSort}
                   active={colActive(col)} renderFilter={colFilter(col)} />
               </th>
             ))}
-            {canEdit && (
-              <th className="px-3 py-3 text-[11px] font-bold text-dark uppercase tracking-wider text-right whitespace-nowrap">
-                Actions
-              </th>
-            )}
+            {canEdit && <th className={`${TH} text-right`}>Actions</th>}
           </tr>
         </thead>
         <tbody>
           {deals.map((deal, i) => {
             const baseline = parseFloat(deal.baseline_revenue) || 0
             const jobPrice = parseFloat(deal.job_price)        || 0
-            const isEven   = i % 2 === 0
             const dimmed = !countsInTotals(deal)
+            const a = audit?.byId[deal.id]
+            const open = notesOpen.has(deal.id)
             return (
               <Fragment key={deal.id}>
               <tr
-                style={{ background: isEven ? '#242424' : '#262626' }}
-                className={`hover:bg-white/[0.03] transition-colors align-top ${dimmed ? 'opacity-50' : ''}`}>
+                style={{ background: rowBg(i) }}
+                className={`hover:bg-bank-raise transition-colors align-top border-t border-bank-line ${dimmed ? 'opacity-60' : ''}`}>
+                {/* Deal: name, ID, office, payment */}
                 <td className="px-3 py-3">
                   <div className="flex items-center gap-2">
                     <button onClick={() => toggleNotes(deal.id)} title="Notes"
-                      className="text-[13px] font-semibold text-white truncate max-w-[210px] text-left hover:text-teal transition-colors">
+                      className="text-[13px] font-semibold text-bank-tx truncate max-w-[220px] text-left hover:text-bank-gold-tx transition-colors">
                       {deal.deal_name}
                     </button>
-                    <ChangeAlertTag deal={deal} canEdit={canEdit} onUpdate={onUpdate} onSplit={onSplit} />
-                    {audit?.byId[deal.id] && <AuditBadge done={audit.byId[deal.id].done} total={audit.byId[deal.id].total} reviewed={audit.byId[deal.id].reviewed} />}
-                    {(deal.notes || noteCounts[deal.id] > 0) && (
-                      <span className="flex items-center gap-0.5 text-teal/70 flex-shrink-0">
-                        <MessageSquare size={12} />
-                        {noteCounts[deal.id] > 0 && <span className="text-[10px] font-semibold">{noteCounts[deal.id]}</span>}
-                      </span>
-                    )}
-                    {isCanceled(deal) && <CanceledMark />}
-                    {isHidden(deal) && <HiddenMark />}
-                    {dupeIds?.has(deal.id) && <DupeMark other={dupeIds.get(deal.id)} />}
+                    <NameFlags deal={deal} canEdit={canEdit} onUpdate={onUpdate} onSplit={onSplit} dupeIds={dupeIds} />
                   </div>
-                  {deal.project_id && <p className="text-[11px] text-white/40 truncate max-w-[260px]">{deal.project_id}</p>}
-                </td>
-                <td className="px-3 py-3">
-                  <InlineSelectCell value={deal.office} options={offices} colorFor={officeColor}
-                    field="office" canEdit={canEdit} dealId={deal.id} onUpdate={onUpdate} missingLabel="office"
-                    deriveExtra={v => officeChangePatch(deal, v)} />
-                </td>
-                <td className="px-3 py-3">
-                  <InlineSelectCell value={deal.payment_method} options={paymentMethods}
-                    field="payment_method" canEdit={canEdit} dealId={deal.id} onUpdate={onUpdate} missingLabel="payment" />
+                  <div className="flex items-center gap-2 flex-wrap mt-1">
+                    {deal.project_id && <span className="text-[13px] text-bank-fa truncate max-w-[160px] tabular-nums">{deal.project_id}</span>}
+                    <InlineSelectCell value={deal.office} options={offices} colorFor={officeColor}
+                      field="office" canEdit={canEdit} dealId={deal.id} onUpdate={onUpdate} missingLabel="office"
+                      deriveExtra={v => officeChangePatch(deal, v)} />
+                    <InlineSelectCell value={deal.payment_method} options={paymentMethods}
+                      field="payment_method" canEdit={canEdit} dealId={deal.id} onUpdate={onUpdate} missingLabel="payment" />
+                  </div>
                 </td>
                 <td className="px-3 py-3">
                   <StatusCell status={deal.status} color={statusColor(deal.status)} options={statusLabels}
@@ -1012,23 +1067,29 @@ export default function DealTable({
                 </td>
                 <td className="px-3 py-3"><RevenueCell baseline={baseline} jobPrice={jobPrice} /></td>
                 <td className="px-3 py-3"><CommissionCell deal={deal} canVerify={canVerify} onUpdate={onUpdate} /></td>
-                {canEdit && (
+                {audit && (
                   <td className="px-3 py-3">
-                    <div className="flex items-center justify-end gap-1.5">
-                      {audit?.byId[deal.id] && canAudit && (
-                        <button onClick={() => audit.rerun(deal.id)} disabled={audit.busy[deal.id]} title="Re-run audit"
-                          className="p-1 rounded text-white/40 hover:text-white disabled:opacity-40"
-                          style={{ background: '#1e1e1e', border: '1px solid #2e2e2e' }}>
+                    <div className="flex items-center gap-1.5">
+                      {a ? <AuditBadge done={a.done} total={a.total} reviewed={a.reviewed} /> : <span className="text-[13px] text-bank-fa">—</span>}
+                      {a && canAudit && (
+                        <IconButton onClick={() => audit.rerun(deal.id)} disabled={audit.busy[deal.id]} title="Re-run audit" aria-label="Re-run audit">
                           <RefreshCw size={12} className={audit.busy[deal.id] ? 'animate-spin' : ''} />
-                        </button>
+                        </IconButton>
                       )}
-                      <ActionButtons deal={deal} onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} />
                     </div>
                   </td>
                 )}
+                <td className="px-3 py-2 text-right">
+                  <NotesButton count={noteCounts[deal.id] || 0} hasLegacy={!!deal.notes} open={open} onClick={() => toggleNotes(deal.id)} />
+                </td>
+                {canEdit && (
+                  <td className="px-3 py-2">
+                    <ActionButtons deal={deal} onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} />
+                  </td>
+                )}
               </tr>
-              {audit && audit.byId[deal.id] && (
-                <tr style={{ background: isEven ? '#242424' : '#262626' }}>
+              {audit && a && (
+                <tr style={{ background: rowBg(i) }}>
                   <td colSpan={colCount} className="px-3 pb-3 pt-0">
                     <AuditStrip deal={deal} audit={audit} canAudit={canAudit} />
                   </td>
@@ -1036,16 +1097,13 @@ export default function DealTable({
               )}
               {/* A dark band ends each customer's block so the next one reads as a
                   separate card (Needs-review / audit view only). */}
-              {audit && audit.byId[deal.id] && (
-                <tr aria-hidden="true"><td colSpan={colCount} style={{ background: '#161616', height: 10, padding: 0 }} /></tr>
+              {audit && a && (
+                <tr aria-hidden="true"><td colSpan={colCount} style={{ background: 'var(--bg)', height: 10, padding: 0 }} /></tr>
               )}
-              {notesOpen.has(deal.id) && (
-                <tr style={{ background: isEven ? '#242424' : '#262626' }}>
+              {open && (
+                <tr style={{ background: rowBg(i) }}>
                   <td colSpan={colCount} className="px-3 pb-3 pt-0">
-                    <div className="rounded-lg p-3" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-white/30 mb-2">Notes — {deal.deal_name}</p>
-                      <NotesThread deal={deal} profile={profile} users={users} onCountChange={setNoteCount} />
-                    </div>
+                    <NotesPanel deal={deal} profile={profile} users={users} onCountChange={setNoteCount} />
                   </td>
                 </tr>
               )}
@@ -1055,14 +1113,14 @@ export default function DealTable({
         </tbody>
       </table>
 
-      {/* Mobile / tablet cards (below lg) — a thick dark divider in the audit
-          view so each customer's card is clearly its own. */}
-      <div className={`lg:hidden ${audit ? 'divide-y-[10px] divide-[#161616]' : 'divide-y divide-white/5'}`}>
+      {/* Phone / tablet rows (below lg) — compact, each expands to the full record. */}
+      <div className="lg:hidden divide-y divide-bank-line">
         {deals.map(deal => (
           <DealCard key={deal.id} deal={deal} canEdit={canEdit} canVerify={canVerify}
             onEdit={onEdit} onDelete={onDelete} onToggleHidden={onToggleHidden} onUpdate={onUpdate} onSplit={onSplit} dupeIds={dupeIds}
-            statusColor={statusColor} statusLabels={statusLabels}
-            audit={audit} canAudit={canAudit}/>
+            statusColor={statusColor} statusLabels={statusLabels} offices={offices} paymentMethods={paymentMethods}
+            profile={profile} users={users} noteCount={noteCounts[deal.id] || 0} onCountChange={setNoteCount}
+            audit={audit} canAudit={canAudit} defaultOpen={openNotesId === deal.id} />
         ))}
       </div>
     </div>
