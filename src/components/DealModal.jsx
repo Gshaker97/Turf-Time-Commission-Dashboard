@@ -24,7 +24,9 @@ const Sel = ({ children, ...props }) => <select {...props} style={inputStyle} cl
 // got unusable as the roster grew. Shows the selected name; typing filters;
 // click or Enter picks the top match. A hidden required input keeps native
 // form validation working.
-function PersonPicker({ value, users = [], onChange, placeholder = 'Search rep…', required = false }) {
+// Exported so My Card's admin "view as" uses THE SAME searchable picker
+// rather than a fourth implementation — the roster outgrew dropdowns.
+export function PersonPicker({ value, users = [], onChange, placeholder = 'Search rep…', required = false }) {
   const [open, setOpen]   = useState(false)
   const [query, setQuery] = useState('')
   const selected = users.find(u => u.id === value) || null

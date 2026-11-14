@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { format as dfFormat } from "date-fns";
-import { Trophy, Award, Target, Flame, Share2, Check, X } from "lucide-react";
+import { Trophy, Award, Target, Flame, Share2, Check, X, Pencil } from "lucide-react";
 import { fetchDeals, fetchCompetitions, fetchUsers, fetchWeeklyStats, fetchLeads, fetchTeamChanges,
   fetchPersonalGoals, upsertPersonalGoal } from "../lib/db";
 import { headIdSet, teamKeyFor, buildChangesByProfile, saleOwnerId, teamLabel } from "../utils/team";
@@ -18,6 +18,7 @@ import { currentPeriods, resolveGoal, repProduction, periodElapsed, metricProgre
 import { useSettings } from "../contexts/SettingsContext";
 import { useAuth } from "../contexts/AuthContext";
 import { toast } from "../lib/toast";
+import { PersonPicker } from "../components/DealModal";
 import { competitionStandings, competitionStatus, fmtScore } from "../utils/competition";
 
 const money = (n) => "$" + Math.round(Number(n) || 0).toLocaleString("en-US");
@@ -359,9 +360,9 @@ export default function Home() {
     const dealRows = (arr) => arr.map(d => ({ id: d.id, name: d.deal_name, sub: `${fmtD(d.sale_date)} · ${d.status}`, value: money(parseFloat(d.baseline_revenue) || 0) }));
 
     if (drill === "self")
-      return { title: "Self gens — the deals you own", total: `${act.closed} deals · ${money(act.revenue)}`, rows: dealRows(ownDeals) };
+      return { title: "Self gens", total: `${act.closed} deals · ${money(act.revenue)}`, rows: dealRows(ownDeals) };
     if (drill === "leads")
-      return { title: "Leads — deals you closed for another setter", total: `${act.leadsClosed} deals · ${money(act.leadRevenue)}`, rows: dealRows(leadDeals) };
+      return { title: "Leads", total: `${act.leadsClosed} deals · ${money(act.leadRevenue)}`, rows: dealRows(leadDeals) };
     if (drill === "commission") {
       const rows = monthDeals.map(d => ({ d, amt: getUserCommission([d], me) })).filter(x => x.amt > 0)
         .sort((a, b) => b.amt - a.amt)
@@ -372,10 +373,15 @@ export default function Home() {
           if (d.manager_id === me || d.director_id === me || d.vp_id === me) roles.push("Override");
           return { id: d.id, name: d.deal_name, sub: `${fmtD(d.sale_date)} · ${[...new Set(roles)].join(", ") || "—"}`, value: money(amt) };
         });
-      return { title: "Commission — your earnings", total: `${money(commission)} total`, rows };
+      return { title: "Commission", total: `${money(commission)} total`, rows };
     }
     return null;
   }, [drill, monthDeals, me, act, commission]);
+
+  // Ghosts keep their "(ghost)" tag, as the old select showed, so an admin can
+  // still tell them apart; the picker is admin-only, so nobody else sees it.
+  const viewablePeople = useMemo(() => users.filter(SELLER)
+    .map(u => (u.ghost ? { ...u, name: `${u.name} (ghost)` } : u)), [users]);
 
   const firstName = (viewUser?.name || "").split(" ")[0] || "there";
   const initials = (viewUser?.name || "?").split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase();
@@ -483,15 +489,29 @@ export default function Home() {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
+          {/* VIEW AS — the SAME type-to-search picker the DealModal uses, not a
+              native <select>. A 23-person roster in a dropdown opens a list
+              that runs most of the height of a laptop screen and offers no way
+              to filter it (per Keaton: "the pop up expands too far… and
+              there's no search filter"). Selecting YOURSELF is just your own
+              card, so no "My card" sentinel option is needed — the X clears. */}
           {isAdmin && (
-            <select value={viewId || ""} onChange={e => setViewId(e.target.value || null)}
-              className="text-[12px] px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white max-w-[160px]"
-              title="View another person's card">
-              <option value="" style={{ background: "#2a2a2a" }}>My card</option>
-              {users.filter(SELLER).slice().sort((a, b) => a.name.localeCompare(b.name)).map(u => (
-                <option key={u.id} value={u.id} style={{ background: "#2a2a2a" }}>{u.name}{u.ghost ? " (ghost)" : ""}</option>
-              ))}
-            </select>
+            <div className="flex items-center gap-1.5">
+              <div className="w-[170px] md:w-[200px]">
+                <PersonPicker
+                  value={viewId || profile?.id}
+                  users={viewablePeople}
+                  onChange={(id) => setViewId(id === profile?.id ? null : id)}
+                  placeholder="View another card…" />
+              </div>
+              {viewingOther && (
+                <button onClick={() => setViewId(null)} title="Back to my card"
+                  className="p-2 rounded-lg text-white/40 hover:text-white transition-colors"
+                  style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
+                  <X size={14} />
+                </button>
+              )}
+            </div>
           )}
           <select value={selected} onChange={e => setSelected(Number(e.target.value))}
             className="text-[12px] px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white"
@@ -622,7 +642,7 @@ export default function Home() {
             <Target size={12} className="text-teal" /> Your goals
           </p>
           {canEditGoals
-            ? <span className="text-[10.5px] text-white/25">tap a target to change it</span>
+            ? null
             : <Link to="/goals" className="text-[11px] text-teal hover:underline">Goals →</Link>}
         </div>
 
@@ -635,9 +655,9 @@ export default function Home() {
             <div key={g.key} className="mb-3 last:mb-0">
               <div className="flex items-baseline justify-between gap-2 text-[11.5px] mb-1.5">
                 <span className="text-white/70 min-w-0 truncate">{g.label}</span>
-                <span className="flex-shrink-0 text-white/45">
-                  {g.format(g.value)} of{" "}
-                  {editing ? (
+                <span className="flex-shrink-0 text-white/45 flex items-center gap-1.5">
+                  {editing ? (<>
+                    <span>{g.format(g.value)} of</span>
                     <input autoFocus type="text" inputMode="numeric" value={editVal}
                       onChange={e => setEditVal(e.target.value)}
                       onKeyDown={e => {
@@ -649,19 +669,36 @@ export default function Home() {
                         saveTarget(g.period, g.field, editVal);
                       }}
                       aria-label={`${g.label} target`}
-                      className="w-20 px-1.5 py-0.5 rounded text-[11.5px] font-semibold text-white"
+                      className="w-24 px-2 py-1 rounded-md text-[12px] font-semibold text-white"
                       style={{ background: "#141414", border: "1px solid #00b894" }} />
-                  ) : canEditGoals ? (
-                    <button
-                      onClick={() => { setEditGoal(g.key); setEditVal(g.target == null ? "" : String(g.target)); }}
-                      className="font-semibold text-white"
-                      style={{ borderBottom: "1px dashed rgba(255,255,255,0.3)" }}
-                      title="Tap to change this target">
-                      {g.target == null ? "set one" : g.format(g.target)}
-                    </button>
-                  ) : (
-                    <span className="font-semibold text-white">{g.target == null ? "—" : g.format(g.target)}</span>
-                  )}
+                  </>) : g.target == null ? (
+                    /* NO TARGET YET — a real button that says what it does.
+                       "set one" as a dashed-underline word read as a scrap of
+                       sentence, not a control (per Keaton: "feels cheap…
+                       need it more obvious its for setting a goal"). */
+                    canEditGoals ? (<>
+                      {/* keep the production figure visible — a row with only
+                          a button hides what they have actually done */}
+                      <span className="text-white/35">{g.format(g.value)}</span>
+                      <button type="button"
+                        onClick={() => { setEditGoal(g.key); setEditVal(""); }}
+                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors hover:brightness-125"
+                        style={{ background: "rgba(0,184,148,0.12)", border: "1px solid rgba(0,184,148,0.45)", color: "#2dd4bf" }}>
+                        <Target size={11} /> Set a goal
+                      </button>
+                    </>) : <span className="text-white/25">{g.format(g.value)} · no goal set</span>
+                  ) : (<>
+                    <span>{g.format(g.value)} of</span>
+                    {canEditGoals ? (
+                      <button type="button"
+                        onClick={() => { setEditGoal(g.key); setEditVal(String(g.target)); }}
+                        className="flex items-center gap-1 px-1.5 py-0.5 -mx-0.5 rounded-md font-semibold text-white transition-colors hover:bg-white/10"
+                        title="Change this target">
+                        {g.format(g.target)}
+                        <Pencil size={10} className="text-white/35" />
+                      </button>
+                    ) : <span className="font-semibold text-white">{g.format(g.target)}</span>}
+                  </>)}
                   {savingGoal === g.key && <span className="text-white/30 ml-1">…</span>}
                 </span>
               </div>

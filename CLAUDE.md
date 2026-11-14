@@ -1050,6 +1050,31 @@ funnel.
   right, and the absolutely-positioned badge printed straight on top of the
   figure at laptop width (Keaton hit it live). It describes the revenue, so
   it belongs next to that label, where it cannot collide with anything.
+- **"VIEW ANOTHER CARD" USES `PersonPicker`, NOT A NATIVE `<select>`** — the
+  same type-to-search control the DealModal uses, now EXPORTED from
+  DealModal.jsx rather than copied (per Keaton: "the drop down… is very
+  cheap. the pop up expands too far, especially on the website from a
+  computer, and there's no search filter"). A 23-person roster in a native
+  select opens a list most of the height of a laptop screen with no way to
+  filter it. The panel is capped at 208px and scrolls. **There is no "My
+  card" sentinel option**: the picker's value is `viewId || profile.id`, so
+  it always names who you are looking at, and picking YOURSELF is your own
+  card (`setViewId(id === profile.id ? null : id)`). An X beside it clears
+  back. Ghosts keep their "(ghost)" tag, as the old select showed; the
+  control is admin-only so nobody else sees it.
+- **A GOAL WITH NO TARGET GETS A REAL BUTTON — "◎ Set a goal"** (per Keaton:
+  "'set one' also feels cheap… more obvious its for setting a goal"). The
+  old dashed-underline "set one" read as a scrap of a sentence, not a
+  control. A target that EXISTS stays inline-editable, now with a small
+  pencil beside it instead of a dashed underline. The production figure
+  stays visible either way (`$10,600 · [Set a goal]`) — a row showing only a
+  button hides what the rep has actually done. The "tap a target to change
+  it" hint went with the change: it existed to explain the underline idiom
+  that real buttons replaced.
+- **The drill-down titles carry NO tagline** — "Self gens", "Leads",
+  "Commission", never "Self gens — the deals you own" (per Keaton: "we dont
+  need an explanation"). The panel's own sub-line already prints the month,
+  the count and the total.
 - `ROLE_LABEL` spells the acronym: Tailwind's `capitalize` rendered the vp
   role as "Vp".
 - The header sub-line is the rep's **team name** (`teamLabel`), falling back
