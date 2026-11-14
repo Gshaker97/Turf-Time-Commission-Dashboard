@@ -31,6 +31,7 @@ const BLANK = {
   name: '', email: '', role: 'rep', company_name: 'Turf Time',
   manager_id: '', director_id: '', vp_id: '',
   is_admin: false, ghost: false,
+  sales_role: '',
   password: '',
 }
 
@@ -53,6 +54,7 @@ export default function UserModal({ user, allUsers = [], teamChanges = [], onSav
         vp_id:       user.vp_id       ?? '',
         is_admin:    user.is_admin    ?? false,
         ghost:       user.ghost       ?? false,
+        sales_role:  user.sales_role  ?? '',
         password: '',
       })
     } else {
@@ -89,6 +91,7 @@ export default function UserModal({ user, allUsers = [], teamChanges = [], onSav
       manager_id:  form.manager_id  || null,
       director_id: form.director_id || null,
       vp_id:       form.vp_id       || null,
+      sales_role:  form.sales_role  || null,
     })
     setSaving(false)
   }
@@ -136,6 +139,15 @@ export default function UserModal({ user, allUsers = [], teamChanges = [], onSav
               <Sel value={form.role} onChange={e => set('role', e.target.value)}>
                 {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
               </Sel>
+            </Field>
+            <Field label="Sales role">
+              <Sel value={form.sales_role} onChange={e => set('sales_role', e.target.value)}>
+                <option value="">Not set</option>
+                <option value="setter">Setter — books appointments</option>
+                <option value="closer">Closer — runs and closes them</option>
+                <option value="both">Both</option>
+              </Sel>
+              <p className="text-[13px] text-bank-fa mt-1">Shown on the roster and My Card, and filters the leaderboard. Deal credit still comes from each deal's setter and closer.</p>
             </Field>
             <Field label="Company">
               <Inp value={form.company_name} onChange={e => set('company_name', e.target.value)} placeholder="Turf Time" />

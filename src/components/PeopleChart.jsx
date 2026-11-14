@@ -199,6 +199,7 @@ export default function PeopleChart({
                   <ShieldCheck size={9} /> admin
                 </span>
               )}
+              {u.sales_role && <span className="text-[12px] font-bold uppercase tracking-wide px-1 rounded" style={badge('var(--pos)')}>{u.sales_role}</span>}
               {u.ghost && <span className="text-[12px] font-bold uppercase tracking-wide px-1 rounded text-bank-mu" style={badge('var(--mu)')}>ghost</span>}
               {!u.auth_id && <span className="text-[12px] font-bold uppercase tracking-wide px-1 rounded" style={badge(WARN)}>no login</span>}
             </div>

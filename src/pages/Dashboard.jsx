@@ -485,8 +485,15 @@ export default function Dashboard() {
   const [boardSort, setBoardSort] = useState({ key: 'revenue', dir: 'desc' })
   const toggleBoardSort = (key) =>
     setBoardSort(v => (v.key === key ? { key, dir: v.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }))
-  const repBoard = useMemo(() => sortLeaderboard(repBoardRaw, boardSort.key, boardSort.dir),
-    [repBoardRaw, boardSort])
+  // Setters / Closers filter (Garrison, Nov 14 2026). Reads profiles.sales_role
+  // — display only. "both" appears under either filter; a rep with no sales
+  // role set only appears under All, so nobody is silently sorted into a job.
+  const [boardRole, setBoardRole] = useState('all')
+  const repBoard = useMemo(() => {
+    const rows = boardRole === 'all' ? repBoardRaw
+      : repBoardRaw.filter(r => { const sr = usersById[r.id]?.sales_role; return sr === boardRole || sr === 'both' })
+    return sortLeaderboard(rows, boardSort.key, boardSort.dir)
+  }, [repBoardRaw, boardSort, boardRole, usersById])
 
   // A team's own rep rows (for the inline accordion) — those with activity in
   // range, ghosts hidden from non-admins, ranked by revenue.
@@ -1072,10 +1079,17 @@ export default function Dashboard() {
               )}
             </div>
             {isBoard ? (
-              <SecondaryButton onClick={copyLeaderboard} active={copiedBoard}
-                title="Copy as a table — pastes formatted into Canva, Sheets or Docs">
-                {copiedBoard ? <Check size={12} /> : <Copy size={12} />}{copiedBoard ? 'Copied' : 'Copy table'}
-              </SecondaryButton>
+              <div className="flex items-center gap-2 flex-wrap">
+                <PillGroup role="group" aria-label="Sales role">
+                  {[['all', 'All'], ['setter', 'Setters'], ['closer', 'Closers']].map(([k, lbl]) => (
+                    <Pill key={k} active={boardRole === k} onClick={() => setBoardRole(k)}>{lbl}</Pill>
+                  ))}
+                </PillGroup>
+                <SecondaryButton onClick={copyLeaderboard} active={copiedBoard}
+                  title="Copy as a table — pastes formatted into Canva, Sheets or Docs">
+                  {copiedBoard ? <Check size={12} /> : <Copy size={12} />}{copiedBoard ? 'Copied' : 'Copy table'}
+                </SecondaryButton>
+              </div>
             ) : (
               <Pill onClick={() => setShowActivity(v => !v)} active={showActivity} className={showActivity ? '' : 'border-bank-line'}>
                 {showActivity ? '✓' : '+'} Appointments
@@ -1087,7 +1101,7 @@ export default function Dashboard() {
             repBoard.length > 0 ? (
               <>
                 <p className="text-[13px] text-bank-mu mb-2">
-                  {repBoard.length} {repBoard.length === 1 ? 'rep' : 'reps'} with activity · tap a column to rank by it ·
+                  {repBoard.length} {boardRole === 'all' ? '' : boardRole + ' '}{repBoard.length === 1 ? 'rep' : 'reps'} with activity · tap a column to rank by it ·
                   Set Deals + Self-Gen are the deals they own · Leads Closed is what Total Revenue adds on top
                 </p>
 
