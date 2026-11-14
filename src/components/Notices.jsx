@@ -39,14 +39,15 @@ export default function Notices() {
     <>
       {expired && (
         <div className="fixed top-0 inset-x-0 z-[90] flex items-center justify-center gap-3 px-4 py-2.5"
-          style={{ background: '#7f1d1d', borderBottom: '1px solid #ef4444' }}>
-          <AlertTriangle size={15} className="text-red-200 flex-shrink-0" />
-          <span className="text-[13px] font-semibold text-red-50">
+          style={{ background: 'var(--card)', borderBottom: '1px solid var(--neg)' }}>
+          <AlertTriangle size={15} className="flex-shrink-0" style={{ color: 'var(--neg)' }} />
+          <span className="text-[13px] font-semibold text-bank-tx">
             Your session expired — data may not load or save until you sign in again.
           </span>
           <button
             onClick={async () => { try { await signOut?.() } finally { window.location.href = '/login' } }}
-            className="px-3 py-1.5 min-h-[44px] md:min-h-0 rounded-lg text-[13px] font-bold text-red-900 bg-red-100 hover:bg-white transition-colors">
+            className="px-3 py-1.5 min-h-[44px] md:min-h-0 rounded-lg text-[13px] font-bold transition-colors hover:brightness-105"
+            style={{ background: 'var(--gold)', color: 'var(--gold-ink)' }}>
             Sign in again
           </button>
         </div>

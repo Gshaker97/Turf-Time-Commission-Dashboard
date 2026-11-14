@@ -1746,7 +1746,7 @@ export default function Payroll() {
                       )}
                     </span>
                     <span style={colStatus} className="hidden sm:flex items-center gap-1">
-                      {d.commission_verified === true && <BadgeCheck size={12} className="flex-shrink-0" style={{ color: 'var(--gold-tx)' }} title="Commission verified" />}
+                      {d.commission_verified === true && <BadgeCheck size={12} className="flex-shrink-0" style={{ color: POS }} title="Commission verified" />}
                       <span className="text-[13px] whitespace-nowrap" style={{ color }}>{d.status}</span>
                     </span>
                     <div style={COL.act} className="flex items-center justify-end gap-1" onClick={e => e.stopPropagation()}>

@@ -20,11 +20,13 @@ const TITLES = {
 }
 
 const ROLE_ORDER = ['vp', 'director', 'manager', 'rep', 'admin']
+// Role tags on the palette: leadership in ivory and sage, reps muted. The
+// label is always printed, so colour is never the only cue.
 const ROLE_COLOR = {
-  vp:       '#a78bfa',
-  director: '#fb923c',
-  manager:  '#fbbf24',
-  rep:      '#60a5fa',
+  vp:       '#ede7da',   // --tx
+  director: '#a9c4b2',   // --pos
+  manager:  '#a19e97',   // --mu
+  rep:      '#8c8a84',   // --fa
   admin:    '#a19e97',   // neutral (--mu): the admin tag is a role, not an accent
 }
 
@@ -229,9 +231,9 @@ export default function NavBar() {
           <div
             className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0"
             style={{
-              background: isPreviewMode ? '#f59e0b22' : 'var(--raise)',
-              border: `1px solid ${isPreviewMode ? '#f59e0b60' : 'var(--line)'}`,
-              color: isPreviewMode ? '#f59e0b' : 'var(--tx)',
+              background: isPreviewMode ? 'rgba(210,160,116,0.14)' : 'var(--raise)',
+              border: `1px solid ${isPreviewMode ? 'rgba(210,160,116,0.45)' : 'var(--line)'}`,
+              color: isPreviewMode ? 'var(--warn)' : 'var(--tx)',
             }}
           >
             {initials}
@@ -302,7 +304,7 @@ export default function NavBar() {
                       <div key={role}>
                         <p
                           className="px-3 pt-2 pb-0.5 text-[13px] font-bold uppercase tracking-wider"
-                          style={{ color: ROLE_COLOR[role] ?? '#888' }}
+                          style={{ color: ROLE_COLOR[role] ?? 'var(--mu)' }}
                         >
                           {role}
                         </p>
@@ -315,7 +317,7 @@ export default function NavBar() {
                             <span>{u.name}</span>
                             <span
                               className="text-[12px] font-semibold px-1 py-0.5 rounded"
-                              style={{ background: (ROLE_COLOR[role] ?? '#888') + '22', color: ROLE_COLOR[role] ?? '#888' }}
+                              style={{ background: (ROLE_COLOR[role] ?? '#a19e97') + '22', color: ROLE_COLOR[role] ?? 'var(--mu)' }}
                             >
                               {u.role}
                             </span>

@@ -606,7 +606,7 @@ export default function Dashboard() {
 
   // Grouped for display, keeping the company → team → rep order.
   const recordGroups = useMemo(() => {
-    const meta = { company: ['Company', '#fbbf24'], team: ['Team', '#a78bfa'], rep: ['Rep', '#00b894'] }
+    const meta = { company: ['Company', 'var(--tx)'], team: ['Team', 'var(--mu)'], rep: ['Rep', 'var(--pos)'] }
     return ['company', 'team', 'rep']
       .map(s => ({ scope: s, label: meta[s][0], color: meta[s][1], rows: recordMoments.filter(m => m.scope === s) }))
       .filter(g => g.rows.length)

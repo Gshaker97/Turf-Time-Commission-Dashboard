@@ -489,12 +489,12 @@ function ChangeAlertTag({ deal, canEdit, onUpdate, onSplit }) {
 // by VP/admin; read-only (shown only if verified) to others.
 function VerifySeal({ verified, canVerify, onToggle }) {
   if (!verified && !canVerify) return null
-  if (!canVerify) return <BadgeCheck size={15} className="flex-shrink-0" style={{ color: 'var(--gold-tx)' }} title="Commission checked" />
+  if (!canVerify) return <BadgeCheck size={15} className="flex-shrink-0" style={{ color: 'var(--pos)' }} title="Commission checked" />
   return (
     <button type="button" onClick={onToggle} className="flex-shrink-0 hover:opacity-80 transition-opacity min-w-[28px] min-h-[28px] flex items-center justify-center"
       aria-pressed={verified}
       title={verified ? 'Commission checked — click to unmark' : 'Mark commission as checked'}>
-      <BadgeCheck size={16} className={verified ? '' : 'text-bank-fa hover:text-bank-mu'} style={verified ? { color: 'var(--gold-tx)' } : undefined} />
+      <BadgeCheck size={16} className={verified ? '' : 'text-bank-fa hover:text-bank-mu'} style={verified ? { color: 'var(--pos)' } : undefined} />
     </button>
   )
 }

@@ -44,10 +44,10 @@ const MyTeam      = lazyWithReload(() => import('./pages/MyTeam'))
 
 function Spinner() {
   return (
-    <div className="min-h-screen flex items-center justify-center" style={{ background: '#1a1a1a' }}>
+    <div className="min-h-screen flex items-center justify-center" style={{ background: 'var(--bg)' }}>
       <div className="flex flex-col items-center gap-3">
-        <div className="w-8 h-8 border-2 border-teal/30 border-t-teal rounded-full animate-spin" />
-        <p className="text-[12px] text-white/30">Loading…</p>
+        <div className="w-8 h-8 border-2 border-bank-line border-t-bank-tx rounded-full animate-spin" />
+        <p className="text-[13px] text-bank-mu">Loading…</p>
       </div>
     </div>
   )

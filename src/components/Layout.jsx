@@ -87,12 +87,12 @@ export default function Layout() {
       {/* Preview banner */}
       {isPreviewMode && (
         <div className="flex items-center justify-between px-5 py-2.5 flex-shrink-0 z-50"
-          style={{ background: '#f59e0b', color: '#1a1a1a' }}>
+          style={{ background: 'var(--warn)', color: 'var(--gold-ink)' }}>
           <div className="flex items-center gap-2">
             <Eye size={14} strokeWidth={2.5} />
             <span className="text-[13px] font-semibold">Viewing as {profile?.name} · {profile?.role} permissions</span>
             <span className="text-[13px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded"
-              style={{ background: 'rgba(0,0,0,0.15)', color: '#1a1a1a' }}>{role}</span>
+              style={{ background: 'rgba(0,0,0,0.15)', color: 'var(--gold-ink)' }}>{role}</span>
           </div>
           <button onClick={clearPreview} aria-label="Exit preview" className="p-1 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center rounded hover:bg-black/15 transition-colors">
             <X size={15} strokeWidth={2.5} />
@@ -141,11 +141,11 @@ export default function Layout() {
             {/* Role badge — dot when collapsed, full text on hover */}
             <div className="px-2 group-hover:px-5 pb-1">
               <div className="hidden group-hover:block text-[13px] font-semibold uppercase tracking-wider px-2 py-1 rounded text-center whitespace-nowrap"
-                style={{ background: isPreviewMode ? '#f59e0b22' : 'var(--raise)', color: isPreviewMode ? '#f59e0b' : 'var(--mu)', border: '1px solid var(--line)' }}>
+                style={{ background: isPreviewMode ? 'rgba(210,160,116,0.14)' : 'var(--raise)', color: isPreviewMode ? 'var(--warn)' : 'var(--mu)', border: '1px solid var(--line)' }}>
                 {role}
               </div>
               <div className="group-hover:hidden flex justify-center">
-                <div className="w-2 h-2 rounded-full" style={{ background: isPreviewMode ? '#f59e0b' : 'var(--mu)' }} />
+                <div className="w-2 h-2 rounded-full" style={{ background: isPreviewMode ? 'var(--warn)' : 'var(--mu)' }} />
               </div>
             </div>
           </div>
