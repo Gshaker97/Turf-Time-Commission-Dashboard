@@ -1341,6 +1341,15 @@ in range, a rep who left) falls back to company rather than rendering empty.
 - The **record-moments card defaults to COLLAPSED** (`tt_records_open`, 'on' to
   open). Six record types × company/team/rep means a dozen-plus can be live at
   once; expanded they filled the entire first screen before a single figure.
+- **Records can be DISMISSED again** (Garrison, Nov 14 2026), per record (✕ on
+  the row) or all at once ("Dismiss all" beside the header). Per browser, in
+  `tt_rec_dismissed_v2`, keyed by the record id (scope + type + period being
+  beaten) — so a dismissed record stays gone while THAT record keeps falling
+  and a new one (new period, new type) reappears on its own. The card hides
+  entirely when every live record is dismissed. #295 removed the old per-row ✕
+  because a cap of three threw records away unseen; there is no cap now, so
+  dismissing only hides what was actually shown. Display-only: nothing reads
+  this store.
 - **`perf_excluded_ids` WAS RETIRED with the page.** On Performance it removed
   a person's production from that page's totals, which was tolerable there and
   is not here — this page is the company's revenue number. `buildPerformance`
