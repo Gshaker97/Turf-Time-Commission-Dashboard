@@ -4,8 +4,9 @@ import RepMultiSelect from './RepMultiSelect'
 import { DATE_FIELDS } from './DealTable'
 import { useSettings } from '../contexts/SettingsContext'
 
-const inputStyle = { background: '#2a2a2a', border: '1px solid #333' }
-const inputCls = 'h-9 rounded-lg text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-teal/40 transition-colors px-3'
+// Private Bank tokens. Inputs and selects are 44px tall on phones, 36px on desktop.
+const inputStyle = { background: 'var(--raise)', border: '1px solid var(--line)' }
+const inputCls = 'h-11 md:h-9 rounded-lg text-[13px] text-bank-tx placeholder-bank-fa focus:outline-none transition-colors px-3'
 
 // Top bar for the Deals page — laid out like the Dashboard's filter row.
 //   Row 1: date-range preset pills (always visible, one click) + which date
@@ -57,7 +58,7 @@ export default function FilterBar({
   })
 
   return (
-    <div className="rounded-xl p-3 md:p-4 space-y-3" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
+    <div className="rounded-2xl p-3 md:p-4 space-y-3 min-w-0" style={{ background: 'var(--card)', border: '1px solid var(--line)', boxShadow: 'var(--card-shadow)' }}>
 
       {/* Row 1 — date pills (Dashboard-style) + which date + scope */}
       <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-2">
@@ -84,7 +85,7 @@ export default function FilterBar({
       {/* Row 2 — search + the field selects, always visible */}
       <div className="flex flex-wrap gap-2 items-center">
         <div className="relative flex-1 min-w-[200px]">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30 pointer-events-none" />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-bank-fa pointer-events-none" />
           <input
             value={search} onChange={e => setSearch(e.target.value)}
             placeholder="Search deal, address, ID…"
@@ -93,7 +94,7 @@ export default function FilterBar({
           />
           {search && (
             <button onClick={() => setSearch('')} title="Clear search"
-              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full text-white/35 hover:text-white hover:bg-white/10 transition-colors">
+              className="absolute right-1 top-1/2 -translate-y-1/2 p-2 md:p-1 rounded-full text-bank-mu hover:text-bank-tx hover:bg-bank-raise transition-colors">
               <X size={13} />
             </button>
           )}
@@ -116,16 +117,16 @@ export default function FilterBar({
       {/* Row 3 — active-filter chips */}
       {chips.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
-          <span className="hidden lg:inline text-[10px] uppercase tracking-wider text-white/25 font-semibold">Filtered by</span>
+          <span className="hidden lg:inline text-[13px] uppercase tracking-wider text-bank-fa font-semibold">Filtered by</span>
           {chips.map(c => (
             <button key={c.key} onClick={c.clear}
-              className="group inline-flex items-center gap-1.5 h-7 pl-2.5 pr-2 rounded-full text-[12px] text-teal transition-colors"
-              style={{ background: '#0e3b35', border: '1px solid #1c5a50' }}>
+              className="group inline-flex items-center gap-1.5 min-h-[44px] md:min-h-0 md:h-7 pl-2.5 pr-2 rounded-full text-[13px] text-bank-gold-tx transition-colors"
+              style={{ background: 'rgba(191,164,108,0.10)', border: '1px solid rgba(191,164,108,0.35)' }}>
               {c.label}
-              <X size={12} className="text-teal/60 group-hover:text-teal" />
+              <X size={12} className="text-bank-fa group-hover:text-bank-gold-tx" />
             </button>
           ))}
-          <button onClick={clearAll} className="text-[12px] text-white/40 hover:text-white underline">Clear all</button>
+          <button onClick={clearAll} className="text-[13px] min-h-[44px] md:min-h-0 px-1 text-bank-mu hover:text-bank-tx underline">Clear all</button>
         </div>
       )}
     </div>
@@ -141,7 +142,7 @@ function Select({ value, onChange, minW, title, children }) {
         style={{ ...inputStyle, minWidth: minW }} className={`${inputCls} pr-8 appearance-none`}>
         {children}
       </select>
-      <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 pointer-events-none" />
+      <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-bank-fa pointer-events-none" />
     </div>
   )
 }

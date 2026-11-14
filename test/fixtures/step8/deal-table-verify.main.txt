@@ -1,0 +1,1 @@
+onToggle={() => onUpdate?.(deal.id, { commission_verified: !deal.commission_verified })}

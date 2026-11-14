@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
+    "test": "node --test test/*.test.mjs",
     "lint": "eslint src/ scripts/",
     "prebuild": "eslint src/ scripts/",
     "build": "vite build",

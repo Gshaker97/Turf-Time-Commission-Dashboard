@@ -3,6 +3,10 @@ import { Upload, CheckCircle2, AlertTriangle } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchUsers, fetchDeals, insertDeal } from '../lib/db'
 import { fmt } from '../utils/commission'
+import { SURFACE, Card, Eyebrow, FieldLabel, Select, TextArea, PrimaryButton } from '../components/ui'
+
+// Row status tones: new = sage, duplicate = amber, missing name = rose.
+const DOT = { new: 'var(--pos)', dup: 'var(--warn)', invalid: 'var(--neg)' }
 
 // Target deal fields + header keywords used to auto-guess the mapping.
 const FIELDS = [
@@ -154,109 +158,135 @@ export default function ImportDeals() {
 
   const hasTable = table.headers.length > 0
   const opt = (i) => <option value={i}>{i === -1 ? '—' : table.headers[i]}</option>
+  const PREVIEW_COLS = ['', 'Deal', 'Baseline', 'Job', 'Sale date', 'Setter', 'Closer', 'Ext ID']
+  const cell = (row, key, money = false) => {
+    const v = get(row, key)
+    if (money) return v ? fmt(parseMoney(v)) : '—'
+    if (key === 'sale_date') return parseDate(v) || '—'
+    return String(v || '—')
+  }
 
   return (
-    <div style={{ background: '#1a1a1a', color: '#fff', minHeight: '100%' }}>
-      <div className="mb-4">
-        <h1 className="text-lg md:text-xl font-bold text-white flex items-center gap-2"><Upload size={18} className="text-teal" /> Import Deals</h1>
-        <p className="text-[12px] text-white/40 mt-0.5">Bring deals in from any spreadsheet or CRM — export a CSV, drop it here, map the columns, import.</p>
+    <div className="space-y-3 pb-8 max-w-[1400px] mx-auto" style={{ color: 'var(--tx)' }}>
+      <div className="mb-1">
+        <h1 className="text-lg md:text-xl font-bold text-bank-tx flex items-center gap-2"><Upload size={18} className="text-bank-mu" /> Import Deals</h1>
+        <p className="text-[13px] text-bank-mu mt-0.5">Bring deals in from any spreadsheet or CRM — export a CSV, drop it here, map the columns, import.</p>
       </div>
 
       {/* Step 1: input */}
-      <div className="rounded-xl p-4 mb-3" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-        <div className="flex items-center justify-between mb-2">
-          <p className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">1 · Paste or upload</p>
-          <label className="text-[12px] font-semibold text-teal cursor-pointer hover:underline">
+      <Card>
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <Eyebrow>1 · Paste or upload</Eyebrow>
+          <label className="text-[13px] font-semibold text-bank-gold-tx cursor-pointer hover:underline min-h-[44px] md:min-h-0 inline-flex items-center">
             Upload CSV<input type="file" accept=".csv,text/csv,text/plain" className="hidden" onChange={onFile} />
           </label>
         </div>
-        <textarea value={text} onChange={e => { setText(e.target.value); parse(e.target.value) }}
-          rows={5} placeholder="Paste rows from a spreadsheet (with a header row) or CSV…"
-          className="w-full px-3 py-2 rounded-lg text-[12px] text-white placeholder-white/20 focus:outline-none resize-y font-mono"
-          style={{ background: '#141414', border: '1px solid #2a2a2a' }} />
-      </div>
+        <TextArea value={text} onChange={e => { setText(e.target.value); parse(e.target.value) }}
+          rows={5} placeholder="Paste rows from a spreadsheet (with a header row) or CSV…" aria-label="CSV rows"
+          style={SURFACE.well} className="font-mono" />
+      </Card>
 
       {hasTable && (
         <>
           {/* Step 2: mapping */}
-          <div className="rounded-xl p-4 mb-3" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-            <p className="text-[11px] uppercase tracking-wider text-white/30 font-semibold mb-3">2 · Map columns</p>
+          <Card>
+            <Eyebrow className="mb-3">2 · Map columns</Eyebrow>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {FIELDS.map(f => (
                 <div key={f.key}>
-                  <label className="block text-[11px] text-white/50 mb-1">{f.label}{f.required && <span className="text-teal"> *</span>}</label>
-                  <select value={mapping[f.key] ?? -1} onChange={e => setMapping(m => ({ ...m, [f.key]: Number(e.target.value) }))}
-                    className="w-full px-2 py-1.5 rounded-lg text-[12px] text-white focus:outline-none"
-                    style={{ background: '#141414', border: '1px solid #2a2a2a' }}>
+                  <FieldLabel htmlFor={`map-${f.key}`}>{f.label}{f.required && <span className="text-bank-gold-tx"> *</span>}</FieldLabel>
+                  <Select id={`map-${f.key}`} value={mapping[f.key] ?? -1} onChange={e => setMapping(m => ({ ...m, [f.key]: Number(e.target.value) }))}>
                     {opt(-1)}{table.headers.map((h, i) => <option key={i} value={i}>{h}</option>)}
-                  </select>
+                  </Select>
                 </div>
               ))}
             </div>
-          </div>
+          </Card>
 
           {/* Step 3: preview */}
-          <div className="rounded-xl overflow-hidden mb-3" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-            <div className="px-4 py-2.5 border-b border-white/5 flex flex-wrap items-center gap-3 text-[12px]">
-              <span className="text-[11px] uppercase tracking-wider text-white/30 font-semibold">3 · Preview</span>
-              <span className="text-teal font-semibold">{stats.new} new</span>
-              <span className="text-amber-400">{stats.dup} duplicate</span>
-              {stats.invalid > 0 && <span className="text-red-400">{stats.invalid} missing name</span>}
-              <span className="text-white/40 ml-auto">{table.rows.length} rows</span>
+          <Card padded={false}>
+            <div className="px-4 py-2.5 border-b border-bank-line flex flex-wrap items-center gap-3 text-[13px]">
+              <Eyebrow>3 · Preview</Eyebrow>
+              <span className="font-semibold" style={{ color: DOT.new }}>{stats.new} new</span>
+              <span style={{ color: DOT.dup }}>{stats.dup} duplicate</span>
+              {stats.invalid > 0 && <span style={{ color: DOT.invalid }}>{stats.invalid} missing name</span>}
+              <span className="text-bank-mu ml-auto">{table.rows.length} rows</span>
             </div>
             {stats.unmatched.size > 0 && (
-              <div className="px-4 py-2 text-[11px] text-amber-400/90 flex items-start gap-1.5 border-b border-white/5">
+              <div className="px-4 py-2 text-[13px] flex items-start gap-1.5 border-b border-bank-line" style={{ color: 'var(--warn)' }}>
                 <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
                 <span>Unmatched rep names (will import with no rep): {[...stats.unmatched].slice(0, 8).join(', ')}{stats.unmatched.size > 8 ? '…' : ''}</span>
               </div>
             )}
-            <div className="overflow-x-auto">
-              <table className="w-full text-[12px]">
-                <thead><tr className="text-white/30 text-[10px] uppercase">
-                  {['', 'Deal', 'Baseline', 'Job', 'Sale date', 'Setter', 'Closer', 'Ext ID'].map(h => <th key={h} className="px-3 py-1.5 text-left font-semibold">{h}</th>)}
+            {/* Desktop table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-[13px]">
+                <thead><tr className="text-bank-fa text-[13px] uppercase tracking-wide">
+                  {PREVIEW_COLS.map(h => <th key={h} className="px-3 py-1.5 text-left font-semibold">{h}</th>)}
                 </tr></thead>
                 <tbody>
                   {table.rows.slice(0, 8).map((row, i) => {
                     const st = rowStatus(row)
-                    const dot = st === 'new' ? '#00b894' : st === 'dup' ? '#fdcb6e' : '#f87171'
                     return (
-                      <tr key={i} className="border-t border-white/5">
-                        <td className="px-3 py-1.5"><span className="inline-block w-2 h-2 rounded-full" style={{ background: dot }} title={st} /></td>
-                        <td className="px-3 py-1.5 text-white/80 whitespace-nowrap">{String(get(row, 'deal_name') || '—')}</td>
-                        <td className="px-3 py-1.5 text-white/60">{get(row, 'baseline_revenue') ? fmt(parseMoney(get(row, 'baseline_revenue'))) : '—'}</td>
-                        <td className="px-3 py-1.5 text-white/60">{get(row, 'job_price') ? fmt(parseMoney(get(row, 'job_price'))) : '—'}</td>
-                        <td className="px-3 py-1.5 text-white/60 whitespace-nowrap">{parseDate(get(row, 'sale_date')) || '—'}</td>
-                        <td className="px-3 py-1.5 text-white/60 whitespace-nowrap">{String(get(row, 'setter') || '—')}</td>
-                        <td className="px-3 py-1.5 text-white/60 whitespace-nowrap">{String(get(row, 'closer') || '—')}</td>
-                        <td className="px-3 py-1.5 text-white/40 whitespace-nowrap">{String(get(row, 'external_id') || '—')}</td>
+                      <tr key={i} className="border-t border-bank-line">
+                        <td className="px-3 py-1.5"><span className="inline-block w-2 h-2 rounded-full" style={{ background: DOT[st] }} title={st} /><span className="sr-only">{st}</span></td>
+                        <td className="px-3 py-1.5 text-bank-tx whitespace-nowrap">{cell(row, 'deal_name')}</td>
+                        <td className="px-3 py-1.5 text-bank-mu tabular-nums">{cell(row, 'baseline_revenue', true)}</td>
+                        <td className="px-3 py-1.5 text-bank-mu tabular-nums">{cell(row, 'job_price', true)}</td>
+                        <td className="px-3 py-1.5 text-bank-mu whitespace-nowrap">{cell(row, 'sale_date')}</td>
+                        <td className="px-3 py-1.5 text-bank-mu whitespace-nowrap">{cell(row, 'setter')}</td>
+                        <td className="px-3 py-1.5 text-bank-mu whitespace-nowrap">{cell(row, 'closer')}</td>
+                        <td className="px-3 py-1.5 text-bank-fa whitespace-nowrap">{cell(row, 'external_id')}</td>
                       </tr>
                     )
                   })}
                 </tbody>
               </table>
             </div>
-          </div>
+            {/* Phones: one stacked row per deal */}
+            <div className="md:hidden">
+              {table.rows.slice(0, 8).map((row, i) => {
+                const st = rowStatus(row)
+                return (
+                  <div key={i} className="px-4 py-3 border-t border-bank-line text-[13px]">
+                    <div className="flex items-center gap-2">
+                      <span className="inline-block w-2 h-2 rounded-full flex-shrink-0" style={{ background: DOT[st] }} />
+                      <span className="font-semibold text-bank-tx truncate">{cell(row, 'deal_name')}</span>
+                      <span className="ml-auto text-bank-fa capitalize">{st === 'dup' ? 'duplicate' : st === 'invalid' ? 'missing name' : st}</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-2 text-bank-mu">
+                      <span>Baseline <b className="text-bank-tx font-semibold tabular-nums">{cell(row, 'baseline_revenue', true)}</b></span>
+                      <span>Job <b className="text-bank-tx font-semibold tabular-nums">{cell(row, 'job_price', true)}</b></span>
+                      <span>Sale date <b className="text-bank-tx font-semibold">{cell(row, 'sale_date')}</b></span>
+                      <span>Ext ID <b className="text-bank-tx font-semibold">{cell(row, 'external_id')}</b></span>
+                      <span>Setter <b className="text-bank-tx font-semibold">{cell(row, 'setter')}</b></span>
+                      <span>Closer <b className="text-bank-tx font-semibold">{cell(row, 'closer')}</b></span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </Card>
 
           {/* Step 4: import */}
-          <div className="flex items-center gap-3">
-            <button onClick={runImport} disabled={importing || mapping.deal_name == null || mapping.deal_name < 0 || stats.new === 0}
-              className="px-4 py-2.5 rounded-xl text-[14px] font-bold text-dark bg-teal hover:bg-teal-dark disabled:opacity-50 transition-colors">
+          <div className="flex items-center gap-3 flex-wrap">
+            <PrimaryButton onClick={runImport} disabled={importing || mapping.deal_name == null || mapping.deal_name < 0 || stats.new === 0} className="text-[14px]">
               {importing ? 'Importing…' : `Import ${stats.new} deal${stats.new === 1 ? '' : 's'}`}
-            </button>
-            {(mapping.deal_name == null || mapping.deal_name < 0) && <span className="text-[12px] text-white/40">Map a “Deal name” column to continue.</span>}
-            {mapping.external_id == null || mapping.external_id < 0 ? <span className="text-[12px] text-amber-400/80">No ID column mapped — deduping by deal name.</span> : null}
+            </PrimaryButton>
+            {(mapping.deal_name == null || mapping.deal_name < 0) && <span className="text-[13px] text-bank-mu">Map a “Deal name” column to continue.</span>}
+            {mapping.external_id == null || mapping.external_id < 0 ? <span className="text-[13px]" style={{ color: 'var(--warn)' }}>No ID column mapped — deduping by deal name.</span> : null}
           </div>
 
           {result && (
-            <div className="mt-4 rounded-xl p-4" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-              <p className="text-[13px] font-semibold text-white flex items-center gap-2"><CheckCircle2 size={15} className="text-teal" /> Import complete</p>
-              <p className="text-[12px] text-white/60 mt-1">Created {result.created} · Skipped {result.skipped} · Errors {result.errors}</p>
+            <Card className="mt-1" role="status">
+              <p className="text-[13px] font-semibold text-bank-tx flex items-center gap-2"><CheckCircle2 size={15} style={{ color: 'var(--pos)' }} /> Import complete</p>
+              <p className="text-[13px] text-bank-mu mt-1">Created {result.created} · Skipped {result.skipped} · Errors {result.errors}</p>
               {result.errs.length > 0 && (
-                <div className="mt-2 text-[11px] text-red-400/90 space-y-0.5 max-h-40 overflow-y-auto">
+                <div className="mt-2 text-[13px] space-y-0.5 max-h-40 overflow-y-auto" style={{ color: 'var(--neg)' }}>
                   {result.errs.slice(0, 20).map((e, i) => <p key={i}>{e}</p>)}
                 </div>
               )}
-            </div>
+            </Card>
           )}
         </>
       )}

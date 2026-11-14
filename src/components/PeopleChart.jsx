@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import { changeDay, headIdSet, teamLabel } from '../utils/team'
 import { fmtDay } from '../utils/teamMove'
+import { SURFACE, GOLD_WASH, Input, PrimaryButton, SecondaryButton, IconButton } from '../components/ui'
 
 // ============================================================
 // The roster as an org chart (Admin → People). Per Keaton, replacing the
@@ -32,8 +33,11 @@ import { fmtDay } from '../utils/teamMove'
 
 const COLLAPSE_KEY = 'tt_people_collapsed'
 const DRAWER_KEY   = 'tt_people_deactivated_open'
-const card = { background: '#1e1e1e', border: '1px solid #2a2a2a' }
-const ROLE_COLOR = { admin: 'text-teal', vp: 'text-amber-400', director: 'text-violet-400', manager: 'text-blue-300', rep: 'text-white/40' }
+const card = SURFACE.card
+// Role tags read by their text; leadership in ivory, everyone else muted.
+const ROLE_COLOR = { admin: 'text-bank-tx', vp: 'text-bank-tx', director: 'text-bank-tx', manager: 'text-bank-mu', rep: 'text-bank-fa' }
+const WARN = 'var(--warn)', NEG = 'var(--neg)'
+const badge = (color) => ({ color, border: `1px solid ${color}66` })
 const byName = (a, b) => (a.name || '').localeCompare(b.name || '')
 const initialsOf = (name) => (name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
 
@@ -175,38 +179,38 @@ export default function PeopleChart({
     const isDragging = dragging === u.id
     const menuOpen = menuFor === u.id
     return (
-      <div className={`group relative border-t border-white/5 first:border-t-0 ${isDragging ? 'opacity-35' : ''}`}>
-        <div className={`flex items-center gap-2 px-2 py-2 ${draggable(u) ? 'cursor-grab active:cursor-grabbing' : ''}`} {...dragProps(u)}>
+      <div className={`group relative border-t border-bank-line first:border-t-0 ${isDragging ? 'opacity-35' : ''}`}>
+        <div className={`flex items-center gap-2 px-2 py-2 min-h-[44px] ${draggable(u) ? 'cursor-grab active:cursor-grabbing' : ''}`} {...dragProps(u)}>
           {draggable(u)
-            ? <GripVertical size={12} className="text-white/15 flex-shrink-0 hidden md:block" />
+            ? <GripVertical size={12} className="text-bank-fa flex-shrink-0 hidden md:block" />
             : <span className="w-3 flex-shrink-0 hidden md:block" />}
-          <div className={`rounded-full flex items-center justify-center text-[10.5px] font-bold flex-shrink-0 ${isHead ? 'w-[34px] h-[34px]' : 'w-[30px] h-[30px]'}`}
-            style={{ background: '#1a1a1a', border: `1px solid ${isHead ? 'rgba(0,184,148,0.45)' : '#333'}`, color: '#00b894' }}>
+          <div className={`rounded-full flex items-center justify-center text-[12px] font-bold flex-shrink-0 ${isHead ? 'w-[34px] h-[34px] text-bank-gold-tx' : 'w-[30px] h-[30px] text-bank-mu'}`}
+            style={isHead ? GOLD_WASH : SURFACE.well}>
             {initialsOf(u.name)}
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5 flex-wrap">
               {/* Names WRAP rather than truncate — a roster where you can't read
                   who's who is useless. Only the email/since subline clips. */}
-              <span className={`text-[12.5px] leading-tight break-words ${isHead ? 'font-bold text-white' : 'font-semibold text-white/85'}`}>{u.name}</span>
-              {(!inTeam || u.role !== 'rep') && <span className={`text-[8.5px] font-bold uppercase tracking-wide ${ROLE_COLOR[u.role] || 'text-white/40'}`}>{u.role}</span>}
+              <span className={`text-[13px] leading-tight break-words ${isHead ? 'font-bold text-bank-tx' : 'font-semibold text-bank-tx'}`}>{u.name}</span>
+              {(!inTeam || u.role !== 'rep') && <span className={`text-[12px] font-bold uppercase tracking-wide ${ROLE_COLOR[u.role] || 'text-bank-mu'}`}>{u.role}</span>}
               {u.is_admin && u.role !== 'admin' && (
-                <span className="inline-flex items-center gap-0.5 text-[8.5px] font-bold uppercase tracking-wide px-1 rounded" style={{ color: '#00b894', border: '1px solid #00b89455' }}>
-                  <ShieldCheck size={8} /> admin
+                <span className="inline-flex items-center gap-0.5 text-[12px] font-bold uppercase tracking-wide px-1 rounded text-bank-tx" style={badge('var(--tx)')}>
+                  <ShieldCheck size={9} /> admin
                 </span>
               )}
-              {u.ghost && <span className="text-[8.5px] font-bold uppercase tracking-wide px-1 rounded" style={{ color: '#a78bfa', border: '1px solid #a78bfa55' }}>ghost</span>}
-              {!u.auth_id && <span className="text-[8.5px] font-bold uppercase tracking-wide px-1 rounded" style={{ color: '#f59e0b', border: '1px solid #f59e0b55' }}>no login</span>}
+              {u.ghost && <span className="text-[12px] font-bold uppercase tracking-wide px-1 rounded text-bank-mu" style={badge('var(--mu)')}>ghost</span>}
+              {!u.auth_id && <span className="text-[12px] font-bold uppercase tracking-wide px-1 rounded" style={badge(WARN)}>no login</span>}
             </div>
-            <p className="text-[10px] text-white/30 truncate mt-0.5">
+            <p className="text-[13px] text-bank-fa truncate mt-0.5">
               {isHead ? u.email : (since ? `since ${fmtDay(since)}` : u.email)}
             </p>
             {/* Where they're GOING, when a move is already scheduled. */}
             {soon && (
-              <p className="text-[10px] mt-0.5 truncate flex items-center gap-1" style={{ color: '#93c5fd' }}>
-                <CalendarClock size={9} className="flex-shrink-0" />
+              <p className="text-[13px] mt-0.5 truncate flex items-center gap-1 text-bank-mu">
+                <CalendarClock size={10} className="flex-shrink-0" />
                 → {soon.new_manager_id ? teamLabel(users.find(x => x.id === soon.new_manager_id)) : 'Unassigned'}
-                <span style={{ color: 'rgba(147,197,253,0.6)' }}>on {fmtDay(soon.effective_date)}</span>
+                <span className="text-bank-fa">on {fmtDay(soon.effective_date)}</span>
               </p>
             )}
           </div>
@@ -214,22 +218,23 @@ export default function PeopleChart({
               they reserve no width at rest — three always-present icons were
               what crammed the names. A soft fade masks whatever sits under
               them. Phone: a ⋯ that opens a row below. */}
-          <div className="hidden md:group-hover:flex absolute right-1 top-1/2 -translate-y-1/2 items-center gap-0.5 rounded-lg pl-1 pr-0.5"
-            style={{ background: '#1e1e1e', boxShadow: '-16px 0 14px -6px #1e1e1e' }}>
+          <div className="hidden md:group-hover:flex md:focus-within:flex absolute right-1 top-1/2 -translate-y-1/2 items-center gap-0.5 rounded-lg pl-1 pr-0.5"
+            style={{ background: 'var(--card)', boxShadow: '-16px 0 14px -6px var(--card)' }}>
             <Actions u={u} />
           </div>
-          <button onClick={() => setMenuFor(menuOpen ? null : u.id)} aria-expanded={menuOpen}
-            className="md:hidden p-1.5 rounded-lg text-white/40 hover:text-white flex-shrink-0">
+          <IconButton onClick={() => setMenuFor(menuOpen ? null : u.id)} aria-expanded={menuOpen} aria-label={`Actions for ${u.name}`}
+            className="md:hidden flex-shrink-0">
             <MoreHorizontal size={15} />
-          </button>
+          </IconButton>
         </div>
         {menuOpen && (
           <div className="md:hidden flex items-center gap-1.5 px-3 pb-2.5 flex-wrap">
             <Actions u={u} />
             {draggable(u) && (
               <select value="" onChange={e => { const v = e.target.value; setMenuFor(null); if (v) onMove?.(u, v === 'unassigned' ? null : v) }}
-                className="h-7 px-2 rounded-lg text-[11px] text-white/80 focus:outline-none appearance-none"
-                style={{ background: '#242424', border: '1px solid #333' }}>
+                aria-label="Move to"
+                className="h-11 px-2 rounded-lg text-[13px] text-bank-tx focus:outline-none appearance-none"
+                style={SURFACE.raise}>
                 <option value="">Move to…</option>
                 {moveTargets.filter(t => t.value !== colKeyOf(u)).map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                 {colKeyOf(u) !== 'unassigned' && <option value="unassigned">Unassigned</option>}
@@ -242,22 +247,21 @@ export default function PeopleChart({
   }
 
   function Actions({ u }) {
-    const act = 'p-1.5 rounded-lg text-white/40 hover:text-white transition-colors disabled:opacity-40'
     return (
       <>
         {u.auth_id
-          ? (hasUserAdmin && <button onClick={() => onResetLogin?.(u)} disabled={busyUser === u.id} title="Reset their password" className={`${act} hover:text-amber-400 hover:bg-amber-500/10`}><KeyRound size={13} /></button>)
-          : (hasUserAdmin && <button onClick={() => onCreateLogin?.(u)} disabled={busyUser === u.id} title="No login yet — create one" className={`${act} hover:text-teal hover:bg-teal/10`}><UserPlus size={13} /></button>)}
-        <button onClick={() => onEdit?.(u)} title="Edit" className={`${act} hover:text-teal hover:bg-teal/10`}><Pencil size={13} /></button>
+          ? (hasUserAdmin && <IconButton onClick={() => onResetLogin?.(u)} disabled={busyUser === u.id} title="Reset their password" aria-label="Reset their password" className="hover:!text-bank-warn"><KeyRound size={13} /></IconButton>)
+          : (hasUserAdmin && <IconButton onClick={() => onCreateLogin?.(u)} disabled={busyUser === u.id} title="No login yet — create one" aria-label="Create their login"><UserPlus size={13} /></IconButton>)}
+        <IconButton onClick={() => onEdit?.(u)} title="Edit" aria-label={`Edit ${u.name}`}><Pencil size={13} /></IconButton>
         {/* Deactivate is the normal way someone LEAVES — it cuts their login
             while every deal, appointment and payout they touched stays put.
             It sat only in the old Users list, so when this chart replaced that
             list the action vanished and Delete was the only exit on the row.
             Delete stays, but Deactivate comes first because it is what you
             almost always want. */}
-        <button onClick={() => onToggleActive?.(u)} title="Deactivate — cuts their login, keeps all their deals and stats"
-          className={`${act} hover:text-amber-400 hover:bg-amber-500/10`}><UserMinus size={13} /></button>
-        <button onClick={() => onDelete?.(u.id)} title="Delete from the roster — only for a row created by mistake" className={`${act} hover:text-red-400 hover:bg-red-500/10`}><Trash2 size={13} /></button>
+        <IconButton onClick={() => onToggleActive?.(u)} title="Deactivate — cuts their login, keeps all their deals and stats" aria-label={`Deactivate ${u.name}`}
+          className="hover:!text-bank-warn"><UserMinus size={13} /></IconButton>
+        <IconButton onClick={() => onDelete?.(u.id)} title="Delete from the roster — only for a row created by mistake" aria-label={`Delete ${u.name}`} className="hover:!text-bank-neg"><Trash2 size={13} /></IconButton>
       </>
     )
   }
@@ -271,15 +275,15 @@ export default function PeopleChart({
     const closed = isCollapsed(colKey)
     const amber = tone === 'amber'
     return (
-      <div className="rounded-xl overflow-hidden transition-shadow" {...dropProps(colKey)}
+      <div className="rounded-2xl overflow-hidden transition-shadow" {...dropProps(colKey)}
         style={{ ...card, borderStyle: amber ? 'dashed' : 'solid',
-                 borderColor: isOver ? 'rgba(0,184,148,0.7)' : amber ? 'rgba(245,158,11,0.4)' : '#2a2a2a',
-                 boxShadow: isOver ? 'inset 0 0 0 3px rgba(0,184,148,0.15)' : 'none' }}>
-        <div className="flex items-center gap-2 px-2.5 py-2" style={{ borderBottom: closed ? 'none' : '1px solid #2a2a2a' }}>
-          <button onClick={() => toggleCol(colKey)} aria-expanded={!closed} title={closed ? 'Expand' : 'Collapse'}
-            className="p-1 -ml-1 rounded text-white/30 hover:text-white flex-shrink-0">
+                 borderColor: isOver ? 'var(--gold)' : amber ? 'rgba(210,160,116,0.5)' : 'var(--line)',
+                 boxShadow: isOver ? 'inset 0 0 0 3px rgba(191,164,108,0.18)' : 'var(--card-shadow)' }}>
+        <div className="flex items-center gap-2 px-2.5 py-2" style={{ borderBottom: closed ? 'none' : '1px solid var(--line)' }}>
+          <IconButton onClick={() => toggleCol(colKey)} aria-expanded={!closed} title={closed ? 'Expand' : 'Collapse'} aria-label={closed ? 'Expand' : 'Collapse'}
+            className="-ml-1 flex-shrink-0 md:!p-1">
             <ChevronDown size={13} className={`transition-transform ${closed ? '-rotate-90' : ''}`} />
-          </button>
+          </IconButton>
           {head ? (
             // The column is titled by the lead's FULL NAME (per Keaton — an
             // initials bubble squeezed between a chevron and a count badge
@@ -291,41 +295,40 @@ export default function PeopleChart({
                   with the same hover actions as every rep — per Keaton, so
                   editing them isn't a hunt for a tiny control. */}
               {renaming === head.id ? (
-                <input autoFocus value={draft} onChange={e => setDraft(e.target.value)}
-                  placeholder={`${head.name}'s Team`}
+                <Input autoFocus value={draft} onChange={e => setDraft(e.target.value)}
+                  placeholder={`${head.name}'s Team`} aria-label="Team name"
                   onKeyDown={e => { if (e.key === 'Enter') commitRename(head); if (e.key === 'Escape') setRenaming(null) }}
                   onBlur={() => commitRename(head)}
-                  className="w-full h-7 px-2 rounded-lg text-[13px] font-bold text-white placeholder-white/25 focus:outline-none"
-                  style={{ background: '#242424', border: '1px solid rgba(0,184,148,0.5)' }} />
+                  className="font-bold" style={{ ...SURFACE.raise, borderColor: 'rgba(191,164,108,0.5)' }} />
               ) : (
                 <button type="button" onClick={() => startRename(head)}
                   title={head.team_name ? 'Rename team' : 'Name this team'}
-                  className="text-left flex items-start gap-1.5 max-w-full">
-                  <span className={`text-[13.5px] font-bold leading-tight break-words ${head.team_name ? 'text-white' : 'text-white/80'}`}>{teamLabel(head)}</span>
-                  <Pencil size={12} className="mt-0.5 text-white/25 group-hover:text-teal flex-shrink-0 transition-colors" />
+                  className="text-left flex items-start gap-1.5 max-w-full min-h-[44px] md:min-h-0">
+                  <span className={`text-[13.5px] font-bold leading-tight break-words ${head.team_name ? 'text-bank-tx' : 'text-bank-mu'}`}>{teamLabel(head)}</span>
+                  <Pencil size={12} className="mt-0.5 text-bank-fa group-hover:text-bank-gold-tx flex-shrink-0 transition-colors" />
                 </button>
               )}
             </div>
           ) : (
             <div className="min-w-0 flex-1 flex items-center gap-2 py-1">
               <div className="w-[34px] h-[34px] rounded-full flex items-center justify-center text-[12px] font-bold flex-shrink-0"
-                style={{ background: '#1a1a1a', border: '1px solid rgba(245,158,11,0.45)', color: '#f59e0b' }}>?</div>
-              <div className="min-w-0"><p className="text-[13px] font-bold truncate" style={{ color: '#f59e0b' }}>{title}</p><p className="text-[10px] text-white/30 truncate">{meta}</p></div>
+                style={{ background: 'var(--bg)', border: '1px solid rgba(210,160,116,0.45)', color: WARN }}>?</div>
+              <div className="min-w-0"><p className="text-[13px] font-bold truncate" style={{ color: WARN }}>{title}</p><p className="text-[13px] text-bank-fa truncate">{meta}</p></div>
             </div>
           )}
-          <span className="text-[11px] font-bold text-white/60 px-2 py-0.5 rounded-full flex-shrink-0" style={{ background: '#242424', border: '1px solid #2a2a2a' }}>{people.length}</span>
+          <span className="text-[13px] font-bold text-bank-mu px-2 py-0.5 rounded-full flex-shrink-0 tabular-nums" style={SURFACE.raise}>{people.length}</span>
         </div>
         {!closed && (
           <div>
             {head && match(head) && <Person u={head} inTeam={false} />}
             {isOver && (
-              <div className="m-2 h-10 rounded-lg flex items-center justify-center text-[11px] font-semibold"
-                style={{ border: '1.5px dashed rgba(0,184,148,0.6)', color: '#00b894', background: 'rgba(0,184,148,0.06)' }}>
+              <div className="m-2 h-10 rounded-lg flex items-center justify-center text-[13px] font-semibold text-bank-gold-tx"
+                style={{ ...GOLD_WASH, borderStyle: 'dashed' }}>
                 Drop to move to {head ? head.name : 'Unassigned'}
               </div>
             )}
             {shown.length === 0 && !isOver
-              ? <p className="px-3 py-3 text-[11px] text-white/25 text-center">{amber ? 'Everyone has a team.' : 'No reps yet — drag someone here.'}</p>
+              ? <p className="px-3 py-3 text-[13px] text-bank-mu text-center">{amber ? 'Everyone has a team.' : 'No reps yet — drag someone here.'}</p>
               : shown.map(u => <Person key={u.id} u={u} />)}
           </div>
         )}
@@ -333,7 +336,7 @@ export default function PeopleChart({
     )
   }
 
-  const label = 'text-[9.5px] font-semibold text-white/30 uppercase tracking-widest flex items-center gap-2 after:content-[""] after:flex-1 after:h-px after:bg-[#2a2a2a]'
+  const label = 'text-[13px] font-semibold text-bank-fa uppercase tracking-wide flex items-center gap-2 after:content-[""] after:flex-1 after:h-px after:bg-bank-line'
   const leadersShown = leadership.filter(match)
 
   return (
@@ -341,38 +344,33 @@ export default function PeopleChart({
       {/* Toolbar */}
       <div className="flex items-center gap-2 flex-wrap">
         <div className="relative flex-1 min-w-[200px] max-w-sm">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/25" />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name or email…"
-            className="w-full pl-9 pr-3 py-2 rounded-xl text-[13px] text-white placeholder-white/25 focus:outline-none focus:border-teal/40 transition-colors"
-            style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }} />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-bank-fa pointer-events-none" />
+          <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name or email…" aria-label="Search people" className="pl-9" />
         </div>
-        <p className="text-[12px] text-white/40">{active.length} people · {teams.length} team{teams.length === 1 ? '' : 's'}</p>
+        <p className="text-[13px] text-bank-mu">{active.length} people · {teams.length} team{teams.length === 1 ? '' : 's'}</p>
         {inactive.length > 0 && (
-          <button onClick={toggleDrawer} className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-red-300 transition-colors"
-            style={{ border: '1px solid #f8717166', background: '#f871711a' }}>
+          <SecondaryButton onClick={toggleDrawer} style={{ color: NEG, borderColor: 'rgba(217,140,128,0.45)' }}>
             Deactivated · {inactive.length}
-          </button>
+          </SecondaryButton>
         )}
         {/* "Move people" is the deliberate path for a reorg: several people at
             once, with an EFFECTIVE DATE and a preview of what changes hands.
             Dragging a card stays for the one-off fix and still means "today". */}
-        <button onClick={() => onMovePeople?.()}
-          className="ml-auto flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-bold text-teal transition-colors hover:bg-teal/10"
-          style={{ border: '1px solid rgba(0,184,148,0.45)' }}>
+        <SecondaryButton onClick={() => onMovePeople?.()} className="ml-auto">
           <ArrowRightLeft size={13} /> Move people
-        </button>
-        <button onClick={onAdd} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-bold text-dark bg-teal transition-colors">
+        </SecondaryButton>
+        <PrimaryButton onClick={onAdd} className="px-3 py-2 min-h-[44px] md:min-h-0">
           <Plus size={13} /> Add person
-        </button>
+        </PrimaryButton>
       </div>
 
       {/* Leadership */}
       {leadersShown.length > 0 && (
         <>
           <p className={label}>Leadership</p>
-          <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', maxWidth: 820 }}>
+          <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', maxWidth: 820 }}>
             {leadersShown.map(u => (
-              <div key={u.id} className="rounded-xl px-1" style={card}><Person u={u} inTeam={false} /></div>
+              <div key={u.id} className="rounded-2xl px-1" style={card}><Person u={u} inTeam={false} /></div>
             ))}
           </div>
         </>
@@ -386,44 +384,42 @@ export default function PeopleChart({
         ))}
         <Column colKey="unassigned" title="Unassigned" meta="no team lead — drag them to a team" people={unassigned} tone="amber" />
       </div>
-      <p className="text-[10px] text-white/25">
-        Drag a rep onto another team for a quick one-off move — effective <strong className="text-white/40">today</strong>, so their
-        past sales stay where they were. For a reorg use <strong className="text-white/40">Move people</strong>: several at
+      <p className="text-[13px] text-bank-fa">
+        Drag a rep onto another team for a quick one-off move — effective <strong className="text-bank-mu">today</strong>, so their
+        past sales stay where they were. For a reorg use <strong className="text-bank-mu">Move people</strong>: several at
         once, any effective date (including a future one), and it shows you how many deals change hands first.
       </p>
 
       {/* Deactivated drawer */}
       {inactive.length > 0 && (
-        <div className="rounded-xl overflow-hidden" style={{ ...card, borderColor: 'rgba(248,113,113,0.35)' }}>
+        <div className="rounded-2xl overflow-hidden" style={{ ...card, borderColor: 'rgba(217,140,128,0.4)' }}>
           <button onClick={toggleDrawer} aria-expanded={drawerOpen}
-            className="w-full flex items-center gap-2 px-3.5 py-2.5 text-left hover:bg-white/[0.02] transition-colors"
-            style={{ borderBottom: drawerOpen ? '1px solid #2a2a2a' : 'none' }}>
-            <ChevronDown size={13} className={`text-white/30 transition-transform ${drawerOpen ? '' : '-rotate-90'}`} />
-            <span className="text-[12.5px] font-bold" style={{ color: '#fca5a5' }}>Deactivated · {inactive.length}</span>
-            <span className="ml-auto text-[10.5px] text-white/30 hidden sm:inline">Their deals and stats still count everywhere. Reactivate restores login + site access.</span>
+            className="w-full flex items-center gap-2 px-3.5 py-2.5 min-h-[44px] text-left hover:bg-bank-raise transition-colors"
+            style={{ borderBottom: drawerOpen ? '1px solid var(--line)' : 'none' }}>
+            <ChevronDown size={13} className={`text-bank-fa transition-transform ${drawerOpen ? '' : '-rotate-90'}`} />
+            <span className="text-[13px] font-bold" style={{ color: NEG }}>Deactivated · {inactive.length}</span>
+            <span className="ml-auto text-[13px] text-bank-fa hidden sm:inline">Their deals and stats still count everywhere. Reactivate restores login + site access.</span>
           </button>
           {drawerOpen && inactive.filter(match).map(u => (
-            <div key={u.id} className="flex items-center gap-2.5 px-3 py-2 border-t border-white/5">
-              <div className="w-[30px] h-[30px] rounded-full flex items-center justify-center text-[10.5px] font-bold flex-shrink-0"
-                style={{ background: '#1a1a1a', border: '1px solid #333', color: 'rgba(255,255,255,0.35)' }}>{initialsOf(u.name)}</div>
+            <div key={u.id} className="flex items-center gap-2.5 px-3 py-2 min-h-[44px] border-t border-bank-line flex-wrap">
+              <div className="w-[30px] h-[30px] rounded-full flex items-center justify-center text-[12px] font-bold flex-shrink-0 text-bank-fa"
+                style={SURFACE.well}>{initialsOf(u.name)}</div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-[12.5px] font-semibold text-white/60 leading-tight break-words">{u.name}</span>
-                  <span className={`text-[8.5px] font-bold uppercase tracking-wide ${ROLE_COLOR[u.role] || 'text-white/40'}`}>{u.role}</span>
-                  <span className="text-[8.5px] font-bold uppercase tracking-wide px-1 rounded" style={{ color: '#f87171', border: '1px solid #f8717155' }}>deactivated</span>
+                  <span className="text-[13px] font-semibold text-bank-mu leading-tight break-words">{u.name}</span>
+                  <span className={`text-[12px] font-bold uppercase tracking-wide ${ROLE_COLOR[u.role] || 'text-bank-mu'}`}>{u.role}</span>
+                  <span className="text-[12px] font-bold uppercase tracking-wide px-1 rounded" style={badge(NEG)}>deactivated</span>
                 </div>
-                <p className="text-[10px] text-white/30 truncate mt-0.5">
+                <p className="text-[13px] text-bank-fa truncate mt-0.5">
                   {u.manager_id && nameOf(u.manager_id) ? `was on ${teamLabel(users.find(x => x.id === u.manager_id))}` : 'no team'} · {u.email}
                 </p>
               </div>
-              <button onClick={() => onToggleActive?.(u)} title="Restore site access — their deals and stats never left"
-                className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10.5px] font-bold text-teal transition-colors hover:bg-teal/10 flex-shrink-0"
-                style={{ border: '1px solid #00b89466' }}>
+              <SecondaryButton onClick={() => onToggleActive?.(u)} title="Restore site access — their deals and stats never left" className="flex-shrink-0">
                 <UserCheck size={11} /> Reactivate
-              </button>
-              <div className="hidden md:flex items-center gap-0.5 flex-shrink-0">
-                <button onClick={() => onEdit?.(u)} title="Edit" className="p-1.5 rounded-lg text-white/30 hover:text-teal hover:bg-teal/10"><Pencil size={13} /></button>
-                <button onClick={() => onDelete?.(u.id)} title="Delete" className="p-1.5 rounded-lg text-white/30 hover:text-red-400 hover:bg-red-500/10"><Trash2 size={13} /></button>
+              </SecondaryButton>
+              <div className="flex items-center gap-0.5 flex-shrink-0">
+                <IconButton onClick={() => onEdit?.(u)} title="Edit" aria-label={`Edit ${u.name}`}><Pencil size={13} /></IconButton>
+                <IconButton onClick={() => onDelete?.(u.id)} title="Delete" aria-label={`Delete ${u.name}`} className="hover:!text-bank-neg"><Trash2 size={13} /></IconButton>
               </div>
             </div>
           ))}

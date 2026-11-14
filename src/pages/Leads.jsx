@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { format } from 'date-fns'
-import { CalendarCheck, Search, Link2, Upload, X } from 'lucide-react'
+import { CalendarCheck, Search, Link2, Upload, X, ChevronDown } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchLeads, fetchUsers, updateLead, upsertLeads, fetchLeadHistory, fetchDeals, fetchTeamChanges } from '../lib/db'
 import { headIdSet, buildChangesByProfile, teamOfSale, teamLabel } from '../utils/team'
@@ -15,17 +15,19 @@ import { confirmDialog } from '../lib/dialog'
 import { useSettings } from '../contexts/SettingsContext'
 import { leadFeedHealth } from '../utils/feedHealth'
 import { apptDay } from '../utils/estimates'
+import { SURFACE, GOLD_WASH, Card, KpiFigure, Pill, PillGroup, Input, Select, PrimaryButton, SecondaryButton, IconButton, LoadingBlock, EmptyBlock } from '../components/ui'
 
 // The lifecycle the site reasons about (migration 041). RUN = the appointment
 // actually happened, which is what counts as an estimate.
+// Status tones on the palette; the label is always printed next to the colour.
 const STATUSES = [
-  { key: 'scheduled', label: 'Scheduled', color: '#74b9ff' },
-  { key: 'completed', label: 'Ran',       color: '#00b894' },
-  { key: 'sold',      label: 'Sold',      color: '#4ade80' },
-  { key: 'no_show',   label: 'No Show',   color: '#fb923c' },
-  { key: 'canceled',  label: 'Canceled',  color: '#6b7280' },
+  { key: 'scheduled', label: 'Scheduled', color: '#a19e97' },
+  { key: 'completed', label: 'Ran',       color: '#ede7da' },
+  { key: 'sold',      label: 'Sold',      color: '#a9c4b2' },
+  { key: 'no_show',   label: 'No Show',   color: '#d2a074' },
+  { key: 'canceled',  label: 'Canceled',  color: '#8c8a84' },
 ]
-const stat = (k) => STATUSES.find(s => s.key === k) ?? { label: k || '—', color: '#6b7280' }
+const stat = (k) => STATUSES.find(s => s.key === k) ?? { label: k || '—', color: '#8c8a84' }
 
 // Appointments look FORWARD, so the usual sales presets (which all stop at
 // today) hide the rest of the week. These span whole periods instead.
@@ -72,12 +74,130 @@ function dayMeta(key, now = new Date()) {
   }
 }
 
-function Kpi({ label, value, sub, color = '#00b894' }) {
+const WARN = 'var(--warn)'
+const chipStyle = (color) => ({ color, border: `1px solid ${color}66` })
+
+// One appointment. Desktop (lg+) is the single flex row the page always had;
+// phones get a compact row (time · customer · status) that opens to the
+// address, flags, people and — for admins — the same inline controls.
+function LeadRow({ l, s, gaps, isDupe, isAdmin, pickUsers, nonReps, openHistory, setPerson, setStatus, toggleIgnore }) {
+  const [open, setOpen] = useState(false)
+  const flags = (
+    <>
+      {l.pinned && (
+        <p className="text-[13px] truncate mt-0.5" style={{ color: WARN }}>Edited here — the CRM feed won't change its status or people</p>
+      )}
+      {gaps.length > 0 && (
+        <p className="text-[13px] truncate mt-0.5" style={{ color: WARN }} title={`Missing info: ${gaps.join('; ')}`}>Missing info — {gaps.join(' · ')}</p>
+      )}
+      {isDupe && (
+        <p className="text-[13px] truncate mt-0.5" style={{ color: WARN }}
+          title="Another appointment has the same customer at the same time. The CRM makes a new record when one is reassigned, so one of these is probably a leftover — ignore whichever is wrong.">
+          Possible duplicate — same customer and time as another appointment
+        </p>
+      )}
+      {l.ignored && <p className="text-[13px] text-bank-mu truncate mt-0.5">Ignored — counts nowhere</p>}
+    </>
+  )
+  const nameBtn = (
+    <button onClick={() => openHistory(l)} title="Show this appointment's edit history"
+      className="block max-w-full text-[13px] font-semibold text-bank-tx truncate text-left hover:text-bank-gold-tx transition-colors min-h-[44px] lg:min-h-0">
+      {l.customer_name || 'Unnamed'}
+      {l.deal_id && <Link2 size={11} className="inline ml-1.5 text-bank-mu" title="Linked to a deal" />}
+    </button>
+  )
+  const people = isAdmin ? (
+    <div className="flex flex-col gap-1 min-w-[168px]">
+      {[['setter_id', 'SET', l.setter_id, l.setter_name], ['closer_id', 'RUN', l.closer_id, l.closer_name]].map(([field, tag, val, named]) => (
+        <span key={field} className="flex flex-col gap-0.5">
+          <span className="flex items-center gap-1.5">
+            <span className="text-[12px] text-bank-fa w-7">{tag}</span>
+            <select value={val || ''} onChange={e => setPerson(l, field, e.target.value)}
+              style={SURFACE.raise} aria-label={tag === 'SET' ? 'Who booked it' : 'Who runs it'}
+              className="h-11 lg:h-7 px-1.5 rounded-lg text-[13px] text-bank-tx focus:outline-none max-w-[160px]"
+              title={tag === 'SET' ? 'Who booked it' : 'Who runs it (reassign here)'}>
+              <option value="">— none —</option>
+              {pickUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+          </span>
+          {/* The feed sent a name but it matched no profile, so the select
+              reads "none" and every total ignores this person. Showing the
+              name turns a mystery into a one-click fix. */}
+          {!val && String(named || '').trim() && (
+            isNonRep(named, nonReps) ? (
+              <span className="text-[12px] text-bank-fa pl-[34px] truncate max-w-[160px]"
+                title={`"${named}" is on the Not Field Reps list, so this appointment credits nobody's Set. Whoever ran it still gets their Leads ran.`}>
+                feed: {named}
+              </span>
+            ) : (
+              <span className="text-[12px] pl-[34px] truncate max-w-[160px]" style={{ color: WARN }}
+                title={`The feed sent "${named}" but no roster profile matched. Pick the right person above.`}>
+                feed: {named}
+              </span>
+            )
+          )}
+        </span>
+      ))}
+    </div>
+  ) : (
+    <div className="text-[13px] text-bank-mu whitespace-nowrap min-w-[150px]">
+      <span className="text-bank-fa">SET</span> {l.setter?.name || l.setter_name || '—'}
+      {(l.closer?.name || l.closer_name) && (l.closer_id !== l.setter_id) && (
+        <><br /><span className="text-bank-fa">RUN</span> {l.closer?.name || l.closer_name}</>
+      )}
+    </div>
+  )
+  const statusCtl = isAdmin ? (
+    <span className="flex items-center gap-1.5">
+      <select value={l.status} onChange={e => setStatus(l, e.target.value)} aria-label="Status"
+        style={{ background: 'var(--raise)', border: `1px solid ${s.color}66`, color: s.color }}
+        className="h-11 lg:h-8 px-2.5 rounded-full text-[13px] font-semibold focus:outline-none">
+        {STATUSES.map(x => <option key={x.key} value={x.key} style={{ color: 'var(--tx)' }}>{x.label}</option>)}
+      </select>
+      <button onClick={() => toggleIgnore(l)}
+        className={`h-11 lg:h-8 px-2.5 rounded-full text-[13px] font-semibold whitespace-nowrap transition-colors ${l.ignored ? 'text-bank-gold-tx' : 'text-bank-mu hover:text-bank-tx'}`}
+        style={l.ignored ? GOLD_WASH : { border: '1px solid var(--line)' }}
+        title={l.ignored ? 'Count this appointment again' : 'Take this appointment out of every count — use it on the leftover half of a duplicate'}>
+        {l.ignored ? 'Restore' : 'Ignore'}
+      </button>
+    </span>
+  ) : (
+    <span className="text-[13px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap" style={chipStyle(s.color)}>{s.label}</span>
+  )
   return (
-    <div className="rounded-xl p-3 md:p-4 min-w-0 flex-1" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-      <p className="text-[9px] md:text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1.5">{label}</p>
-      <p className="text-[17px] md:text-[21px] font-bold leading-none" style={{ color }}>{value}</p>
-      {sub && <p className="text-[10px] text-white/30 mt-1">{sub}</p>}
+    <div className={`border-b border-bank-line last:border-0 ${l.ignored ? 'opacity-50' : ''}`}>
+      {/* Desktop row */}
+      <div className="hidden lg:flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5">
+        <div className="text-[13px] font-semibold text-bank-mu tabular-nums w-[64px] flex-shrink-0">{tm(l.appointment_at)}</div>
+        <div className="min-w-0 flex-1">
+          {nameBtn}
+          <p className="text-[13px] text-bank-mu truncate">{l.address || 'No address'}{l.office ? ` · ${l.office}` : ''}</p>
+          {flags}
+        </div>
+        {people}
+        {statusCtl}
+      </div>
+      {/* Phone row */}
+      <div className="lg:hidden">
+        <button onClick={() => setOpen(o => !o)} aria-expanded={open}
+          className="w-full flex items-center gap-3 px-4 py-3 min-h-[44px] text-left hover:bg-bank-raise transition-colors">
+          <span className="text-[13px] font-semibold text-bank-mu tabular-nums w-[64px] flex-shrink-0">{tm(l.appointment_at)}</span>
+          <span className="min-w-0 flex-1 text-[13px] font-semibold text-bank-tx truncate">{l.customer_name || 'Unnamed'}</span>
+          <span className="text-[13px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap" style={chipStyle(s.color)}>{s.label}</span>
+          <ChevronDown size={16} className={`text-bank-fa flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+        </button>
+        {open && (
+          <div className="px-4 pb-3 space-y-3" style={{ background: 'var(--bg)' }}>
+            <div className="pt-3">
+              {nameBtn}
+              <p className="text-[13px] text-bank-mu">{l.address || 'No address'}{l.office ? ` · ${l.office}` : ''}</p>
+              {flags}
+            </div>
+            <div><p className="text-[13px] text-bank-fa mb-1">People</p>{people}</div>
+            <div><p className="text-[13px] text-bank-fa mb-1">Status</p>{statusCtl}</div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -365,58 +485,56 @@ export default function Leads() {
     })
   }, [view, scoped, deals, users, dateFrom, dateTo, teamFilter, teamOf, role, isAdmin, profile?.id])
 
-  const selCls = 'h-8 px-2 rounded-lg text-[12px] text-white focus:outline-none'
-  const selStyle = { background: '#242424', border: '1px solid #333' }
+  if (loading) return <LoadingBlock text="Loading appointments…" />
 
-  if (loading) return <div className="p-8 text-white/40 text-sm">Loading…</div>
+  const modalShell = 'relative w-full md:max-w-2xl h-[100dvh] md:h-auto md:max-h-[88dvh] rounded-none md:rounded-2xl overflow-y-auto flex flex-col'
+  const modalStyle = { ...SURFACE.card, boxShadow: 'var(--card-shadow), 0 24px 60px rgba(0,0,0,0.55)', color: 'var(--tx)' }
+  const modalHead = { background: 'var(--card)', borderBottom: '1px solid var(--line)' }
+  const selW = 'w-auto'
 
   return (
-    <div className="space-y-4 pb-8">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h1 className="text-lg md:text-xl font-bold text-white flex items-center gap-2">
-            <CalendarCheck size={18} className="text-teal" /> Leads
+    <div className="space-y-4 pb-8 max-w-[1400px] mx-auto" style={{ color: 'var(--tx)' }}>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <h1 className="text-lg md:text-xl font-bold text-bank-tx flex items-center gap-2">
+            <CalendarCheck size={18} className="text-bank-mu" /> Leads
           </h1>
-          <p className="text-[12px] text-white/40 mt-0.5">
+          <p className="text-[13px] text-bank-mu mt-0.5">
             Appointments fed in from the field CRM, in calendar order. An appointment that RAN counts as an estimate —
-            marking one <span className="text-white/55">Sold</span> records the outcome only; deal counts and revenue
+            marking one <span className="text-bank-tx">Sold</span> records the outcome only; deal counts and revenue
             always come from the Deals page.
           </p>
         </div>
         {isAdmin && (
-          <button onClick={() => setImportOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold text-white/70 hover:text-white transition-colors flex-shrink-0"
-            style={{ background: '#1e1e1e', border: '1px solid #2e2e2e' }}
-            title="Backfill appointments from a CRM export">
+          <SecondaryButton onClick={() => setImportOpen(true)} title="Backfill appointments from a CRM export" className="flex-shrink-0">
             <Upload size={14} /> Import CSV
-          </button>
+          </SecondaryButton>
         )}
       </div>
 
       {/* Edit history for one appointment */}
       {histLead && (
         <div className="fixed inset-0 z-[60] flex items-end md:items-center md:justify-center md:p-4">
-          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setHistLead(null)} />
-          <div className="relative w-full md:max-w-lg rounded-t-2xl md:rounded-2xl overflow-y-auto shadow-2xl"
-            style={{ background: '#242424', border: '1px solid #333', maxHeight: '80dvh', paddingBottom: 'calc(env(safe-area-inset-bottom) + 72px)' }}>
-            <div className="flex items-start justify-between gap-3 px-5 py-3 sticky top-0" style={{ background: '#242424', borderBottom: '1px solid #2e2e2e' }}>
+          <div className="absolute inset-0" style={{ background: 'rgba(0,0,0,0.62)', backdropFilter: 'blur(3px)' }} onClick={() => setHistLead(null)} />
+          <div className={modalShell.replace('md:max-w-2xl', 'md:max-w-lg')} style={modalStyle} role="dialog" aria-modal="true" aria-label="Appointment history">
+            <div className="flex items-start justify-between gap-3 px-5 py-3 sticky top-0 z-10" style={modalHead}>
               <div className="min-w-0">
-                <h2 className="text-[14px] font-semibold text-white truncate">{histLead.customer_name || 'Unnamed'}</h2>
-                <p className="text-[11px] text-white/35">{dt(histLead.appointment_at)}</p>
+                <h2 className="text-[15px] font-bold text-bank-tx truncate">{histLead.customer_name || 'Unnamed'}</h2>
+                <p className="text-[13px] text-bank-mu">{dt(histLead.appointment_at)}</p>
               </div>
-              <button onClick={() => setHistLead(null)} className="p-1.5 rounded-lg text-white/30 hover:text-white hover:bg-white/10 flex-shrink-0"><X size={16} /></button>
+              <IconButton onClick={() => setHistLead(null)} aria-label="Close"><X size={16} /></IconButton>
             </div>
             <div className="p-5 space-y-3">
               {histLead.pinned && (
-                <div className="rounded-lg px-3 py-2.5 flex items-start justify-between gap-3 text-[11.5px]"
-                  style={{ background: 'rgba(251,191,36,0.07)', border: '1px solid rgba(251,191,36,0.3)' }}>
-                  <span className="text-amber-200/85">
+                <div className="rounded-xl px-3 py-2.5 flex items-start justify-between gap-3 text-[13px]"
+                  style={{ background: 'rgba(210,160,116,0.10)', border: '1px solid rgba(210,160,116,0.4)' }}>
+                  <span style={{ color: 'var(--warn)' }}>
                     Corrected here, so the CRM feed can no longer change its status, setter or closer.
                     It still refreshes timing and customer details.
                   </span>
                   {isAdmin && (
                     <button onClick={() => { unpin(histLead); setHistLead({ ...histLead, pinned: false }) }}
-                      className="text-[11px] font-semibold text-amber-300 hover:underline whitespace-nowrap flex-shrink-0">
+                      className="text-[13px] font-semibold text-bank-gold-tx hover:underline whitespace-nowrap flex-shrink-0 min-h-[44px] md:min-h-0">
                       Hand back to feed
                     </button>
                   )}
@@ -424,34 +542,32 @@ export default function Leads() {
               )}
 
               {hist === null ? (
-                <p className="text-[12px] text-white/35 py-4 text-center">Loading history…</p>
+                <EmptyBlock className="py-4">Loading history…</EmptyBlock>
               ) : hist.length === 0 ? (
-                <p className="text-[12px] text-white/35 py-4 text-center">
-                  No changes recorded yet. History starts once migration 043 is in place.
-                </p>
+                <EmptyBlock className="py-4">No changes recorded yet. History starts once migration 043 is in place.</EmptyBlock>
               ) : hist.map(h => {
                 // One plain sentence per change: who did it, what it became.
                 const who = h.editor?.name || nameOfUser(h.changed_by) || 'RepCard'
                 const entries = Object.entries(h.changes || {}).filter(([k]) => k !== '_event')
                 const created = h.changes?._event === 'created'
                 return (
-                  <div key={h.id} className="flex items-baseline justify-between gap-3 py-1.5 border-b border-white/5 last:border-0">
+                  <div key={h.id} className="flex items-baseline justify-between gap-3 py-1.5 border-b border-bank-line last:border-0">
                     <div className="min-w-0">
                       {created ? (
-                        <p className="text-[12px] text-white/70">
-                          Added by <span className="font-semibold text-white/90">{who}</span>
+                        <p className="text-[13px] text-bank-mu">
+                          Added by <span className="font-semibold text-bank-tx">{who}</span>
                         </p>
                       ) : entries.length === 0 ? (
-                        <p className="text-[12px] text-white/35">Refreshed by {who}</p>
+                        <p className="text-[13px] text-bank-fa">Refreshed by {who}</p>
                       ) : entries.map(([field, v]) => (
-                        <p key={field} className="text-[12px] text-white/70">
-                          <span className="font-semibold text-white/90">{who}</span>
+                        <p key={field} className="text-[13px] text-bank-mu">
+                          <span className="font-semibold text-bank-tx">{who}</span>
                           {' '}updated {FIELD_LABEL[field] || field} to{' '}
-                          <span className="font-semibold text-white/90">{histValue(field, v?.to)}</span>
+                          <span className="font-semibold text-bank-tx">{histValue(field, v?.to)}</span>
                         </p>
                       ))}
                     </div>
-                    <span className="text-[10px] text-white/25 whitespace-nowrap flex-shrink-0">
+                    <span className="text-[13px] text-bank-fa whitespace-nowrap flex-shrink-0">
                       {format(new Date(h.changed_at), 'MMM d, h:mma')}
                     </span>
                   </div>
@@ -465,58 +581,54 @@ export default function Leads() {
       {/* CSV backfill */}
       {importOpen && (
         <div className="fixed inset-0 z-[60] flex items-end md:items-center md:justify-center md:p-4">
-          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setImportOpen(false)} />
-          <div className="relative w-full md:max-w-2xl rounded-t-2xl md:rounded-2xl overflow-y-auto shadow-2xl"
-            style={{ background: '#242424', border: '1px solid #333', maxHeight: '88dvh', paddingBottom: 'calc(env(safe-area-inset-bottom) + 72px)' }}>
-            <div className="flex items-center justify-between px-5 py-3 sticky top-0" style={{ background: '#242424', borderBottom: '1px solid #2e2e2e' }}>
-              <h2 className="text-[15px] font-semibold text-white">Import appointments</h2>
-              <button onClick={() => setImportOpen(false)} className="p-1.5 rounded-lg text-white/30 hover:text-white hover:bg-white/10"><X size={16} /></button>
+          <div className="absolute inset-0" style={{ background: 'rgba(0,0,0,0.62)', backdropFilter: 'blur(3px)' }} onClick={() => setImportOpen(false)} />
+          <div className={modalShell} style={modalStyle} role="dialog" aria-modal="true" aria-label="Import appointments">
+            <div className="flex items-center justify-between px-5 py-3 sticky top-0 z-10" style={modalHead}>
+              <h2 className="text-[15px] font-bold text-bank-tx">Import appointments</h2>
+              <IconButton onClick={() => setImportOpen(false)} aria-label="Close"><X size={16} /></IconButton>
             </div>
-            <div className="p-5 space-y-3">
-              <p className="text-[12px] text-white/45">
-                Paste a CSV export from the CRM (or choose the file). Rows are matched on the appointment <b className="text-white/70">ID</b>,
+            <div className="p-5 flex-1 flex flex-col gap-3">
+              <p className="text-[13px] text-bank-mu">
+                Paste a CSV export from the CRM (or choose the file). Rows are matched on the appointment <b className="text-bank-tx">ID</b>,
                 so importing the same range twice updates rather than duplicates — safe to re-run.
               </p>
-              <input type="file" accept=".csv,text/csv"
+              <input type="file" accept=".csv,text/csv" aria-label="CSV file"
                 onChange={e => { const f = e.target.files?.[0]; if (f) f.text().then(setCsvText) }}
-                className="block w-full text-[12px] text-white/60 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:text-[12px] file:font-semibold file:bg-teal file:text-dark" />
-              <textarea value={csvText} onChange={e => setCsvText(e.target.value)} rows={6}
+                className="block w-full text-[13px] text-bank-mu file:mr-3 file:px-3 file:py-2 file:min-h-[44px] md:file:min-h-0 file:rounded-lg file:border-0 file:text-[13px] file:font-semibold file:bg-[#bfa46c] file:text-[#191509]" />
+              <textarea value={csvText} onChange={e => setCsvText(e.target.value)} rows={6} aria-label="CSV contents"
                 placeholder="…or paste the CSV contents here"
-                style={{ background: '#1a1a1a', border: '1px solid #3a3a3a' }}
-                className="w-full px-3 py-2 rounded-lg text-[12px] text-white placeholder-white/20 focus:outline-none font-mono resize-none" />
+                style={SURFACE.well}
+                className="w-full px-3 py-2 rounded-lg text-[13px] text-bank-tx placeholder-bank-fa focus:outline-none font-mono resize-none" />
 
               {preview && (
-                <div className="rounded-lg p-3 space-y-2 text-[12px]" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+                <div className="rounded-xl p-3 space-y-2 text-[13px]" style={SURFACE.well}>
                   {preview.missing.length > 0 && (
-                    <p className="text-amber-400">⚠ Missing expected column{preview.missing.length > 1 ? 's' : ''}: {preview.missing.join(', ')}</p>
+                    <p style={{ color: 'var(--warn)' }}>⚠ Missing expected column{preview.missing.length > 1 ? 's' : ''}: {preview.missing.join(', ')}</p>
                   )}
-                  <p className="text-white/70">
-                    <b className="text-teal">{preview.leads.length}</b> appointment{preview.leads.length === 1 ? '' : 's'} ready
+                  <p className="text-bank-mu">
+                    <b className="text-bank-tx">{preview.leads.length}</b> appointment{preview.leads.length === 1 ? '' : 's'} ready
                   </p>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-white/45">
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-bank-mu">
                     {['scheduled', 'completed', 'sold', 'no_show', 'canceled'].map(s => {
                       const n = preview.leads.filter(l => l.status === s).length
-                      return n ? <span key={s}>{stat(s).label}: <b className="text-white/70">{n}</b></span> : null
+                      return n ? <span key={s}>{stat(s).label}: <b className="text-bank-tx">{n}</b></span> : null
                     })}
                   </div>
                   {unmatchedEmails.length > 0 && (
-                    <div className="text-[11px] text-amber-400/90">
+                    <div className="text-[13px]" style={{ color: 'var(--warn)' }}>
                       <p>{unmatchedEmails.length} rep{unmatchedEmails.length === 1 ? '' : 's'} not matched to the roster — those appointments still import, with the name as text:</p>
-                      <p className="text-amber-400/60 break-words mt-0.5">{unmatchedEmails.join(', ')}</p>
+                      <p className="break-words mt-0.5 opacity-80">{unmatchedEmails.join(', ')}</p>
                     </div>
                   )}
                 </div>
               )}
 
-              <div className="flex gap-3 pt-1">
-                <button onClick={runImport} disabled={!preview?.leads.length || importing}
-                  className="flex-1 py-2.5 rounded-xl text-[13px] font-bold text-dark bg-teal hover:bg-teal-dark disabled:opacity-40 transition-colors">
+              <div className="sticky bottom-0 -mx-5 md:mx-0 px-5 md:px-0 pt-3 pb-3 md:pb-0 mt-auto flex gap-3 md:static"
+                style={{ background: 'var(--card)', borderTop: '1px solid var(--line)', paddingBottom: 'max(12px, env(safe-area-inset-bottom))' }}>
+                <PrimaryButton onClick={runImport} disabled={!preview?.leads.length || importing} className="flex-1">
                   {importing ? 'Importing…' : preview?.leads.length ? `Import ${preview.leads.length}` : 'Import'}
-                </button>
-                <button onClick={() => setImportOpen(false)}
-                  className="px-5 py-2.5 rounded-xl text-[13px] text-white/50 hover:text-white transition-colors" style={{ border: '1px solid #3a3a3a' }}>
-                  Cancel
-                </button>
+                </PrimaryButton>
+                <SecondaryButton onClick={() => setImportOpen(false)} className="px-5 min-h-[44px]">Cancel</SecondaryButton>
               </div>
             </div>
           </div>
@@ -525,84 +637,79 @@ export default function Leads() {
 
       {/* Feed health — a push feed has no "last ran", so this answers
           "are appointments actually arriving?" at a glance. */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl px-3.5 py-2"
-        style={{ background: '#1e1e1e', border: `1px solid ${feed.level === 'ok' ? '#2a2a2a' : feed.color + '55'}` }}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl px-3.5 py-2.5"
+        style={{ ...SURFACE.card, border: `1px solid ${feed.level === 'ok' ? 'var(--line)' : feed.color + '66'}` }}>
         <span className="flex items-center gap-2 min-w-0">
           <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: feed.color }} />
-          <span className="text-[11.5px] text-white/60">CRM feed · {feed.text}</span>
+          <span className="text-[13px] text-bank-mu">CRM feed · {feed.text}</span>
         </span>
         {feed.lastAt && (
-          <span className="text-[11px] text-white/30 ml-auto whitespace-nowrap">
+          <span className="text-[13px] text-bank-fa ml-auto whitespace-nowrap">
             {feed.last7} in the last 7 days
           </span>
         )}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex gap-1 p-1 rounded-xl" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+        <PillGroup role="group" aria-label="Date range">
           {APPT_RANGES.map(([k, label]) => (
-            <button key={k} onClick={() => { const r = apptRange(k); setDateFrom(r.from); setDateTo(r.to); setPreset(k) }}
-              className={`px-2.5 py-1.5 rounded-lg text-[12px] font-semibold transition-colors ${preset === k ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
+            <Pill key={k} active={preset === k}
+              onClick={() => { const r = apptRange(k); setDateFrom(r.from); setDateTo(r.to); setPreset(k) }}>
               {label}
-            </button>
+            </Pill>
           ))}
-        </div>
+        </PillGroup>
         <span className="flex items-center gap-1.5">
-          <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPreset('custom') }}
-            style={selStyle} className={selCls} />
-          <span className="text-white/25 text-[11px]">to</span>
-          <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setPreset('custom') }}
-            style={selStyle} className={selCls} />
+          <Input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPreset('custom') }} aria-label="From date" className={`${selW} !w-[150px]`} />
+          <span className="text-bank-fa text-[13px]">to</span>
+          <Input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setPreset('custom') }} aria-label="To date" className={`${selW} !w-[150px]`} />
         </span>
-        <span className="text-[11px] text-white/30">{filtered.length} appointments</span>
+        <span className="text-[13px] text-bank-mu">{filtered.length} appointments</span>
         <div className="relative">
-          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/25" />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Customer, address, rep…"
-            style={selStyle} className={`${selCls} pl-7 w-[200px]`} />
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-bank-fa pointer-events-none" />
+          <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Customer, address, rep…" aria-label="Search"
+            className="!w-[210px] pl-7" />
         </div>
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={selStyle} className={selCls}>
+        <Select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="!w-auto" aria-label="Status filter">
           <option value="">All statuses</option>
           {STATUSES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
-        </select>
+        </Select>
         {(role !== 'rep' || isAdmin) && (
-          <select value={repFilter} onChange={e => setRepFilter(e.target.value)} style={selStyle} className={`${selCls} max-w-[180px]`}>
+          <Select value={repFilter} onChange={e => setRepFilter(e.target.value)} className="!w-auto max-w-[180px]" aria-label="Rep filter">
             <option value="">All reps</option>
             {pickUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-          </select>
+          </Select>
         )}
         {(role !== 'rep' || isAdmin) && teamOptions.length > 0 && (
-          <select value={teamFilter} onChange={e => setTeamFilter(e.target.value)} style={selStyle}
-            className={`${selCls} max-w-[200px]`}
+          <Select value={teamFilter} onChange={e => setTeamFilter(e.target.value)} className="!w-auto max-w-[200px]" aria-label="Team filter"
             title="Picks the TEAM'S PEOPLE, then everything each of them did — including leads they ran for another team.">
             <option value="">All teams</option>
             {teamOptions.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
-          </select>
+          </Select>
         )}
-        <select value={missing} onChange={e => setMissing(e.target.value)} style={selStyle} className={selCls}
+        <Select value={missing} onChange={e => setMissing(e.target.value)} className="!w-auto" aria-label="Attention filter"
           title="Anything a human should look at: missing setter, no outcome logged after its time passed, a ran appointment with no closer, or a likely duplicate. Each row says which.">
           <option value="">All appointments</option>
           <option value="info">Needs attention</option>
-        </select>
+        </Select>
         {/* The same appointments, read two ways: as a schedule, or per person. */}
-        <div className="flex gap-1 p-1 rounded-xl ml-auto" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+        <PillGroup className="ml-auto" role="tablist">
           {[['list', 'List'], ['byrep', 'By rep']].map(([k, label]) => (
-            <button key={k} onClick={() => pickView(k)}
-              className={`px-2.5 py-1 rounded-lg text-[12px] font-semibold transition-colors ${view === k ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}>
-              {label}
-            </button>
+            <Pill key={k} active={view === k} onClick={() => pickView(k)}>{label}</Pill>
           ))}
-        </div>
+        </PillGroup>
       </div>
 
       {view === 'list' && (
-      <div className="grid grid-cols-2 md:flex gap-2 md:gap-3">
-        <Kpi label="Appointments Set" value={kpis.set} color="#74b9ff" />
-        <Kpi label="Ran (Estimates)"  value={kpis.ran} sub={kpis.showRate != null ? `${kpis.showRate.toFixed(0)}% show rate` : undefined} />
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
+        <KpiFigure label="Appointments Set" value={kpis.set} />
+        <KpiFigure label="Ran (Estimates)"  value={kpis.ran} sub={kpis.showRate != null ? `${kpis.showRate.toFixed(0)}% show rate` : undefined} />
         {/* "Sold at appt" is an APPOINTMENT OUTCOME, not a sale record — the
             deals table is the only source of deal counts and revenue. */}
-        <Kpi label="Sold at Appt"     value={kpis.sold} sub="outcome, not a deal record" color="#4ade80" />
-        <Kpi label="Appt Close %"     value={kpis.closeRate == null ? '—' : `${kpis.closeRate.toFixed(0)}%`} sub="sold ÷ ran" color="#a78bfa" />
-        <Kpi label="No Shows"         value={kpis.noShow} color="#fb923c" />
+        <KpiFigure label="Sold at Appt"     value={kpis.sold} sub="outcome, not a deal record" />
+        {/* The one gold number on this page. */}
+        <KpiFigure label="Appt Close %"     value={kpis.closeRate == null ? '—' : `${kpis.closeRate.toFixed(0)}%`} sub="sold ÷ ran" color="var(--gold-tx)" />
+        <KpiFigure label="No Shows"         value={kpis.noShow} />
       </div>
       )}
 
@@ -611,135 +718,32 @@ export default function Leads() {
       )}
 
       {view === 'list' && filtered.length === 0 && (
-        <div className="rounded-xl" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-          <p className="px-4 py-8 text-center text-[13px] text-white/30">No appointments in this range.</p>
-        </div>
+        <Card padded={false}><EmptyBlock>No appointments in this range.</EmptyBlock></Card>
       )}
 
       {view === 'list' && byDay.map(g => (
-      <div key={g.day || 'nodate'} className="rounded-xl overflow-hidden"
-        style={{ background: '#1e1e1e', border: `1px solid ${g.isToday ? '#00b89455' : '#2a2a2a'}` }}>
+      <Card key={g.day || 'nodate'} padded={false} style={g.isToday ? { borderColor: 'rgba(191,164,108,0.45)' } : undefined}>
         {/* Day header — the separator that turns one long list into a schedule. */}
-        <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 px-4 py-2"
-          style={{ background: g.isToday ? '#00b8940f' : '#232323', borderBottom: '1px solid #2a2a2a' }}>
-          <span className="text-[12.5px] font-bold" style={{ color: g.isToday ? '#00b894' : '#fff' }}>{g.label}</span>
+        <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 px-4 py-2.5 border-b border-bank-line" style={{ background: 'var(--raise)' }}>
+          <span className={`text-[13px] font-bold ${g.isToday ? 'text-bank-gold-tx' : 'text-bank-tx'}`}>{g.label}</span>
           {g.rel && (
-            <span className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded"
-              style={g.isToday
-                ? { color: '#00b894', border: '1px solid #00b89455' }
-                : { color: 'rgba(255,255,255,0.4)', border: '1px solid #3a3a3a' }}>{g.rel}</span>
+            <span className="text-[12px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded"
+              style={g.isToday ? { ...GOLD_WASH, color: 'var(--gold-tx)' } : { color: 'var(--mu)', border: '1px solid var(--line)' }}>{g.rel}</span>
           )}
-          <span className="text-[10.5px] text-white/30 ml-auto whitespace-nowrap">
+          <span className="text-[13px] text-bank-mu ml-auto whitespace-nowrap">
             {g.rows.length} appt{g.rows.length === 1 ? '' : 's'}
-            {g.ran > 0 && <> · <span className="text-teal/70">{g.ran} ran</span></>}
-            {g.sold > 0 && <> · <span className="text-white/50">{g.sold} sold</span></>}
+            {g.ran > 0 && <> · <span className="text-bank-tx">{g.ran} ran</span></>}
+            {g.sold > 0 && <> · <span style={{ color: 'var(--pos)' }}>{g.sold} sold</span></>}
           </span>
         </div>
-        {g.rows.map(l => {
-          const s = stat(l.status)
-          const gaps = l.ignored ? [] : gapReasons(l, new Date().toISOString(), nonReps)
-          const isDupe = !l.ignored && dupes.has(l.id)
-          return (
-            <div key={l.id} className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 border-b border-white/5 last:border-0 ${l.ignored ? 'opacity-45' : ''}`}>
-              <div className="text-[11px] font-semibold text-white/45 tabular-nums w-[58px] flex-shrink-0">
-                {tm(l.appointment_at)}
-              </div>
-              <div className="min-w-0 flex-1">
-                <button onClick={() => openHistory(l)} title="Show this appointment's edit history"
-                  className="block max-w-full text-[13px] font-semibold text-white truncate text-left hover:text-teal transition-colors">
-                  {l.customer_name || 'Unnamed'}
-                  {l.deal_id && <Link2 size={11} className="inline ml-1.5 text-teal/70" title="Linked to a deal" />}
-                </button>
-                <p className="text-[10.5px] text-white/35 truncate">
-                  {l.address || 'No address'}
-                  {l.office ? ` · ${l.office}` : ''}
-                </p>
-                {l.pinned && (
-                  <p className="text-[9.5px] text-amber-400/70 truncate mt-0.5">
-                    Edited here — the CRM feed won't change its status or people
-                  </p>
-                )}
-                {gaps.length > 0 && (
-                  <p className="text-[9.5px] text-amber-400/80 truncate mt-0.5" title={`Missing info: ${gaps.join('; ')}`}>
-                    Missing info — {gaps.join(' · ')}
-                  </p>
-                )}
-                {isDupe && (
-                  <p className="text-[9.5px] text-amber-400/80 truncate mt-0.5"
-                    title="Another appointment has the same customer at the same time. The CRM makes a new record when one is reassigned, so one of these is probably a leftover — ignore whichever is wrong.">
-                    Possible duplicate — same customer and time as another appointment
-                  </p>
-                )}
-                {l.ignored && (
-                  <p className="text-[9.5px] text-white/40 truncate mt-0.5">Ignored — counts nowhere</p>
-                )}
-              </div>
-              {isAdmin ? (
-                <div className="flex flex-col gap-1 min-w-[168px]">
-                  {[['setter_id', 'SET', l.setter_id, l.setter_name], ['closer_id', 'RUN', l.closer_id, l.closer_name]].map(([field, tag, val, named]) => (
-                    <span key={field} className="flex flex-col gap-0.5">
-                      <span className="flex items-center gap-1.5">
-                        <span className="text-[9px] text-white/25 w-6">{tag}</span>
-                        <select value={val || ''} onChange={e => setPerson(l, field, e.target.value)}
-                          style={{ background: '#242424', border: '1px solid #333' }}
-                          className="h-6 px-1.5 rounded text-[11px] text-white/80 focus:outline-none max-w-[136px]"
-                          title={tag === 'SET' ? 'Who booked it' : 'Who runs it (reassign here)'}>
-                          <option value="">— none —</option>
-                          {pickUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-                        </select>
-                      </span>
-                      {/* The feed sent a name but it matched no profile, so the
-                          select reads "none" and every total ignores this
-                          person. Showing the name turns a mystery into a
-                          one-click fix. */}
-                      {!val && String(named || '').trim() && (
-                        isNonRep(named, nonReps) ? (
-                          // A known non-rep: the blank select is correct, so
-                          // this reads as information, not a thing to fix.
-                          <span className="text-[9.5px] text-white/30 pl-[30px] truncate max-w-[136px]"
-                            title={`"${named}" is on the Not Field Reps list, so this appointment credits nobody's Set. Whoever ran it still gets their Leads ran.`}>
-                            feed: {named}
-                          </span>
-                        ) : (
-                          <span className="text-[9.5px] text-amber-400/80 pl-[30px] truncate max-w-[136px]"
-                            title={`The feed sent "${named}" but no roster profile matched. Pick the right person above.`}>
-                            feed: {named}
-                          </span>
-                        )
-                      )}
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-[11px] text-white/45 whitespace-nowrap min-w-[150px]">
-                  <span className="text-white/25">SET</span> {l.setter?.name || l.setter_name || '—'}
-                  {(l.closer?.name || l.closer_name) && (l.closer_id !== l.setter_id) && (
-                    <><br /><span className="text-white/25">RUN</span> {l.closer?.name || l.closer_name}</>
-                  )}
-                </div>
-              )}
-              {isAdmin ? (
-                <span className="flex items-center gap-1.5">
-                  <select value={l.status} onChange={e => setStatus(l, e.target.value)}
-                    style={{ background: '#242424', border: `1px solid ${s.color}55`, color: s.color }}
-                    className="h-7 px-2 rounded-full text-[11px] font-semibold focus:outline-none">
-                    {STATUSES.map(x => <option key={x.key} value={x.key} style={{ color: '#fff' }}>{x.label}</option>)}
-                  </select>
-                  <button onClick={() => toggleIgnore(l)}
-                    className={`h-7 px-2 rounded-full text-[10px] font-semibold whitespace-nowrap transition-colors ${l.ignored ? 'text-teal hover:bg-teal/10' : 'text-white/30 hover:text-amber-300'}`}
-                    style={{ border: '1px solid #333' }}
-                    title={l.ignored ? 'Count this appointment again' : 'Take this appointment out of every count — use it on the leftover half of a duplicate'}>
-                    {l.ignored ? 'Restore' : 'Ignore'}
-                  </button>
-                </span>
-              ) : (
-                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap"
-                  style={{ color: s.color, border: `1px solid ${s.color}40` }}>{s.label}</span>
-              )}
-            </div>
-          )
-        })}
-      </div>
+        {g.rows.map(l => (
+          <LeadRow key={l.id} l={l} s={stat(l.status)}
+            gaps={l.ignored ? [] : gapReasons(l, new Date().toISOString(), nonReps)}
+            isDupe={!l.ignored && dupes.has(l.id)}
+            isAdmin={isAdmin} pickUsers={pickUsers} nonReps={nonReps}
+            openHistory={openHistory} setPerson={setPerson} setStatus={setStatus} toggleIgnore={toggleIgnore} />
+        ))}
+      </Card>
       ))}
     </div>
   )

@@ -3,6 +3,7 @@ import { Navigate } from 'react-router-dom'
 import { Users, Trophy, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchMyTeams, fetchTeamMonthSummary } from '../lib/db'
+import { SURFACE, Card, Expandable, LoadingBlock, ErrorBlock, EmptyBlock, IconButton } from '../components/ui'
 
 // Whole-dollar currency (no cents) — this section deals in large revenue and
 // round bonus figures, and showing cents on a $472,000 number just adds noise.
@@ -33,25 +34,20 @@ function BonusBar({ revenue, tiers, maxTier }) {
   return (
     <div className="mt-1">
       {/* Track + fill */}
-      <div className="relative h-4 rounded-full overflow-hidden" style={{ background: '#1a1a1a', border: '1px solid #2e2e2e' }}>
+      <div className="relative h-4 rounded-full overflow-hidden" style={SURFACE.well}>
         <div
           className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-500"
-          style={{
-            width: `${pct}%`,
-            background: maxTier
-              ? 'linear-gradient(90deg,#00b894,#34d399)'
-              : 'linear-gradient(90deg,#00b894aa,#00b894)',
-          }}
+          style={{ width: `${pct}%`, background: maxTier ? 'var(--pos)' : 'var(--tx)' }}
         />
         {/* Tier gridlines sitting on top of the track */}
         {tiers.map(t => {
           const left = Math.min(100, (Number(t.min_revenue) / TOP) * 100)
           if (left >= 100) return null
-          return <div key={t.min_revenue} className="absolute top-0 bottom-0 w-px" style={{ left: `${left}%`, background: '#00000055' }} />
+          return <div key={t.min_revenue} className="absolute top-0 bottom-0 w-px" style={{ left: `${left}%`, background: 'rgba(0,0,0,0.45)' }} />
         })}
       </div>
 
-      {/* Tick labels — cleared tiers in teal, the rest muted. Abbreviated so
+      {/* Tick labels — cleared tiers in ivory, the rest muted. Abbreviated so
           six labels stay legible on a narrow phone. */}
       <div className="relative h-4 mt-1">
         {tiers.map(t => {
@@ -63,7 +59,7 @@ function BonusBar({ revenue, tiers, maxTier }) {
           return (
             <span
               key={min}
-              className={`absolute top-0 text-[9px] md:text-[10px] font-semibold tabular-nums ${cleared ? 'text-teal' : 'text-white/35'}`}
+              className={`absolute top-0 text-[12px] md:text-[13px] font-semibold tabular-nums ${cleared ? 'text-bank-tx' : 'text-bank-fa'}`}
               style={{ left: `${left}%`, transform: translate, whiteSpace: 'nowrap' }}
             >
               {tickLabel(min)}
@@ -117,19 +113,12 @@ export default function MyTeam() {
   // The nav item is already hidden for non-leads, and every data call is
   // re-checked server-side — this just keeps a non-authorized user who types
   // the URL from seeing an empty shell.
-  if (teams === null) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <div className="w-6 h-6 border-2 border-teal/30 border-t-teal rounded-full animate-spin" />
-      </div>
-    )
-  }
+  if (teams === null) return <LoadingBlock text="Loading your teams…" />
   if (!isAdmin && teams.length === 0) return <Navigate to="/dashboard" replace />
   if (teams.length === 0) {
     return (
-      <div className="max-w-2xl mx-auto py-16 text-center">
-        <Users size={28} className="mx-auto text-white/20" />
-        <p className="mt-3 text-[14px] text-white/50">No sales teams have been set up yet.</p>
+      <div className="max-w-2xl mx-auto rounded-2xl" style={SURFACE.card}>
+        <EmptyBlock className="py-16"><Users size={28} className="mx-auto text-bank-fa mb-3" />No sales teams have been set up yet.</EmptyBlock>
       </div>
     )
   }
@@ -143,84 +132,62 @@ export default function MyTeam() {
   const memberTotal = members.reduce((sum, m) => sum + (Number(m.revenue) || 0), 0)
   const roleLabel  = { lead: 'Lead', closer: 'Closer', setter: 'Setter' }
 
+  const selectCls = 'appearance-none px-3 py-1.5 min-h-[44px] md:min-h-0 md:h-9 rounded-lg text-[13px] text-bank-tx focus:outline-none'
+  const label = 'text-[13px] font-semibold text-bank-fa uppercase tracking-wide mb-1'
+
   return (
-    <div className="max-w-4xl mx-auto space-y-5">
+    <div className="max-w-4xl mx-auto space-y-5" style={{ color: 'var(--tx)' }}>
 
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
-            style={{ background: '#00b89420', border: '1px solid #00b89430' }}>
-            <Users size={18} className="text-teal" />
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={SURFACE.raise}>
+            <Users size={18} className="text-bank-mu" />
           </div>
           <div>
-            <h1 className="text-[18px] font-bold text-white leading-tight">{s?.team_name || 'My Team'}</h1>
-            <p className="text-[11px] text-white/40">Team revenue bonus tracker</p>
+            <h1 className="text-[18px] font-bold text-bank-tx leading-tight">{s?.team_name || 'My Team'}</h1>
+            <p className="text-[13px] text-bank-mu">Team revenue bonus tracker</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {/* Team selector — only when the viewer can see more than one team */}
           {teams.length > 1 && (
-            <select
-              value={teamId}
-              onChange={e => setTeamId(e.target.value)}
-              className="appearance-none px-3 py-1.5 rounded-lg text-[12px] text-white/80 focus:outline-none"
-              style={{ background: '#242424', border: '1px solid #2e2e2e' }}
-            >
+            <select value={teamId} onChange={e => setTeamId(e.target.value)} className={selectCls} style={SURFACE.raise} aria-label="Team">
               {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
           )}
           {/* Month picker */}
           <div className="flex items-center gap-1">
-            <button
-              onClick={() => setMonthIdx(i => Math.min(months.length - 1, i + 1))}
-              disabled={monthIdx >= months.length - 1}
-              className="p-1.5 rounded-lg text-white/40 hover:text-white hover:bg-white/5 disabled:opacity-30 transition-colors"
-              title="Previous month"
-            ><ChevronLeft size={16} /></button>
-            <select
-              value={monthIdx}
-              onChange={e => setMonthIdx(Number(e.target.value))}
-              className="appearance-none px-3 py-1.5 rounded-lg text-[12px] text-white/80 focus:outline-none text-center"
-              style={{ background: '#242424', border: '1px solid #2e2e2e', minWidth: 140 }}
-            >
+            <IconButton onClick={() => setMonthIdx(i => Math.min(months.length - 1, i + 1))}
+              disabled={monthIdx >= months.length - 1} title="Previous month" aria-label="Previous month"><ChevronLeft size={16} /></IconButton>
+            <select value={monthIdx} onChange={e => setMonthIdx(Number(e.target.value))}
+              className={`${selectCls} text-center`} style={{ ...SURFACE.raise, minWidth: 150 }} aria-label="Month">
               {months.map((m, i) => <option key={`${m.year}-${m.month}`} value={i}>{m.label}</option>)}
             </select>
-            <button
-              onClick={() => setMonthIdx(i => Math.max(0, i - 1))}
-              disabled={monthIdx <= 0}
-              className="p-1.5 rounded-lg text-white/40 hover:text-white hover:bg-white/5 disabled:opacity-30 transition-colors"
-              title="Next month"
-            ><ChevronRight size={16} /></button>
+            <IconButton onClick={() => setMonthIdx(i => Math.max(0, i - 1))}
+              disabled={monthIdx <= 0} title="Next month" aria-label="Next month"><ChevronRight size={16} /></IconButton>
           </div>
         </div>
       </div>
 
-      {error && (
-        <div className="rounded-xl p-4 text-[13px]" style={{ background: '#3a1f1f', border: '1px solid #5a2a2a', color: '#f8b4b4' }}>
-          {error}
-        </div>
-      )}
+      {error && <ErrorBlock title="Could not load team data" message={error} />}
 
       {loading ? (
-        <div className="flex items-center justify-center py-20">
-          <div className="w-6 h-6 border-2 border-teal/30 border-t-teal rounded-full animate-spin" />
-        </div>
+        <LoadingBlock text="Loading the month…" />
       ) : !s ? null : (
         <>
           {/* Bonus + progress card */}
-          <div className="rounded-xl p-4 md:p-6" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
+          <Card className="p-4 md:p-6">
             <div className="flex flex-wrap items-end justify-between gap-4 mb-5">
               <div>
-                <p className="text-[10px] font-semibold text-white/40 uppercase tracking-[0.1em] mb-1">
-                  {months[monthIdx].label} team revenue
-                </p>
-                <p className="text-[30px] md:text-[38px] font-bold text-white leading-none tabular-nums">{usd0(revenue)}</p>
+                <p className={label}>{months[monthIdx].label} team revenue</p>
+                <p className="text-[30px] md:text-[38px] font-bold text-bank-tx leading-none tabular-nums">{usd0(revenue)}</p>
               </div>
               <div className="text-right">
-                <p className="text-[10px] font-semibold text-white/40 uppercase tracking-[0.1em] mb-1">Bonus earned</p>
-                <p className="text-[22px] md:text-[26px] font-bold text-teal leading-none tabular-nums">{usd0(bonus)}</p>
+                <p className={label}>Bonus earned</p>
+                {/* The one gold number on this page. */}
+                <p className="text-[26px] md:text-[30px] font-bold leading-none tabular-nums" style={{ color: 'var(--gold-tx)' }}>{usd0(bonus)}</p>
               </div>
             </div>
 
@@ -229,62 +196,81 @@ export default function MyTeam() {
             {/* Next-tier / max-tier line */}
             <div className="mt-4">
               {maxTier ? (
-                <p className="flex items-center gap-2 text-[13px] font-semibold text-teal">
+                <p className="flex items-center gap-2 text-[13px] font-semibold" style={{ color: 'var(--pos)' }}>
                   <Trophy size={15} /> Top tier reached — max bonus of {usd0(bonus)} locked in for {months[monthIdx].label}.
                 </p>
               ) : s.next_target != null ? (
-                <p className="text-[13px] text-white/60">
-                  <span className="font-bold text-white">{usd0(s.gap)}</span> more in revenue to reach the{' '}
-                  <span className="font-bold text-white">{usd0(s.next_bonus)}</span> bonus
-                  <span className="text-white/35"> (at {usd0(s.next_target)})</span>.
+                <p className="text-[13px] text-bank-mu">
+                  <span className="font-bold text-bank-tx">{usd0(s.gap)}</span> more in revenue to reach the{' '}
+                  <span className="font-bold text-bank-tx">{usd0(s.next_bonus)}</span> bonus
+                  <span className="text-bank-fa"> (at {usd0(s.next_target)})</span>.
                 </p>
               ) : (
-                <p className="text-[13px] text-white/50">No bonus tiers configured.</p>
+                <p className="text-[13px] text-bank-mu">No bonus tiers configured.</p>
               )}
             </div>
-          </div>
+          </Card>
 
           {/* Member breakdown */}
-          <div className="rounded-xl overflow-hidden" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
-            <div className="px-4 md:px-5 py-3 border-b" style={{ borderColor: '#2e2e2e' }}>
-              <p className="text-[10px] font-semibold text-white/40 uppercase tracking-[0.1em]">Member breakdown</p>
+          <Card padded={false}>
+            <div className="px-4 md:px-5 py-3 border-b border-bank-line">
+              <p className={label.replace(' mb-1', '')}>Member breakdown</p>
             </div>
             {members.length === 0 ? (
-              <p className="px-4 md:px-5 py-6 text-[13px] text-white/40">No active team members this month.</p>
+              <EmptyBlock className="py-6 text-left px-4 md:px-5">No active team members this month.</EmptyBlock>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-[13px]">
-                  <thead>
-                    <tr className="text-white/40 text-[10px] uppercase tracking-wider">
-                      <th className="text-left  font-semibold px-4 md:px-5 py-2.5">Member</th>
-                      <th className="text-left  font-semibold px-3 py-2.5">Role</th>
-                      <th className="text-right font-semibold px-3 py-2.5">Deals</th>
-                      <th className="text-right font-semibold px-4 md:px-5 py-2.5">Revenue</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {members.map(m => (
-                      <tr key={m.user_id} className="border-t" style={{ borderColor: '#2a2a2a' }}>
-                        <td className="px-4 md:px-5 py-3 text-white/90 font-medium">{m.name}</td>
-                        <td className="px-3 py-3 text-white/50">{roleLabel[m.role] || m.role}</td>
-                        <td className="px-3 py-3 text-right text-white/70 tabular-nums">{m.deals}</td>
-                        <td className="px-4 md:px-5 py-3 text-right text-white/90 tabular-nums">{usd0(m.revenue)}</td>
+              <>
+                {/* Desktop table */}
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-[13px]">
+                    <thead>
+                      <tr className="text-bank-fa text-[13px] uppercase tracking-wide">
+                        <th className="text-left  font-semibold px-4 md:px-5 py-2.5">Member</th>
+                        <th className="text-left  font-semibold px-3 py-2.5">Role</th>
+                        <th className="text-right font-semibold px-3 py-2.5">Deals</th>
+                        <th className="text-right font-semibold px-4 md:px-5 py-2.5">Revenue</th>
                       </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr className="border-t" style={{ borderColor: '#2e2e2e', background: '#1f1f1f' }}>
-                      <td className="px-4 md:px-5 py-2.5 text-white/50 text-[11px] uppercase tracking-wider font-semibold" colSpan={3}>Team total</td>
-                      <td className="px-4 md:px-5 py-2.5 text-right text-teal font-bold tabular-nums">{usd0(memberTotal)}</td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {members.map(m => (
+                        <tr key={m.user_id} className="border-t border-bank-line">
+                          <td className="px-4 md:px-5 py-3 text-bank-tx font-medium">{m.name}</td>
+                          <td className="px-3 py-3 text-bank-mu">{roleLabel[m.role] || m.role}</td>
+                          <td className="px-3 py-3 text-right text-bank-mu tabular-nums">{m.deals}</td>
+                          <td className="px-4 md:px-5 py-3 text-right text-bank-tx tabular-nums">{usd0(m.revenue)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t border-bank-line" style={{ background: 'var(--raise)' }}>
+                        <td className="px-4 md:px-5 py-2.5 text-bank-mu text-[13px] uppercase tracking-wide font-semibold" colSpan={3}>Team total</td>
+                        <td className="px-4 md:px-5 py-2.5 text-right text-bank-tx font-bold tabular-nums">{usd0(memberTotal)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+                {/* Phones: compact rows (member · revenue) that open to role and deals */}
+                <div className="md:hidden">
+                  {members.map(m => (
+                    <Expandable key={m.user_id} title={m.name}
+                      right={<span className="text-[14px] font-bold text-bank-tx tabular-nums">{usd0(m.revenue)}</span>}>
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-2 px-4 py-3" style={{ background: 'var(--bg)' }}>
+                        <div><p className="text-[13px] text-bank-fa">Role</p><p className="text-[13px] font-semibold text-bank-tx">{roleLabel[m.role] || m.role}</p></div>
+                        <div><p className="text-[13px] text-bank-fa">Deals</p><p className="text-[13px] font-semibold text-bank-tx tabular-nums">{m.deals}</p></div>
+                      </div>
+                    </Expandable>
+                  ))}
+                  <div className="flex items-center justify-between px-4 py-3 border-t border-bank-line" style={{ background: 'var(--raise)' }}>
+                    <span className="text-[13px] uppercase tracking-wide font-semibold text-bank-mu">Team total</span>
+                    <span className="text-[14px] font-bold text-bank-tx tabular-nums">{usd0(memberTotal)}</span>
+                  </div>
+                </div>
+              </>
             )}
-            <p className="px-4 md:px-5 py-2.5 text-[10px] text-white/25 border-t" style={{ borderColor: '#2a2a2a' }}>
+            <p className="px-4 md:px-5 py-2.5 text-[13px] text-bank-mu border-t border-bank-line">
               Each deal counts once at full revenue, credited to its setter (or the closer when no team member set it).
             </p>
-          </div>
+          </Card>
         </>
       )}
     </div>

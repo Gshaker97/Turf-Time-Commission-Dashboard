@@ -1,0 +1,80 @@
+const isKeaton = (p) =>
+  p?.email?.toLowerCase() === 'keaton@turftime.com' || p?.name === 'Keaton Shaker'
+
+const FIELD_LABELS = {
+  setter_amount: 'Setter', closer_amount: 'Closer', manager_amount: 'Manager',
+  director_amount: 'Director', vp_amount: 'VP',
+}
+
+
+// ──── next block ────
+export default function RequiresAudit() {
+  const { profile, isAdmin } = useAuth()
+  const { dataStartDate } = useSettings()
+  const allowed = isAdmin || isKeaton(profile)
+
+  const [deals,     setDeals]     = useState([])
+  const [overrides, setOverrides] = useState([])
+  const [loading,   setLoading]   = useState(true)
+  const [active,    setActive]    = useState(null)   // audit result being corrected
+
+  const load = useCallback(async () => {
+    const [d, o] = await Promise.all([fetchDeals(), fetchAuditOverrides()])
+    setDeals(d.data || [])
+    setOverrides(o.data || [])
+    setLoading(false)
+  }, [])
+
+  useEffect(() => { if (allowed) load() }, [allowed, load])
+
+  const flagged = useMemo(() => dealsRequiringAudit(deals, dataStartDate), [deals, dataStartDate])
+  const dealName = useMemo(() => {
+    const m = {}
+    for (const d of deals) m[d.id] = d.deal_name
+    return m
+  }, [deals])
+
+
+// ──── next block ────
+function CorrectionModal({ audit, correctorId, onClose, onSaved }) {
+  const { deal, mismatches } = audit
+  // Prefill each correctable field with the calculated value (rounded to cents).
+  const [values, setValues] = useState(() =>
+    Object.fromEntries(mismatches.map(m => [m.field, String(Number(m.calculated.toFixed(2)))]))
+  )
+  const [note, setNote]     = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError]   = useState(null)
+
+  const set = (field, v) => setValues(s => ({ ...s, [field]: v }))
+
+  async function save() {
+    if (!note.trim()) return setError('Add a note explaining the correction.')
+    setSaving(true); setError(null)
+
+    // Build the deal patch + one audit row per field that actually changed.
+    const patch = {}
+    const rows = []
+    for (const m of mismatches) {
+      const raw = values[m.field]
+      const corrected = Number(raw)
+      if (raw === '' || Number.isNaN(corrected)) { setSaving(false); return setError(`Enter a valid number for ${m.label}.`) }
+      patch[m.field] = corrected
+      rows.push({
+        deal_id: deal.id,
+        field_name: m.field,
+        original_value: m.stored,
+        corrected_value: corrected,
+        correction_note: note.trim(),
+        corrected_by: correctorId ?? null,
+      })
+    }
+
+    const { error: upErr } = await updateDeal(deal.id, patch)
+    if (upErr) { setSaving(false); return setError(upErr.message || 'Could not save the corrected amounts.') }
+    const { error: logErr } = await insertAuditOverrides(rows)
+    if (logErr) { setSaving(false); return setError(logErr.message || 'Amounts saved, but logging the override failed.') }
+
+    setSaving(false)
+    onSaved()
+  }

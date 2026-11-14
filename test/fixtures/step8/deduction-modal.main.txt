@@ -1,0 +1,146 @@
+const money = (v) => '$' + Math.abs(Number(v) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const fmtDay = (iso) => (iso ? new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', d: undefined, day: 'numeric', year: 'numeric' }) : '')
+const shortDay = (iso) => (iso ? new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '')
+
+
+// ──── next block ────
+  const [q, setQ]           = useState('')
+  const [dealId, setDealId] = useState(edit?.deal_id || fixedDeal?.id || '')
+  const [amount, setAmount] = useState(edit ? String(Math.abs(Number(edit.amount) || 0)) : '')
+  const [note, setNote]     = useState(edit?.note || '')
+  const [payeeId, setPayeeId] = useState(edit?.payee_id || '')
+  // 'one' = one person absorbs it; 'split' = BOTH do, and we write TWO debt
+  // rows. Two rows rather than one flagged row because each share then
+  // recovers on its OWN pay run — the ledger, the tray, the pay statement and
+  // the rep's Commissions card all keep working with no change at all.
+  // Create only: re-splitting a debt that already has recoveries against it
+  // would mean unpicking money already paid.
+  const [mode, setMode]     = useState('one')
+  const [splitPct, setSplitPct] = useState(50)      // the SETTER's share
+  const [when, setWhen]     = useState(edit ? 'hold' : 'hold')   // hold | now | pick
+  const [pickDate, setPickDate] = useState(currentRun && currentRun !== 'overdue' ? currentRun : (payDates[0] || ''))
+  const [saving, setSaving] = useState(false)
+
+  const dealById = useMemo(() => Object.fromEntries(deals.map(d => [d.id, d])), [deals])
+  const deal = dealId ? dealById[dealId] : null
+
+  // Search every deal ever, paid or not — the whole point is reaching back to
+  // a job that already went out.
+  const matches = useMemo(() => {
+    const term = q.trim().toLowerCase()
+    if (!term) return []
+    return deals
+      .filter(d => String(d.deal_name || '').toLowerCase().includes(term))
+      .sort((a, b) => String(b.sale_date || '').localeCompare(String(a.sale_date || '')))
+      .slice(0, 6)
+  }, [q, deals])
+
+  // Who the deal already says absorbs a deduction — the same rule the
+  // commission engine pays by, so the default matches how the job was priced.
+  // What each person actually EARNED on this job, so you can see at a glance
+  // whether the deduction fits inside their pay for it.
+  const amounts = useMemo(() => (deal ? dealAmounts(deal) : null), [deal])
+
+  const people = useMemo(() => {
+    if (!deal) return []
+    const setter = users.find(u => u.id === deal.setter_id)
+    const closer = users.find(u => u.id === deal.closer_id)
+    const out = []
+    if (setter) out.push({ id: setter.id, name: setter.name, role: 'Setter', earned: amounts?.setter ?? 0 })
+    if (closer && closer.id !== setter?.id) out.push({ id: closer.id, name: closer.name, role: 'Closer', earned: amounts?.closer ?? 0 })
+    return out
+  }, [deal, users, amounts])
+
+  const canSplit = !edit && people.length === 2
+  const setterPerson = people.find(p => p.role === 'Setter')
+  const closerPerson = people.find(p => p.role === 'Closer')
+
+  const defaultPayee = useMemo(() => {
+    if (!deal) return ''
+    const solo = !deal.closer_id || deal.closer_id === deal.setter_id
+    if (solo) return deal.setter_id || deal.closer_id || ''
+    const paidBy = deal.deduction_paid_by || 'closer'
+    return paidBy === 'setter' ? deal.setter_id : deal.closer_id
+  }, [deal])
+
+  const effectivePayee = payeeId || defaultPayee
+  const amt = Math.abs(parseFloat(amount) || 0)
+
+  function pickDeal(d) {
+    setDealId(d.id); setQ('')
+    setPayeeId('')                                   // re-derive from the new deal
+    setMode('one')
+    // Start from how this deal already splits deductions, same as the editor.
+    const pct = d.deduction_split_pct != null ? Math.round(Number(d.deduction_split_pct) * 100) : 50
+    setSplitPct(Math.min(100, Math.max(0, pct)))
+    if (!note.trim()) setNote('')
+  }
+
+  // Round to cents and give any rounding remainder to the LARGER share, so the
+  // two rows always add back to exactly what was typed.
+  const splitRows = useMemo(() => {
+    if (mode !== 'split' || !setterPerson || !closerPerson) return null
+    const setterCut = Math.round(amt * (splitPct / 100) * 100) / 100
+    const closerCut = Math.round((amt - setterCut) * 100) / 100
+    return [
+      { payeeId: setterPerson.id, amount: setterCut, who: setterPerson },
+      { payeeId: closerPerson.id, amount: closerCut, who: closerPerson },
+    ]
+  }, [mode, amt, splitPct, setterPerson, closerPerson])
+
+  // ── What their next cheque actually is ────────────────────────────────
+  // Knowing a rep earned $1,400 on THIS job says nothing about whether $640
+  // can come off their pay — that depends on the whole run. So every person
+  // shows their pay on the run the money would leave from, which follows the
+  // "when" choice: the run picked, or — for a held debt, which has no run of
+  // its own — the NEXT cheque, the first one it can reach.
+  const runDate = when === 'now'  ? (currentRun && currentRun !== 'overdue' ? currentRun : nextRun)
+                : when === 'pick' ? (pickDate || null)
+                : nextRun
+  const payOn = (id) => (id && runDate ? payByRun?.[runDate]?.[id] : null) || null
+
+  // This person's slice of the deduction, so the pay line can flag a take
+  // that does not fit. Zero for someone who is not absorbing any of it.
+  const shareFor = (id) => {
+    if (mode === 'split') return splitRows?.find(r => r.payeeId === id)?.amount ?? 0
+    return effectivePayee === id ? amt : 0
+  }
+
+  // Who is actually absorbing money, and by how much the run comes up short.
+  // This is the answer to "can I take it out" stated in words — the amber
+  // figure alone makes you do the subtraction.
+  const absorbers = people.length
+    ? people.map(p => ({ id: p.id, name: p.name.split(' ')[0], share: shareFor(p.id) }))
+    : effectivePayee
+      ? [{ id: effectivePayee, name: (users.find(u => u.id === effectivePayee)?.name || '').split(' ')[0], share: amt }]
+      : []
+  const overshoot = runDate
+    ? absorbers
+        .map(a => ({ ...a, by: a.share - (payOn(a.id)?.net || 0) }))
+        .filter(a => a.share > 0 && a.by > 0.005)
+    : []
+
+  const canSave = amt > 0 && !saving &&
+    (mode === 'split' ? !!splitRows && splitRows.every(r => r.amount > 0) : !!effectivePayee)
+
+  async function save() {
+    if (!canSave) return
+    setSaving(true)
+    const payDate = when === 'now' ? (currentRun !== 'overdue' ? currentRun : null)
+                  : when === 'pick' ? (pickDate || null)
+                  : null                             // hold = the debt, no run
+    // ONE call carrying one row or two — Payroll writes them together so a
+    // split can never half-save and leave one person owing the whole thing.
+    const ok = await onSave({
+      id: edit?.id || null,
+      dealId: dealId || null,
+      note: note.trim() || null,
+      payDate,
+      rows: mode === 'split'
+        ? splitRows.map(r => ({ payeeId: r.payeeId, amount: -r.amount }))
+        : [{ payeeId: effectivePayee, amount: -amt }],
+    })
+    setSaving(false)
+    if (ok) onClose()
+  }
+

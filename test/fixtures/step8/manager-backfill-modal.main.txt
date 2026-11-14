@@ -1,0 +1,27 @@
+export default function ManagerBackfillModal({ rep, manager, onClose }) {
+  const [deals, setDeals]   = useState(null)   // null = loading
+  const [picked, setPicked] = useState({})     // deal_id -> bool
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    fetchNullManagerDeals(rep.id).then(({ data }) => { if (alive) setDeals(data || []) })
+    return () => { alive = false }
+  }, [rep.id])
+
+  // Projected manager override if THIS manager is attached.
+  const projected = (d) => dealAmounts({ ...d, manager_id: manager.id }).manager
+  const chosen = (deals || []).filter(d => picked[d.id])
+  const chosenTotal = chosen.reduce((s, d) => s + projected(d), 0)
+
+  async function run() {
+    if (!chosen.length) return
+    setSaving(true)
+    let okCount = 0
+    for (const d of chosen) {
+      const res = await updateDeal(d.id, { manager_id: manager.id })
+      if (!res?.error) okCount++
+    }
+    setSaving(false)
+    onClose(okCount)
+  }

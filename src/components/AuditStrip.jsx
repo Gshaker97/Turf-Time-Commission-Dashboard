@@ -1,11 +1,14 @@
 import { Check, Circle, X, Lock, RefreshCw, CalendarClock, Users, UploadCloud } from 'lucide-react'
+import { SURFACE, SecondaryButton } from './ui'
 
 // X/7 pill shown next to the deal name on the Needs-review table.
 export function AuditBadge({ done, total, reviewed }) {
   const full = done >= total
   return (
-    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold flex-shrink-0"
-      style={{ background: full ? '#00b89420' : '#f59e0b20', color: full ? '#34d399' : '#f59e0b' }}>
+    <span className="px-2 py-0.5 rounded-full text-[12px] font-bold flex-shrink-0 whitespace-nowrap"
+      style={full
+        ? { background: 'rgba(169,196,178,0.14)', color: 'var(--pos)', border: '1px solid rgba(169,196,178,0.4)' }
+        : { background: 'rgba(210,160,116,0.14)', color: 'var(--warn)', border: '1px solid rgba(210,160,116,0.4)' }}>
       {done}/{total}{reviewed ? ' · Reviewed' : ''}
     </span>
   )
@@ -28,20 +31,18 @@ export function AuditControls({ audit, canAudit }) {
   return (
     <div className="flex items-center gap-2 flex-wrap">
       {canAudit && (
-        <button onClick={audit.rerunAll} disabled={anyBusy || audit.state === 'loading'}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-white/60 hover:text-white disabled:opacity-40"
-          style={{ background: '#1e1e1e', border: '1px solid #2e2e2e' }}
+        <SecondaryButton onClick={audit.rerunAll} disabled={anyBusy || audit.state === 'loading'}
           title="Re-check every deal against the install sheet + GHL now (otherwise cached for an hour)">
           <RefreshCw size={12} className={audit.state === 'loading' ? 'animate-spin' : ''} /> Refresh
-        </button>
+        </SecondaryButton>
       )}
       {canAudit && audit.state === 'ready' && ago && (
-        <span className="text-[11px] text-white/35">updated {ago}</span>
+        <span className="text-[13px] text-bank-mu">updated {ago}</span>
       )}
-      {audit.state === 'loading' && <span className="text-[11px] text-white/40">Running audit…</span>}
-      {audit.state === 'disabled' && <span className="text-[11px] text-white/40">The audit runs on the live site (disabled in demo mode).</span>}
+      {audit.state === 'loading' && <span className="text-[13px] text-bank-mu">Running audit…</span>}
+      {audit.state === 'disabled' && <span className="text-[13px] text-bank-mu">The audit runs on the live site (disabled in demo mode).</span>}
       {audit.state === 'error' && (
-        <span className="text-[11px] text-red-300">Audit failed: {audit.err}{' '}
+        <span className="text-[13px]" style={{ color: 'var(--neg)' }}>Audit failed: {audit.err}{' '}
           <button onClick={audit.rerunAll} className="underline">retry</button>
         </span>
       )}
@@ -117,7 +118,8 @@ function FixButton({ fix, busy, onFix }) {
     : fix.type === 'ghl_fill' ? UploadCloud : Users
   return (
     <button onClick={onFix} disabled={busy}
-      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold text-dark bg-teal disabled:opacity-40">
+      className="inline-flex items-center gap-1 px-2.5 py-1 min-h-[44px] md:min-h-0 rounded-lg text-[13px] font-semibold disabled:opacity-40 hover:brightness-105"
+      style={{ background: 'var(--gold)', color: 'var(--gold-ink)' }}>
       <Icon size={10} /> {label}
     </button>
   )
@@ -130,33 +132,33 @@ function AuditRow({ deal, item, audit, canAudit, busy, onToggle, onFix }) {
   const done = item.checked
   const clickable = item.manual && canAudit
   const icon = done
-    ? <Check size={14} className="text-teal" />
-    : clickable ? <Circle size={14} className="text-white/35" />
-    : item.manual ? <Lock size={12} className="text-white/25" />
-    : <X size={13} className="text-amber-400" />
+    ? <Check size={14} style={{ color: 'var(--pos)' }} />
+    : clickable ? <Circle size={14} className="text-bank-fa" />
+    : item.manual ? <Lock size={12} className="text-bank-fa" />
+    : <X size={13} style={{ color: 'var(--warn)' }} />
   const label = (
-    <span className={`inline-flex items-center gap-1.5 text-[12px] font-semibold ${done ? 'text-white/55' : 'text-white/90'}`}>
-      {icon}{item.label}{item.manual && <span className="text-white/25 text-[10px] font-normal">(manual)</span>}
+    <span className={`inline-flex items-center gap-1.5 text-[13px] font-semibold ${done ? 'text-bank-mu' : 'text-bank-tx'}`}>
+      {icon}{item.label}{item.manual && <span className="text-bank-fa text-[12px] font-normal">(manual)</span>}
     </span>
   )
   const lines = detailLines(item, deal, audit.byId[deal.id])
   return (
-    <div className="rounded-lg px-2.5 py-1.5" style={{ background: '#242424', border: '1px solid #2a2a2a' }}>
+    <div className="rounded-xl px-3 py-2" style={SURFACE.well}>
       {clickable
-        ? <button onClick={() => onToggle(!done)} disabled={busy} title={done ? 'Uncheck' : 'Check'}
-            className="disabled:opacity-40 hover:opacity-80 transition-opacity">{label}</button>
+        ? <button onClick={() => onToggle(!done)} disabled={busy} title={done ? 'Uncheck' : 'Check'} aria-pressed={done}
+            className="min-h-[44px] md:min-h-0 disabled:opacity-40 hover:opacity-80 transition-opacity">{label}</button>
         : label}
       {lines.length > 0 && (
         <div className="mt-1 ml-[20px] space-y-0.5">
           {lines.map((ln, i) => {
             const text = typeof ln === 'string' ? ln : ln.text
             const tone = typeof ln === 'string' ? null : ln.tone
-            const cls = tone === 'match' ? 'text-teal'
-              : tone === 'mismatch' ? 'text-red-400'
-              : tone === 'blank' ? 'text-amber-400'
-              : tone === 'nofield' ? 'text-white/35'
-              : 'text-white/45'
-            return <p key={i} className={`text-[11px] leading-snug ${cls}`}>{text}</p>
+            const color = tone === 'match' ? 'var(--pos)'
+              : tone === 'mismatch' ? 'var(--neg)'
+              : tone === 'blank' ? 'var(--warn)'
+              : tone === 'nofield' ? 'var(--fa)'
+              : 'var(--mu)'
+            return <p key={i} className="text-[13px] leading-snug" style={{ color }}>{text}</p>
           })}
           {canAudit && item.fix && (
             <div className="pt-0.5"><FixButton fix={item.fix} busy={busy} onFix={onFix} /></div>
@@ -185,10 +187,10 @@ export default function AuditStrip({ deal, audit, canAudit }) {
   if (!a || !Array.isArray(a.items)) return null
 
   return (
-    <div className="rounded-xl px-3 py-2.5" style={{ background: '#1e1e1e', border: '1px solid #313131' }}>
+    <div className="rounded-xl px-3 py-2.5" style={SURFACE.raise}>
       {/* Name the customer this checklist belongs to, so each card is clearly its own. */}
-      <div className="flex items-center gap-2 mb-2.5 pb-2 border-b border-white/10">
-        <span className="text-[11px] font-bold uppercase tracking-wide text-white/70 truncate">{deal.deal_name}</span>
+      <div className="flex items-center gap-2 mb-2.5 pb-2 border-b border-bank-line">
+        <span className="text-[13px] font-bold uppercase tracking-wide text-bank-mu truncate">{deal.deal_name}</span>
         <AuditBadge done={a.done} total={a.total} reviewed={a.reviewed} />
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">

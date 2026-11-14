@@ -20,6 +20,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { toast } from "../lib/toast";
 import { PersonPicker } from "../components/DealModal";
 import { competitionStandings, competitionStatus, fmtScore } from "../utils/competition";
+import { SURFACE, GOLD_WASH, Card, LoadingBlock, EmptyBlock, IconButton } from "../components/ui";
 
 const money = (n) => "$" + Math.round(Number(n) || 0).toLocaleString("en-US");
 const SELLER = (u) => ["rep", "manager", "director", "vp"].includes(u.role);
@@ -45,12 +46,14 @@ function getMonths(n = 12) {
   return months;
 }
 
-function rateColor(r) {
-  if (r == null) return "#6b7280";
-  if (r >= 40) return "#4ade80";
-  if (r >= 25) return "#fbbf24";
-  return "#fb923c";
-}
+// Closing-rate tone on the tokens: strong = sage, middling = amber, weak = rose.
+// Returned as CSS values for the page and as hex for the canvas card.
+const RATE_HEX = { pos: "#a9c4b2", warn: "#d2a074", neg: "#d98c80", mu: "#a19e97" };
+function rateKey(r) { if (r == null) return "mu"; if (r >= 40) return "pos"; if (r >= 25) return "warn"; return "neg"; }
+const rateColor = (r) => `var(--${rateKey(r)})`;
+const rateHex   = (r) => RATE_HEX[rateKey(r)];
+// Shared label style above every block on this page.
+const EYEBROW = "text-[13px] uppercase tracking-wider text-bank-fa font-semibold";
 
 // One figure inside a group card. Clickable ones drill to the deals behind them.
 // A COUNT IS NEVER COLOURED BY ITS RATE. `Closed` used to render the count
@@ -58,17 +61,17 @@ function rateColor(r) {
 // ORANGE "1" — the number read as an error when it is just a count, and the
 // verdict belongs to the rate underneath it (Keaton: "why is the deals #
 // orange?"). The rate line carries the colour now; the count stays plain.
-function Stat({ value, label, sub, subColor, color = "#ededed", onClick }) {
+function Stat({ value, label, sub, subColor, color = "var(--tx)", onClick }) {
   const Tag = onClick ? "button" : "div";
   return (
     <Tag onClick={onClick ? onClickUnlessSelecting(onClick) : undefined}
       // `self-start` because a stretched <button> VERTICALLY CENTRES its own
       // content: Revenue (no rate line) sat 7px below its neighbours, whose
       // extra sub-line made them taller. Top-align and every label lines up.
-      className={`flex-1 min-w-0 text-left self-start ${onClick ? "cursor-pointer" : ""}`}>
-      <p className="text-[18px] md:text-[20px] font-bold leading-none truncate" style={{ color }}>{value}</p>
-      <p className="text-[10px] text-white/45 mt-1 truncate">{label}</p>
-      {sub && <p className="text-[10px] truncate" style={{ color: subColor || "rgba(255,255,255,0.3)" }}>{sub}</p>}
+      className={`flex-1 min-w-0 text-left self-start ${onClick ? "cursor-pointer min-h-[44px] md:min-h-0 rounded-lg hover:bg-bank-raise transition-colors" : ""}`}>
+      <p className="text-[20px] md:text-[22px] font-bold leading-none truncate tabular-nums" style={{ color }}>{value}</p>
+      <p className="text-[13px] text-bank-mu mt-1 truncate">{label}</p>
+      {sub && <p className="text-[13px] truncate tabular-nums" style={{ color: subColor || "var(--fa)" }}>{sub}</p>}
     </Tag>
   );
 }
@@ -90,7 +93,7 @@ function StatRow({ left, right }) {
     <div className="flex flex-col md:flex-row md:items-stretch gap-2.5 md:gap-0">
       <div className="flex gap-3 md:gap-4 min-w-0" style={{ flex: `${left.length} 1 0%` }}>{left}</div>
       <div className="w-full h-px md:w-px md:h-auto md:self-stretch md:mx-3 my-0.5 flex-shrink-0"
-        style={{ background: "#ffffff1f" }} />
+        style={{ background: "var(--line)" }} />
       <div className="flex gap-3 md:gap-4 min-w-0" style={{ flex: `${right.length} 1 0%` }}>{right}</div>
     </div>
   );
@@ -98,10 +101,10 @@ function StatRow({ left, right }) {
 
 function GroupCard({ title, tone, children }) {
   return (
-    <div className="rounded-xl p-3.5 md:p-4 mb-3" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
-      <p className="text-[10px] uppercase tracking-widest font-bold mb-3" style={{ color: tone }}>{title}</p>
+    <Card className="mb-3">
+      <p className={`${EYEBROW} mb-3`} style={tone ? { color: tone } : undefined}>{title}</p>
       {children}
-    </div>
+    </Card>
   );
 }
 
@@ -398,29 +401,29 @@ export default function Home() {
     const ctx = cv.getContext("2d");
     const rr = (x, y, w, h, r) => { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); };
 
-    ctx.fillStyle = "#141414"; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "#131416"; ctx.fillRect(0, 0, W, H);
     // header band
-    const g = ctx.createLinearGradient(0, 0, W, 300); g.addColorStop(0, "#0e3b35"); g.addColorStop(1, "#143d52");
+    const g = ctx.createLinearGradient(0, 0, W, 300); g.addColorStop(0, "#1c1e21"); g.addColorStop(1, "#23262a");
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, 300);
     // avatar
-    ctx.beginPath(); ctx.arc(P + 56, 150, 56, 0, Math.PI * 2); ctx.fillStyle = "#00b894"; ctx.fill();
-    ctx.fillStyle = "#0b0b0b"; ctx.font = "bold 46px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.beginPath(); ctx.arc(P + 56, 150, 56, 0, Math.PI * 2); ctx.fillStyle = "#bfa46c"; ctx.fill();
+    ctx.fillStyle = "#191509"; ctx.font = "bold 46px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(initials, P + 56, 152);
     // name + sub
     ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
-    ctx.fillStyle = "#fff"; ctx.font = "bold 52px Arial"; ctx.fillText(viewUser?.name || "", P + 130, 140);
-    ctx.fillStyle = "rgba(255,255,255,0.55)"; ctx.font = "28px Arial";
+    ctx.fillStyle = "#ede7da"; ctx.font = "bold 52px Arial"; ctx.fillText(viewUser?.name || "", P + 130, 140);
+    ctx.fillStyle = "#a19e97"; ctx.font = "28px Arial";
     ctx.fillText(`${(viewUser?.role || "").toUpperCase()} · ${mr.label}`, P + 132, 184);
     // rank (right)
     ctx.textAlign = "right";
-    ctx.fillStyle = "rgba(255,255,255,0.5)"; ctx.font = "bold 22px Arial"; ctx.fillText("COMPANY RANK", W - P, 110);
-    ctx.fillStyle = "#fbbf24"; ctx.font = "bold 96px Arial";
+    ctx.fillStyle = "#8c8a84"; ctx.font = "bold 22px Arial"; ctx.fillText("COMPANY RANK", W - P, 110);
+    ctx.fillStyle = "#ede7da"; ctx.font = "bold 96px Arial";
     ctx.fillText(rank.ranked ? `#${rank.rank}` : "—", W - P, 200);
-    if (rank.ranked) { ctx.fillStyle = "rgba(255,255,255,0.5)"; ctx.font = "24px Arial"; ctx.fillText(`of ${rank.total}`, W - P, 240); }
+    if (rank.ranked) { ctx.fillStyle = "#a19e97"; ctx.font = "24px Arial"; ctx.fillText(`of ${rank.total}`, W - P, 240); }
     ctx.textAlign = "left";
 
     // gap / best ribbon
-    ctx.fillStyle = "rgba(255,255,255,0.85)"; ctx.font = "26px Arial";
+    ctx.fillStyle = "#ede7da"; ctx.font = "26px Arial";
     const ribbon = isBest ? "🔥 Personal best month"
       : rank.ranked ? (rank.ahead ? `${money(rank.gapAhead)} to pass ${rank.ahead.name}` : "🏆 #1 in the company")
       : "Make your first sale to hit the board";
@@ -429,25 +432,25 @@ export default function Home() {
     // stat cards — the same six figures the card shows on screen
     const hasLeads = act.leadsRan > 0 || act.leadsClosed > 0;
     const tiles = [
-      ["REVENUE SOLD", money(sold), "#2dd4bf"],
-      ["COMMISSION", money(commission), "#34d399"],
-      ["APPTS SET", String(act.set), "#74b9ff"],
-      ["RUN %", pct(act.ranRate), rateColor(act.ranRate)],
-      ["CLOSED", String(act.closed), "#fff"],
-      [hasLeads ? "LEADS CLOSED" : "CLOSING %", hasLeads ? String(act.leadsClosed) : pct(act.closeRate), "#fbbf24"],
+      ["REVENUE SOLD", money(sold), "#ede7da"],
+      ["COMMISSION", money(commission), "#cdb684"],   // the one gold number
+      ["APPTS SET", String(act.set), "#ede7da"],
+      ["RUN %", pct(act.ranRate), rateHex(act.ranRate)],
+      ["CLOSED", String(act.closed), "#ede7da"],
+      [hasLeads ? "LEADS CLOSED" : "CLOSING %", hasLeads ? String(act.leadsClosed) : pct(act.closeRate), hasLeads ? "#ede7da" : rateHex(act.closeRate)],
     ];
     const cw = (W - P * 2 - 40) / 2, ch = 190, gap = 40;
     tiles.forEach((t, i) => {
       const col = i % 2, row = Math.floor(i / 2);
       const x = P + col * (cw + 40), y = 340 + row * (ch + gap);
-      ctx.fillStyle = "#1e1e1e"; rr(x, y, cw, ch, 24); ctx.fill();
-      ctx.strokeStyle = "#2a2a2a"; ctx.lineWidth = 2; rr(x, y, cw, ch, 24); ctx.stroke();
-      ctx.fillStyle = "rgba(255,255,255,0.4)"; ctx.font = "bold 26px Arial"; ctx.fillText(t[0], x + 34, y + 62);
+      ctx.fillStyle = "#1c1e21"; rr(x, y, cw, ch, 24); ctx.fill();
+      ctx.strokeStyle = "#2c2f33"; ctx.lineWidth = 2; rr(x, y, cw, ch, 24); ctx.stroke();
+      ctx.fillStyle = "#a19e97"; ctx.font = "bold 26px Arial"; ctx.fillText(t[0], x + 34, y + 62);
       ctx.fillStyle = t[2]; ctx.font = "bold 70px Arial"; ctx.fillText(t[1], x + 34, y + 145);
     });
 
     // footer
-    ctx.textAlign = "center"; ctx.fillStyle = "#00b894"; ctx.font = "bold 30px Arial";
+    ctx.textAlign = "center"; ctx.fillStyle = "#bfa46c"; ctx.font = "bold 30px Arial";
     ctx.fillText("TURF TIME", W / 2, H - 46);
 
     cv.toBlob(async (blob) => {
@@ -466,7 +469,7 @@ export default function Home() {
     }, "image/png");
   }
 
-  if (loading) return <div className="text-white/30 text-sm py-16 text-center" style={{ background: "#1a1a1a", minHeight: "100%" }}>Loading…</div>;
+  if (loading) return <LoadingBlock text="Loading your card…" />;
 
   const soldDelta = prevSold == null ? null : sold - prevSold;
   // THE LEADS GROUP IS GONE ENTIRELY when the rep has run none (per Keaton:
@@ -474,18 +477,18 @@ export default function Home() {
   const hasLeads = act.leadsRan > 0 || act.leadsClosed > 0;
 
   return (
-    <div style={{ background: "#1a1a1a", color: "#fff", minHeight: "100%" }} className="pb-8">
+    <div style={{ color: "var(--tx)", minHeight: "100%" }} className="pb-8 max-w-[960px] mx-auto">
 
       {/* Header */}
       <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-11 h-11 rounded-full flex items-center justify-center text-[15px] font-bold text-dark flex-shrink-0"
-            style={{ background: "linear-gradient(135deg,#2dd4bf,#00b894)" }}>{initials}</div>
+          <div className="w-11 h-11 rounded-full flex items-center justify-center text-[15px] font-bold text-bank-tx flex-shrink-0"
+            style={SURFACE.raise}>{initials}</div>
           <div className="min-w-0">
-            <h1 className="text-lg md:text-xl font-bold text-white truncate">
-              {viewUser?.name}{viewingOther && <span className="text-[11px] font-semibold text-amber-300 ml-2">· viewing</span>}
+            <h1 className="text-lg md:text-xl font-bold text-bank-tx truncate">
+              {viewUser?.name}{viewingOther && <span className="text-[13px] font-semibold ml-2" style={{ color: "var(--warn)" }}>· viewing</span>}
             </h1>
-            <p className="text-[12px] text-white/40 truncate">{myTeam || ROLE_LABEL[viewUser?.role] || viewUser?.role}</p>
+            <p className="text-[13px] text-bank-mu truncate">{myTeam || ROLE_LABEL[viewUser?.role] || viewUser?.role}</p>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
@@ -505,80 +508,78 @@ export default function Home() {
                   placeholder="View another card…" />
               </div>
               {viewingOther && (
-                <button onClick={() => setViewId(null)} title="Back to my card"
-                  className="p-2 rounded-lg text-white/40 hover:text-white transition-colors"
-                  style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
+                <IconButton onClick={() => setViewId(null)} title="Back to my card" aria-label="Back to my card" style={SURFACE.raise}>
                   <X size={14} />
-                </button>
+                </IconButton>
               )}
             </div>
           )}
           <select value={selected} onChange={e => setSelected(Number(e.target.value))}
-            className="text-[12px] px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white"
-            title="Which month this card shows">
-            {months.map((m, i) => <option key={i} value={i} style={{ background: "#2a2a2a" }}>{m.label}</option>)}
+            className="text-[13px] px-3 py-2 min-h-[44px] md:min-h-0 rounded-lg text-bank-tx focus:outline-none" style={SURFACE.raise}
+            title="Which month this card shows" aria-label="Month">
+            {months.map((m, i) => <option key={i} value={i}>{m.label}</option>)}
           </select>
         </div>
       </div>
 
       {/* Hero — what they sold, where they rank, what they earned */}
-      <div className="rounded-2xl p-4 md:p-5 mb-3 overflow-hidden"
-        style={{ background: "linear-gradient(135deg,#0e3b35,#143d52)", border: "1px solid #1c5a50" }}>
+      <Card className="mb-3 overflow-hidden">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="min-w-0">
-            <p className="text-[10px] uppercase tracking-widest text-white/45 font-bold flex items-center gap-2 flex-wrap">
+            <p className={`${EYEBROW} flex items-center gap-2 flex-wrap`}>
               Revenue sold
               {isBest && (
-                <span className="text-[9.5px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full whitespace-nowrap"
-                  style={{ background: "#fb923c22", color: "#fdba74", border: "1px solid #fb923c55" }}>🔥 Personal best</span>
+                <span className="text-[11px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full whitespace-nowrap"
+                  style={{ background: "rgba(210,160,116,0.14)", color: "var(--warn)", border: "1px solid rgba(210,160,116,0.4)" }}>🔥 Personal best</span>
               )}
             </p>
-            <p className="text-[30px] md:text-[40px] font-extrabold leading-none text-white mt-1">{money(sold)}</p>
+            <p className="text-[30px] md:text-[40px] font-extrabold leading-none text-bank-tx mt-1 tabular-nums">{money(sold)}</p>
             {soldDelta != null && soldDelta !== 0 && (
-              <p className="text-[12px] font-semibold mt-1.5" style={{ color: soldDelta > 0 ? "#6ee7c8" : "#f87171" }}>
+              <p className="text-[13px] font-semibold mt-1.5 tabular-nums" style={{ color: soldDelta > 0 ? "var(--pos)" : "var(--neg)" }}>
                 {soldDelta > 0 ? "▲" : "▼"} {money(Math.abs(soldDelta))} on last month
               </p>
             )}
           </div>
           <button onClick={onClickUnlessSelecting(() => toggleDrill("commission"))}
-            className="flex-shrink-0 text-right" title="Tap for the deals behind it">
-            <p className="text-[10px] uppercase tracking-widest text-white/45 font-bold">Your commission</p>
-            <p className="text-[24px] md:text-[30px] font-extrabold leading-none mt-1" style={{ color: "#6ee7c8" }}>{money(commission)}</p>
+            className="flex-shrink-0 text-right min-h-[44px] md:min-h-0 rounded-lg hover:bg-bank-raise transition-colors" title="Tap for the deals behind it">
+            <p className={EYEBROW}>Your commission</p>
+            {/* the one gold number on this page */}
+            <p className="text-[24px] md:text-[30px] font-extrabold leading-none mt-1 tabular-nums" style={{ color: "var(--gold-tx)" }}>{money(commission)}</p>
           </button>
         </div>
 
         {/* Two ranks. Each row names the figure it ranks on and carries its own
             gap in that same unit — the headline's gap can never be read as the
             other board's. */}
-        <div className="mt-3.5 pt-3 border-t" style={{ borderColor: "rgba(255,255,255,0.1)" }}>
-          <p className="text-[10px] uppercase tracking-widest text-white/45 font-bold flex items-center gap-1.5 mb-1.5">
-            <Award size={12} className="text-amber-300" /> Company rank
+        <div className="mt-3.5 pt-3 border-t border-bank-line">
+          <p className={`${EYEBROW} flex items-center gap-1.5 mb-1.5`}>
+            <Award size={13} className="text-bank-mu" aria-hidden="true" /> Company rank
           </p>
           {!ranks.sold.ranked && !ranks.selfgen.ranked ? (
-            <p className="text-[12px] text-white/70">Log a sale this month to hit the board, {firstName}.</p>
+            <p className="text-[13px] text-bank-mu">Log a sale this month to hit the board, {firstName}.</p>
           ) : [
             { key: "sold", label: "Revenue sold", r: ranks.sold },
             { key: "selfgen", label: "Self-gen", r: ranks.selfgen },
           ].map(({ key, label, r }) => (
             <div key={key} className="flex items-baseline gap-2 flex-wrap py-0.5">
-              <span className="text-[19px] md:text-[22px] font-extrabold leading-none text-white flex-shrink-0">
-                {r.ranked ? <>#{r.rank}<span className="text-[12px] md:text-[13px] font-bold text-white/40"> / {r.total}</span></> : <span className="text-[13px] font-bold text-white/40">—</span>}
+              <span className="text-[19px] md:text-[22px] font-extrabold leading-none text-bank-tx flex-shrink-0 tabular-nums">
+                {r.ranked ? <>#{r.rank}<span className="text-[13px] font-bold text-bank-fa"> / {r.total}</span></> : <span className="text-[13px] font-bold text-bank-fa">—</span>}
               </span>
-              <span className="text-[11.5px] text-white/50 flex-shrink-0">{label}</span>
-              <span className="text-[11.5px] text-white/70 min-w-0">
+              <span className="text-[13px] text-bank-mu flex-shrink-0">{label}</span>
+              <span className="text-[13px] text-bank-mu min-w-0">
                 {!r.ranked
                   ? "not on this board yet"
                   : r.ahead
-                    ? <><span className="font-bold text-amber-300">{money(r.gapAhead)}</span> to pass {r.ahead.name}</>
-                    : <>🏆 #1{r.behind ? <> by <span className="font-bold text-amber-300">{money(r.leadBehind)}</span></> : ""}</>}
+                    ? <><span className="font-bold text-bank-tx tabular-nums">{money(r.gapAhead)}</span> to pass {r.ahead.name}</>
+                    : <>🏆 #1{r.behind ? <> by <span className="font-bold text-bank-tx tabular-nums">{money(r.leadBehind)}</span></> : ""}</>}
               </span>
             </div>
           ))}
         </div>
-      </div>
+      </Card>
 
       {/* Self gens — the appointments they booked and what became of them */}
-      <GroupCard title="Self Gens" tone="#00b894">
+      <GroupCard title="Self Gens">
         <StatRow
           left={[
             <Stat key="set" value={act.set} label="Appts set" />,
@@ -589,13 +590,13 @@ export default function Home() {
           right={[
             <Stat key="closed" value={act.closed} label="Deals closed" sub={pct(act.closeRate)} subColor={rateColor(act.closeRate)}
               onClick={() => toggleDrill("self")} />,
-            <Stat key="rev" value={money(act.revenue)} label="Revenue" color="#00b894" onClick={() => toggleDrill("self")} />,
+            <Stat key="rev" value={money(act.revenue)} label="Revenue" onClick={() => toggleDrill("self")} />,
           ]} />
       </GroupCard>
 
       {/* Leads — only when they actually ran one */}
       {hasLeads && (
-        <GroupCard title="Leads" tone="#c084fc">
+        <GroupCard title="Leads">
           {/* NO EMPTY SPACER CELL. A fourth `flex-1` div used to pad this row
               out to match Self Gens, which handed a quarter of the width to
               nothing and squeezed Revenue until it clipped. */}
@@ -604,58 +605,58 @@ export default function Home() {
             right={[
               <Stat key="closed" value={act.leadsClosed} label="Deals closed" sub={pct(act.leadsCloseRate)} subColor={rateColor(act.leadsCloseRate)}
                 onClick={() => toggleDrill("leads")} />,
-              <Stat key="rev" value={money(act.leadRevenue)} label="Revenue" color="#00b894" onClick={() => toggleDrill("leads")} />,
+              <Stat key="rev" value={money(act.leadRevenue)} label="Revenue" onClick={() => toggleDrill("leads")} />,
             ]} />
         </GroupCard>
       )}
 
       {/* Stat drill-down — inline, subtle */}
       {drill && drillData && (
-        <div className="rounded-xl mb-3 overflow-hidden" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
-          <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/5" style={{ background: "#171717" }}>
+        <Card padded={false} className="mb-3">
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-bank-line" style={{ background: "var(--bg)" }}>
             <div className="min-w-0">
-              <p className="text-[12px] font-semibold text-white truncate">{drillData.title}</p>
-              <p className="text-[10px] text-white/40">{mr.label} · {drillData.total}</p>
+              <p className="text-[13px] font-semibold text-bank-tx truncate">{drillData.title}</p>
+              <p className="text-[13px] text-bank-mu">{mr.label} · {drillData.total}</p>
             </div>
-            <button onClick={() => setDrill(null)} className="text-white/40 hover:text-white p-1 flex-shrink-0"><X size={15} /></button>
+            <IconButton onClick={() => setDrill(null)} aria-label="Close" className="flex-shrink-0 -mr-2"><X size={15} /></IconButton>
           </div>
           <div className="max-h-72 overflow-y-auto">
             {drillData.rows.length === 0 ? (
-              <p className="px-4 py-6 text-center text-white/30 text-[12px]">Nothing here for {mr.label}.</p>
+              <EmptyBlock className="py-6">Nothing here for {mr.label}.</EmptyBlock>
             ) : drillData.rows.map(r => (
-              <div key={r.id} className="flex items-center justify-between gap-3 px-4 py-2 border-b border-white/5 last:border-0">
+              <div key={r.id} className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-bank-line last:border-0">
                 <div className="min-w-0">
-                  <p className="text-[12px] text-white/80 truncate">{r.name}</p>
-                  {r.sub && <p className="text-[10px] text-white/35">{r.sub}</p>}
+                  <p className="text-[13px] text-bank-tx truncate">{r.name}</p>
+                  {r.sub && <p className="text-[13px] text-bank-mu">{r.sub}</p>}
                 </div>
-                <span className="text-[12px] font-semibold text-teal whitespace-nowrap">{r.value}</span>
+                <span className="text-[13px] font-semibold text-bank-tx whitespace-nowrap tabular-nums">{r.value}</span>
               </div>
             ))}
           </div>
-        </div>
+        </Card>
       )}
 
       {/* Goals — targets edited in place, no modal, no Change button */}
-      <div className="rounded-xl p-3.5 md:p-4 mb-3" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
+      <Card className="mb-3">
         <div className="flex items-baseline justify-between gap-3 mb-3">
-          <p className="text-[10px] uppercase tracking-widest text-white/35 font-bold flex items-center gap-1.5">
-            <Target size={12} className="text-teal" /> Your goals
+          <p className={`${EYEBROW} flex items-center gap-1.5`}>
+            <Target size={13} className="text-bank-mu" aria-hidden="true" /> Your goals
           </p>
           {canEditGoals
             ? null
-            : <Link to="/goals" className="text-[11px] text-teal hover:underline">Goals →</Link>}
+            : <Link to="/goals" className="text-[13px] text-bank-gold-tx hover:underline min-h-[44px] md:min-h-0 inline-flex items-center">Goals →</Link>}
         </div>
 
         {goalLines.map(g => {
           const editing = editGoal === g.key;
-          const tone = !g.prog ? "#4b5563"
-            : g.prog.status === "done" ? "#4ade80"
-            : g.prog.status === "ahead" ? "#00b894" : "#f59e0b";
+          const tone = !g.prog ? "var(--line)"
+            : g.prog.status === "done" ? "var(--pos)"
+            : g.prog.status === "ahead" ? "var(--tx)" : "var(--warn)";
           return (
             <div key={g.key} className="mb-3 last:mb-0">
-              <div className="flex items-baseline justify-between gap-2 text-[11.5px] mb-1.5">
-                <span className="text-white/70 min-w-0 truncate">{g.label}</span>
-                <span className="flex-shrink-0 text-white/45 flex items-center gap-1.5">
+              <div className="flex items-center justify-between gap-2 text-[13px] mb-1.5">
+                <span className="text-bank-tx min-w-0 truncate">{g.label}</span>
+                <span className="flex-shrink-0 text-bank-mu flex items-center gap-1.5 tabular-nums">
                   {editing ? (<>
                     <span>{g.format(g.value)} of</span>
                     <input autoFocus type="text" inputMode="numeric" value={editVal}
@@ -669,8 +670,8 @@ export default function Home() {
                         saveTarget(g.period, g.field, editVal);
                       }}
                       aria-label={`${g.label} target`}
-                      className="w-24 px-2 py-1 rounded-md text-[12px] font-semibold text-white"
-                      style={{ background: "#141414", border: "1px solid #00b894" }} />
+                      className="w-24 px-2 py-1 min-h-[44px] md:min-h-0 rounded-md text-[13px] font-semibold text-bank-tx focus:outline-none"
+                      style={{ background: "var(--bg)", border: "1px solid var(--gold)" }} />
                   </>) : g.target == null ? (
                     /* NO TARGET YET — a real button that says what it does.
                        "set one" as a dashed-underline word read as a scrap of
@@ -679,30 +680,30 @@ export default function Home() {
                     canEditGoals ? (<>
                       {/* keep the production figure visible — a row with only
                           a button hides what they have actually done */}
-                      <span className="text-white/35">{g.format(g.value)}</span>
+                      <span className="text-bank-fa">{g.format(g.value)}</span>
                       <button type="button"
                         onClick={() => { setEditGoal(g.key); setEditVal(""); }}
-                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors hover:brightness-125"
-                        style={{ background: "rgba(0,184,148,0.12)", border: "1px solid rgba(0,184,148,0.45)", color: "#2dd4bf" }}>
-                        <Target size={11} /> Set a goal
+                        className="flex items-center gap-1.5 px-2.5 py-1 min-h-[44px] md:min-h-0 rounded-md text-[13px] font-semibold text-bank-gold-tx transition-colors hover:brightness-110"
+                        style={GOLD_WASH}>
+                        <Target size={12} aria-hidden="true" /> Set a goal
                       </button>
-                    </>) : <span className="text-white/25">{g.format(g.value)} · no goal set</span>
+                    </>) : <span className="text-bank-fa">{g.format(g.value)} · no goal set</span>
                   ) : (<>
                     <span>{g.format(g.value)} of</span>
                     {canEditGoals ? (
                       <button type="button"
                         onClick={() => { setEditGoal(g.key); setEditVal(String(g.target)); }}
-                        className="flex items-center gap-1 px-1.5 py-0.5 -mx-0.5 rounded-md font-semibold text-white transition-colors hover:bg-white/10"
+                        className="flex items-center gap-1 px-1.5 py-0.5 -mx-0.5 min-h-[44px] md:min-h-0 rounded-md font-semibold text-bank-tx transition-colors hover:bg-bank-raise"
                         title="Change this target">
                         {g.format(g.target)}
-                        <Pencil size={10} className="text-white/35" />
+                        <Pencil size={11} className="text-bank-fa" aria-hidden="true" />
                       </button>
-                    ) : <span className="font-semibold text-white">{g.format(g.target)}</span>}
+                    ) : <span className="font-semibold text-bank-tx">{g.format(g.target)}</span>}
                   </>)}
-                  {savingGoal === g.key && <span className="text-white/30 ml-1">…</span>}
+                  {savingGoal === g.key && <span className="text-bank-fa ml-1">…</span>}
                 </span>
               </div>
-              <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "#2a2a2a" }}>
+              <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--raise)" }}>
                 <div className="h-full rounded-full transition-all duration-500"
                   style={{ width: `${g.prog ? g.prog.frac * 100 : 0}%`, background: tone }} />
               </div>
@@ -711,22 +712,22 @@ export default function Home() {
         })}
 
         {selected !== 0 && (
-          <p className="text-[10px] text-white/25 mt-3">
+          <p className="text-[13px] text-bank-fa mt-3">
             Goals always track the current week and month — not {mr.label}.
           </p>
         )}
-      </div>
+      </Card>
 
       {/* Active competitions */}
-      <div className="rounded-xl p-3.5 md:p-4 mb-3" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
+      <Card className="mb-3">
         <div className="flex items-center justify-between mb-3">
-          <p className="text-[10px] uppercase tracking-widest text-white/35 font-bold flex items-center gap-1.5">
-            <Trophy size={13} className="text-amber-300" /> Contests you're in
+          <p className={`${EYEBROW} flex items-center gap-1.5`}>
+            <Trophy size={13} className="text-bank-mu" aria-hidden="true" /> Contests you're in
           </p>
-          <Link to="/competitions" className="text-[11px] text-teal hover:underline">View all</Link>
+          <Link to="/competitions" className="text-[13px] text-bank-gold-tx hover:underline min-h-[44px] md:min-h-0 inline-flex items-center">View all</Link>
         </div>
         {myComps.length === 0 ? (
-          <p className="text-[12px] text-white/30 py-1">You're not in any active competitions right now.</p>
+          <p className="text-[13px] text-bank-mu py-1">You're not in any active competitions right now.</p>
         ) : (
           <div className="space-y-2">
             {myComps.map(({ comp, mine, count, leader, ahead, gap }) => {
@@ -735,36 +736,36 @@ export default function Home() {
               const w = denom > 0 ? Math.min((mine.score / denom) * 100, 100) : 0;
               return (
                 <Link key={comp.id} to="/competitions"
-                  className="block rounded-lg px-3 py-2.5 hover:bg-white/[0.03] transition-colors"
-                  style={{ background: "#171717", border: "1px solid #262626" }}>
+                  className="block rounded-xl px-3.5 py-3 min-h-[44px] hover:bg-bank-raise transition-colors"
+                  style={SURFACE.well}>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[13px] font-semibold text-white truncate">{comp.name}</span>
-                    <span className="text-[12px] font-bold whitespace-nowrap" style={{ color: mine.rank === 1 ? "#fbbf24" : "#2dd4bf" }}>
+                    <span className="text-[13px] font-semibold text-bank-tx truncate">{comp.name}</span>
+                    <span className="text-[13px] font-bold whitespace-nowrap tabular-nums" style={{ color: mine.rank === 1 ? "var(--pos)" : "var(--tx)" }}>
                       {mine.earned ? "🎉 Earned" : `#${mine.rank} of ${count}`}
                     </span>
                   </div>
-                  <div className="text-[11px] text-white/40 mt-1">
-                    {comp.type === "team_avg" ? "Your team: " : "You: "}<span className="text-white/70 font-semibold">{fmtScore(mine.score, comp.metric, comp.type === "team_avg")}</span>
+                  <div className="text-[13px] text-bank-mu mt-1">
+                    {comp.type === "team_avg" ? "Your team: " : "You: "}<span className="text-bank-tx font-semibold">{fmtScore(mine.score, comp.metric, comp.type === "team_avg")}</span>
                     {target > 0
                       ? <> · target {fmtScore(target, comp.metric, comp.type === "team_avg")}</>
                       : ahead
-                        ? <> · <span className="text-amber-300">{fmtScore(gap, comp.metric, comp.type === "team_avg")}</span> to pass {ahead.name}</>
+                        ? <> · <span style={{ color: "var(--warn)" }}>{fmtScore(gap, comp.metric, comp.type === "team_avg")}</span> to pass {ahead.name}</>
                         : <> · 🏆 leading</>}
                   </div>
-                  <div className="h-1.5 rounded-full overflow-hidden mt-2" style={{ background: "#ffffff12" }}>
-                    <div className="h-full rounded-full" style={{ width: `${w}%`, background: mine.earned ? "#00b894" : "#2dd4bf" }} />
+                  <div className="h-1.5 rounded-full overflow-hidden mt-2" style={{ background: "var(--raise)" }}>
+                    <div className="h-full rounded-full" style={{ width: `${w}%`, background: mine.earned ? "var(--pos)" : "var(--tx)" }} />
                   </div>
                 </Link>
               );
             })}
           </div>
         )}
-      </div>
+      </Card>
 
       {/* Best ever — all-time, owner-credited, completed periods only */}
       {bests && (bests.bestMonth.best || bests.biggestDeal) && (
-        <div className="rounded-xl p-3.5 md:p-4 mb-3" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
-          <p className="text-[10px] uppercase tracking-widest text-white/35 font-bold mb-3">Your best ever</p>
+        <Card className="mb-3">
+          <p className={`${EYEBROW} mb-3`}>Your best ever</p>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {[
               { label: "Best month", v: bests.bestMonth.best ? fmt(bests.bestMonth.best.value) : "—", sub: bests.bestMonth.best?.label },
@@ -773,8 +774,8 @@ export default function Home() {
               { label: "Biggest deal", v: bests.biggestDeal ? fmt(bests.biggestDeal.value) : "—", sub: bests.biggestDeal?.when },
             ].map(t => (
               <div key={t.label} className="min-w-0">
-                <p className="text-[15px] md:text-[17px] font-bold truncate" style={{ color: "#fbbf24" }}>{t.v}</p>
-                <p className="text-[10px] text-white/45 truncate">{t.label}{t.sub ? ` · ${t.sub}` : ""}</p>
+                <p className="text-[18px] md:text-[20px] font-bold truncate text-bank-tx tabular-nums">{t.v}</p>
+                <p className="text-[13px] text-bank-mu truncate">{t.label}{t.sub ? ` · ${t.sub}` : ""}</p>
               </div>
             ))}
           </div>
@@ -782,24 +783,25 @@ export default function Home() {
             const bm = bests.bestMonth;
             if (!bm.best || !bm.current || bm.current.value <= 0) return null;
             const gap = bm.best.value - bm.current.value;
+            const banner = { background: "rgba(210,160,116,0.10)", border: "1px solid rgba(210,160,116,0.4)", color: "var(--warn)" };
             if (gap <= 0) return (
-              <p className="flex items-center gap-2 text-[11.5px] mt-3" style={{ color: "#6ee7c8" }}>
-                <Flame size={13} /> <span><b>{fmt(bm.current.value)} this month</b> — a new personal best, and the month isn't over.</span>
+              <p className="flex items-center gap-2 rounded-xl px-3.5 py-2.5 text-[13px] mt-3" style={banner}>
+                <Flame size={14} aria-hidden="true" /> <span><b>{fmt(bm.current.value)} this month</b> — a new personal best, and the month isn't over.</span>
               </p>
             );
             if (bm.current.value >= bm.best.value * 0.8) return (
-              <p className="flex items-center gap-2 text-[11.5px] mt-3" style={{ color: "#6ee7c8" }}>
-                <Flame size={13} /> <span><b>{fmt(bm.current.value)} this month</b> — {fmt(gap)} from your best month ever.</span>
+              <p className="flex items-center gap-2 rounded-xl px-3.5 py-2.5 text-[13px] mt-3" style={banner}>
+                <Flame size={14} aria-hidden="true" /> <span><b>{fmt(bm.current.value)} this month</b> — {fmt(gap)} from your best month ever.</span>
               </p>
             );
             return null;
           })()}
-        </div>
+        </Card>
       )}
 
       <button onClick={shareCard}
-        className="w-full flex items-center justify-center gap-2 px-3 py-3 rounded-xl text-[12.5px] font-semibold transition-colors"
-        style={{ background: shared ? "#00b89420" : "#1e1e1e", border: `1px solid ${shared ? "#00b89455" : "#2a2a2a"}`, color: shared ? "#00b894" : "rgba(255,255,255,0.55)" }}
+        className={`w-full flex items-center justify-center gap-2 px-3 py-3 min-h-[44px] rounded-xl text-[13px] font-semibold transition-colors ${shared ? "text-bank-gold-tx" : "text-bank-mu hover:text-bank-tx"}`}
+        style={shared ? GOLD_WASH : SURFACE.card}
         title="Copy a shareable card image">
         {shared ? <Check size={14} /> : <Share2 size={14} />}
         {shared === "copied" ? "Copied to clipboard" : shared === "downloaded" ? "Saved" : "Share my card"}

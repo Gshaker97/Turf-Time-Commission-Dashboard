@@ -1,0 +1,90 @@
+  const today = todayISO()
+  const periods = useMemo(() => currentPeriods(today), [today])
+  const headsSet = useMemo(() => headIdSet(users), [users])
+  const estOpts = useMemo(() => ({ leads, estimatesFrom }), [leads, estimatesFrom])
+
+  // Roster grouped by current team — active reps, managers, and team heads
+  // (same seeding rule as the Performance breakdown); ghosts admin-only.
+  const teams = useMemo(() => {
+    const people = users.filter(u =>
+      u.active !== false &&
+      (u.role === 'rep' || u.role === 'manager' || headsSet.has(u.id)) &&
+      (isAdmin || !u.ghost))
+    const groups = {}
+    for (const u of people) (groups[teamKeyFor(u, headsSet)] ??= []).push(u)
+    return Object.entries(groups).map(([tk, rows], i) => {
+      const lead = users.find(u => u.id === tk)
+      rows.sort((a, b) => a.name.localeCompare(b.name))
+      return {
+        key: tk,
+        name: tk === 'unassigned' ? 'No Team' : lead ? teamLabel(lead) : 'Former Team',
+        color: PALETTE[i % PALETTE.length],
+        rows,
+      }
+    }).sort((a, b) => (a.key === 'unassigned') - (b.key === 'unassigned') || a.name.localeCompare(b.name))
+  }, [users, headsSet, isAdmin])
+
+  const canEditRep = (rep) => isAdmin || rep.id === profile?.id || rep.manager_id === profile?.id
+
+  // Save one field of one rep's goal for the CURRENT period. The write
+  // materializes the full row (carried values included), so carry-forward
+  // becomes explicit the moment anyone touches a goal.
+  async function saveGoalField(rep, periodKey, field, raw) {
+    const p = periods[periodKey]
+    const g = resolveGoal(goals, rep.id, p.period, p.start)
+    const v = raw === '' ? null : Math.max(0, Number(raw) || 0)
+    const cur = {
+      est_target: g?.est_target ?? null,
+      deals_target: g?.deals_target ?? null,
+      revenue_target: g?.revenue_target ?? null,
+    }
+    if (cur[field] === v) return
+    const row = { rep_id: rep.id, period: p.period, period_start: p.start, ...cur, [field]: v }
+    setGoals(gs => [
+      ...gs.filter(x => !(x.rep_id === rep.id && x.period === p.period && String(x.period_start).slice(0, 10) === p.start)),
+      row,
+    ])
+    const res = await upsertPersonalGoal(row, profile?.id)
+    if (res?.error) { toast.error("Couldn't save the goal: " + (res.error.message || 'unknown error')); return }
+    // Monthly revenue also mirrors into rep_goals so the Performance page's
+    // rep goal fallback (and anything else on that store) stays in sync.
+    if (periodKey === 'month' && field === 'revenue_target' && v != null) {
+      const d = new Date(p.start + 'T12:00:00')
+      saveRepGoal(rep.id, 'rep', d.getFullYear(), d.getMonth() + 1, v)
+    }
+  }
+
+  // Apply the goal-math suggestion to week + month activity targets.
+  async function applySuggestion(rep, sug, monthGoal) {
+    const rows = [
+      { rep_id: rep.id, period: 'month', period_start: periods.month.start,
+        est_target: sug.month.est, deals_target: sug.month.deals, revenue_target: monthGoal?.revenue_target ?? null },
+      { rep_id: rep.id, period: 'week', period_start: periods.week.start,
+        est_target: sug.week.est, deals_target: sug.week.deals, revenue_target: sug.week.revenue },
+    ]
+    setGoals(gs => [
+      ...gs.filter(x => !(x.rep_id === rep.id && (
+        (x.period === 'month' && String(x.period_start).slice(0, 10) === periods.month.start) ||
+        (x.period === 'week' && String(x.period_start).slice(0, 10) === periods.week.start)))),
+      ...rows,
+    ])
+    for (const r of rows) {
+      const res = await upsertPersonalGoal(r, profile?.id)
+      if (res?.error) { toast.error("Couldn't save the goals: " + (res.error.message || 'unknown error')); return }
+    }
+    toast.success('Weekly + monthly targets set.')
+  }
+
+  // Team rollup for the header row: month production vs summed month goals.
+  function teamRollup(rows) {
+    let rev = 0, revGoal = 0, dealsN = 0, dealsGoal = 0
+    for (const rep of rows) {
+      const g = resolveGoal(goals, rep.id, 'month', periods.month.start)
+      const p = repProduction(deals, weeklyStats, rep.id, periods.month, estOpts)
+      rev += p.revenue; dealsN += p.deals
+      if (g?.revenue_target > 0) revGoal += Number(g.revenue_target)
+      if (g?.deals_target > 0) dealsGoal += Number(g.deals_target)
+    }
+    return { rev, revGoal, dealsN, dealsGoal }
+  }
+

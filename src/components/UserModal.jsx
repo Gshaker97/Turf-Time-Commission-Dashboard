@@ -1,24 +1,30 @@
 import { useState, useEffect } from 'react'
 import { X } from 'lucide-react'
 import { userAdmin, userAdminConfigured } from '../lib/db'
+import { SURFACE, GOLD_WASH, FieldLabel, Input, Select, PrimaryButton, SecondaryButton, IconButton } from '../components/ui'
 
 const ROLES = ['rep', 'manager', 'director', 'vp', 'admin']
 
-const inputCls =
-  'w-full px-3 py-2 rounded-lg text-[13px] text-white placeholder-white/20 ' +
-  'focus:outline-none focus:border-teal/40 transition-colors'
-const inputStyle = { background: '#1a1a1a', border: '1px solid #3a3a3a' }
-const Inp = (p) => <input {...p} style={inputStyle} className={inputCls} />
-const Sel = ({ children, ...p }) => (
-  <select {...p} style={inputStyle} className={inputCls}>{children}</select>
-)
+// Shared controls on the "well" surface so the inputs sit inside the card.
+const Inp = (p) => <Input {...p} style={SURFACE.well} />
+const Sel = ({ children, ...p }) => <Select {...p} style={SURFACE.well}>{children}</Select>
 const Field = ({ label, children }) => (
   <div>
-    <label className="block text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1.5">
-      {label}
-    </label>
+    <FieldLabel>{label}</FieldLabel>
     {children}
   </div>
+)
+// On/off switch — gold is the active state.
+const Toggle = ({ on, onClick, label }) => (
+  <button type="button" onClick={onClick} aria-pressed={on}
+    className={`w-full flex items-center justify-between px-3 py-2 min-h-[44px] md:min-h-0 md:h-9 rounded-lg text-[13px] transition-colors ${on ? 'text-bank-gold-tx' : 'text-bank-mu'}`}
+    style={on ? GOLD_WASH : SURFACE.well}>
+    <span>{label}</span>
+    <span className="w-9 h-5 rounded-full flex items-center px-0.5 transition-colors flex-shrink-0"
+      style={{ background: on ? 'var(--gold)' : 'var(--line)', justifyContent: on ? 'flex-end' : 'flex-start' }}>
+      <span className="w-4 h-4 rounded-full block" style={{ background: on ? 'var(--gold-ink)' : 'var(--tx)' }} />
+    </span>
+  </button>
 )
 
 const BLANK = {
@@ -96,29 +102,25 @@ export default function UserModal({ user, allUsers = [], teamChanges = [], onSav
   const leads     = [...managers, ...directors, ...vps]
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+    <div className="fixed inset-0 z-[60] flex items-end md:items-center md:justify-center md:p-4">
+      <div className="absolute inset-0" style={{ background: 'rgba(0,0,0,0.62)', backdropFilter: 'blur(3px)' }} onClick={onClose} />
       <div
-        className="relative w-full max-w-lg rounded-2xl shadow-2xl overflow-y-auto"
-        style={{ background: '#242424', border: '1px solid #333', maxHeight: '90vh' }}
+        className="relative w-full md:max-w-lg h-[100dvh] md:h-auto md:max-h-[90vh] rounded-none md:rounded-2xl overflow-y-auto flex flex-col"
+        style={{ ...SURFACE.card, boxShadow: 'var(--card-shadow), 0 24px 60px rgba(0,0,0,0.55)', color: 'var(--tx)' }}
+        role="dialog" aria-modal="true" aria-label={user ? 'Edit user' : 'Add user'}
       >
         <div
-          className="flex items-center justify-between px-6 py-4 sticky top-0 z-10"
-          style={{ background: '#242424', borderBottom: '1px solid #2e2e2e' }}
+          className="flex items-center justify-between px-5 py-3 sticky top-0 z-10"
+          style={{ background: 'var(--card)', borderBottom: '1px solid var(--line)' }}
         >
-          <h2 className="text-[15px] font-semibold text-white">
+          <h2 className="text-[15px] font-bold text-bank-tx">
             {user ? 'Edit User' : 'Add User'}
           </h2>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-white/30 hover:text-white hover:bg-white/10"
-          >
-            <X size={16} />
-          </button>
+          <IconButton onClick={onClose} aria-label="Close"><X size={16} /></IconButton>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+        <form onSubmit={handleSubmit} className="p-5 flex-1 flex flex-col gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field label="Full Name *">
               <Inp required value={form.name} onChange={e => set('name', e.target.value)} placeholder="Jane Smith" />
             </Field>
@@ -139,28 +141,12 @@ export default function UserModal({ user, allUsers = [], teamChanges = [], onSav
               <Inp value={form.company_name} onChange={e => set('company_name', e.target.value)} placeholder="Turf Time" />
             </Field>
             <Field label="Site Access">
-              <button type="button" onClick={() => set('is_admin', !form.is_admin)}
-                className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-[13px] transition-colors"
-                style={{ background: '#1a1a1a', border: '1px solid #3a3a3a', color: form.is_admin ? '#00b894' : 'rgba(255,255,255,0.6)' }}>
-                <span>Admin access {form.is_admin ? '— on' : '— off'}</span>
-                <span className="w-9 h-5 rounded-full flex items-center px-0.5 transition-colors"
-                  style={{ background: form.is_admin ? '#00b894' : '#3a3a3a', justifyContent: form.is_admin ? 'flex-end' : 'flex-start' }}>
-                  <span className="w-4 h-4 rounded-full bg-white block" />
-                </span>
-              </button>
-              <p className="text-[10px] text-white/30 mt-1">Full site/admin powers, independent of sales title.</p>
+              <Toggle on={form.is_admin} onClick={() => set('is_admin', !form.is_admin)} label={`Admin access ${form.is_admin ? '— on' : '— off'}`} />
+              <p className="text-[13px] text-bank-fa mt-1">Full site/admin powers, independent of sales title.</p>
             </Field>
             <Field label="Visibility">
-              <button type="button" onClick={() => set('ghost', !form.ghost)}
-                className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-[13px] transition-colors"
-                style={{ background: '#1a1a1a', border: '1px solid #3a3a3a', color: form.ghost ? '#a78bfa' : 'rgba(255,255,255,0.6)' }}>
-                <span>Ghost {form.ghost ? '— on' : '— off'}</span>
-                <span className="w-9 h-5 rounded-full flex items-center px-0.5 transition-colors"
-                  style={{ background: form.ghost ? '#a78bfa' : '#3a3a3a', justifyContent: form.ghost ? 'flex-end' : 'flex-start' }}>
-                  <span className="w-4 h-4 rounded-full bg-white block" />
-                </span>
-              </button>
-              <p className="text-[10px] text-white/30 mt-1">Deals still count in all totals, but the name is hidden from non-admins on leaderboards, competitions, stats &amp; filters.</p>
+              <Toggle on={form.ghost} onClick={() => set('ghost', !form.ghost)} label={`Ghost ${form.ghost ? '— on' : '— off'}`} />
+              <p className="text-[13px] text-bank-fa mt-1">Deals still count in all totals, but the name is hidden from non-admins on leaderboards, competitions, stats &amp; filters.</p>
             </Field>
           </div>
 
@@ -170,7 +156,7 @@ export default function UserModal({ user, allUsers = [], teamChanges = [], onSav
                 <option value="">None</option>
                 {leads.map(u => <option key={u.id} value={u.id}>{u.name} ({u.role})</option>)}
               </Sel>
-              <p className="text-[10px] text-white/30 mt-1">Their team lead — a manager, director, or VP. Groups them on the Team page and lets that person set their goals. Manager overrides on deals only apply when this is a manager.</p>
+              <p className="text-[13px] text-bank-fa mt-1">Their team lead — a manager, director, or VP. Groups them on the Team page and lets that person set their goals. Manager overrides on deals only apply when this is a manager.</p>
             </Field>
             <Field label="Assigned Director">
               <Sel value={form.director_id} onChange={e => set('director_id', e.target.value)}>
@@ -187,30 +173,27 @@ export default function UserModal({ user, allUsers = [], teamChanges = [], onSav
           </div>
 
           {user && (
-            <div className="rounded-lg p-3 space-y-2" style={{ background: '#1a1a1a', border: '1px solid #2e2e2e' }}>
-              <label className="block text-[10px] font-semibold text-white/30 uppercase tracking-widest">
-                Login Password
-              </label>
+            <div className="rounded-xl p-3 space-y-2" style={SURFACE.raise}>
+              <FieldLabel className="mb-0">Login Password</FieldLabel>
               {pwConfigured ? (
                 <>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 flex-wrap">
                     <Inp type="text" value={pw} onChange={e => { setPw(e.target.value); setPwMsg('') }}
-                      placeholder="Type a password (min 8 chars)" minLength={8} />
-                    <button type="button" onClick={setPassword} disabled={pwBusy || pw.length < 8}
-                      className="px-3 py-2 rounded-lg text-[12px] font-bold text-dark bg-teal hover:bg-teal-dark disabled:opacity-50 whitespace-nowrap">
+                      placeholder="Type a password (min 8 chars)" minLength={8} className="flex-1 !w-auto min-w-[180px]" />
+                    <PrimaryButton type="button" onClick={setPassword} disabled={pwBusy || pw.length < 8} className="px-3 py-2 min-h-[44px] md:min-h-0 whitespace-nowrap">
                       {pwBusy ? 'Saving…' : user.auth_id ? 'Set password' : 'Create login'}
-                    </button>
+                    </PrimaryButton>
                   </div>
-                  <p className="text-[10px] text-white/30">
+                  <p className="text-[13px] text-bank-fa">
                     {user.auth_id
                       ? 'Sets a new password you choose — share it with them and reset it here anytime.'
                       : 'No login yet — this creates one with the password you choose.'}
                   </p>
-                  {pwMsg && <p className={`text-[11px] ${pwErr ? 'text-red-400' : 'text-emerald-400'}`}>{pwMsg}</p>}
+                  {pwMsg && <p className="text-[13px]" style={{ color: pwErr ? 'var(--neg)' : 'var(--pos)' }}>{pwMsg}</p>}
                 </>
               ) : (
-                <p className="text-[11px] text-white/40">
-                  Set <code className="text-white/60">SUPABASE_SERVICE_KEY</code> on the site service to manage passwords here, or use
+                <p className="text-[13px] text-bank-mu">
+                  Set <code className="text-bank-tx">SUPABASE_SERVICE_KEY</code> on the site service to manage passwords here, or use
                   Supabase Studio → Authentication → Users.
                 </p>
               )}
@@ -218,57 +201,45 @@ export default function UserModal({ user, allUsers = [], teamChanges = [], onSav
           )}
 
           {user && (
-            <div className="rounded-lg p-3" style={{ background: '#1a1a1a', border: '1px solid #2e2e2e' }}>
-              <label className="block text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-2">
-                Team History
-              </label>
+            <div className="rounded-xl p-3" style={SURFACE.raise}>
+              <FieldLabel className="mb-2">Team History</FieldLabel>
               {(() => {
                 const nameOf = (id) => (id ? (allUsers.find(u => u.id === id)?.name ?? '—') : 'Unassigned')
                 const moves = teamChanges
                   .filter(c => c.profile_id === user.id)
                   .sort((a, b) => String(b.changed_at).localeCompare(String(a.changed_at)))
                 if (!moves.length) {
-                  return <p className="text-[11px] text-white/35">No team moves recorded — reporting to {nameOf(user.manager_id)} since before the change log began.</p>
+                  return <p className="text-[13px] text-bank-mu">No team moves recorded — reporting to {nameOf(user.manager_id)} since before the change log began.</p>
                 }
                 return (
                   <div className="space-y-1.5">
                     {/* Current state first, then each dated move (newest → oldest).
                         These dates are what the site's numbers attribute by:
                         sales before a move stay with the old team. */}
-                    <p className="text-[12px] text-white/70">
-                      <span className="text-teal font-semibold">Now:</span> reports to {nameOf(user.manager_id)}
-                      <span className="text-white/30"> · since {String(moves[0].changed_at).slice(0, 10)}</span>
+                    <p className="text-[13px] text-bank-tx">
+                      <span className="font-semibold">Now:</span> reports to {nameOf(user.manager_id)}
+                      <span className="text-bank-fa"> · since {String(moves[0].changed_at).slice(0, 10)}</span>
                     </p>
                     {moves.map(c => (
-                      <p key={c.id} className="text-[12px] text-white/55">
-                        <span className="text-white/35">{String(c.changed_at).slice(0, 10)}:</span>{' '}
-                        {nameOf(c.old_manager_id)} <span className="text-white/30">→</span> {nameOf(c.new_manager_id)}
-                        {c.changed_by ? <span className="text-white/30"> · by {nameOf(c.changed_by)}</span> : null}
+                      <p key={c.id} className="text-[13px] text-bank-mu">
+                        <span className="text-bank-fa">{String(c.changed_at).slice(0, 10)}:</span>{' '}
+                        {nameOf(c.old_manager_id)} <span className="text-bank-fa">→</span> {nameOf(c.new_manager_id)}
+                        {c.changed_by ? <span className="text-bank-fa"> · by {nameOf(c.changed_by)}</span> : null}
                       </p>
                     ))}
-                    <p className="text-[10px] text-white/25 pt-0.5">Sales and overrides attribute to teams by these dates — deals before a move stay with the old team.</p>
+                    <p className="text-[13px] text-bank-fa pt-0.5">Sales and overrides attribute to teams by these dates — deals before a move stay with the old team.</p>
                   </div>
                 )
               })()}
             </div>
           )}
 
-          <div className="flex gap-3 pt-1">
-            <button
-              type="submit"
-              disabled={saving}
-              className="flex-1 py-2.5 rounded-xl text-[13px] font-bold text-dark bg-teal hover:bg-teal-dark disabled:opacity-50 transition-colors"
-            >
+          <div className="sticky bottom-0 -mx-5 md:mx-0 px-5 md:px-0 pt-3 mt-auto flex gap-3 md:static"
+            style={{ background: 'var(--card)', borderTop: '1px solid var(--line)', paddingBottom: 'max(12px, env(safe-area-inset-bottom))' }}>
+            <PrimaryButton type="submit" disabled={saving} className="flex-1">
               {saving ? 'Saving…' : user ? 'Save Changes' : 'Create User'}
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-5 py-2.5 rounded-xl text-[13px] text-white/50 hover:text-white transition-colors"
-              style={{ border: '1px solid #3a3a3a' }}
-            >
-              Cancel
-            </button>
+            </PrimaryButton>
+            <SecondaryButton type="button" onClick={onClose} className="px-5 min-h-[44px]">Cancel</SecondaryButton>
           </div>
         </form>
       </div>

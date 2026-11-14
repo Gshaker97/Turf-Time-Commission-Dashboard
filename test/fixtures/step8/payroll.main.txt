@@ -1,0 +1,973 @@
+const todayISO = () => format(new Date(), 'yyyy-MM-dd')
+const fmtDay   = (iso) => iso ? format(new Date(iso + 'T12:00:00'), 'EEE, MMM d, yyyy') : null
+// Compact form for the run list's Install column — the full date is in the
+// expanded card, and a column 56px wide can't hold a weekday and a year.
+const fmtShort = (iso) => iso ? format(new Date(iso + 'T12:00:00'), 'MMM d') : null
+const APPROVED = 'Pay Finalized'
+const PAID     = 'Paid'
+const ISSUE    = 'Sales Issue'
+// A deal counts toward the payout total only once it's finalized (Pay Finalized
+// or Paid). Pending Install / Deal Review / Change Order deals can carry a pay
+// date but aren't being paid out yet, so they're shown separately, never in the
+// headline total — this is what keeps the run in step with the commission sheet.
+const isFinalized = (d) => d.status === APPROVED || d.status === PAID
+
+// Every pay date the page can show. Deals are the usual source, but an
+// ADJUSTMENT alone makes a run real too — an incentive paid to someone with no
+// deal that week (per Keaton) would otherwise sit on a date the run picker
+// never offers, and the money would be invisible on every screen.
+const distinctPayDates = (deals, adjustments = []) => [...new Set([
+  ...deals.filter(d => d.pay_date).map(d => d.pay_date),
+  ...adjustments.filter(a => a.pay_date).map(a => a.pay_date),
+])].sort()
+
+function downloadCsv(name, rows) {
+  const csv = rows.map(r => r.map(c => {
+    const s = String(c ?? '')
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
+  }).join(',')).join('\n')
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+  const a = document.createElement('a')
+  a.href = url; a.download = name; a.click()
+  URL.revokeObjectURL(url)
+}
+
+
+// ──── next block ────
+// Per-deal payout breakdown — who earns what on a single deal.
+// What the run's list shows per COLUMN. Read straight off the deal + its
+// amounts rather than from dealPayouts, because that helper drops zero-dollar
+// shares — a setter earning $0 must still show as the setter.
+// The Adjustments cell: a signed total plus WHY, in as few words as the count
+// allows. One item shows its own note; several show what kind they are, since
+// listing three notes on one row would truncate all of them.
+// `dealById` is optional so a single adjustment can NAME ITS JOB, the same
+// thing the pay statement prints — a lone "-$250.00 · Adjustment" on the
+// payee row sends you hunting for which job it was.
+function adjSummary(adjustments = [], dealById = null) {
+  if (!adjustments.length) return null
+  const neg = adjustments.filter(a => Number(a.amount) < 0).length
+  const pos = adjustments.length - neg
+  if (adjustments.length === 1) {
+    const a = adjustments[0]
+    const job = a.deal_id ? dealById?.[a.deal_id]?.deal_name : ''
+    const what = a.note || (a.deal_id ? 'Deduction' : 'Adjustment')
+    return job ? `${job} · ${what}` : what
+  }
+  const parts = []
+  if (neg) parts.push(`${neg} deduction${neg === 1 ? '' : 's'}`)
+  if (pos) parts.push(`${pos} addition${pos === 1 ? '' : 's'}`)
+  return `${adjustments.length} items · ${parts.join(', ')}`
+}
+
+function rowFacts(d, a, userById = {}) {
+  const nameOf = (joined, id) => (id ? (userById[id]?.name || joined?.name || '(unknown)') : null)
+  const solo = !d.closer_id || d.closer_id === d.setter_id
+  const overrideIds = [d.manager_id, d.director_id, d.vp_id].filter(Boolean)
+  return {
+    setter: nameOf(d.setter, d.setter_id),
+    // A share with money behind it and nobody to pay — the same amber the
+    // "Before you pay" card counts.
+    setterUnassigned: !d.setter_id && a.setter !== 0,
+    closer: solo ? null : nameOf(d.closer, d.closer_id),
+    closerSolo: solo,
+    closerUnassigned: !solo && !d.closer_id && a.closer !== 0,
+    overrideCount: overrideIds.length,
+    overrideTotal: a.manager + a.director + a.vp,
+  }
+}
+
+function dealPayouts(d, userById = null) {
+  const a = dealAmounts(d)
+  const out = []
+  // People resolve by ID from the roster first (the embedded join objects are
+  // missing on some rows even when the id is set — real bug: whole payees
+  // vanished from the run), joined object as fallback.
+  const resolve = (joined, id) => {
+    if (id && userById?.[id]) return userById[id]
+    if (joined && joined.id) return joined
+    return id ? { id, name: '(unknown)' } : null
+  }
+  // NEGATIVE takes flow through too (a below-baseline deal docks the rep) —
+  // dropping them would overstate the payee's total vs the run's Total payout.
+  // A share with truly NO person assigned still shows — as an amber
+  // "Unassigned" line — instead of silently vanishing while the money stays
+  // in the deal's Total commission (those deals also sit in Needs review).
+  const push = (person, role, amount, extra) => {
+    if (amount === 0) return
+    if (person && person.id) out.push({ id: person.id, name: person.name, role, amount, ...extra })
+    else out.push({ id: null, name: 'Unassigned', role, amount, unassigned: true, ...extra })
+  }
+  // A solo deal (setter closed their own) is flagged self-gen — exports label
+  // it "Self-Gen" instead of "Setter" (the role string itself stays 'Setter'
+  // because roleDeduction and the engine key off it).
+  const solo = !d.closer_id || d.setter_id === d.closer_id
+  push(resolve(d.setter, d.setter_id), 'Setter', a.setter, solo ? { selfGen: true } : undefined)
+  if (d.closer_id !== d.setter_id) push(resolve(d.closer, d.closer_id), 'Closer', a.closer)
+  push(resolve(d.manager, d.manager_id), 'Manager', a.manager)
+  push(resolve(d.director, d.director_id), 'Director', a.director)
+  push(resolve(d.vp, d.vp_id), 'VP', a.vp)
+  return out
+}
+
+
+// ──── next block ────
+const asPct = (ratio) => { const v = (Number(ratio) || 0) * 100; return (Number.isInteger(v) ? v : +v.toFixed(2)) + '%' }
+// How much of a deal's deduction a setter/closer absorbed (mirrors the engine).
+function roleDeduction(d, role, a) {
+  if (role !== 'Setter' && role !== 'Closer') return 0
+  const deduction = a.deduction
+  if (deduction <= 0) return 0
+  const solo = !d.closer_id || d.setter_id === d.closer_id
+  const paidBy = d.deduction_paid_by || 'closer'
+  const dsp = d.deduction_split_pct == null ? 0.5 : Number(d.deduction_split_pct)
+  if (role === 'Setter') {
+    if (d.setter_amount != null) return 0
+    return solo ? deduction : paidBy === 'setter' ? deduction : paidBy === 'split' ? deduction * dsp : 0
+  }
+  if (d.closer_amount != null) return 0
+  return solo ? 0 : paidBy === 'closer' ? deduction : paidBy === 'split' ? deduction * (1 - dsp) : 0
+}
+
+export default function Payroll() {
+  const { isAdmin, profile } = useAuth()
+  const { statusColor, statusLabels, dataStartDate } = useSettings()
+  const [copiedId, setCopiedId] = useState('')
+  const [deals, setDeals]     = useState([])
+  const [users, setUsers]     = useState([])
+  const [adjustments, setAdjustments] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [view, setView]       = useState(null)        // a pay_date string, or 'overdue'
+  const [editDeal, setEditDeal] = useState(null)
+  const [modal, setModal]     = useState(false)
+  const [showPayees, setShowPayees] = useState(true)
+  const [tab, setTab] = useState('run')   // 'run' | 'deductions'
+  // Deals render as one list; a row expands IN PLACE to its full payout card.
+  const [expanded, setExpanded] = useState(() => new Set())
+  const toggleExpanded = (id) => setExpanded(s => {
+    const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n
+  })
+  // Same idea on the payee summary: click a person to see the deals behind
+  // their lump sum.
+  const [openPayees, setOpenPayees] = useState(() => new Set())
+  const togglePayee = (id) => setOpenPayees(s => {
+    const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n
+  })
+  const [repFilters, setRepFilters] = useState([])   // profile ids; empty = everyone
+  const [adjFor, setAdjFor] = useState('')            // payee id whose adjustment editor is open
+  const [adjAmt, setAdjAmt] = useState('')
+  const [adjNote, setAdjNote] = useState('')
+  const [locks, setLocks] = useState([])              // locked pay runs (migration 028)
+  // Admin overrides of this locked run (migration 057) — fetched per run so
+  // the one thing that gets past the freeze is visible next to the freeze.
+  const [overrides, setOverrides] = useState([])
+  const [showOverrides, setShowOverrides] = useState(false)
+  // Deduction ledger (migration 050): a debt is an adjustment with NO pay
+  // date. Nothing is ever taken automatically — Keaton clicks, and he types
+  // how much comes out of each cheque.
+  const [dedModal, setDedModal] = useState(null)      // {} = new, {edit: debt} = editing
+  const [applyFor, setApplyFor] = useState('')        // debt id whose amount box is open
+  const [applyAmt, setApplyAmt] = useState('')
+  const [dedFilter, setDedFilter] = useState('open')  // open | all
+  // "Before you pay" — which checklist rows are expanded.
+  const [openChecks, setOpenChecks] = useState(() => new Set())
+  const toggleCheck = (k) => setOpenChecks(s => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n })
+  const today = todayISO()
+
+  useEffect(() => { load() }, [])
+  async function load() {
+    const [{ data: d }, { data: u }, { data: adj }, { data: lk }] = await Promise.all([
+      fetchDeals(), fetchUsers(), fetchPayrollAdjustments(), fetchPayrollLocks(),
+    ])
+    const dd = activeDeals(d || [])   // canceled jobs are never paid / counted
+    setDeals(dd); setUsers(u || []); setAdjustments(adj || []); setLocks(lk || [])
+    setView(v => {
+      if (v) return v
+      const pds = distinctPayDates(dd, adj || [])
+      return pds.find(p => p >= today) || pds[pds.length - 1] || null
+    })
+    setLoading(false)
+  }
+  async function reloadAdjustments() {
+    const { data } = await fetchPayrollAdjustments()
+    setAdjustments(data || [])
+  }
+
+  // Adjustments on the current run (a real pay date, not the synthetic Overdue view).
+  const runAdjustments = useMemo(
+    () => (view && view !== 'overdue') ? adjustments.filter(a => a.pay_date === view) : [],
+    [adjustments, view]
+  )
+
+  // "Add pay" — a payee who is NOT on this run yet (per Keaton: "I do little
+  // incentives and such where i have to pay people out and they dont always
+  // have a deal to be paid on"). The payee panel has always been able to RENDER
+  // someone whose only line is an adjustment (`ensure` in `payees`); the one
+  // thing missing was a way to create that first adjustment, because the `+`
+  // is bound to an existing row.
+  const [addPayOpen, setAddPayOpen] = useState(false)
+  const [addPayId, setAddPayId]     = useState('')
+  const [addPayAmt, setAddPayAmt]   = useState('')
+  const [addPayNote, setAddPayNote] = useState('')
+  const [addPaySaving, setAddPaySaving] = useState(false)
+
+  // Anyone active on the roster can be paid, not just people already on the
+  // run — that is the whole point. Ghosts stay hidden from non-admins as
+  // everywhere else. Already-on-this-run is LABELLED rather than filtered out:
+  // adding a second line to someone who has one is perfectly normal (a deal
+  // plus a spiff), and silently dropping them from the list would look broken.
+  const payUsers = useMemo(
+    () => users.filter(u => u.active !== false && (isAdmin || !u.ghost))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    [users, isAdmin])
+
+  const closeAddPay = () => { setAddPayOpen(false); setAddPayId(''); setAddPayAmt(''); setAddPayNote('') }
+
+  async function saveAddPay() {
+    const amt = parseFloat(addPayAmt)
+    // A NOTE IS REQUIRED. The pay statement prints the note as the line's
+    // label, and a blank one renders as a bare "—" — the exact money-line-with-
+    // no-label bug already fixed once for deductions. An incentive the rep
+    // can't identify on their cheque is worse than no line at all.
+    if (!addPayId || !amt || !addPayNote.trim()) return
+    if (!view || view === 'overdue') return
+    setAddPaySaving(true)
+    const res = await addPayrollAdjustment(
+      { payeeId: addPayId, payDate: view, amount: amt, note: addPayNote.trim() }, profile?.id)
+    setAddPaySaving(false)
+    if (res?.error) { toast.error('Could not add that pay: ' + (res.error.message || 'unknown error')); return }
+    const who = users.find(u => u.id === addPayId)?.name || 'that person'
+    toast.success(`${fmt(amt)} added for ${who} on this run.`)
+    closeAddPay()
+    reloadAdjustments()
+  }
+
+  async function saveAdjustment(payeeId) {
+    const amt = parseFloat(adjAmt)
+    if (!amt || view === 'overdue' || !view) { setAdjFor(''); return }
+    const res = await addPayrollAdjustment({ payeeId, payDate: view, amount: amt, note: adjNote.trim() || null }, profile?.id)
+    if (res?.error) { toast.error('Could not save adjustment: ' + (res.error.message || 'unknown error')); return }
+    setAdjFor(''); setAdjAmt(''); setAdjNote('')
+    reloadAdjustments()
+  }
+  async function removeAdjustment(id) {
+    setAdjustments(a => a.filter(x => x.id !== id))   // optimistic
+    const res = await deletePayrollAdjustment(id)
+    if (res?.error) reloadAdjustments()
+  }
+
+  const withJoins = (data) => ({
+    ...data,
+    setter:   users.find(u => u.id === data.setter_id)   ?? null,
+    closer:   users.find(u => u.id === data.closer_id)   ?? null,
+    manager:  users.find(u => u.id === data.manager_id)  ?? null,
+    director: users.find(u => u.id === data.director_id) ?? null,
+    vp:       users.find(u => u.id === data.vp_id)       ?? null,
+  })
+
+  const payDates = useMemo(() => distinctPayDates(deals, adjustments), [deals, adjustments])
+  const idx = payDates.indexOf(view)
+
+  // Legacy deals (sale_date before the data-start cutoff) predate our atomized
+  // data; they're excluded from the overdue nag so old history doesn't pile up
+  // as tasks. They still show on their own pay-date run when one rolls around.
+  const overdueDeals = useMemo(
+    () => deals.filter(d => d.pay_date && d.pay_date < today && d.status !== PAID && d.status !== ISSUE &&
+                            !(dataStartDate && d.sale_date && d.sale_date < dataStartDate)),
+    [deals, today, dataStartDate]
+  )
+  const runDeals = useMemo(() => {
+    // Sales-Issue deals are pulled from the run (they're flagged, not payable).
+    const list = view === 'overdue' ? overdueDeals : deals.filter(d => d.pay_date === view && d.status !== ISSUE)
+    // INSTALL order — the same order the Google Calendar shows the week — so a
+    // run can be walked top-to-bottom against the calendar for checks and
+    // balances (per Keaton). Same-day ties (the sheet carries no install TIME,
+    // only the date) fall back to sale date, then name; deals with no install
+    // date yet sink to the bottom.
+    const key = (d) => `${d.install_date || '9999-99-99'}|${d.sale_date || '9999-99-99'}|${(d.deal_name || '').toLowerCase()}`
+    return [...list].sort((a, b) => key(a).localeCompare(key(b)))
+  }, [deals, view, overdueDeals])
+
+  // Deals on this run with no office set — their director/VP override rate
+  // defaulted instead of using the office rate (Tucson 3.75% vs 5%), so the
+  // commission is likely wrong. Flag them so they get fixed before payout.
+  const noOfficeDeals = useMemo(
+    () => runDeals.filter(d => !d.office || !String(d.office).trim()),
+    [runDeals]
+  )
+
+  const userById = useMemo(() => Object.fromEntries(users.map(u => [u.id, u])), [users])
+  const dealById = useMemo(() => Object.fromEntries(deals.map(d => [d.id, d])), [deals])
+
+  // Re-read the run's override log whenever the run changes or one is made.
+  useEffect(() => {
+    let gone = false
+    if (!view || view === 'overdue') { setOverrides([]); return }
+    fetchLockOverrides(view).then(({ data }) => { if (!gone) setOverrides(data || []) })
+    return () => { gone = true }
+  }, [view, deals])
+  // "Pay Finalized" was clipped at a fixed 84px, and statuses are
+  // admin-editable so the worst case isn't knowable in advance.
+  const colStatus = useMemo(() => ({ ...COL.status, width: statusWidth(statusLabels) }), [statusLabels])
+
+  // Deals on this run with commission owed to NOBODY (missing setter/closer) —
+  // that money would fall out of every payee's statement. Flag before payout.
+  const unassignedDeals = useMemo(
+    () => runDeals.filter(d => dealPayouts(d, userById).some(p => p.unassigned)),
+    [runDeals, userById]
+  )
+
+  const payees = useMemo(() => {
+    const m = {}
+    const ensure = (id, name) => (m[id] ||= { id, name, total: 0, lines: [], dealIds: new Set(), adjustments: [] })
+    const add = (person, role, amount, deal, a, selfGen) => {
+      // amount !== 0 (not > 0): a NEGATIVE take from a below-baseline deal must
+      // dock the payee's total, or the payee rows overstate vs Total payout.
+      if (!person || !person.id || !amount) return
+      const p = ensure(person.id, person.name)
+      p.total += amount
+      const ded = roleDeduction(deal, role, a)
+      // Deduction note: when the deduction is SPLIT between setter and closer,
+      // a short share breakdown — "Dealer fee: 6% (split with Jordan, your 3%)"
+      // — so a rep never reads the full fee as theirs. Single-payer keeps the
+      // standard label (they do pay it all).
+      let note = ''
+      if (ded > 0) {
+        note = deductionLabel(deal, a)
+        if ((deal.deduction_paid_by || 'closer') === 'split' && a.deduction > ded + 0.005) {
+          const shareFrac = ded / a.deduction
+          const pctStr = (v) => { const n = +v.toFixed(2); return (Number.isInteger(n) ? n : n) + '%' }
+          if (a.dealerFee > 0 && !a.manualDeduction) {
+            const feePct = (Number(deal.dealer_fee_pct) || 0) * 100
+            note = `Dealer fee: ${pctStr(feePct)} (split), ${pctStr(feePct * shareFrac)}`
+          } else {
+            note = `${note} (split), ${Math.round(shareFrac * 100)}%`
+          }
+        }
+      }
+      p.lines.push({
+        deal: deal.deal_name, role, amount, baseline: a.baseline, selfGen: !!selfGen,
+        // setter/closer: % of baseline they net; mgmt: their override %
+        // amount ÷ baseline for every role — for mgmt this is the EFFECTIVE
+        // override rate (reflects override exclusions, e.g. 2.7% not 3%).
+        pct: a.baseline > 0 ? amount / a.baseline : 0,
+        ded, note,
+      })
+      p.dealIds.add(deal.id)
+    }
+    for (const d of runDeals) {
+      if (!isFinalized(d)) continue   // only finalized deals are being paid out
+      const a = dealAmounts(d)
+      // Same id-based person resolution as the deal cards (joins can be
+      // missing even when the ids are set); unassigned shares carry no payee.
+      for (const p of dealPayouts(d, userById)) {
+        if (!p.unassigned) add(p, p.role, p.amount, d, a, p.selfGen)
+      }
+    }
+    // Manual adjustments for this run — folded into each payee's total (a payee
+    // can exist on adjustments alone, e.g. a clawback after their deal was paid).
+    for (const adj of runAdjustments) {
+      const person = users.find(u => u.id === adj.payee_id)
+      const p = ensure(adj.payee_id, person?.name || 'Unknown')
+      p.total += Number(adj.amount)
+      p.adjustments.push(adj)
+    }
+    // DEAL PAY vs ADJUSTMENTS vs NET. `total` has always folded adjustments
+    // in, so the headline figure per person silently mixed the two and what
+    // someone actually earned from deals appeared NOWHERE on the page — you
+    // had to read the sub-lines and subtract (per Keaton's review).
+    for (const p of Object.values(m)) {
+      p.adjTotal = p.adjustments.reduce((s2, a) => s2 + Number(a.amount), 0)
+      p.dealPay  = p.total - p.adjTotal
+    }
+    return Object.values(m).sort((a, b) => b.total - a.total)
+  }, [runDeals, runAdjustments, users])
+
+  // Who already has a row on this run — the Add-pay picker LABELS them rather
+  // than hiding them, since a second line (a deal plus a spiff) is normal.
+  const payeeIds = useMemo(() => new Set(payees.map(p => p.id)), [payees])
+
+  // ── Pay per person per RUN, for the deduction modal ───────────────────
+  // "Can this actually come out?" is a question about a cheque that may not
+  // be the run on screen — and about BOTH reps when the deduction is split
+  // (per Keaton). `payeeTotals` below only covers the viewed run, so this
+  // builds the same figure for every run. It walks every deal, so it is
+  // built ONLY while the modal is open; the rest of the page is one run.
+  //
+  // It counts exactly what the payee panel counts: finalized deals plus
+  // dated adjustments. A future run whose deals are not finalized yet would
+  // otherwise read $0, so that money rides along as `pending` instead of
+  // being folded in — one number per thing, same as the panel's
+  // "not yet finalized" line.
+  const payByRun = useMemo(() => {
+    if (!dedModal) return null
+    const m = {}
+    const bump = (date, id, amount, key) => {
+      if (!date || !id || !amount) return
+      const day = (m[date] ||= {})
+      const row = (day[id] ||= { net: 0, pending: 0 })
+      row[key] += amount
+    }
+    for (const d of deals) {
+      if (!d.pay_date || d.status === ISSUE) continue
+      const key = isFinalized(d) ? 'net' : 'pending'
+      for (const p of dealPayouts(d, userById)) if (!p.unassigned) bump(d.pay_date, p.id, p.amount, key)
+    }
+    for (const a of adjustments) if (a.pay_date) bump(a.pay_date, a.payee_id, Number(a.amount), 'net')
+    return m
+  }, [dedModal, deals, adjustments, userById])
+
+  // The next cheque anyone will actually receive — what "hold until they have
+  // pay" lands on, and the fallback when the page is parked on the overdue
+  // view. Falls back to the most recent run when nothing is scheduled ahead,
+  // the same rule the page picks its opening view by; the pay line names the
+  // date, so a past run can't be read as a future one.
+  const nextRun = useMemo(
+    () => payDates.find(p => p >= today) || payDates[payDates.length - 1] || null,
+    [payDates, today])
+
+  // What each person is currently owed on THIS run — the number the tray
+  // prefills a recovery with, so a take never quietly exceeds the cheque.
+  const payeeTotals = useMemo(
+    () => Object.fromEntries(payees.map(p => [p.id, p.total])),
+    [payees])
+
+  // All deals that carry a deduction — across all time, for the Deductions tab.
+  // A deduction is "applied" once its deal is Paid; otherwise it's still pending.
+  const deductions = useMemo(() => {
+    return deals
+      .map(d => ({ d, a: dealAmounts(d) }))
+      .filter(({ a }) => a.deduction > 0)
+      .map(({ d, a }) => {
+        const solo = !d.closer_id || d.setter_id === d.closer_id
+        const paidBy = d.deduction_paid_by || 'closer'
+        const setterNm = d.setter?.name ?? '—', closerNm = d.closer?.name ?? '—'
+        const absorbedBy = solo ? setterNm
+          : paidBy === 'setter' ? setterNm
+          : paidBy === 'split'  ? `${setterNm} & ${closerNm} (split)`
+          : closerNm
+        return {
+          id: d.id,
+          deal: d,
+          name: d.deal_name,
+          office: d.office,
+          amount: a.deduction,            // manual + dealer fee
+          manual: a.manualDeduction,
+          dealerFee: a.dealerFee,
+          note: d.deduction_note,
+          absorbedBy,
+          payDate: d.pay_date,
+          status: d.status,
+          applied: d.status === PAID,
+        }
+      })
+      .sort((a, b) => (b.payDate || '').localeCompare(a.payDate || ''))
+  }, [deals])
+
+  const deductionTotals = useMemo(() => {
+    let total = 0, applied = 0, pending = 0
+    for (const x of deductions) { total += x.amount; if (x.applied) applied += x.amount; else pending += x.amount }
+    return { total, applied, pending, count: deductions.length, pendingCount: deductions.filter(x => !x.applied).length }
+  }, [deductions])
+
+  // Deals on this run whose commission hasn't been gold-checked yet. The
+  // Deals page's "Needs review" tab is the verification inbox; this is just
+  // the pre-payout safety net.
+  const runUnverified = useMemo(
+    () => runDeals.filter(d => d.commission_verified !== true && dealAmounts(d).totalCommission !== 0),
+    [runDeals]
+  )
+
+  // ── Deduction ledger (migration 050) ─────────────────────────────────
+  // Every debt with the recoveries taken against it. All the math lives in
+  // utils/deductions.js; this page only renders and writes.
+  const ledger    = useMemo(() => buildLedger(adjustments), [adjustments])
+  const ledgerById = useMemo(() => Object.fromEntries(ledger.map(d => [d.id, d])), [ledger])
+  const openLedger = useMemo(() => openDebts(ledger), [ledger])
+  const owedTotals = useMemo(() => ledgerTotals(ledger), [ledger])
+
+  // `rows` is one entry normally and TWO when the deduction is split between
+  // the setter and the closer — a split writes a separate DEBT PER PERSON so
+  // each share recovers on that rep's own run. Editing is always single-row.
+  async function saveDeduction(input) {
+    const rows = input.rows || [{ payeeId: input.payeeId, amount: input.amount }]
+    if (input.id) {
+      const r = rows[0]
+      const res = await updatePayrollAdjustment(input.id, {
+        payee_id: r.payeeId, deal_id: input.dealId, amount: r.amount, note: input.note, pay_date: input.payDate,
+      })
+      if (res?.error) { toast.error('Could not save the deduction: ' + (res.error.message || 'unknown error')); return false }
+      toast.success(input.payDate ? 'Deduction added to that run' : 'Deduction logged — it will show on every run until it is recovered')
+      reloadAdjustments()
+      return true
+    }
+    // Write every share before reporting success. If the second one fails the
+    // first is already in — say so plainly rather than claiming it all saved,
+    // because a half-saved split leaves one rep owing money nobody logged.
+    const done = []
+    for (const r of rows) {
+      const res = await addPayrollAdjustment(
+        { payeeId: r.payeeId, amount: r.amount, dealId: input.dealId, note: input.note, payDate: input.payDate },
+        profile?.id)
+      if (res?.error) {
+        toast.error(done.length
+          ? `Saved ${done.length} of ${rows.length} shares, then failed: ${res.error.message || 'unknown error'}. Check the Deductions tab before retrying.`
+          : 'Could not save the deduction: ' + (res.error.message || 'unknown error') + '\n(Has migration 050 been run?)')
+        reloadAdjustments()
+        return false
+      }
+      done.push(r)
+    }
+    toast.success(rows.length > 1
+      ? `Split logged — ${rows.length} balances, one per rep`
+      : input.payDate ? 'Deduction added to that run' : 'Deduction logged — it will show on every run until it is recovered')
+    reloadAdjustments()
+    return true
+  }
+
+  // Take some (or all) of a debt on the CURRENT run. Never automatic: this
+  // only ever runs from a click, with an amount Keaton can type over.
+  async function applyDeduction(debt, rawAmount) {
+    if (!view || view === 'overdue') return
+    const take = Math.round(Math.abs(parseFloat(rawAmount) || 0) * 100) / 100
+    if (!take) { setApplyFor(''); return }
+    if (take > debt.remaining && !await confirmDialog({
+      tone: 'warn',
+      title: `Take ${fmt(take)} against a balance of only ${fmt(debt.remaining)}?`,
+      message: "The extra isn't owed — it comes off this cheque anyway.",
+      confirmLabel: 'Take it anyway',
+    })) return
+    const res = await addPayrollAdjustment({
+      payeeId: debt.payee_id, payDate: view, amount: -take,
+      note: debt.note, dealId: debt.deal_id, parentId: debt.id,
+    }, profile?.id)
+    if (res?.error) { toast.error('Could not apply it: ' + (res.error.message || 'unknown error')); return }
+    const left = Math.max(0, Math.round((debt.remaining - take) * 100) / 100)
+    toast.success(left > 0 ? `${fmt(take)} taken · ${fmt(left)} still owed, carried to the next run` : `${fmt(take)} taken · settled`)
+    setApplyFor(''); setApplyAmt('')
+    reloadAdjustments()
+  }
+
+  async function writeOff(debt) {
+    const why = await promptDialog({
+      tone: 'warn',
+      title: `Write off ${fmt(debt.remaining)} still owed by ${userById[debt.payee_id]?.name || 'this rep'}?`,
+      message: 'It stops appearing on every run but stays on the record — nothing is deleted.',
+      label: 'Reason (optional)',
+      placeholder: 'e.g. left the company, never another run to take it from',
+      confirmLabel: 'Write it off',
+    })
+    if (why === null) return
+    const res = await writeOffDeduction(debt.id, why.trim() || null, profile?.id)
+    if (res?.error) { toast.error('Could not write it off: ' + (res.error.message || 'unknown error')); return }
+    reloadAdjustments()
+  }
+  async function reopen(debt) {
+    const res = await reopenDeduction(debt.id)
+    if (res?.error) { toast.error('Could not reopen it: ' + (res.error.message || 'unknown error')); return }
+    reloadAdjustments()
+  }
+  async function deleteDebt(debt) {
+    if (debt.recoveries.length) {
+      toast.error('Money has already come out against this one. Write it off instead — deleting it would erase what was paid.')
+      return
+    }
+    if (!await confirmDialog({
+      tone: 'danger',
+      title: 'Delete this deduction?',
+      message: 'Nothing has been collected against it, so nothing is lost.',
+      confirmLabel: 'Delete it',
+    })) return
+    const res = await deletePayrollAdjustment(debt.id)
+    if (res?.error) { toast.error('Could not delete it: ' + (res.error.message || 'unknown error')); return }
+    reloadAdjustments()
+  }
+
+  // Is the current run locked? A locked run is frozen — no status changes,
+  // deal edits, or adjustments (enforced in the DB by migration 028's trigger;
+  // this mirrors it in the UI).
+  const runLock = view && view !== 'overdue' ? locks.find(l => l.pay_date === view) : null
+  // Per-deal lock check — matters in the Overdue view, which mixes deals from
+  // several pay dates (runLock above only covers a single-date view).
+  const isRunLocked = (payDate) => !!payDate && locks.some(l => l.pay_date === payDate)
+
+  // Viewing payroll is leadership (route guard: vp/admin), but CHANGING data
+  // (advancing status, editing a deal) is admin-only — non-admins get a
+  // read-only run. A locked run is read-only for everyone.
+  const canApprove = isAdmin && !runLock && statusLabels?.includes(APPROVED)
+  // Marking a FINALIZED deal Paid is allowed even on a locked run (matches
+  // migration 035's trigger — it acknowledges the payout without changing it).
+  const canPay     = isAdmin && statusLabels?.includes(PAID)
+  const openEdit   = (deal) => {
+    if (!isAdmin) return
+    // Only the locked run's PAYOUT is frozen (finalized/paid deals — matches
+    // migration 034's trigger). A pending / Sales Issue deal parked on a
+    // locked date stays editable so e.g. its install date can be corrected.
+    // A locked run used to be a dead end here. It still can't be saved
+    // silently — the DB trigger rejects it — but an admin can now open it,
+    // make the fix, and be offered the logged override on save (057). That
+    // beats unlocking nineteen other payouts to correct one field.
+    setEditDeal(deal); setModal(true)
+  }
+  const viewLabel  = view === 'overdue' ? 'Overdue (unpaid)' : (fmtDay(view) || '—')
+
+  // Optional filter: scope the run to a single payee/rep. Auto-clears if that
+  // person isn't in the current run.
+  // Pruned to people actually on this run, so a selection made on one run
+  // can't silently empty the next one.
+  const effFilters = useMemo(
+    () => repFilters.filter(id => payees.some(p => p.id === id)),
+    [repFilters, payees])
+  const effSet = useMemo(() => new Set(effFilters), [effFilters])
+  const filtered = effFilters.length > 0
+  const shownDeals  = filtered ? runDeals.filter(d => dealPayouts(d, userById).some(p => effSet.has(p.id))) : runDeals
+  const shownPayees = filtered ? payees.filter(p => effSet.has(p.id)) : payees
+
+// ──── next block ────
+  // The three deal-level problems, as one list. They used to be three amber
+  // banners of identical construction stacked on top of each other.
+  const checks = useMemo(() => ([
+    {
+      key: 'unverified', deals: runUnverified,
+      label: 'aren\u2019t gold-checked yet',
+      hint: 'Verify commissions in Deals \u2192 Needs review, or click one to review it here.',
+    },
+    {
+      key: 'office', deals: noOfficeDeals,
+      label: 'have no office \u2014 override rates may be wrong',
+      hint: 'Set the office to apply the correct director/VP rate. Click a deal to fix it.',
+    },
+    {
+      key: 'unassigned', deals: unassignedDeals,
+      label: 'have commission with nobody assigned to pay it to',
+      hint: 'The share exists but there is nobody to pay it to \u2014 it will not appear on any pay statement.',
+    },
+  ].filter(c => c.deals.length > 0)), [runUnverified, noOfficeDeals, unassignedDeals])
+
+  const onThisRun  = useMemo(() => openLedger.filter(d => (payeeTotals[d.payee_id] ?? 0) > 0).length, [openLedger, payeeTotals])
+  const checkCount = checks.length + (openLedger.length > 0 ? 1 : 0)
+
+  // Deal pay / adjustments / net for the run-total row, so the headline
+  // figure reconciles instead of having to be trusted.
+  const payTotals = useMemo(() => {
+    const dealPay = shownPayees.reduce((s2, p) => s2 + p.dealPay, 0)
+    const adj     = shownPayees.reduce((s2, p) => s2 + p.adjTotal, 0)
+    return {
+      dealPay, adj,
+      // The row sums ITS OWN column, never the run headline. They differ when
+      // a deal carries a share with nobody assigned: that money is in the
+      // run's total but reaches no payee, so pinning the footer to the
+      // headline would make the column visibly fail to add up.
+      net: dealPay + adj,
+      people: shownPayees.filter(p => p.adjustments.length > 0).length,
+    }
+  }, [shownPayees])
+
+  const summary = (() => {
+    let total = 0, paid = 0, paidCount = 0, pending = 0, pendingCount = 0, finalizedCount = 0
+    for (const d of shownDeals) {
+      const amt = filtered
+        ? dealPayouts(d, userById).filter(p => effSet.has(p.id)).reduce((s, p) => s + p.amount, 0)
+        : dealAmounts(d).totalCommission
+      if (isFinalized(d)) {
+        total += amt; finalizedCount++
+        if (d.status === PAID) { paid += amt; paidCount++ }
+      } else {
+        pending += amt; pendingCount++
+      }
+    }
+    // Manual adjustments count toward the payout total. They go out WITH the
+    // paychecks, so they count toward Remaining only while the run still has
+    // unpaid finalized deals — once everything's Paid, the adjustments were
+    // disbursed too and Remaining reads $0 (not the stray adjustment total).
+    const adjTotal = shownPayees.reduce((s, p) => s + p.adjustments.reduce((t, a) => t + Number(a.amount), 0), 0)
+    total += adjTotal
+    const allPaid = finalizedCount === 0 || paidCount === finalizedCount
+    return { total, paid, remaining: allPaid ? 0 : total - paid, pending, pendingCount, finalizedCount, adjTotal,
+             count: shownDeals.length, paidCount, payees: shownPayees.length }
+  })()
+
+  // Declared before its first use: `summary` is built from shownDeals/shownPayees below, so these
+  // two handlers sit after it rather than hoisting it past its own inputs.
+  async function lockRun() {
+    if (!view || view === 'overdue') return
+    const unpaid = runDeals.filter(d => d.status !== PAID).length
+    const msg = unpaid
+      ? `Lock the ${viewLabel} run? ${unpaid} deal(s) are not marked Paid yet — locking freezes them as-is.`
+      : `Lock the ${viewLabel} run? Its deals and adjustments become read-only until unlocked.`
+    if (!await confirmDialog({
+      title: `Lock the ${viewLabel} run?`,
+      message: msg,
+      bullets: [
+        'Its deals and adjustments become read-only, enforced in the database.',
+        'An admin can still force a single deal through, with a reason that gets logged.',
+      ],
+      confirmLabel: 'Lock the run',
+    })) return
+    const snapshot = {
+      total: summary.total,
+      payees: payees.map(p => ({ id: p.id, name: p.name, total: +p.total.toFixed(2) })),
+      deals: runDeals.length,
+    }
+    const res = await lockPayrollRun(view, snapshot, profile?.id)
+    if (res?.error) { toast.error('Could not lock the run: ' + (res.error.message || 'unknown error') + '\n(Has migration 028 been run?)'); return }
+    const { data } = await fetchPayrollLocks(); setLocks(data || [])
+  }
+  async function unlockRun() {
+    if (!runLock) return
+    if (!await confirmDialog({
+      tone: 'warn',
+      title: `Unlock the ${viewLabel} run?`,
+      message: 'Its deals and adjustments become editable again, and the run totals will move with them.',
+      bullets: ['The sync re-locks a past-due, fully-paid run automatically after 24 hours.'],
+      confirmLabel: 'Unlock the run',
+    })) return
+    const res = await unlockPayrollRun(runLock.pay_date)
+    if (res?.error) { toast.error('Could not unlock: ' + (res.error.message || 'unknown error')); return }
+    const { data } = await fetchPayrollLocks(); setLocks(data || [])
+  }
+
+
+  // Advancing a deal collapses it — you've dealt with it, so the run reads
+  // top-to-bottom as you work. Re-click the row to open it again.
+  function approveAndCollapse(id, status = APPROVED) {
+    setExpanded(s => { const n = new Set(s); n.delete(id); return n })
+    setStatus(id, status)
+  }
+
+  async function setStatus(id, status) {
+    const deal = deals.find(d => d.id === id)
+    // Advancing status makes the deal part of the run's payout (or edits an
+    // already-locked payout) — frozen while the run is locked, EXCEPT the
+    // payout acknowledgment: Pay Finalized → Paid is always allowed (035).
+    if (deal && isRunLocked(deal.pay_date) && !(status === PAID && deal.status === APPROVED)) {
+      toast.info(`The ${fmtDay(deal.pay_date)} pay run is locked — unlock it first to change this deal.`)
+      return
+    }
+    setDeals(ds => ds.map(d => d.id === id ? { ...d, status } : d))   // optimistic
+    for (let attempt = 0; ; attempt++) {
+      const res = await updateDeal(id, { status })
+      if (!res?.error) return
+      if (attempt < 2) { await new Promise(r => setTimeout(r, 500 * (attempt + 1))); continue }
+      toast.error('Could not save the status change, so it was reverted:\n' + (res.error.message || 'network error'))
+      load()
+      return
+    }
+  }
+  async function markAll(status) {
+    const ids = shownDeals.filter(d => d.status !== status && (!isRunLocked(d.pay_date) || (status === PAID && d.status === APPROVED))).map(d => d.id)
+    if (!ids.length) return
+    // Name the outstanding problems in the confirm (per Keaton's review).
+    // The warnings sit in the "Before you pay" card above, which is one
+    // scroll away and easy to have skimmed — and this is money going out.
+    const set = new Set(ids)
+    const among = (list) => list.filter(d => set.has(d.id)).length
+    const flags = [
+      [among(runUnverified),   'not gold-checked'],
+      [among(noOfficeDeals),   'missing an office'],
+      [among(unassignedDeals), 'have commission with nobody assigned'],
+    ].filter(([n]) => n > 0).map(([n, what]) => `${n} ${what}`)
+    const owed = status === PAID
+      ? openLedger.filter(d => (payeeTotals[d.payee_id] ?? 0) > 0).reduce((s2, d) => s2 + d.remaining, 0)
+      : 0
+    const warn = [
+      flags.length ? `Of those, ${flags.join(', ')}.` : '',
+      owed > 0 ? `${fmt(owed)} in logged deductions has not been taken off this run yet.` : '',
+    ].filter(Boolean).join('\n')
+    if (!await confirmDialog({
+      tone: warn ? 'warn' : 'default',
+      title: `Mark ${ids.length} deal${ids.length === 1 ? '' : 's'} as "${status}"?`,
+      bullets: [
+        flags.length ? `Of those, ${flags.join(', ')}.` : '',
+        owed > 0 ? `${fmt(owed)} in logged deductions has not been taken off this run yet.` : '',
+      ],
+      confirmLabel: `Mark as ${status}`,
+    })) return
+    setDeals(ds => ds.map(d => ids.includes(d.id) ? { ...d, status } : d))
+    const results = await Promise.all(ids.map(id => updateDeal(id, { status })))
+    const failed = results.filter(r => r?.error)
+    if (failed.length) {
+      toast.error(`${failed.length} of ${ids.length} deal${ids.length === 1 ? '' : 's'} could not be updated and were reverted:\n` +
+            (failed[0].error.message || 'unknown error'))
+      load()
+    }
+  }
+
+  async function handleSave(data) {
+    if (editDeal) {
+      setDeals(ds => ds.map(d => d.id === editDeal.id ? { ...d, ...withJoins(data) } : d))
+      setModal(false); setEditDeal(null)
+      const res = await saveDealFields(editDeal.id, data, {
+        isAdmin, payDate: editDeal.pay_date,
+        dealName: editDeal.deal_name ? `"${editDeal.deal_name}"` : 'This deal',
+        what: 'these edits',
+      })
+      if (res?.overridden) { toast.success('Saved — the lock override is logged on this run.'); load() }
+      else if (res?.error) {
+        if (!res.cancelled) toast.error('Could not save this deal, so it was reverted:\n' + (res.error.message || 'unknown error'))
+        load()
+      }
+    } else {
+      setModal(false); setEditDeal(null)
+    }
+  }
+
+  // Full run export — organized by deal, listing everyone paid on it with their
+  // % (override % for mgmt, % of baseline for setter/closer) and $, then any
+  // deduction, then the deal total. Manual adjustments and the grand total last.
+  function exportCsv() {
+    const rows = [['Deal', 'Baseline', 'Paid to', 'Role', '%', 'Commission $', 'Note']]
+    const scoped = filtered
+    for (const d of shownDeals) {
+      if (!isFinalized(d)) continue
+      const a = dealAmounts(d)
+      let payouts = dealPayouts(d, userById)
+      if (scoped) payouts = payouts.filter(p => effSet.has(p.id))   // rep-scoped export
+      if (!payouts.length) continue
+      rows.push([d.deal_name || '—', a.baseline.toFixed(2), '', '', '', '', d.office || ''])
+      for (const p of payouts) {
+        const isRep = p.role === 'Setter' || p.role === 'Closer'
+        const roleCell = p.selfGen ? 'Self-Gen' : isRep ? p.role : 'Override'
+        const pctRatio = a.baseline > 0 ? p.amount / a.baseline : 0   // effective rate (reflects exclusions)
+        rows.push(['', '', p.name, roleCell, asPct(pctRatio), p.amount.toFixed(2), ''])
+      }
+      if (!scoped && a.deduction > 0)
+        rows.push(['', '', '', 'Deduction (already in takes)', '', (-a.deduction).toFixed(2), deductionLabel(d, a)])
+      const dealTotal = scoped ? payouts.reduce((s, p) => s + p.amount, 0) : a.totalCommission
+      rows.push(['', '', '', 'Deal total', '', dealTotal.toFixed(2), ''])
+    }
+    // Manual payroll adjustments for this run.
+    const adjList = scoped ? runAdjustments.filter(x => effSet.has(x.payee_id)) : runAdjustments
+    if (adjList.length) {
+      rows.push([])
+      rows.push(['Manual adjustments', '', '', '', '', '', ''])
+      for (const adj of adjList) {
+        const person = users.find(u => u.id === adj.payee_id)
+        rows.push(['', '', person?.name || '—', 'Adjustment', '', Number(adj.amount).toFixed(2), adj.note || ''])
+      }
+    }
+    // Net total each rep is actually being paid this run (deal takes + adjustments).
+    rows.push([])
+    rows.push(['Net totals per rep', '', '', '', '', '', ''])
+    for (const p of shownPayees) rows.push(['', '', p.name, '', '', p.total.toFixed(2), ''])
+    rows.push([])
+    rows.push(['TOTAL', '', '', '', '', summary.total.toFixed(2), ''])
+    const who = effFilters.length === 1 ? (users.find(u => u.id === effFilters[0])?.name || 'rep')
+              : effFilters.length > 1 ? `${effFilters.length}-reps` : ''
+    downloadCsv(`payroll-${view === 'overdue' ? 'overdue' : view}${who ? '-' + who : ''}.csv`, rows)
+  }
+
+  // Copy one rep's pay statement to the clipboard — a styled table (text/html,
+  // pastes into email/Sheets/Docs) plus a plain-text version. Admin only.
+  async function copyPayee(p) {
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    // Self-gen deals (rep set AND closed it) read "Self-Gen", not "Setter".
+    const roleLabel = (l) => l.selfGen ? 'Self-Gen' : (l.role === 'Setter' || l.role === 'Closer') ? l.role : 'Override'
+    const ORDER = { 'Self-Gen': 0, Setter: 1, Closer: 2, Override: 3 }
+    const sorted = [...p.lines].sort((a, b) =>
+      (ORDER[roleLabel(a)] ?? 9) - (ORDER[roleLabel(b)] ?? 9) || b.amount - a.amount)
+    // Flat rows: each pay line (with its % + $), a deduction sub-line where one
+    // applied, then any manual adjustments. Net total is authoritative (p.total).
+    const items = []
+    for (const l of sorted) {
+      items.push({ grp: 'deal', deal: l.deal, baseline: fmt(l.baseline || 0), role: roleLabel(l), pct: asPct(l.pct), amount: l.amount })
+      if (l.ded > 0) items.push({ grp: 'deal', deal: '', baseline: '', role: l.note || 'Deduction', pct: '', amount: -l.ded, dim: true })
+    }
+    for (const adj of p.adjustments) {
+      // A recovery against a logged deduction (migration 050) names its job,
+      // and a PARTIAL take spells out the whole balance and what is left —
+      // per Keaton, the statement shows both so nobody has to ask.
+      const debt = adj.parent_id ? ledgerById[adj.parent_id] : null
+      const line = debt ? recoveryLine(adj, debt) : null
+      // NAME THE JOB whenever the adjustment references one — not only on a
+      // RECOVERY (`parent_id`). A deduction logged straight onto a run has a
+      // `deal_id` and NO parent, which is the common case from the "Log a
+      // deduction" button, and it used to render as a bare "Adjustment".
+      const job = adj.deal_id ? dealById[adj.deal_id]?.deal_name : ''
+      items.push({
+        grp: 'adj',
+        deal: job || '',
+        baseline: '',
+        // Never "—". With no note, say what it is from its shape.
+        role: adj.note || (debt || adj.deal_id ? 'Deduction' : 'Adjustment'),
+        pct: '', amount: Number(adj.amount),
+      })
+      if (line?.detail) items.push({ grp: 'adj', deal: '', baseline: '', role: line.detail, pct: '', amount: 0, dim: true, noAmount: true })
+    }
+    const text = `Pay statement — ${p.name} — ${viewLabel}\n\n`
+      + items.map(l => l.noAmount
+          ? `    ${l.role}`
+          : `• ${l.deal ? l.deal + (l.baseline ? ` (baseline ${l.baseline})` : '') + ' — ' : ''}${l.role}${l.pct ? ` (${l.pct})` : ''}: ${fmt(l.amount)}`).join('\n')
+      + `\n\nNet total: ${fmt(p.total)}`
+
+    // Styled statement (inline CSS only — it's pasted into email clients).
+    const F = 'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Arial,sans-serif'
+    const money = (v) => `<span style="color:${v < 0 ? '#dc2626' : '#111827'};font-weight:600;white-space:nowrap">${fmt(v)}</span>`
+    // Each item is tagged at push time — never inferred from its deal name,
+    // which would misfile a recovery whose job the rep is also being paid for
+    // on this same run.
+    const dealRows = items.filter(l => l.grp === 'deal')
+    const adjRows  = items.filter(l => l.grp === 'adj')
+    const th = (label, align = 'left') =>
+      `<td style="padding:8px 12px;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:#6b7280;font-weight:700;text-align:${align};border-bottom:2px solid #e5e7eb">${label}</td>`
+    const row = (l, last) => l.noAmount
+      ? `<tr><td colspan="5" style="padding:0 12px 8px 24px;font-size:12px;color:#b45309;font-style:italic;${last ? '' : 'border-bottom:1px solid #f3f4f6'}">${esc(l.role)}</td></tr>`
+      : l.dim
+      ? `<tr><td colspan="4" style="padding:2px 12px 8px 24px;font-size:12px;color:#dc2626;font-style:italic;${last ? '' : 'border-bottom:1px solid #f3f4f6'}">− ${esc(l.role)}</td>` +
+        `<td style="padding:2px 12px 8px;font-size:12px;text-align:right;color:#dc2626;font-style:italic;${last ? '' : 'border-bottom:1px solid #f3f4f6'}">${fmt(l.amount)}</td></tr>`
+      : `<tr>` +
+        `<td style="padding:10px 12px;font-size:13px;color:#111827;font-weight:600;${last ? '' : 'border-bottom:1px solid #f3f4f6'}">${esc(l.deal)}</td>` +
+        `<td style="padding:10px 12px;font-size:13px;color:#6b7280;text-align:right;${last ? '' : 'border-bottom:1px solid #f3f4f6'}">${esc(l.baseline)}</td>` +
+        `<td style="padding:10px 12px;font-size:12px;color:#374151;${last ? '' : 'border-bottom:1px solid #f3f4f6'}">${esc(l.role)}</td>` +
+        `<td style="padding:10px 12px;font-size:13px;color:#374151;text-align:right;${last ? '' : 'border-bottom:1px solid #f3f4f6'}">${esc(l.pct)}</td>` +
+        `<td style="padding:10px 12px;font-size:13px;text-align:right;${last ? '' : 'border-bottom:1px solid #f3f4f6'}">${money(l.amount)}</td></tr>`
+    const html =
+      `<div style="${F};max-width:620px;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden">` +
+      // Header band
+      `<div style="background:#0f2e28;padding:18px 20px">` +
+      `<div style="font-size:11px;letter-spacing:0.18em;color:#2dd4a7;font-weight:800">TURF TIME</div>` +
+      `<div style="font-size:19px;color:#ffffff;font-weight:700;margin-top:2px">Pay Statement</div>` +
+      `<table style="width:100%;border-collapse:collapse;margin-top:10px"><tr>` +
+      `<td style="${F}"><div style="font-size:11px;color:#7fb8aa;text-transform:uppercase;letter-spacing:0.08em">Paid to</div>` +
+      `<div style="font-size:15px;color:#ffffff;font-weight:600">${esc(p.name)}</div></td>` +
+      `<td style="${F};text-align:right"><div style="font-size:11px;color:#7fb8aa;text-transform:uppercase;letter-spacing:0.08em">Pay date</div>` +
+      `<div style="font-size:15px;color:#ffffff;font-weight:600">${esc(viewLabel)}</div></td>` +
+      `</tr></table></div>` +
+      // Deal lines
+      `<table style="width:100%;border-collapse:collapse;background:#ffffff">` +
+      `<tr>${th('Deal')}${th('Baseline', 'right')}${th('Role')}${th('%', 'right')}${th('Commission', 'right')}</tr>` +
+      dealRows.map((l, i) => row(l, i === dealRows.length - 1 && !adjRows.length)).join('') +
+      (adjRows.length
+        ? `<tr><td colspan="5" style="padding:12px 12px 4px;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:#6b7280;font-weight:700;border-top:2px solid #e5e7eb">Adjustments</td></tr>` +
+          adjRows.map((l, i) => {
+            const bb = i === adjRows.length - 1 ? '' : 'border-bottom:1px solid #f3f4f6'
+            // The JOB NAME is the thing Keaton needs on the cheque — it was
+            // computed above and then thrown away here, so every deduction
+            // read as an unexplained figure.
+            const label = l.deal
+              ? `<span style="font-weight:600;color:#111827">${esc(l.deal)}</span>` +
+                (l.role ? `<span style="color:#6b7280"> · ${esc(l.role)}</span>` : '')
+              : esc(l.role)
+            return l.noAmount
+              ? `<tr><td colspan="5" style="padding:0 12px 8px 24px;font-size:12px;color:#b45309;font-style:italic;${bb}">${esc(l.role)}</td></tr>`
+              : `<tr>` +
+                `<td colspan="4" style="padding:8px 12px;font-size:13px;color:#374151;${bb}">${label}</td>` +
+                `<td style="padding:8px 12px;font-size:13px;text-align:right;${bb}">${money(l.amount)}</td></tr>`
+          }).join('')
+        : '') +
+      // Net total band
+      `<tr><td colspan="4" style="padding:14px 12px;background:#f0fdf9;border-top:2px solid #00b894;font-size:14px;color:#0f2e28;font-weight:800">Net total</td>` +
+      `<td style="padding:14px 12px;background:#f0fdf9;border-top:2px solid #00b894;font-size:17px;text-align:right;color:${p.total < 0 ? '#dc2626' : '#047857'};font-weight:800;white-space:nowrap">${fmt(p.total)}</td></tr>` +
+      `</table>` +
+      `<div style="background:#f9fafb;padding:10px 20px;font-size:11px;color:#9ca3af;border-top:1px solid #e5e7eb">Deductions are already reflected in each line. Questions? Reply to this email.</div>` +
+      `</div>`
+    try {
+      if (navigator.clipboard && window.ClipboardItem) {
+        await navigator.clipboard.write([new window.ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([text], { type: 'text/plain' }),
+        })])
+      } else { await navigator.clipboard.writeText(text) }
+      setCopiedId(p.id); setTimeout(() => setCopiedId(''), 1800)
+    } catch { try { await navigator.clipboard.writeText(text); setCopiedId(p.id); setTimeout(() => setCopiedId(''), 1800) } catch {} }
+  }

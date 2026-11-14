@@ -53,6 +53,9 @@ export const DEMO_CREDENTIALS = DEMO_USERS.reduce((acc, u) => {
 const byId = Object.fromEntries(DEMO_USERS.map(u => [u.id, u]))
 const slim = (id) => (id && byId[id] ? { id, name: byId[id].name } : null)
 const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10) }
+// Redesign step 4 (dates-only exception, see CLAUDE.md "Redesign rules"): a few
+// deals carry FUTURE install/pay dates so demo mode always has upcoming paydays.
+const daysFrom = (n) => daysAgo(-n)
 
 // Raw deal → joined deal (embeds {id,name} objects like the live DEAL_SELECT)
 function makeDeal(o) {
@@ -98,16 +101,16 @@ function makeDeal(o) {
 export const DEMO_DEALS_JOINED = [
   // Current-week deals so MTD / This Week landing views aren't empty.
   makeDeal({ deal_name: 'Whitaker — 9 Birchwood Ct',  project_id: 'TT-1023', sale_date: daysAgo(0),   setter_id: 'u-stephen',  closer_id: 'u-stephen',  baseline_revenue: 5400, job_price: 10200, status: 'Deal Review',     payment_method: 'Goodleap' }),
-  makeDeal({ deal_name: 'Yamamoto — 71 Clover Way',   project_id: 'TT-1024', sale_date: daysAgo(1),   setter_id: 'u-charlieh', closer_id: 'u-stephen',  baseline_revenue: 5000, job_price: 9400,  status: 'Deal Review',     payment_method: 'Self-Pay + Sunlight', deduction_amount: 250, deduction_note: 'Materials reorder — wrong turf color on first drop.' }),
-  makeDeal({ deal_name: 'Anderson — 142 Oak St',     project_id: 'TT-1001', sale_date: daysAgo(2),   setter_id: 'u-stephen',  closer_id: 'u-stephen',  baseline_revenue: 5200, job_price: 9800,  status: 'Deal Review',     payment_method: 'Sunlight' }),
-  makeDeal({ deal_name: 'Bradley — 88 Pine Ave',     project_id: 'TT-1002', sale_date: daysAgo(4),   setter_id: 'u-charlieh', closer_id: 'u-stephen',  baseline_revenue: 4800, job_price: 8500,  status: 'Deal Review' }),
+  makeDeal({ deal_name: 'Yamamoto — 71 Clover Way',   project_id: 'TT-1024', sale_date: daysAgo(1),   setter_id: 'u-charlieh', closer_id: 'u-stephen',  baseline_revenue: 5000, job_price: 9400,  status: 'Deal Review',     install_date: daysFrom(5), pay_date: daysFrom(10), payment_method: 'Self-Pay + Sunlight', deduction_amount: 250, deduction_note: 'Materials reorder — wrong turf color on first drop.' }),
+  makeDeal({ deal_name: 'Anderson — 142 Oak St',     project_id: 'TT-1001', sale_date: daysAgo(2),   setter_id: 'u-stephen',  closer_id: 'u-stephen',  baseline_revenue: 5200, job_price: 9800,  status: 'Deal Review',     install_date: daysFrom(2), pay_date: daysFrom(3), payment_method: 'Sunlight' }),
+  makeDeal({ deal_name: 'Bradley — 88 Pine Ave',     project_id: 'TT-1002', sale_date: daysAgo(4),   setter_id: 'u-charlieh', closer_id: 'u-stephen',  baseline_revenue: 4800, job_price: 8500,  status: 'Deal Review',     install_date: daysFrom(6), pay_date: daysFrom(10) }),
   makeDeal({ deal_name: 'Carter — 210 Elm Dr',       project_id: 'TT-1003', sale_date: daysAgo(6),   setter_id: 'u-marc',     closer_id: 'u-marc',     baseline_revenue: 6100, job_price: 11200, status: 'Pending Install', install_date: daysAgo(1),
              change_alert: { prev_baseline: 6100, prev_job_price: 11200, baseline: 6800, job_price: 12500, at: new Date().toISOString() } }),
   makeDeal({ deal_name: 'Davis — 55 Cedar Ln',       project_id: 'TT-1004', sale_date: daysAgo(8),   setter_id: 'u-tylerm',   closer_id: 'u-tylerm',   baseline_revenue: 3800, job_price: 7400,  status: 'Pending Install' }),
   makeDeal({ deal_name: 'Evans — 790 Maple Rd',      project_id: 'TT-1005', sale_date: daysAgo(10),  setter_id: 'u-jeremy',   closer_id: 'u-mattj',    baseline_revenue: 5500, job_price: 10100, status: 'Deal Review' }),
   makeDeal({ deal_name: 'Foster — 33 Birch Ct',      project_id: 'TT-1006', sale_date: daysAgo(13),  setter_id: 'u-codym',    closer_id: 'u-codym',    baseline_revenue: 4200, job_price: 8100,  status: 'Pending Install', install_date: daysAgo(3) }),
-  makeDeal({ deal_name: 'Garcia — 415 Spruce Way',   project_id: 'TT-1007', sale_date: daysAgo(15),  setter_id: 'u-johnk',    closer_id: 'u-dayton',   baseline_revenue: 5800, job_price: 12000, status: 'Pay Finalized', install_date: daysAgo(6) }),
-  makeDeal({ deal_name: 'Hernandez — 22 Walnut Blvd',project_id: 'TT-1008', sale_date: daysAgo(18),  setter_id: 'u-caleb',    closer_id: 'u-caleb',    baseline_revenue: 6800, job_price: 14500, status: 'Pay Finalized', install_date: daysAgo(8) }),
+  makeDeal({ deal_name: 'Garcia — 415 Spruce Way',   project_id: 'TT-1007', sale_date: daysAgo(15),  setter_id: 'u-johnk',    closer_id: 'u-dayton',   baseline_revenue: 5800, job_price: 12000, status: 'Pay Finalized', install_date: daysAgo(6), pay_date: daysFrom(3) }),
+  makeDeal({ deal_name: 'Hernandez — 22 Walnut Blvd',project_id: 'TT-1008', sale_date: daysAgo(18),  setter_id: 'u-caleb',    closer_id: 'u-caleb',    baseline_revenue: 6800, job_price: 14500, status: 'Pay Finalized', install_date: daysAgo(8), pay_date: daysFrom(3) }),
   makeDeal({ deal_name: 'Ingram — 701 Aspen St',     project_id: 'TT-1009', sale_date: daysAgo(22),  setter_id: 'u-jc',       closer_id: 'u-ricky',    baseline_revenue: 4600, job_price: 9200,  status: 'Pending Install' }),
   makeDeal({ deal_name: 'Jensen — 58 Poplar Ave',    project_id: 'TT-1010', sale_date: daysAgo(25),  setter_id: 'u-bryan',    closer_id: 'u-bryan',    baseline_revenue: 3500, job_price: 6800,  status: 'Paid', install_date: daysAgo(15), pay_date: daysAgo(8) }),
   makeDeal({ deal_name: 'Kim — 320 Willow Dr',       project_id: 'TT-1011', sale_date: daysAgo(28),  setter_id: 'u-casey',    closer_id: 'u-seth',     baseline_revenue: 5100, job_price: 9600,  status: 'Paid', install_date: daysAgo(18), pay_date: daysAgo(10), manager_id: null }),
@@ -127,7 +130,7 @@ export const DEMO_DEALS_JOINED = [
   //    rules engine, so Keaton/admin see a populated audit panel offline. ──
   // (A) Stored amounts off vs computed: solo setter pool = 11000-6000 = 5000 (so
   //     setter_amount 4600 is $400 light) and director @5% = 300 (stored 520).
-  makeDeal({ id: 'deal-aud-a', deal_name: 'Whitfield — 12 Mesa Verde',  project_id: 'TT-1090', sale_date: daysAgo(3),  setter_id: 'u-marc', closer_id: 'u-marc', baseline_revenue: 6000, job_price: 11000, status: 'Pay Finalized', install_date: daysAgo(1), office: 'Phoenix', setter_amount: 4600, director_amount: 520 }),
+  makeDeal({ id: 'deal-aud-a', deal_name: 'Whitfield — 12 Mesa Verde',  project_id: 'TT-1090', sale_date: daysAgo(3),  setter_id: 'u-marc', closer_id: 'u-marc', baseline_revenue: 6000, job_price: 11000, status: 'Pay Finalized', install_date: daysAgo(1), pay_date: daysFrom(3), office: 'Phoenix', setter_amount: 4600, director_amount: 520 }),
   // (B) Tucson deal billed at the 5% rate instead of 3.75%: dir/VP @3.75% of
   //     8000 = 300, but both stored at 400 (=5%). Flagged by the Tucson check.
   makeDeal({ id: 'deal-aud-b', deal_name: 'Ochoa — 455 Saguaro (Tucson)', project_id: 'TT-1091', sale_date: daysAgo(5), setter_id: 'u-caleb', closer_id: 'u-jc', baseline_revenue: 8000, job_price: 15000, status: 'Pending Install', office: 'Tucson', director_override_pct: 0.05, vp_override_pct: 0.05, director_amount: 400, vp_amount: 400 }),

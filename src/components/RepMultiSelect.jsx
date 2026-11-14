@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Search, ChevronDown, Check, X } from 'lucide-react'
+import { SURFACE, POPOVER, GOLD_WASH } from './ui'
 
 // Multi-select rep filter, searchable. Two exports that share one list body:
 //   RepPickList   — the search box + checkbox rows. Drop it inside any popover
@@ -24,29 +25,29 @@ export function RepPickList({ users = [], value = [], onChange, autoFocus = fals
   return (
     <div className="space-y-1">
       <div className="relative px-1">
-        <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30 pointer-events-none" />
+        <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-bank-fa pointer-events-none" />
         <input ref={inputRef} value={query} onChange={e => setQuery(e.target.value)}
-          placeholder="Search reps…"
+          placeholder="Search reps…" aria-label="Search reps"
           onKeyDown={e => {
             // Enter toggles the first match — type a few letters, hit Enter, done.
             if (e.key === 'Enter' && matches.length) { e.preventDefault(); toggle(matches[0].id) }
             if (e.key === 'Escape' && query) { e.preventDefault(); setQuery('') }
           }}
-          style={{ background: '#1e1e1e', border: '1px solid #333' }}
-          className="h-8 w-full rounded-lg text-[12px] text-white placeholder-white/25 pl-7 pr-2 focus:outline-none focus:border-teal/50" />
+          style={SURFACE.raise}
+          className="h-11 md:h-9 w-full rounded-lg text-[13px] text-bank-tx placeholder-bank-fa pl-7 pr-2 focus:outline-none" />
       </div>
       <div className="max-h-60 overflow-auto">
         <Row label="All reps" active={value.length === 0} onClick={() => onChange([])} />
         {matches.length === 0
-          ? <p className="px-2 py-1.5 text-[12px] text-white/30">No one matches “{query}”.</p>
+          ? <p className="px-2 py-1.5 text-[13px] text-bank-mu">No one matches “{query}”.</p>
           : matches.map(u => (
             <Row key={u.id} label={u.name} sub={u.role} active={selected.has(u.id)} box onClick={() => toggle(u.id)} />
           ))}
       </div>
       {value.length > 0 && (
-        <div className="flex items-center justify-between px-2 pt-1 border-t border-white/5">
-          <span className="text-[11px] text-white/40">{value.length} selected</span>
-          <button type="button" onClick={() => onChange([])} className="text-[11px] text-white/40 hover:text-white underline">Clear</button>
+        <div className="flex items-center justify-between px-2 pt-1 border-t border-bank-line">
+          <span className="text-[13px] text-bank-mu">{value.length} selected</span>
+          <button type="button" onClick={() => onChange([])} className="text-[13px] min-h-[44px] md:min-h-0 text-bank-mu hover:text-bank-tx underline">Clear</button>
         </div>
       )}
     </div>
@@ -55,17 +56,17 @@ export function RepPickList({ users = [], value = [], onChange, autoFocus = fals
 
 function Row({ label, sub, active, box, onClick }) {
   return (
-    <button type="button" onClick={onClick}
-      className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left hover:bg-white/[0.04] transition-colors">
+    <button type="button" onClick={onClick} aria-pressed={active}
+      className="w-full flex items-center gap-2 px-2 py-1.5 min-h-[44px] md:min-h-0 rounded-lg text-left hover:bg-bank-raise transition-colors">
       {box && (
-        <span className="w-3.5 h-3.5 rounded flex items-center justify-center flex-shrink-0"
-          style={{ background: active ? '#00b894' : 'transparent', border: `1px solid ${active ? '#00b894' : '#444'}` }}>
-          {active && <Check size={10} className="text-dark" strokeWidth={3} />}
+        <span className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0"
+          style={{ background: active ? 'var(--gold)' : 'transparent', border: `1px solid ${active ? 'var(--gold)' : 'var(--mu)'}` }}>
+          {active && <Check size={11} strokeWidth={3} style={{ color: 'var(--gold-ink)' }} />}
         </span>
       )}
-      <span className="text-[12px] truncate flex-1" style={{ color: active ? '#2dd4bf' : 'rgba(255,255,255,0.85)' }}>{label}</span>
-      {sub && <span className="text-[10px] text-white/30 uppercase flex-shrink-0">{sub}</span>}
-      {!box && active && <Check size={12} className="text-teal flex-shrink-0" />}
+      <span className={`text-[13px] truncate flex-1 ${active ? 'text-bank-gold-tx font-semibold' : 'text-bank-tx'}`}>{label}</span>
+      {sub && <span className="text-[12px] text-bank-fa uppercase flex-shrink-0">{sub}</span>}
+      {!box && active && <Check size={12} className="text-bank-gold-tx flex-shrink-0" />}
     </button>
   )
 }
@@ -89,18 +90,17 @@ export default function RepMultiSelect({ users = [], value = [], onChange, minW 
   return (
     <div ref={wrapRef} className="relative">
       <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
-        style={{ background: '#2a2a2a', border: `1px solid ${value.length ? 'rgba(0,184,148,0.5)' : '#333'}`, minWidth: minW }}
-        className={`h-9 rounded-lg text-[13px] px-3 pr-8 text-left w-full flex items-center gap-1.5 focus:outline-none focus:border-teal/40 transition-colors ${value.length ? 'text-teal' : 'text-white'}`}>
+        style={{ ...(value.length ? GOLD_WASH : SURFACE.raise), minWidth: minW }}
+        className={`h-11 md:h-9 rounded-lg text-[13px] px-3 pr-8 text-left w-full flex items-center gap-1.5 focus:outline-none transition-colors ${value.length ? 'text-bank-gold-tx' : 'text-bank-tx'}`}>
         <span className="truncate">{label}</span>
         {value.length > 0 && (
-          <span onClick={e => { e.stopPropagation(); onChange([]) }} title="Clear reps"
-            className="ml-auto -mr-1 p-0.5 rounded text-teal/60 hover:text-white hover:bg-white/10"><X size={12} /></span>
+          <span onClick={e => { e.stopPropagation(); onChange([]) }} title="Clear reps" role="button"
+            className="ml-auto -mr-1 p-1 rounded text-bank-gold-tx hover:text-bank-tx hover:bg-bank-raise"><X size={12} /></span>
         )}
       </button>
-      <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 pointer-events-none" />
+      <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-bank-fa pointer-events-none" />
       {open && (
-        <div className="absolute left-0 z-50 mt-1 rounded-xl shadow-2xl p-1.5 min-w-[240px]"
-          style={{ background: '#242424', border: '1px solid #3a3a3a' }}>
+        <div className="absolute left-0 z-50 mt-1 p-1.5 min-w-[260px] max-w-[calc(100vw-2rem)]" style={POPOVER}>
           <RepPickList users={users} value={value} onChange={onChange} autoFocus />
         </div>
       )}

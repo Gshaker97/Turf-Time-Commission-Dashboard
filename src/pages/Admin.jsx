@@ -19,6 +19,7 @@ import { leadFeedHealth } from '../utils/feedHealth'
 import SettingsPanel from '../components/SettingsPanel'
 import { useSettings } from '../contexts/SettingsContext'
 import { DEMO_MODE } from '../lib/supabase'
+import { SURFACE, Card, Eyebrow, Pill, PillGroup, SecondaryButton, IconButton, Input } from '../components/ui'
 
 const TABS = ['People', 'Settings']
 
@@ -38,13 +39,16 @@ const agoText = (iso) => {
 
 function HealthRow({ label, ok, color, text }) {
   return (
-    <div className="flex items-center gap-2.5 py-1.5">
-      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} />
-      <span className="text-[12px] text-white/60 w-[110px] flex-shrink-0">{label}</span>
-      <span className="text-[12px] font-semibold" style={{ color: ok ? 'rgba(255,255,255,0.85)' : color }}>{text}</span>
+    <div className="flex items-start sm:items-center gap-2.5 py-1.5 flex-wrap sm:flex-nowrap">
+      <span className="w-2 h-2 rounded-full flex-shrink-0 mt-1.5 sm:mt-0" style={{ background: color }} />
+      <span className="text-[13px] text-bank-mu w-[110px] flex-shrink-0">{label}</span>
+      <span className="text-[13px] font-semibold min-w-0 break-words" style={{ color: ok ? 'var(--tx)' : color }}>{text}</span>
     </div>
   )
 }
+
+// Status tones: healthy = sage, a warning = amber, broken = rose, unknown = faint.
+const OK = 'var(--pos)', WARN = 'var(--warn)', BAD = 'var(--neg)', NONE = 'var(--fa)'
 
 function SystemHealth() {
   const { settings, refresh } = useSettings()
@@ -65,14 +69,14 @@ function SystemHealth() {
 
   let sync
   const syncVer = hb?.version ? ` · v${hb.version}` : ''
-  if (!hb?.at) sync = { ok: false, color: '#6b7280', text: 'no heartbeat yet — paste the latest ScheduleSync.gs' }
+  if (!hb?.at) sync = { ok: false, color: NONE, text: 'no heartbeat yet — paste the latest ScheduleSync.gs' }
   else {
     const mins = (Date.now() - new Date(hb.at).getTime()) / 60000
-    if (hb.dry_run)      sync = { ok: false, color: '#f59e0b', text: `PREVIEW MODE — running but writing nothing (SCH_DRY_RUN=true) · ${agoText(hb.at)}` }
-    else if (mins > 10)  sync = { ok: false, color: '#ef4444', text: `stalled — last ran ${agoText(hb.at)}${syncVer}` }
-    else if (hb.sheet_issue) sync = { ok: false, color: '#ef4444', text: `SHEET FORMAT PROBLEM · ran ${agoText(hb.at)}${syncVer}` }
-    else if (hb.errors > 0) sync = { ok: false, color: '#f59e0b', text: `ran ${agoText(hb.at)} with ${hb.errors} error${hb.errors === 1 ? '' : 's'}${syncVer}` }
-    else sync = { ok: true, color: '#00b894', text: `ran ${agoText(hb.at)}${syncVer}` }
+    if (hb.dry_run)      sync = { ok: false, color: WARN, text: `PREVIEW MODE — running but writing nothing (SCH_DRY_RUN=true) · ${agoText(hb.at)}` }
+    else if (mins > 10)  sync = { ok: false, color: BAD, text: `stalled — last ran ${agoText(hb.at)}${syncVer}` }
+    else if (hb.sheet_issue) sync = { ok: false, color: BAD, text: `SHEET FORMAT PROBLEM · ran ${agoText(hb.at)}${syncVer}` }
+    else if (hb.errors > 0) sync = { ok: false, color: WARN, text: `ran ${agoText(hb.at)} with ${hb.errors} error${hb.errors === 1 ? '' : 's'}${syncVer}` }
+    else sync = { ok: true, color: OK, text: `ran ${agoText(hb.at)}${syncVer}` }
   }
   // WHY the last run had problems (unmatched setters, failed writes, sheet
   // format issues) — surfaced here so bad imports are visible in the site,
@@ -83,45 +87,45 @@ function SystemHealth() {
   // volume snapshots now, managed and monitored in Railway itself.)
 
   return (
-    <div className="rounded-xl px-4 py-2.5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
+    <Card padded={false} className="px-4 py-2.5">
       <div className="flex items-center gap-2 mb-1">
-        <Activity size={13} className="text-teal" />
-        <span className="text-[10px] uppercase tracking-wider text-white/30 font-semibold">System health</span>
+        <Activity size={13} className="text-bank-mu" />
+        <Eyebrow>System health</Eyebrow>
       </div>
       <HealthRow label="Scheduler sync" {...sync} />
       <HealthRow label="Lead feed" ok={feed.level === 'ok'} color={feed.color}
         text={`${feed.text}${feed.lastAt ? ` · ${feed.last7} in 7 days` : ''}`} />
       {syncIssues.length > 0 && (
-        <div className="ml-[126px] -mt-0.5 pb-1 space-y-0.5">
+        <div className="sm:ml-[126px] -mt-0.5 pb-1 space-y-0.5">
           {syncIssues.map((t, i) => (
-            <p key={i} className="text-[11px] text-amber-400/90">{t}</p>
+            <p key={i} className="text-[13px]" style={{ color: WARN }}>{t}</p>
           ))}
         </div>
       )}
       {(() => {
         let dog
-        if (!wd?.at) dog = { ok: false, color: '#6b7280', text: 'not running yet — set up Watchdog.gs' }
+        if (!wd?.at) dog = { ok: false, color: NONE, text: 'not running yet — set up Watchdog.gs' }
         else {
           const hrs = (Date.now() - new Date(wd.at).getTime()) / 3600000
           const n = wd.issues?.length || 0
-          if (hrs > 2)       dog = { ok: false, color: '#ef4444', text: `stalled — last ran ${agoText(wd.at)}` }
-          else if (n > 0)    dog = { ok: false, color: wd.issues.some(i => i.startsWith('[CRIT]')) ? '#ef4444' : '#f59e0b', text: `${n} issue${n === 1 ? '' : 's'} found · ${agoText(wd.at)}` }
-          else               dog = { ok: true, color: '#00b894', text: `all clear · ${agoText(wd.at)}` }
+          if (hrs > 2)       dog = { ok: false, color: BAD, text: `stalled — last ran ${agoText(wd.at)}` }
+          else if (n > 0)    dog = { ok: false, color: wd.issues.some(i => i.startsWith('[CRIT]')) ? BAD : WARN, text: `${n} issue${n === 1 ? '' : 's'} found · ${agoText(wd.at)}` }
+          else               dog = { ok: true, color: OK, text: `all clear · ${agoText(wd.at)}` }
         }
         return (
           <>
             <HealthRow label="Watchdog" {...dog} />
             {wd?.issues?.length > 0 && (
-              <div className="ml-[126px] -mt-0.5 pb-1 space-y-0.5">
+              <div className="sm:ml-[126px] -mt-0.5 pb-1 space-y-0.5">
                 {wd.issues.map((t, i) => (
-                  <p key={i} className="text-[11px]" style={{ color: t.startsWith('[CRIT]') ? '#f87171' : '#fbbf24' }}>{t}</p>
+                  <p key={i} className="text-[13px]" style={{ color: t.startsWith('[CRIT]') ? BAD : WARN }}>{t}</p>
                 ))}
               </div>
             )}
           </>
         )
       })()}
-    </div>
+    </Card>
   )
 }
 
@@ -148,29 +152,28 @@ function LogRow({ c, users, teamChanges, editing, onStartEdit, onCancelEdit, onP
     .every(x => changeDay(x) < eff || (changeDay(x) === eff && String(x.changed_at) <= String(c.changed_at)))
 
   return (
-    <div className="group px-3 md:px-4 py-2 flex items-center gap-3 flex-wrap hover:bg-white/[0.02] transition-colors">
+    <div className="group px-3 md:px-4 py-2 flex items-center gap-3 flex-wrap hover:bg-bank-raise transition-colors">
       {editing ? (
-        <input type="date" autoFocus defaultValue={eff}
+        <Input type="date" autoFocus defaultValue={eff} aria-label="Effective date"
           onChange={e => e.target.value && onPickDate(e.target.value)}
           onBlur={onCancelEdit}
           onKeyDown={e => { if (e.key === 'Escape') onCancelEdit() }}
-          className="px-2 py-1 rounded-lg text-[11px] text-white focus:outline-none w-[150px] flex-shrink-0"
-          style={{ background: '#1a1a1a', border: '1px solid rgba(0,184,148,0.5)' }} />
+          className="!w-[160px] flex-shrink-0" style={{ ...SURFACE.well, borderColor: 'rgba(191,164,108,0.5)' }} />
       ) : (
-        <span className="text-[11px] w-[150px] flex-shrink-0">
-          <span className="text-white/55 font-semibold">{fmtDay(eff, { year: true })}</span>
+        <span className="text-[13px] w-[150px] flex-shrink-0">
+          <span className="text-bank-tx font-semibold">{fmtDay(eff, { year: true })}</span>
           {recorded && recorded !== eff && (
-            <span className="block text-[9.5px] text-white/25">recorded {fmtDay(recorded)}</span>
+            <span className="block text-[12px] text-bank-fa">recorded {fmtDay(recorded)}</span>
           )}
         </span>
       )}
-      <span className="text-[12px] text-white/75 min-w-0 flex-1">
-        <span className="font-semibold text-white">{who}</span>
-        <span className="text-white/40"> — {from} → {to}</span>
-        {by && <span className="text-white/25"> · by {by}</span>}
-        {c.note && <span className="text-white/30"> · {c.note}</span>}
+      <span className="text-[13px] text-bank-mu min-w-0 flex-1 basis-[200px]">
+        <span className="font-semibold text-bank-tx">{who}</span>
+        <span> — {from} → {to}</span>
+        {by && <span className="text-bank-fa"> · by {by}</span>}
+        {c.note && <span className="text-bank-fa"> · {c.note}</span>}
         {c.prior_effective && (
-          <span className="text-[9.5px] text-amber-300/70"> · re-dated from {fmtDay(c.prior_effective)}</span>
+          <span className="text-[12px]" style={{ color: WARN }}> · re-dated from {fmtDay(c.prior_effective)}</span>
         )}
       </span>
       {/* ALWAYS VISIBLE. These were hover-only, which hid the one control
@@ -178,13 +181,13 @@ function LogRow({ c, users, teamChanges, editing, onStartEdit, onCancelEdit, onP
           stamped today instead of the day it really happened. A control
           nobody can find is a control that does not exist. */}
       <div className="flex items-center gap-0.5 flex-shrink-0">
-        <button onClick={onStartEdit} title="Change the date this move counts from"
-          className="p-1.5 rounded-lg text-white/35 hover:text-teal hover:bg-teal/10 transition-colors"><Pencil size={12} /></button>
-        <button onClick={() => onRemove(isLatest)}
+        <IconButton onClick={onStartEdit} title="Change the date this move counts from" aria-label="Change the date this move counts from"><Pencil size={12} /></IconButton>
+        <IconButton onClick={() => onRemove(isLatest)}
           title={isLatest ? 'Undo this move, or remove the entry' : 'Remove this entry from the log'}
-          className="p-1.5 rounded-lg text-white/35 hover:text-red-400 hover:bg-red-500/10 transition-colors">
+          aria-label={isLatest ? 'Undo this move, or remove the entry' : 'Remove this entry from the log'}
+          className="hover:!text-bank-neg">
           {isLatest ? <Undo2 size={12} /> : <Trash2 size={12} />}
-        </button>
+        </IconButton>
       </div>
     </div>
   )
@@ -431,12 +434,7 @@ export default function Admin() {
     }
   }
 
-  const btnCls = (active) =>
-    `px-3 py-1.5 rounded-lg text-[12px] md:text-[13px] font-medium transition-colors ${
-      active ? 'bg-teal/15 text-teal border border-teal/25' : 'text-white/40 hover:text-white hover:bg-white/5 border border-transparent'
-    }`
-
-  const card  = { background: '#242424', border: '1px solid #2e2e2e' }
+  const card  = SURFACE.card
   const [showLog, setShowLog] = useState(false)
   const logRef = useRef(null)
   // Expand the change log and bring it on screen. The move modal hands off
@@ -617,16 +615,18 @@ export default function Admin() {
   }
 
   return (
-    <div className="space-y-4 pb-8">
+    <div className="space-y-4 pb-8 max-w-[1400px] mx-auto" style={{ color: 'var(--tx)' }}>
 
       <SystemHealth />
 
       {/* Tab bar */}
       <div className="flex items-center gap-2 flex-wrap">
-        {TABS.map(t => <button key={t} onClick={() => setTab(t)} className={btnCls(tab === t)}>{t}</button>)}
-        <button onClick={loadAll} className="ml-auto p-2 rounded-lg text-white/30 hover:text-white hover:bg-white/5 transition-colors">
+        <PillGroup role="tablist" aria-label="Admin sections">
+          {TABS.map(t => <Pill key={t} role="tab" aria-selected={tab === t} active={tab === t} onClick={() => setTab(t)}>{t}</Pill>)}
+        </PillGroup>
+        <IconButton onClick={loadAll} className="ml-auto" title="Refresh" aria-label="Refresh">
           <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
-        </button>
+        </IconButton>
       </div>
 
       {/* ── PEOPLE — the roster as an org chart ── */}
@@ -650,37 +650,36 @@ export default function Admin() {
               NOTHING until its day, so it needs its own place to be seen and
               cancelled; otherwise it is invisible until it lands. */}
           {pendingMoves.length > 0 && (
-            <div className="rounded-xl overflow-hidden" style={card}>
-              <div className="px-3 md:px-4 py-2.5 flex items-center gap-2.5" style={{ background: '#1e1e1e' }}>
-                <CalendarClock size={14} style={{ color: overdueMoves.length ? '#f59e0b' : '#93c5fd' }} />
-                <span className="text-[12px] font-bold text-white">Scheduled moves</span>
-                <span className="text-[10px] text-white/25 hidden md:inline">nothing changes until the date — the roster is live as-is</span>
-                <span className="ml-auto text-[10px] text-white/30">{pendingMoves.length} upcoming</span>
+            <div className="rounded-2xl overflow-hidden" style={card}>
+              <div className="px-3 md:px-4 py-2.5 flex items-center gap-2.5" style={{ background: 'var(--raise)' }}>
+                <CalendarClock size={14} style={{ color: overdueMoves.length ? WARN : 'var(--mu)' }} />
+                <span className="text-[13px] font-bold text-bank-tx">Scheduled moves</span>
+                <span className="text-[13px] text-bank-fa hidden md:inline">nothing changes until the date — the roster is live as-is</span>
+                <span className="ml-auto text-[13px] text-bank-mu">{pendingMoves.length} upcoming</span>
               </div>
               {/* OVERDUE: the date has arrived and the move still has not been
                   applied. Without this it renders identically to a move that
                   is simply not due yet, so a stuck sweep is invisible. */}
               {overdueMoves.length > 0 && (
                 <div className="px-3 md:px-4 py-2.5 flex items-center gap-3 flex-wrap"
-                  style={{ background: 'rgba(245,158,11,0.07)', borderBottom: '1px solid #2a2a2a' }}>
-                  <AlertTriangle size={13} className="text-amber-400 flex-shrink-0" />
-                  <span className="text-[11.5px] text-amber-200 min-w-0 flex-1">
+                  style={{ background: 'rgba(210,160,116,0.08)', borderBottom: '1px solid var(--line)' }}>
+                  <AlertTriangle size={13} className="flex-shrink-0" style={{ color: WARN }} />
+                  <span className="text-[13px] min-w-0 flex-1" style={{ color: WARN }}>
                     {overdueMoves.length === 1 ? 'One of these was' : `${overdueMoves.length} of these were`} due
                     on or before today ({fmtDay(azToday(), { year: true })}) and {overdueMoves.length === 1 ? 'has' : 'have'} not
                     been applied.
                     {sweepError
-                      ? <span className="block text-amber-300/80 mt-0.5">The site could not run them: {sweepError}</span>
-                      : <span className="block text-amber-200/60 mt-0.5">
+                      ? <span className="block mt-0.5 text-bank-mu">The site could not run them: {sweepError}</span>
+                      : <span className="block mt-0.5 text-bank-mu">
                           Usually the database’s own clock has not reached the date yet — Apply now will say which.
                         </span>}
                   </span>
-                  <button onClick={applyNow}
-                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold text-dark bg-amber-400 flex-shrink-0">
+                  <SecondaryButton onClick={applyNow} className="flex-shrink-0" style={{ borderColor: 'rgba(210,160,116,0.5)' }}>
                     <RefreshCw size={11} /> Apply now
-                  </button>
+                  </SecondaryButton>
                 </div>
               )}
-              <div className="divide-y divide-white/5">
+              <div className="divide-y divide-bank-line">
                 {pendingMoves.map(m => {
                   const who  = users.find(x => x.id === m.profile_id)
                   const from = who?.manager_id ? teamKeyLabel(who.manager_id, users) : 'Unassigned'
@@ -688,19 +687,18 @@ export default function Admin() {
                   const due  = m.effective_date <= azToday()
                   return (
                     <div key={m.id} className="px-3 md:px-4 py-2 flex items-center gap-3 flex-wrap">
-                      <span className="text-[11px] font-semibold w-[104px] flex-shrink-0" style={{ color: due ? '#f59e0b' : '#93c5fd' }}>
+                      <span className="text-[13px] font-semibold w-[110px] flex-shrink-0" style={{ color: due ? WARN : 'var(--mu)' }}>
                         {fmtDay(m.effective_date, { year: true })}
-                        {due && <span className="block text-[9px] font-bold uppercase tracking-wide">due — not applied</span>}
+                        {due && <span className="block text-[12px] font-bold uppercase tracking-wide">due — not applied</span>}
                       </span>
-                      <span className="text-[12px] text-white/75 min-w-0 flex-1">
-                        <span className="font-semibold text-white">{who?.name || '—'}</span>
-                        <span className="text-white/40"> — {from} → {to}</span>
-                        {m.note && <span className="text-white/25"> · {m.note}</span>}
+                      <span className="text-[13px] text-bank-mu min-w-0 flex-1 basis-[180px]">
+                        <span className="font-semibold text-bank-tx">{who?.name || '—'}</span>
+                        <span> — {from} → {to}</span>
+                        {m.note && <span className="text-bank-fa"> · {m.note}</span>}
                       </span>
-                      <button onClick={() => cancelScheduled(m)} title="Cancel this scheduled move"
-                        className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10.5px] font-semibold text-white/40 hover:text-red-300 hover:bg-red-500/10 transition-colors flex-shrink-0">
+                      <SecondaryButton onClick={() => cancelScheduled(m)} title="Cancel this scheduled move" className="flex-shrink-0 hover:!text-bank-neg">
                         <X size={11} /> Cancel
-                      </button>
+                      </SecondaryButton>
                     </div>
                   )
                 })}
@@ -715,16 +713,16 @@ export default function Admin() {
               The dates here ARE the attribution rule, so being able to fix
               one is the difference between a log and a liability. */}
           {teamChanges.length > 0 && (
-            <div ref={logRef} className="rounded-xl overflow-hidden" style={card}>
-              <button onClick={() => { setShowLog(v => !v); ensureDeals() }}
-                className="w-full px-3 md:px-4 py-2.5 flex items-center justify-between gap-3 hover:bg-white/[0.02] transition-colors"
-                style={{ background: '#1e1e1e' }}>
-                <span className="text-[12px] font-bold text-white">Team change log</span>
-                <span className="text-[10px] text-white/25 hidden md:inline">sales &amp; overrides attribute to teams by these dates</span>
-                <span className="text-[10px] text-white/30">{teamChanges.length} change{teamChanges.length === 1 ? '' : 's'} · {showLog ? 'hide' : 'show'}</span>
+            <div ref={logRef} className="rounded-2xl overflow-hidden" style={card}>
+              <button onClick={() => { setShowLog(v => !v); ensureDeals() }} aria-expanded={showLog}
+                className="w-full px-3 md:px-4 py-2.5 min-h-[44px] flex items-center justify-between gap-3 hover:bg-bank-raise transition-colors"
+                style={{ background: 'var(--raise)' }}>
+                <span className="text-[13px] font-bold text-bank-tx">Team change log</span>
+                <span className="text-[13px] text-bank-fa hidden md:inline">sales &amp; overrides attribute to teams by these dates</span>
+                <span className="text-[13px] text-bank-mu">{teamChanges.length} change{teamChanges.length === 1 ? '' : 's'} · {showLog ? 'hide' : 'show'}</span>
               </button>
               {showLog && (
-                <div className="divide-y divide-white/5">
+                <div className="divide-y divide-bank-line">
                   {teamChanges.map(c => (
                     <LogRow key={c.id} c={c} users={users} teamChanges={teamChanges}
                       editing={editDate === c.id}

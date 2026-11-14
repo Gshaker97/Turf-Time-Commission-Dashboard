@@ -1,0 +1,297 @@
+const BLANK = {
+  deal_name: '', office: '', project_id: '', payment_method: '',
+  sale_date: '', install_date: '', pay_date: '',
+  setter_id: '', closer_id: '', setter_split_pct: '50',
+  baseline_revenue: '', job_price: '',
+  status: 'Deal Review',
+  manager_id: '', manager_override_pct: '',
+  director_id: '', director_override_pct: '',
+  vp_id: '', vp_override_pct: '',
+  deduction_amount: '', deduction_note: '',
+  financed_amount: '', dealer_fee_pct: '',
+  deduction_paid_by: 'closer', deduction_split_pct: '50',
+  bonus_mode: 'amount', bonus_recipient: 'setter', bonus_split_pct: '50',
+  bonus_company: '', bonus_manager: '', bonus_director: '', bonus_vp: '',
+}
+// Override % defaults come from the admin-configured rate schedule
+// (Admin → Settings → Override Rates), picked by the DEAL'S SALE DATE so a
+// rate change going forward never re-prices older deals. Falls back to the
+// legacy rules (manager 3%; director/VP 5%, Tucson 3.75%) with no schedule.
+const asPctStr = (fraction) => String(+((fraction || 0) * 100).toFixed(4))
+const dirVpDefault = (office, saleDate) => asPctStr(officeOverrideRate({ office, sale_date: saleDate || null }))
+const overrideDefaults = (office, saleDate) => ({
+  manager_override_pct: asPctStr(managerDefaultRate(saleDate || null)),
+  director_override_pct: dirVpDefault(office, saleDate),
+  vp_override_pct: dirVpDefault(office, saleDate),
+})
+
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  // Picking a setter/closer auto-fills a MISSING manager. The rule itself is
+  // `dealManagerId` in utils/team.js — shared so this and the sync can never
+  // disagree about who earns the override. Never overwrites a manager already
+  // on the deal.
+  const pickPerson = (field, id) => {
+    setForm(f => {
+      const next = { ...f, [field]: id }
+      if (!next.manager_id) {
+        const mgrId = dealManagerId(
+          (uid) => users.find(u => u.id === uid) || null,
+          { setterId: next.setter_id, closerId: next.closer_id },
+        )
+        if (mgrId) {
+          next.manager_id = mgrId
+          if (!next.manager_override_pct) next.manager_override_pct = asPctStr(managerDefaultRate(next.sale_date || null))
+        }
+      }
+      return next
+    })
+  }
+
+  // Switching the bonus entry unit (% ↔ $) converts the typed values so the
+  // dollar effect stays the same.
+  function setBonusMode(newMode) {
+    setForm(f => {
+      if (newMode === f.bonus_mode) return f
+      const base = parseFloat(f.baseline_revenue) || 0
+      const conv = (raw) => {
+        const v = parseFloat(raw)
+        if (!(v > 0) || base <= 0) return raw
+        return newMode === 'pct' ? String(+(v / base * 100).toFixed(4)) : String(+(base * v / 100).toFixed(2))
+      }
+      return {
+        ...f, bonus_mode: newMode,
+        bonus_company: conv(f.bonus_company), bonus_manager: conv(f.bonus_manager),
+        bonus_director: conv(f.bonus_director), bonus_vp: conv(f.bonus_vp),
+      }
+    })
+  }
+
+  // Setting/changing the install date auto-populates the pay date (Friday of
+  // the following week). Clearing the install date leaves pay date untouched,
+  // and the pay date stays manually editable.
+  function setInstallDate(v) {
+    // Setting an install date auto-fills the pay date; clearing it clears both.
+    setForm(f => ({ ...f, install_date: v, pay_date: v ? payDateFromInstall(v) : '' }))
+  }
+
+  function handleOverrideId(idKey, pctKey, value) {
+    // Picking a person fills the default % if blank; clearing to "None" zeroes
+    // the % out (a rep with no manager shouldn't carry a stranded 3%).
+    setForm(f => ({ ...f, [idKey]: value, [pctKey]: value ? (f[pctKey] || overrideDefaults(f.office, f.sale_date)[pctKey]) : '' }))
+  }
+
+  // Changing the office re-applies the office-driven default to any director/VP
+  // override already assigned (manager stays put at its default).
+  function handleOfficeChange(office) {
+    setForm(f => ({
+      ...f,
+      office,
+      director_override_pct: f.director_id ? dirVpDefault(office, f.sale_date) : f.director_override_pct,
+      vp_override_pct:       f.vp_id       ? dirVpDefault(office, f.sale_date) : f.vp_override_pct,
+    }))
+  }
+
+  // Parse a % field, defaulting to 50 ONLY when blank/invalid — NOT when 0
+  // (so a 0% setter / 100% closer split is allowed; plain `|| 50` swallowed 0).
+  const pctOr50 = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 50 }
+  const splitPct = Math.min(100, Math.max(0, pctOr50(form.setter_split_pct)))
+  // Let the split be set by typing a $ amount (back-calculated from the rep pool).
+  const repPoolForm = Math.max((parseFloat(form.job_price) || 0) - (parseFloat(form.baseline_revenue) || 0), 0)
+  const setterDollars = repPoolForm * splitPct / 100
+  const closerDollars = repPoolForm * (100 - splitPct) / 100
+  // While a $ box is focused, keep the RAW typed text — the displayed value is
+  // otherwise recomputed from the split on every keystroke, which mangles
+  // multi-digit entry ("1" → "1.00" → the next digit lands after the decimal).
+  // On blur it snaps back to the computed amount.
+  const [moneyEdit, setMoneyEdit] = useState(null)   // { which, text }
+  function setSplitFromDollars(which, raw) {
+    setMoneyEdit({ which, text: raw })
+    if (repPoolForm <= 0) return
+    const v = Math.max(0, parseFloat(String(raw).replace(/[$,]/g, '')) || 0)
+    let sp = which === 'setter' ? (v / repPoolForm) * 100 : (1 - v / repPoolForm) * 100
+    // Keep enough precision (4 decimals) that a typed $ amount round-trips to the
+    // cent — rounding to 2 dropped custom splits off by a few dollars.
+    set('setter_split_pct', Math.min(100, Math.max(0, sp)).toFixed(4))
+  }
+  const moneyValue = (which, computed) =>
+    moneyEdit?.which === which ? moneyEdit.text : (repPoolForm > 0 ? computed.toFixed(2) : '')
+  // Resolve a typed bonus contribution to dollars (% is of baseline).
+  const baseForBonus = parseFloat(form.baseline_revenue) || 0
+  // Override exclusions — subcontracted items (Electrical/Gas/Pergolas…) whose
+  // price earns no override. Overrides compute off baseline − these amounts.
+  const exclusionsTotal = exRows.reduce((s2, r2) => s2 + (parseFloat(r2.amount) || 0), 0)
+  const overrideBaseForm = Math.max(baseForBonus - exclusionsTotal, 0)
+  const resolveBonus = (raw) => {
+    const v = parseFloat(raw) || 0
+    if (v <= 0) return 0
+    return form.bonus_mode === 'pct' ? baseForBonus * v / 100 : v
+  }
+  const bonus$ = {
+    company:  resolveBonus(form.bonus_company),
+    manager:  resolveBonus(form.bonus_manager),
+    director: resolveBonus(form.bonus_director),
+    vp:       resolveBonus(form.bonus_vp),
+  }
+  const preview  = calcDealCommissions({
+    job_price:             parseFloat(form.job_price)        || 0,
+    baseline_revenue:      parseFloat(form.baseline_revenue) || 0,
+    setter_id:             form.setter_id,
+    closer_id:             form.closer_id,
+    setter_split_pct:      splitPct / 100,
+    // Override amounts only count when their person is assigned, so the preview
+    // must carry the ids too (not just the %s).
+    manager_id:            form.manager_id  || null,
+    director_id:           form.director_id || null,
+    vp_id:                 form.vp_id       || null,
+    manager_override_pct:  parseFloat(form.manager_override_pct)  / 100 || 0,
+    director_override_pct: parseFloat(form.director_override_pct) / 100 || 0,
+    vp_override_pct:       parseFloat(form.vp_override_pct)       / 100 || 0,
+    override_exclusions:   exRows.map(r => ({ item: r.item, amount: parseFloat(r.amount) || 0 })),
+    bonus_recipient:       form.bonus_recipient,
+    bonus_company:         bonus$.company,
+    bonus_manager:         bonus$.manager,
+    bonus_director:        bonus$.director,
+    bonus_vp:              bonus$.vp,
+  })
+  const bonusDollars = preview.bonus || 0
+
+  // Financing dealer fee = financed amount × fee%. Counts as a deduction.
+  const financed = parseFloat(form.financed_amount) || 0
+  const dealerFee = financed * (parseFloat(form.dealer_fee_pct) || 0) / 100
+  const totalDeduction = (parseFloat(form.deduction_amount) || 0) + dealerFee
+  const isSplitDeal = !!(form.setter_id && form.closer_id && form.setter_id !== form.closer_id)
+  const setterName = users.find(u => u.id === form.setter_id)?.name || 'Setter'
+  const closerName = users.find(u => u.id === form.closer_id)?.name || 'Closer'
+  const dedSplit = Math.min(100, Math.max(0, pctOr50(form.deduction_split_pct)))  // setter's %
+  // Mirror the engine: 'closer' and 'split' both need a DISTINCT closer — on a
+  // solo deal the whole bonus falls back to the setter, so show that name.
+  const bonusIsSplit = form.bonus_recipient === 'split' && isSplitDeal
+  const bonusSplit = Math.min(100, Math.max(0, pctOr50(form.bonus_split_pct)))  // setter's %
+  const recipName = (form.bonus_recipient === 'closer' && isSplitDeal) ? closerName : setterName
+  // Per-role override $ (gross) for showing the live "5% → 4%" net as bonuses pull from it.
+  const overrideGross = {
+    manager:  form.manager_id  ? overrideBaseForm * ((parseFloat(form.manager_override_pct)  || 0) / 100) : 0,
+    director: form.director_id ? overrideBaseForm * ((parseFloat(form.director_override_pct) || 0) / 100) : 0,
+    vp:       form.vp_id       ? overrideBaseForm * ((parseFloat(form.vp_override_pct)        || 0) / 100) : 0,
+  }
+  // The contributor rows rendered in the Rep Bonus section.
+  const bonusRows = [
+    { key: 'bonus_company',  label: 'Company',  role: 'company',  id: true,            gross: null },
+    { key: 'bonus_manager',  label: 'Manager',  role: 'manager',  id: !!form.manager_id,  gross: overrideGross.manager },
+    { key: 'bonus_director', label: 'Director', role: 'director', id: !!form.director_id, gross: overrideGross.director },
+    { key: 'bonus_vp',       label: 'VP',       role: 'vp',       id: !!form.vp_id,       gross: overrideGross.vp },
+  ]
+
+  // Loose equality for the changed-fields diff: '' / null / undefined are the
+  // same "empty", numeric strings equal their numbers, objects compare by JSON.
+  const sameVal = (a, b) => {
+    const na = a === undefined || a === '' ? null : a
+    const nb = b === undefined || b === '' ? null : b
+    if (na === null || nb === null) return na === nb
+    if (typeof na === 'object' || typeof nb === 'object') return JSON.stringify(na) === JSON.stringify(nb)
+    const numish = (v) => typeof v === 'number' || /^-?\d*\.?\d+$/.test(String(v).trim())
+    if (numish(na) && numish(nb)) return parseFloat(na) === parseFloat(nb)
+    return String(na) === String(nb)
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    if (duplicate && !await confirmDialog({
+      tone: 'warn',
+      title: `A deal named "${duplicate.deal_name}" already exists`,
+      message: duplicate.sale_date ? `Sold ${duplicate.sale_date}.` : undefined,
+      bullets: ['If this is a second job for the same customer, that is fine — ArcSite keys jobs by Project ID, not name.'],
+      confirmLabel: 'Create it anyway',
+    })) return
+    setSaving(true)
+    // bonus_mode is a UI-only toggle (not a column) — don't send it to the DB.
+    const { bonus_mode: _bonusMode, ...formCols } = form
+    await saveDeal({
+      ...formCols,
+      baseline_revenue:      parseFloat(form.baseline_revenue) || 0,
+      job_price:             parseFloat(form.job_price) || 0,
+      setter_split_pct:      form.setter_id !== form.closer_id ? Math.min(1, Math.max(0, pctOr50(form.setter_split_pct) / 100)) : null,
+      manager_override_pct:  form.manager_id  && form.manager_override_pct  ? parseFloat(form.manager_override_pct)  / 100 : null,
+      director_override_pct: form.director_id && form.director_override_pct ? parseFloat(form.director_override_pct) / 100 : null,
+      vp_override_pct:       form.vp_id       && form.vp_override_pct       ? parseFloat(form.vp_override_pct)       / 100 : null,
+      manager_id:  form.manager_id  || null,
+      director_id: form.director_id || null,
+      vp_id:       form.vp_id       || null,
+      payment_method:   form.payment_method || null,
+      pay_date:         form.pay_date || null,
+      deduction_amount: form.deduction_amount !== '' ? Math.max(0, parseFloat(form.deduction_amount) || 0) : null,
+      deduction_note:   form.deduction_note?.trim() || null,
+      financed_amount:  form.financed_amount !== '' ? Math.max(0, parseFloat(form.financed_amount) || 0) : null,
+      dealer_fee_pct:   form.dealer_fee_pct ? parseFloat(form.dealer_fee_pct) / 100 : null,
+      deduction_paid_by: form.deduction_paid_by || 'closer',
+      deduction_split_pct: Math.min(1, Math.max(0, pctOr50(form.deduction_split_pct) / 100)),
+      // Subcontracted items that earn no override (null when none).
+      override_exclusions: (() => {
+        const clean = exRows
+          .map(r => ({ item: String(r.item || '').trim(), amount: Math.max(0, parseFloat(r.amount) || 0) }))
+          .filter(r => r.item && r.amount > 0)
+        return clean.length ? clean : null
+      })(),
+      // Multi-source bonus, stored as resolved $ per source.
+      bonus_company:   bonus$.company  > 0 ? bonus$.company  : null,
+      bonus_manager:   bonus$.manager  > 0 ? bonus$.manager  : null,
+      bonus_director:  bonus$.director > 0 ? bonus$.director : null,
+      bonus_vp:        bonus$.vp       > 0 ? bonus$.vp       : null,
+      bonus_recipient: bonusDollars > 0 ? form.bonus_recipient : null,
+      // Setter's share, stored as a fraction — only meaningful for a split.
+      bonus_split_pct: bonusDollars > 0 && form.bonus_recipient === 'split'
+        ? Math.min(1, Math.max(0, pctOr50(form.bonus_split_pct) / 100)) : null,
+    })
+    setSaving(false)
+  }
+
+  // Saving an EDIT sends only the fields that actually changed. The modal used
+  // to write every field back, so a save could stomp anything the sync (or an
+  // inline edit) updated while the modal sat open — install dates and setters
+  // silently reverted to the values the modal opened with.
+  async function saveDeal(payload) {
+    if (!deal) {
+      // New deal — full payload, plus null stored amounts for completeness.
+      await onSave({ ...payload, setter_amount: null, closer_amount: null, manager_amount: null, director_amount: null, vp_amount: null })
+      return
+    }
+    const changed = {}
+    for (const k of Object.keys(payload)) {
+      if (!sameVal(payload[k], deal[k])) changed[k] = payload[k]
+    }
+    if (Object.keys(changed).length === 0) { onClose(); return }   // nothing to save
+    // Money inputs changed → clear stored sheet amounts so the engine
+    // recomputes from the new numbers (an unrelated edit — e.g. a date —
+    // leaves stored amounts alone).
+    const MONEY_KEYS = ['baseline_revenue', 'job_price', 'setter_id', 'closer_id', 'setter_split_pct',
+      'manager_id', 'director_id', 'vp_id', 'manager_override_pct', 'director_override_pct', 'vp_override_pct',
+      'deduction_amount', 'financed_amount', 'dealer_fee_pct', 'deduction_paid_by', 'deduction_split_pct',
+      'override_exclusions', 'bonus_company', 'bonus_manager', 'bonus_director', 'bonus_vp', 'bonus_recipient', 'bonus_split_pct']
+    if (MONEY_KEYS.some(k => k in changed)) {
+      Object.assign(changed, { setter_amount: null, closer_amount: null, manager_amount: null, director_amount: null, vp_amount: null })
+    }
+    await onSave(changed)
+  }
+
+  // Override dropdowns list people by CURRENT role — but a deal keeps paying
+  // whoever is stamped on it, so someone demoted since (e.g. a manager moved to
+  // rep) must still appear as the assigned option on their old deals, or the
+  // field would show blank and a re-save could silently knock them off the pay.
+  const withAssigned = (list, id) => {
+    if (!id || list.some(u => u.id === id)) return list
+    const cur = users.find(u => u.id === id)
+    return cur ? [...list, cur] : list
+  }
+  const managers  = withAssigned(users.filter(u => u.role === 'manager'),  form.manager_id)
+  const directors = withAssigned(users.filter(u => u.role === 'director'), form.director_id)
+  const vps       = withAssigned(users.filter(u => u.role === 'vp'),       form.vp_id)
+  const showPreview = form.job_price && form.baseline_revenue
+
+  const overrideRows = [
+    { label: 'Manager',  idKey: 'manager_id',  pctKey: 'manager_override_pct',  list: managers,  role: 'manager' },
+    { label: 'Director', idKey: 'director_id', pctKey: 'director_override_pct', list: directors, role: 'director' },
+    { label: 'VP',       idKey: 'vp_id',       pctKey: 'vp_override_pct',       list: vps,       role: 'vp' },
+  ]
+

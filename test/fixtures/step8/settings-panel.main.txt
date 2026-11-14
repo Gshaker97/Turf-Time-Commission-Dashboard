@@ -1,0 +1,423 @@
+const localDateISO = () => {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+// ──── next block ────
+function StatusEditor() {
+  const { statuses, save } = useSettings()
+  const [rows, setRows]   = useState(statuses)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
+  const [error, setError]   = useState('')
+  useEffect(() => { setRows(statuses) }, [statuses])
+
+  const dirty = JSON.stringify(rows) !== JSON.stringify(statuses)
+  const update = (i, patch) => setRows(rs => rs.map((r, j) => j === i ? { ...r, ...patch } : r))
+  const remove = (i) => setRows(rs => rs.filter((_, j) => j !== i))
+  const add    = () => setRows(rs => [...rs, { label: 'New Status', color: '#94a3b8' }])
+  async function onSave() {
+    const clean = rows.filter(r => r.label.trim()).map(r => ({ label: r.label.trim(), color: r.color || '#94a3b8' }))
+    setError(''); setSaving(true)
+    const { error: err } = (await save('deal_statuses', clean)) || {}
+    setSaving(false)
+    if (err) { setError(err.message || 'Could not save.'); return }
+    setSaved(true); setTimeout(() => setSaved(false), 1800)
+  }
+
+// ──── next block ────
+function ListEditor({ title, hint, settingKey, placeholder, fallback }) {
+  const { settings, save } = useSettings()
+  // `fallback` seeds the editor when the setting has never been saved, so what
+  // you see matches what's actually in effect (e.g. the sync's built-in lists).
+  const current = settings[settingKey] ?? fallback ?? []
+  const [rows, setRows]     = useState(current)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
+  const [error, setError]   = useState('')
+  useEffect(() => { setRows(current) }, [JSON.stringify(current)])
+
+  const dirty = JSON.stringify(rows) !== JSON.stringify(current)
+  const update = (i, v) => setRows(rs => rs.map((r, j) => j === i ? v : r))
+  const remove = (i) => setRows(rs => rs.filter((_, j) => j !== i))
+  const add    = () => setRows(rs => [...rs, ''])
+  async function onSave() {
+    const clean = rows.map(r => r.trim()).filter(Boolean)
+    setError(''); setSaving(true)
+    const { error: err } = (await save(settingKey, clean)) || {}
+    setSaving(false)
+    if (err) { setError(err.message || 'Could not save.'); return }
+    setSaved(true); setTimeout(() => setSaved(false), 1800)
+  }
+
+// ──── next block ────
+function stripWhiteBackground(canvas) {
+  const ctx = canvas.getContext('2d')
+  const w = canvas.width, h = canvas.height
+  const img = ctx.getImageData(0, 0, w, h)
+  const d = img.data
+  const nearWhite = (i) => d[i] > 232 && d[i + 1] > 232 && d[i + 2] > 232
+  const seen = new Uint8Array(w * h)
+  const stack = []
+  for (let x = 0; x < w; x++) { stack.push(x, 0, x, h - 1) }
+  for (let y = 0; y < h; y++) { stack.push(0, y, w - 1, y) }
+  while (stack.length) {
+    const y = stack.pop(), x = stack.pop()
+    if (x < 0 || y < 0 || x >= w || y >= h) continue
+    const p = y * w + x
+    if (seen[p]) continue
+    seen[p] = 1
+    const i4 = p * 4
+    if (d[i4 + 3] === 0 || !nearWhite(i4)) continue
+    d[i4 + 3] = 0
+    stack.push(x + 1, y, x - 1, y, x, y + 1, x, y - 1)
+  }
+  ctx.putImageData(img, 0, 0)
+}
+
+function LogoEditor() {
+  const { settings, save } = useSettings()
+  const current = settings?.site_logo || null
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
+  const [error, setError]   = useState('')
+  const [stripBg, setStripBg] = useState(true)
+
+  async function apply(value) {
+    setError(''); setSaving(true)
+    const { error: err } = (await save('site_logo', value)) || {}
+    setSaving(false)
+    if (err) { setError(err.message || 'Could not save.'); return }
+    setSaved(true); setTimeout(() => setSaved(false), 1800)
+  }
+
+  function onPick(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    if (!file.type.startsWith('image/')) return setError('Pick an image file (PNG with transparency works best).')
+    const img = new Image()
+    const url = URL.createObjectURL(file)
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      // Downscale so the stored data URL stays small (~20–60KB).
+      const max = 256
+      const scale = Math.min(1, max / Math.max(img.width, img.height))
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(img.width * scale)
+      canvas.height = Math.round(img.height * scale)
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
+      if (stripBg) stripWhiteBackground(canvas)
+      const dataUrl = canvas.toDataURL('image/png')
+      if (dataUrl.length > 400000) return setError('That image is too complex even after resizing — try a simpler PNG.')
+      apply(dataUrl)
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); setError('Could not read that image.') }
+    img.src = url
+  }
+
+// ──── next block ────
+function TextSetting({ title, hint, settingKey, placeholder }) {
+  const { settings, save } = useSettings()
+  const current = settings[settingKey] ?? ''
+  const [value, setValue]   = useState(current)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
+  const [error, setError]   = useState('')
+  useEffect(() => { setValue(current) }, [current])
+
+  const dirty = value !== current
+  async function onSave() {
+    setError(''); setSaving(true)
+    const { error: err } = (await save(settingKey, value.trim() || null)) || {}
+    setSaving(false)
+    if (err) { setError(err.message || 'Could not save.'); return }
+    setSaved(true); setTimeout(() => setSaved(false), 1800)
+  }
+
+// ──── next block ────
+function DashboardFlagsEditor() {
+  const { settings, save } = useSettings()
+  const curFloors = settings.perf_floors || {}
+  const curTeam   = settings.perf_default_team ?? ''
+  const [setFloor,    setSetFloor]    = useState(curFloors.set ?? 1)
+  const [team,        setTeam]        = useState(curTeam)
+  const [heads,       setHeads]       = useState([])
+  const [saving, setSaving] = useState(false)
+  const [saved,  setSaved]  = useState(false)
+  const [error,  setError]  = useState('')
+
+  useEffect(() => {
+    setSetFloor(curFloors.set ?? 1); setTeam(curTeam)
+  }, [settings.perf_floors, settings.perf_default_team])
+  useEffect(() => {
+    let alive = true
+    fetchUsers().then(({ data }) => {
+      if (!alive) return
+      const us = data || []
+      const hs = headIdSet(us)
+      setHeads(us.filter(u => hs.has(u.id)))
+    })
+    return () => { alive = false }
+  }, [])
+
+  const dirty = Number(setFloor) !== (curFloors.set ?? 1) || team !== curTeam
+  async function onSave() {
+    setError(''); setSaving(true)
+    const a = (await save('perf_floors', { set: Math.max(0, Number(setFloor) || 0) })) || {}
+    const b = (await save('perf_default_team', team || '')) || {}
+    setSaving(false)
+    const err = a.error || b.error
+    if (err) { setError(err.message || 'Could not save.'); return }
+    setSaved(true); setTimeout(() => setSaved(false), 1800)
+  }
+
+// ──── next block ────
+function DateSetting({ title, hint, settingKey, fallback }) {
+  const { settings, save } = useSettings()
+  const current = settings[settingKey] ?? fallback ?? ''
+  const [value, setValue]   = useState(current)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
+  const [error, setError]   = useState('')
+  useEffect(() => { setValue(current) }, [current])
+
+  const dirty = value !== current
+  async function onSave() {
+    setError(''); setSaving(true)
+    const { error: err } = (await save(settingKey, value || null)) || {}
+    setSaving(false)
+    if (err) { setError(err.message || 'Could not save.'); return }
+    setSaved(true); setTimeout(() => setSaved(false), 1800)
+  }
+
+// ──── next block ────
+const LEGACY_ERA = { effective: '2000-01-01', manager: 3, default: 5, byOffice: { tucson: 3.75 } }
+
+function OverrideRatesEditor() {
+  const { settings, offices, save } = useSettings()
+  const current = Array.isArray(settings.override_rates) && settings.override_rates.length
+    ? settings.override_rates : [LEGACY_ERA]
+  const [rows, setRows]     = useState(current)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
+  const [error, setError]   = useState('')
+  useEffect(() => { setRows(current) }, [JSON.stringify(current)])
+
+  const dirty = JSON.stringify(rows) !== JSON.stringify(current)
+  const setEra = (i, patch) => setRows(rs => rs.map((r, x) => x === i ? { ...r, ...patch } : r))
+  const setOffice = (i, office, v) => setRows(rs => rs.map((r, x) =>
+    x === i ? { ...r, byOffice: { ...(r.byOffice || {}), [office.toLowerCase()]: v } } : r))
+
+  function addEra() {
+    const last = rows[rows.length - 1] || LEGACY_ERA
+    setRows(rs => [...rs, { ...last, byOffice: { ...(last.byOffice || {}) }, effective: localDateISO() }])
+  }
+  async function onSave() {
+    setError(''); setSaving(true)
+    const clean = rows
+      .filter(r => r.effective)
+      .map(r => ({
+        effective: r.effective,
+        manager: Math.max(0, parseFloat(r.manager) || 0),
+        default: Math.max(0, parseFloat(r.default) || 0),
+        byOffice: Object.fromEntries(Object.entries(r.byOffice || {})
+          .filter(([, v]) => v !== '' && v != null && Number.isFinite(parseFloat(v)))
+          .map(([k, v]) => [k, Math.max(0, parseFloat(v))])),
+      }))
+      .sort((a, b) => a.effective.localeCompare(b.effective))
+    const { error: err } = (await save('override_rates', clean)) || {}
+    setSaving(false)
+    if (err) { setError(err.message || 'Could not save.'); return }
+    setSaved(true); setTimeout(() => setSaved(false), 1800)
+  }
+
+
+// ──── next block ────
+const WEEKDAYS = [[1, 'Monday'], [2, 'Tuesday'], [3, 'Wednesday'], [4, 'Thursday'], [5, 'Friday'], [6, 'Saturday'], [7, 'Sunday']]
+
+function PayDateRuleEditor() {
+  const { settings, save } = useSettings()
+  const cur = settings.pay_date_rule || { day: 5, weeks_after: 1 }
+  const [day, setDay]     = useState(cur.day ?? 5)
+  const [weeks, setWeeks] = useState(cur.weeks_after ?? 1)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
+  const [error, setError]   = useState('')
+  useEffect(() => { setDay(cur.day ?? 5); setWeeks(cur.weeks_after ?? 1) }, [JSON.stringify(cur)])
+
+  const dirty = Number(day) !== Number(cur.day ?? 5) || Number(weeks) !== Number(cur.weeks_after ?? 1)
+  async function onSave() {
+    setError(''); setSaving(true)
+    const { error: err } = (await save('pay_date_rule', { day: Number(day), weeks_after: Math.max(0, Number(weeks) || 0) })) || {}
+    setSaving(false)
+    if (err) { setError(err.message || 'Could not save.'); return }
+    setSaved(true); setTimeout(() => setSaved(false), 1800)
+  }
+
+  const dayName = (WEEKDAYS.find(([v]) => v === Number(day)) || [5, 'Friday'])[1]
+  const weeksN = Math.max(0, Number(weeks) || 0)
+// ──── next block ────
+function NoteNotifyEditor() {
+  const { settings, save } = useSettings()
+  const cur = { closer: true, setter: false, manager: false, admins: true, ...(settings.note_notify || {}) }
+  const [cfg, setCfg]       = useState(cur)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
+  const [error, setError]   = useState('')
+  useEffect(() => { setCfg(cur) }, [JSON.stringify(cur)])
+
+  const dirty = JSON.stringify(cfg) !== JSON.stringify(cur)
+  async function onSave() {
+    setError(''); setSaving(true)
+    const { error: err } = (await save('note_notify', cfg)) || {}
+    setSaving(false)
+    if (err) { setError(err.message || 'Could not save.'); return }
+    setSaved(true); setTimeout(() => setSaved(false), 1800)
+  }
+
+// ──── next block ────
+const LEAD_FIELDS = [
+  { key: 'external_id',    label: 'Appointment ID', hint: 'Their unique id — prevents duplicates' },
+  { key: 'customer_name',  label: 'Customer Name' },
+  { key: 'appointment_at', label: 'Appointment Date/Time' },
+  { key: 'status',         label: 'Status / Disposition' },
+  { key: 'setter_email',   label: 'Setter Email', hint: 'How we match the rep who booked it' },
+  { key: 'closer_email',   label: 'Closer Email', hint: 'The rep running it' },
+  { key: 'setter_name',    label: 'Setter Name', hint: 'Fallback when the email has no match' },
+  { key: 'closer_name',    label: 'Closer Name' },
+  { key: 'address',        label: 'Address' },
+  { key: 'phone',          label: 'Phone' },
+  { key: 'email',          label: 'Customer Email' },
+  { key: 'office',         label: 'Office' },
+  { key: 'notes',          label: 'Notes' },
+]
+const LEAD_LIFECYCLE = [
+  ['scheduled', 'Scheduled — on the calendar'],
+  ['completed', 'Ran — counts as an estimate'],
+  ['sold',      'Sold — ran and closed'],
+  ['no_show',   'No Show'],
+  ['canceled',  'Canceled'],
+]
+
+// Door-knocking activity feed (migration 048) — same mapper, different
+// fields. A payload with a doors count is a DAILY SUMMARY; one with a knock
+// time is a PER-KNOCK EVENT (the DB rolls those into the day row).
+const FIELD_ACTIVITY_FIELDS = [
+  { key: 'rep_email',      label: 'Rep Email', hint: 'How we match the rep' },
+  { key: 'rep_name',       label: 'Rep Name', hint: 'Fallback when the email has no match' },
+  { key: 'activity_date',  label: 'Date', hint: 'Daily summaries — the day the doors were knocked' },
+  { key: 'doors_knocked',  label: 'Doors Knocked', hint: 'Daily summaries — the count for that day' },
+  { key: 'knock_at',       label: 'Knock Time', hint: 'Per-knock events — one webhook per door' },
+  { key: 'knock_flag',     label: 'Is a Knock?', hint: 'Events where this is 0/false are ignored' },
+  { key: 'external_id',    label: 'Event / Row ID', hint: 'Their unique id — prevents duplicates' },
+  { key: 'office',         label: 'Office' },
+]
+
+// One CRM feed's admin panel: endpoint URL, the last payload received (real
+// field names to pick from), our-field ← their-field mapping, and — for the
+// leads feed only — the disposition → lifecycle mapper.
+function FeedEditor({ title, blurb, path, fields, mapKey, lastKey, resultKey, withStatusMap = false, footnote = null }) {
+  const { settings, save } = useSettings()
+  const [map, setMap] = useState({})
+  const [statusMap, setStatusMap] = useState({})
+  const [dirty, setDirty] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState('')
+  const [copied, setCopied] = useState(false)
+  const [copiedPayload, setCopiedPayload] = useState(false)
+
+  useEffect(() => {
+    setMap(settings[mapKey] || {})
+    setStatusMap(settings.lead_status_map || {})
+    setDirty(false)
+  }, [settings[mapKey], settings.lead_status_map, mapKey])
+
+  const last = settings[lastKey] || null
+  const result = resultKey ? settings[resultKey] || null : null
+  const incoming = last?.fields ? Object.keys(last.fields).sort() : []
+  const url = `${window.location.origin}${path}`
+
+  const setField = (k, v) => { setMap(m => ({ ...m, [k]: v })); setDirty(true); setSaved(false) }
+  const setStatus = (k, v) => { setStatusMap(m => ({ ...m, [k]: v })); setDirty(true); setSaved(false) }
+
+  async function onSave() {
+    setSaving(true); setError('')
+    const cleanMap = Object.fromEntries(Object.entries(map).filter(([, v]) => v))
+    const a = (await save(mapKey, cleanMap)) || {}
+    let b = {}
+    if (withStatusMap) {
+      const cleanStatus = Object.fromEntries(Object.entries(statusMap).filter(([, v]) => v))
+      b = (await save('lead_status_map', cleanStatus)) || {}
+    }
+    setSaving(false)
+    if (a.error || b.error) { setError((a.error || b.error).message); return }
+    setDirty(false); setSaved(true); setTimeout(() => setSaved(false), 2000)
+  }
+
+  // Disposition values seen in the last payload's status-ish field, so the
+  // status mapper can be filled in by clicking rather than typing.
+  const seenStatus = last?.sample && map.status ? String(
+    String(map.status).split('.').reduce((o, k) => (o == null ? undefined : o[k]), last.sample) ?? '') : ''
+  const knownDispositions = [...new Set([...Object.keys(statusMap), seenStatus].filter(Boolean))]
+  const LEAD_FIELDS = fields
+
+// ──── next block ────
+const LeadFeedEditor = () => (
+  <FeedEditor
+    title="Lead Feed (CRM Webhook)"
+    blurb="Point your CRM's appointment webhook here and map its fields onto ours — no code change needed when the CRM's format differs."
+    path="/api/leads/ingest" fields={LEAD_FIELDS} mapKey="lead_field_map" lastKey="lead_last_payload" resultKey="lead_last_result" withStatusMap />
+)
+
+const FieldFeedEditor = () => (
+  <FeedEditor
+    title="Field Activity Feed (Door Knocks — recorded, not shown)"
+    blurb="Door knocks are RECORDED BUT NOT SHOWN anywhere on the site — RepCard's own count never reconciled with ours, so the figure was removed. This feed stays wired so nothing is lost and it can be switched back on. Keep the webhook pointed here: if the site stops recognising these events they get filed as junk appointments instead."
+    path="/api/field/ingest" fields={FIELD_ACTIVITY_FIELDS} mapKey="field_activity_field_map" lastKey="field_last_payload" resultKey="field_last_result"
+    footnote="RepCard's door-knock events work with nothing mapped: the site already reads id, createdAt, user.name / user.email and hasDoorKnock. Map a field here only to override that. Two shapes work: a payload with a Doors Knocked count is a daily summary for that rep and date; a payload with a Knock Time is one door — the site adds it to that rep's day (doors +1, first/last knock). Admins can also import a CSV report from the Performance page." />
+)
+
+
+// ──── next block ────
+function AddDisposition({ onAdd, existing }) {
+  const [v, setV] = useState('')
+  const add = () => { const t = v.trim(); if (t && !existing.includes(t)) { onAdd(t); setV('') } }
+// ──── next block ────
+      <LogoEditor />
+      <TextSetting title="Site Name" settingKey="site_name"
+        hint="Shown in the header next to the logo and as the browser-tab title."
+        placeholder="Turf Time Dashboard" />
+      <StatusEditor />
+      <ListEditor title="Payment Methods" settingKey="payment_methods"
+        hint="Shown on every deal and in the create/edit form."
+        placeholder="e.g. Self-Pay + Goodleap" />
+      <ListEditor title="Offices" settingKey="offices"
+        hint="Selectable office locations on deals."
+        placeholder="e.g. Phoenix" />
+      <OverrideRatesEditor />
+      <PayDateRuleEditor />
+      <NoteNotifyEditor />
+      <LeadFeedEditor />
+      <FieldFeedEditor />
+      <ListEditor title="Feed: Not Field Reps" settingKey="feed_non_reps"
+        hint="Names the CRM sends that aren't field reps — inside sales, or someone who's left. Their appointments still count in full for whoever RAN them; the name just stops being flagged as a missing setter forever. Match is on the whole name, case-insensitive."
+        placeholder="e.g. Josh Hilton" />
+      <ListEditor title="Override Exclusion Items" settingKey="override_exclusion_items"
+        hint="Subcontracted products that earn no manager/director/VP override. On a deal, pick the item and enter its price — overrides then compute off baseline minus those amounts (baseline and job price don't change)."
+        placeholder="e.g. Electrical" fallback={['Electrical', 'Gas', 'Pergolas']} />
+      <ListEditor title="Sync: Excluded Reps" settingKey="sync_excluded_reps"
+        hint="The sheet sync never imports deals for these sales reps. Matched on whole name WORDS in either direction, so 'Tanner Arnett' also catches a sheet cell reading just 'Tanner' — and 'Jack' never catches 'Jackson'. Only blocks NEW imports; a deal already in the site stays until you hide or delete it."
+        placeholder="e.g. Rhett" fallback={['rhett', 'ronnie']} />
+      <ListEditor title="Sync: Skip Deal Names" settingKey="sync_skip_names"
+        hint="Jobs whose customer name contains any of these are skipped as junk/test rows (case-insensitive substring)."
+        placeholder="e.g. test" fallback={['test', 'cute']} />
+      <DateSetting title="Estimates From Leads — Start Date" settingKey="estimates_from_leads_date" fallback=""
+        hint="On and after this date, a rep's estimate count comes from the Leads feed — every appointment that RAN — instead of the hand-entered weekly numbers. Earlier weeks keep their manual entries, so history stays intact. Leave blank to keep using manual entry everywhere." />
+      <DashboardFlagsEditor />
+      <DateSetting title="Data Start Date" settingKey="data_start_date" fallback="2026-06-01"
+        hint="Deals closed before this date are treated as legacy: they still count in historical totals, but they're left out of the Needs-review staging list, the payroll overdue nag, and the Watchdog's background alerts. You'll still be prompted as they reach their pay-date run." />
+    </div>
+  )
+}

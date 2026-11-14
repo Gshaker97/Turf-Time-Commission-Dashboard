@@ -1,0 +1,66 @@
+const BLANK = {
+  name: '', email: '', role: 'rep', company_name: 'Turf Time',
+  manager_id: '', director_id: '', vp_id: '',
+  is_admin: false, ghost: false,
+  password: '',
+}
+
+export default function UserModal({ user, allUsers = [], teamChanges = [], onSave, onClose }) {
+  const [form, setForm] = useState(BLANK)
+  const [saving, setSaving] = useState(false)
+  const [pw, setPw] = useState('')
+  const [pwBusy, setPwBusy] = useState(false)
+  const [pwMsg, setPwMsg] = useState('')
+  const [pwErr, setPwErr] = useState(false)
+  const pwConfigured = userAdminConfigured()
+
+  useEffect(() => {
+    if (user) {
+      setForm({
+        ...BLANK,
+        ...user,
+        manager_id:  user.manager_id  ?? '',
+        director_id: user.director_id ?? '',
+        vp_id:       user.vp_id       ?? '',
+        is_admin:    user.is_admin    ?? false,
+        ghost:       user.ghost       ?? false,
+        password: '',
+      })
+    } else {
+      setForm(BLANK)
+    }
+  }, [user])
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  // Admin sets/resets this user's login password to one they choose. Uses the
+  // UserAdmin web app (holds the service key); creates the login if there's none.
+  async function setPassword() {
+    if (pw.length < 8) return
+    setPwBusy(true); setPwMsg(''); setPwErr(false)
+    // The endpoint finds the profile by email. If the email was edited but not
+    // saved, push it through change_email first (updates the LOGIN + profile
+    // together) so the lookup matches and login/email never diverge.
+    if (user && form.email && form.email !== user.email) {
+      const r0 = await userAdmin('change_email', { email: user.email, newEmail: form.email })
+      if (!r0?.ok) { setPwBusy(false); setPwErr(true); setPwMsg('Could not update the email first: ' + (r0?.error || 'unknown error')); return }
+    }
+    const action = user?.auth_id ? 'reset_password' : 'create_login'
+    const r = await userAdmin(action, { email: form.email, password: pw })
+    setPwBusy(false)
+    if (!r?.ok) { setPwErr(true); setPwMsg(r?.error || 'Could not set password.'); return }
+    setPwMsg(`Saved — ${form.name || 'they'} can sign in with: ${pw}`)
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setSaving(true)
+    await onSave({
+      ...form,
+      manager_id:  form.manager_id  || null,
+      director_id: form.director_id || null,
+      vp_id:       form.vp_id       || null,
+    })
+    setSaving(false)
+  }
+

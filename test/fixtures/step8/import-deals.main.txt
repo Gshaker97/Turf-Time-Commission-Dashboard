@@ -1,0 +1,147 @@
+const FIELDS = [
+  { key: 'deal_name',        label: 'Deal name',          required: true, guess: ['deal', 'customer', 'client', 'lead', 'name', 'proposal'] },
+  { key: 'external_id',      label: 'External ID (dedupe)', guess: ['project id', 'proposal id', 'doc', 'id'] },
+  { key: 'baseline_revenue', label: 'Baseline revenue',   guess: ['baseline', 'base'] },
+  { key: 'job_price',        label: 'Job price',          guess: ['pre-tax', 'job price', 'contract', 'total', 'subtotal', 'price', 'sale'] },
+  { key: 'sale_date',        label: 'Sale date',          guess: ['approved date', 'sale date', 'closing', 'sold', 'date'] },
+  { key: 'setter',           label: 'Setter (rep)',       guess: ['setter', 'sales rep', 'rep'] },
+  { key: 'closer',           label: 'Closer',             guess: ['closer'] },
+  { key: 'office',           label: 'Office',             guess: ['office', 'location', 'branch'] },
+  { key: 'payment_method',   label: 'Payment method',     guess: ['payment', 'financ'] },
+]
+
+function parseDelimited(text) {
+  const t = text.replace(/\r/g, '').trim()
+  if (!t) return []
+  const delim = (t.split('\n')[0].includes('\t')) ? '\t' : ','
+  const rows = []; let row = [], field = '', inQ = false
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i]
+    if (inQ) {
+      if (c === '"') { if (t[i + 1] === '"') { field += '"'; i++ } else inQ = false }
+      else field += c
+    } else if (c === '"') inQ = true
+    else if (c === delim) { row.push(field); field = '' }
+    else if (c === '\n') { row.push(field); rows.push(row); row = []; field = '' }
+    else field += c
+  }
+  row.push(field); rows.push(row)
+  return rows
+}
+const parseMoney = (v) => {
+  if (v == null || v === '') return null
+  const raw = String(v).trim(); const neg = /^\(.*\)$/.test(raw)
+  const n = parseFloat(raw.replace(/[$,\s()]/g, ''))
+  return isNaN(n) ? null : (neg ? -n : n)
+}
+const parseDate = (v) => {
+  const s = String(v || '').trim(); if (!s) return null
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/)
+  if (m) { let [, mo, d, y] = m; if (y.length === 2) y = '20' + y; return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}` }
+  return s
+}
+const cleanName = (s) => String(s || '').replace(/\s*\(.*$/, '').trim().toLowerCase()
+
+export default function ImportDeals() {
+  const { profile } = useAuth()
+  const [text, setText] = useState('')
+  const [table, setTable] = useState({ headers: [], rows: [] })
+  const [mapping, setMapping] = useState({})
+  const [users, setUsers] = useState([])
+  const [existing, setExisting] = useState({ ids: new Set(), names: new Set() })
+  const [importing, setImporting] = useState(false)
+  const [result, setResult] = useState(null)
+
+  useEffect(() => {
+    fetchUsers().then(({ data }) => setUsers(data || []))
+    fetchDeals().then(({ data }) => setExisting({
+      ids: new Set((data || []).map(d => String(d.project_id || '')).filter(Boolean)),
+      names: new Set((data || []).map(d => String(d.deal_name || '').trim().toLowerCase()).filter(Boolean)),
+    }))
+  }, [])
+
+  const usersByName = useMemo(() => {
+    const m = {}; users.forEach(u => { if (u.name) m[u.name.trim().toLowerCase()] = u }); return m
+  }, [users])
+
+  function parse(input) {
+    const rows = parseDelimited(input)
+    if (rows.length < 2) { setTable({ headers: [], rows: [] }); setMapping({}); return }
+    const headers = rows[0].map(h => String(h).trim())
+    const body = rows.slice(1).filter(r => r.some(c => String(c).trim() !== ''))
+    // auto-guess mapping
+    const map = {}
+    FIELDS.forEach(f => {
+      const i = headers.findIndex(h => f.guess.some(g => h.toLowerCase().includes(g)))
+      map[f.key] = i
+    })
+    setTable({ headers, rows: body }); setMapping(map); setResult(null)
+  }
+
+  function onFile(e) {
+    const file = e.target.files?.[0]; if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => { setText(String(reader.result)); parse(String(reader.result)) }
+    reader.readAsText(file)
+  }
+
+  const get = (row, key) => mapping[key] >= 0 ? row[mapping[key]] : ''
+  function rowStatus(row) {
+    const name = String(get(row, 'deal_name') || '').trim()
+    if (!name) return 'invalid'
+    const ext = String(get(row, 'external_id') || '').trim()
+    if (ext && existing.ids.has(ext)) return 'dup'
+    if (!ext && existing.names.has(name.toLowerCase())) return 'dup'
+    return 'new'
+  }
+  const stats = useMemo(() => {
+    const s = { new: 0, dup: 0, invalid: 0, unmatched: new Set() }
+    for (const row of table.rows) {
+      const st = rowStatus(row); s[st === 'new' ? 'new' : st]++
+      ;['setter', 'closer'].forEach(k => {
+        const v = get(row, k); if (v && !usersByName[cleanName(v)]) s.unmatched.add(String(v).trim())
+      })
+    }
+    return s
+  }, [table, mapping, existing, usersByName])
+
+  async function runImport() {
+    setImporting(true)
+    let created = 0, skipped = 0, errors = 0; const errs = []
+    const batch = new Set()
+    for (const row of table.rows) {
+      const name = String(get(row, 'deal_name') || '').trim()
+      if (!name) { skipped++; continue }
+      const ext = String(get(row, 'external_id') || '').trim()
+      if (ext && (existing.ids.has(ext) || batch.has(ext))) { skipped++; continue }
+      if (!ext && existing.names.has(name.toLowerCase())) { skipped++; continue }
+
+      const setterId = usersByName[cleanName(get(row, 'setter'))]?.id || null
+      const closerVal = get(row, 'closer')
+      const closerId = (closerVal ? usersByName[cleanName(closerVal)]?.id : setterId) || setterId || null
+      const payload = {
+        deal_name: name,
+        baseline_revenue: parseMoney(get(row, 'baseline_revenue')),
+        job_price: parseMoney(get(row, 'job_price')),
+        sale_date: parseDate(get(row, 'sale_date')) || null,
+        setter_id: setterId, closer_id: closerId,
+        setter_split_pct: setterId && closerId ? (setterId === closerId ? 1 : 0.5) : null,
+        status: 'Deal Review',
+        office: String(get(row, 'office') || '').trim() || null,
+        payment_method: String(get(row, 'payment_method') || '').trim() || null,
+        project_id: ext || null,
+      }
+      const res = await insertDeal(payload, profile?.id)
+      if (res?.error) { errors++; errs.push(`${name}: ${res.error.message}`) }
+      else { created++; if (ext) batch.add(ext) }
+    }
+    setResult({ created, skipped, errors, errs })
+    setImporting(false)
+    // refresh existing so a second run dedupes against what we just added
+    fetchDeals().then(({ data }) => setExisting({
+      ids: new Set((data || []).map(d => String(d.project_id || '')).filter(Boolean)),
+      names: new Set((data || []).map(d => String(d.deal_name || '').trim().toLowerCase()).filter(Boolean)),
+    }))
+  }
+
