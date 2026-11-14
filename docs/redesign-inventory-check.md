@@ -8,6 +8,7 @@ Every backticked item in `docs/redesign-inventory.md`, checked against the finis
 | Section | Moved to |
 |---|---|
 | Route: /deals | Office + payment sit under the deal name; their filters/sorts live in the Deal header menu; phones show compact rows that expand. |
+| Route: /home (My Card) | Main's My Card layout kept as-is (hero → Self Gens → Leads → goals → contests → best ever → share); cards use the shared Card, gold only on commission, rate tones on the tokens. See the Step 10 section at the end. |
 | Route: /dashboard | KPI tiles use the shared KpiFigure; everything else in place. |
 | Route: /commissions | Payday card → standing list → detail order; phone rows expand. |
 | Route: /leads | Day rows become compact rows on phones; admin SET/RUN/status controls sit inside the expanded row. |
@@ -1399,3 +1400,119 @@ Every backticked item in `docs/redesign-inventory.md`, checked against the finis
 - CHECK: 3
 
 Hand-resolved CHECK items: "e.g. Tanner’s job, came in under Keaton’s ArcSite login" is in src/pages/Deals.jsx (curly apostrophes); "Passwords don’t match." is in src/components/NavBar.jsx line 130 (curly apostrophe); "{n} rep(s) → {dest}" is the TeamMoveModal preview row. Nothing from the inventory is missing.
+
+## Step 10: My Card (main #477–#481 merged)
+
+Items from the rewritten `Route: /home (My Card)` section of the inventory, checked against `src/pages/Home.jsx` on the merged branch. **yes (placeholder)** = a template token that stands for a JSX expression (named in the last column). **removed on main (#477)** = an old-Home item main itself removed in the My Card rework; the redesign neither removed nor reintroduces it.
+
+| Section | Item | Present | Moved to / resolved as |
+|---|---|---|---|
+| Route: /home (My Card) | repActivity | yes |  |
+| Route: /home (My Card) | My Card | yes |  |
+| Route: /home (My Card) | Card | yes |  |
+| Route: /home (My Card) | Contact | yes (elsewhere) | src/components/Layout.jsx |
+| Route: /home (My Card) | / | yes |  |
+| Route: /home (My Card) | /login | yes (elsewhere) | src/App.jsx |
+| Route: /home (My Card) | /home | yes (elsewhere) | src/components/Layout.jsx |
+| Route: /home (My Card) | {name} | yes (placeholder) | viewUser?.name / r.ahead.name |
+| Route: /home (My Card) | · viewing | yes |  |
+| Route: /home (My Card) | teamLabel | yes |  |
+| Route: /home (My Card) | Rep | yes |  |
+| Route: /home (My Card) | Manager | yes |  |
+| Route: /home (My Card) | Director | yes |  |
+| Route: /home (My Card) | VP | yes |  |
+| Route: /home (My Card) | Admin | yes |  |
+| Route: /home (My Card) | Revenue sold | yes |  |
+| Route: /home (My Card) | {$} | yes (placeholder) | money(...) |
+| Route: /home (My Card) | 🔥 Personal best | yes |  |
+| Route: /home (My Card) | ▲/▼ {$} on last month | yes (fuzzy) |  |
+| Route: /home (My Card) | Your commission | yes |  |
+| Route: /home (My Card) | Company rank | yes |  |
+| Route: /home (My Card) | Self-gen | yes |  |
+| Route: /home (My Card) | #{rank} / {total} | yes (placeholder) | #{r.rank} / {r.total} |
+| Route: /home (My Card) | {$} to pass {name} | yes (fuzzy) |  |
+| Route: /home (My Card) | 🏆 #1 by {$} | yes (fuzzy) |  |
+| Route: /home (My Card) | not on this board yet | yes |  |
+| Route: /home (My Card) | Log a sale this month to hit the board, {first}. | yes (fuzzy) |  |
+| Route: /home (My Card) | Self Gens | yes |  |
+| Route: /home (My Card) | Appts set | yes |  |
+| Route: /home (My Card) | Appts ran | yes |  |
+| Route: /home (My Card) | Deals closed | yes |  |
+| Route: /home (My Card) | Revenue | yes |  |
+| Route: /home (My Card) | Leads | yes |  |
+| Route: /home (My Card) | leadsRan > 0 \\|\\| leadsClosed > 0 | gate |  |
+| Route: /home (My Card) | Self gens | yes |  |
+| Route: /home (My Card) | Commission | yes |  |
+| Route: /home (My Card) | {month} · {n} deals · {$} | yes (fuzzy) |  |
+| Route: /home (My Card) | {$} total | yes (fuzzy) |  |
+| Route: /home (My Card) | {deal} | yes (placeholder) | r.name (deal_name) |
+| Route: /home (My Card) | {date} · {status} | yes (placeholder) | `${fmtD(d.sale_date)} · ${d.status}` |
+| Route: /home (My Card) | {date} · Self-gen, Closer, Override | yes (fuzzy) |  |
+| Route: /home (My Card) | Nothing here for {month}. | yes (fuzzy) |  |
+| Route: /home (My Card) | Your goals | yes |  |
+| Route: /home (My Card) | Revenue this month | yes |  |
+| Route: /home (My Card) | Deals this month | yes |  |
+| Route: /home (My Card) | Estimates this week | yes |  |
+| Route: /home (My Card) | {value} of {target} | yes (fuzzy) |  |
+| Route: /home (My Card) | Change this target | yes |  |
+| Route: /home (My Card) | Set a goal | yes |  |
+| Route: /home (My Card) | {value} · no goal set | yes (fuzzy) |  |
+| Route: /home (My Card) | {label} target | yes (fuzzy) |  |
+| Route: /home (My Card) | … | yes |  |
+| Route: /home (My Card) | Goals → | yes |  |
+| Route: /home (My Card) | Goals always track the current week and month — not {month}. | yes (fuzzy) |  |
+| Route: /home (My Card) | Contests you're in | yes |  |
+| Route: /home (My Card) | View all | yes |  |
+| Route: /home (My Card) | You're not in any active competitions right now. | yes |  |
+| Route: /home (My Card) | 🎉 Earned | yes |  |
+| Route: /home (My Card) | #{rank} of {n} | yes (fuzzy) |  |
+| Route: /home (My Card) | You: | yes |  |
+| Route: /home (My Card) | Your team: | yes |  |
+| Route: /home (My Card) | · target … | yes (fuzzy) |  |
+| Route: /home (My Card) | · {gap} to pass {name} | yes (fuzzy) |  |
+| Route: /home (My Card) | · 🏆 leading | yes |  |
+| Route: /home (My Card) | Your best ever | yes |  |
+| Route: /home (My Card) | Best month | yes |  |
+| Route: /home (My Card) | Best week | yes |  |
+| Route: /home (My Card) | Most deals / mo | yes |  |
+| Route: /home (My Card) | Biggest deal | yes |  |
+| Route: /home (My Card) | {$} this month — a new personal best, and the month isn't over. | yes (fuzzy) |  |
+| Route: /home (My Card) | {$} this month — {$} from your best month ever. | yes (fuzzy) |  |
+| Route: /home (My Card) | Share my card | yes |  |
+| Route: /home (My Card) | Copied to clipboard | yes |  |
+| Route: /home (My Card) | Saved | yes |  |
+| Route: /home (My Card) | Copy a shareable card image | yes |  |
+| Route: /home (My Card) | Which month this card shows | yes |  |
+| Route: /home (My Card) | PersonPicker | yes |  |
+| Route: /home (My Card) | View another card… | yes |  |
+| Route: /home (My Card) | Back to my card | yes |  |
+| Route: /home (My Card) | isAdmin | yes |  |
+| Route: /home (My Card) | canEditGoals = !viewingOther \\|\\| isAdmin | gate |  |
+| Route: /home (My Card) | That target isn't a number. | yes |  |
+| Route: /home (My Card) | Could not save that target:  | yes |  |
+| Route: /home (My Card) | saveTarget | yes |  |
+| Route: /home (My Card) | COMPANY RANK | yes |  |
+| Route: /home (My Card) | 🔥 Personal best month | yes |  |
+| Route: /home (My Card) | 🏆 #1 in the company | yes |  |
+| Route: /home (My Card) | Make your first sale to hit the board | yes |  |
+| Route: /home (My Card) | REVENUE SOLD | yes |  |
+| Route: /home (My Card) | COMMISSION | yes |  |
+| Route: /home (My Card) | APPTS SET | yes |  |
+| Route: /home (My Card) | RUN % | yes |  |
+| Route: /home (My Card) | CLOSED | yes |  |
+| Route: /home (My Card) | LEADS CLOSED | yes |  |
+| Route: /home (My Card) | CLOSING % | yes |  |
+| Route: /home (My Card) | TURF TIME | yes |  |
+| Route: /home (My Card) | (ghost) | yes |  |
+| Route: /home (My Card) | isAdmin \|\| !u.ghost | yes |  |
+| Route: /home (My Card) | hiddenIds = isAdmin ? null : ghostIds | yes |  |
+| Route: /home (My Card) | win streak | removed on main (#477) | not expected; main's decision |
+| Route: /home (My Card) | last sale | removed on main (#477) | not expected; main's decision |
+| Route: /home (My Card) | Avg Deal | removed on main (#477) | not expected; main's decision |
+| Route: /home (My Card) | Monthly pace | removed on main (#477) | not expected; main's decision |
+| Route: /home (My Card) | Field activity · RepCard | removed on main (#477) | not expected; main's decision |
+| Route: /home (My Card) | Estimates | removed on main (#477) | not expected; main's decision |
+| Route: /home (My Card) | Set goals → | removed on main (#477) | not expected; main's decision |
+| Route: /home (My Card) | My card | removed on main (#477) | not expected; main's decision |
+
+Step 10 totals: 107 items — yes: 72, yes (elsewhere): 3, yes (placeholder): 5, yes (fuzzy): 17, gate: 2, removed on main (#477): 8.

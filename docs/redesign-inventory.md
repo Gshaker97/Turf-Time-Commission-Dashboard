@@ -30,7 +30,7 @@ Routes (App.jsx order)
 - [/leads](#route-leads)
 - [/myteam](#route-myteam)
 - [/competitions](#route-competitions)
-- [/home](#route-home)
+- [/home (My Card)](#route-home-my-card)
 - [/payroll](#route-payroll)
 - [/import](#route-import)
 - [/audit](#route-audit)
@@ -159,7 +159,7 @@ Any signed-in user with a profile. Not signed in → `/login` (App.jsx:59).
 ### Navigation items (sidebar + bottom bar share `items`)
 | Order | to | label | short | Gate (Layout.jsx) |
 |---|---|---|---|---|
-| 1 | /home | Home | Home | roles rep,manager,director,vp,admin (line 16) |
+| 1 | /home | My Card (was Home, renamed on main #477) | Card | roles rep,manager,director,vp,admin |
 | 2 | /dashboard | Dashboard | Stats | all roles (17) |
 | 2b (inserted after Dashboard) | /myteam | Bonus | Bonus | `isAdmin \|\| canSeeTeam` (56-59) |
 | 3 | /deals | Deals | Deals | all roles (18) |
@@ -539,14 +539,62 @@ Live cards vs `Past competitions` collapsed list.
 
 ---
 
-## Route: /home
+## Route: /home (My Card)
 
-File: src/pages/Home.jsx.
+File: src/pages/Home.jsx. **Step 10:** main rebuilt this page as **My Card** (#477–#481) after the redesign branch started. The merge takes main's page verbatim — every hook, rank board, `repActivity` row, goal upsert and drill-down is byte-identical to main (test/fixtures/step8/home-my-card.main.txt) — and re-applies only bank tokens, shared ui blocks and layout. Nav label `My Card` / short `Card` (lucide `Contact`); `/` and `/login` now land here (App.jsx). The route is still `/home`.
 
 ### Who can see it
 All signed-in users (own card; admin may view another's).
 
 ### Fields shown
+| Element | Text | Where |
+|---|---|---|
+| Header | initials avatar, `{name}` + `· viewing` (viewingOther), sub-line = team name (`teamLabel`) or role label `Rep` / `Manager` / `Director` / `VP` / `Admin` | header |
+| Hero | `Revenue sold` `{$}` (= revenue + leadRevenue), badge `🔥 Personal best`, `▲/▼ {$} on last month`; `Your commission` `{$}` (tap → commission drill; the one gold number); `Company rank` with two rows `Revenue sold` and `Self-gen`: `#{rank} / {total}`, `{$} to pass {name}` / `🏆 #1 by {$}` / `not on this board yet`; `Log a sale this month to hit the board, {first}.` | hero Card |
+| `Self Gens` card | `Appts set`, `Appts ran` (+ run %), seam, `Deals closed` (+ closing %), `Revenue` (tap → self drill) | GroupCard |
+| `Leads` card (only when `leadsRan > 0 \|\| leadsClosed > 0`) | `Appts ran`, seam, `Deals closed` (+ %), `Revenue` (tap → leads drill) | GroupCard |
+| Drill-down panel | titles `Self gens` / `Leads` / `Commission`; `{month} · {n} deals · {$}` / `{$} total`; rows `{deal}` `{date} · {status}` / `{date} · Self-gen, Closer, Override`; `Nothing here for {month}.`; X close | Card |
+| `Your goals` | rows `Revenue this month`, `Deals this month`, `Estimates this week`: `{value} of {target}` with pencil (title `Change this target`), or `Set a goal` button, or `{value} · no goal set`; inline input (aria `{label} target`); `…` while saving; progress bar; `Goals →` link when not editable; note `Goals always track the current week and month — not {month}.` | Card |
+| `Contests you're in` | `View all`; `You're not in any active competitions right now.`; rows `{name}`, `🎉 Earned` / `#{rank} of {n}`, `You:` / `Your team:` score, `· target …` / `· {gap} to pass {name}` / `· 🏆 leading`, bar | Card |
+| `Your best ever` | `Best month`, `Best week`, `Most deals / mo`, `Biggest deal` (+ when); nudges `{$} this month — a new personal best, and the month isn't over.` / `{$} this month — {$} from your best month ever.` | Card |
+| Share | full-width `Share my card` / `Copied to clipboard` / `Saved` (title `Copy a shareable card image`) | bottom |
+
+### Filters / sort / search
+- Month select (last 12 months), title `Which month this card shows`.
+
+### Action buttons & controls
+| Element | Label | Gate | Where |
+|---|---|---|---|
+| View-as | `PersonPicker` (from DealModal) placeholder `View another card…`, X `Back to my card` | `isAdmin` | header |
+| Stat cells / commission | tap to drill | all | |
+| Goal targets | pencil / `Set a goal` / input (Enter saves, Esc cancels, blur saves) | `canEditGoals = !viewingOther \|\| isAdmin` | goals Card |
+| Toasts | `That target isn't a number.`, `Could not save that target: ` | | `saveTarget` |
+
+### Exports / copy
+Share card PNG 1080×1080 on canvas: `COMPANY RANK`, ribbon `🔥 Personal best month` / `{$} to pass {name}` / `🏆 #1 in the company` / `Make your first sale to hit the board`; tiles `REVENUE SOLD`, `COMMISSION`, `APPTS SET`, `RUN %`, `CLOSED`, `LEADS CLOSED` / `CLOSING %`; footer `TURF TIME`.
+
+### Modals & dialogs
+None (inline drill panel).
+
+### Dropdown / select options
+Month list; view-as picker (admin; ghosts keep a `(ghost)` suffix).
+
+### Role differences
+- Admin view-as picker.
+- Rank boards exclude ghosts for non-admins (`isAdmin || !u.ghost`); competitions `hiddenIds = isAdmin ? null : ghostIds`.
+- Goals editable on your own card, or on anyone's for admins.
+
+### Removed by main's My Card rework (#477), NOT by the redesign
+Momentum strip (`win streak`, `last sale`); `Avg Deal`; `Monthly pace` (auto target); `Field activity · RepCard` (doors, presets, averages); self-gen / lead `Estimates` tiles and their drills; drill taglines; `Set goals →` link; the `My card` sentinel option in view-as. These are main's product decisions (see CLAUDE.md "My Card"); the branch does not reintroduce them.
+
+### Previous Home (before main #477, kept for the record)
+
+File: src/pages/Home.jsx.
+
+#### Who can see it
+All signed-in users (own card; admin may view another's).
+
+#### Fields shown
 | Element | Text | File:line |
 |---|---|---|
 | Header | initials avatar, `{name}` + `· viewing` (viewingOther), `{role} · {Month YYYY}` | 407-417 |
@@ -561,27 +609,27 @@ All signed-in users (own card; admin may view another's).
 | `Monthly pace` | `{$} of {$} target`, bar, `Target = your trailing 3-month average +10%. · Best month: …` | 628-646 |
 | `Your competitions` | link `View all`; `You're not in any active competitions right now.`; rows `{name}`, `🎉 Earned` / `#{rank} of {n}`, `You:`/`Your team:` score, `· target …` / `· {gap} to pass {name}` / `· 🏆 leading`, bar | 649-690 |
 
-### Filters / sort / search
+#### Filters / sort / search
 - Month select (last 12 months) — 436-439.
 - Field-activity preset pills + custom from/to.
 
-### Action buttons & controls
+#### Action buttons & controls
 | Element | Label | Gate | File:line |
 |---|---|---|---|
 | View-as select | `My card` + sellers (`(ghost)` suffix) | `isAdmin` | 419-428 |
 | Share | `Share` / `Copied` / `Saved` (title `Copy a shareable card image`) | all | 429-435 |
 | StatTiles | tap to drill | all | |
 
-### Exports / copy
+#### Exports / copy
 Share card PNG 1080×1080 drawn on canvas (clipboard or download `{name}-{YYYY-MM}.png`) — 325-396.
 
-### Modals & dialogs
+#### Modals & dialogs
 None (inline drill panel).
 
-### Dropdown / select options
+#### Dropdown / select options
 Month list; view-as (admin).
 
-### Role differences
+#### Role differences
 - Admin view-as (419).
 - Rank board excludes ghosts for non-admins (`isAdmin || !u.ghost`, 214); competitions `hiddenIds = isAdmin ? null : ghostIds` (264).
 
