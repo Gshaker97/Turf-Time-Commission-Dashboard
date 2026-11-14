@@ -128,29 +128,36 @@ function RepDealsInline({ deals, repId }) {
   )
 }
 
+// Close ratio (Garrison, Nov 14 2026). A SETTER is judged on their sets: deals
+// they own ÷ appointments they set. A CLOSER (or both) is judged on what was
+// handed to them: deals they closed ÷ appointments assigned to them. Teams,
+// offices and the company read as a setting unit: deals ÷ sets. A person with
+// no sales role set gets the setter view if they set anything, else the
+// closer view. Same >100% blank rule as every other cross-source rate here.
+function closeRatio(st, { isPerson = false, role = null } = {}) {
+  const asSetter = { pct: st.setCloseRate, sub: (st.set ?? 0) > 0 ? `${st.deals ?? 0} of ${st.set} set` : 'nothing set' }
+  const asCloser = { pct: st.closerCloseRate, sub: (st.assigned ?? 0) > 0 ? `${st.closes ?? 0} of ${st.assigned} assigned` : 'nothing assigned' }
+  if (!isPerson) return asSetter
+  if (role === 'closer' || role === 'both') return asCloser
+  if (role === 'setter') return asSetter
+  return (st.set ?? 0) > 0 ? asSetter : asCloser
+}
+const pctOrDash = (v) => (v == null ? '—' : `${v.toFixed(0)}%`)
+
 // The numeric <td>s shared by a drill-table row and an expanded rep sub-row, so
-// the two always line up with the same header. (Optional Set/Ran, then Revenue,
-// Deals, Avg deal, Markup, Commission — the Goal cell is rendered by the caller
-// since its percentage depends on which goal applies.)
-function StatCells({ st, prev, showActivity, flagSet = false, bold = false }) {
+// the two always line up with the same header. (Revenue, Deals, Set, Close
+// ratio, Markup, Commission — the Goal cell is rendered by the caller since
+// its percentage depends on which goal applies.) Set = every appointment on
+// RepCard's calendar with a day and time, booked in range, any outcome.
+function StatCells({ st, prev, flagSet = false, bold = false, isPerson = false, role = null }) {
   const base = bold ? 'font-bold text-bank-tx' : 'text-bank-mu'
+  const cr = closeRatio(st, { isPerson, role })
   return (
     <>
-      {showActivity && (
-        <>
-          <td className={`${TD} ${flagSet ? 'font-bold' : base}`} style={flagSet ? { color: NEG } : undefined}>
-            {st.set ?? 0}
-            {st.showRate != null && <span className={TD_SUB}>{st.showRate.toFixed(0)}% ran</span>}
-          </td>
-          <td className={`${TD} ${base}`}>
-            {st.ran ?? 0}
-            {st.dealCloseRate != null && <span className={TD_SUB}>{st.dealCloseRate.toFixed(0)}% closed</span>}
-          </td>
-        </>
-      )}
       <td className={`${TD} text-bank-tx font-semibold`}>{fmt(st.revenue)}<Delta cur={st.revenue} prev={prev?.revenue} /></td>
       <td className={`${TD} ${base}`}>{st.deals}<Delta cur={st.deals} prev={prev?.deals} /></td>
-      <td className={`${TD} ${base}`}>{st.avgDeal != null ? fmt(st.avgDeal) : '—'}</td>
+      <td className={`${TD} ${flagSet ? 'font-bold' : base}`} style={flagSet ? { color: NEG } : undefined}>{st.set ?? 0}</td>
+      <td className={`${TD} ${base}`}>{pctOrDash(cr.pct)}<span className={TD_SUB}>{cr.sub}</span></td>
       <td className={`${TD} ${base}`}>{st.markupPct != null ? `${st.markupPct.toFixed(1)}%` : '—'}</td>
       <td className={`${TD} ${base}`}>{fmt(st.commission)}</td>
     </>
@@ -167,7 +174,8 @@ function GoalCell({ pct, bold = false }) {
 }
 
 // Phone view of one table row: the remaining columns as a small grid.
-function MobileStats({ st, prev, showActivity, goalPct, flagSet }) {
+function MobileStats({ st, prev, goalPct, flagSet, isPerson = false, role = null }) {
+  const cr = closeRatio(st, { isPerson, role })
   const Item = ({ label, children, style }) => (
     <div className="min-w-0">
       <p className="text-[13px] text-bank-fa">{label}</p>
@@ -176,13 +184,10 @@ function MobileStats({ st, prev, showActivity, goalPct, flagSet }) {
   )
   return (
     <div className="grid grid-cols-2 gap-x-4 gap-y-2 px-4 py-3" style={{ background: 'var(--bg)' }}>
-      {showActivity && (<>
-        <Item label="Set" style={flagSet ? { color: NEG } : undefined}>{st.set ?? 0}{st.showRate != null && <span className="text-bank-fa font-normal"> · {st.showRate.toFixed(0)}% ran</span>}</Item>
-        <Item label="Ran">{st.ran ?? 0}{st.dealCloseRate != null && <span className="text-bank-fa font-normal"> · {st.dealCloseRate.toFixed(0)}% closed</span>}</Item>
-      </>)}
       <Item label="Revenue">{fmt(st.revenue)}<Delta cur={st.revenue} prev={prev?.revenue} /></Item>
       <Item label="Deals">{st.deals}<Delta cur={st.deals} prev={prev?.deals} /></Item>
-      <Item label="Avg deal">{st.avgDeal != null ? fmt(st.avgDeal) : '—'}</Item>
+      <Item label="Set" style={flagSet ? { color: NEG } : undefined}>{st.set ?? 0}</Item>
+      <Item label="Close ratio">{pctOrDash(cr.pct)}<span className="text-bank-fa font-normal"> · {cr.sub}</span></Item>
       <Item label="Markup">{st.markupPct != null ? `${st.markupPct.toFixed(1)}%` : '—'}</Item>
       <Item label="Commission">{fmt(st.commission)}</Item>
       <Item label="Goal" style={{ color: goalTone(goalPct) }}>{goalPct == null ? '—' : `${Math.round(goalPct)}%`}</Item>
@@ -281,7 +286,6 @@ export default function Dashboard() {
   // place, without scoping the page to that rep (per Keaton).
   const [expandedReps, setExpandedReps] = useState(() => new Set())
   const toggleRep = (id) => setExpandedReps(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
-  const [showActivity, setShowActivity] = useState(false)      // extra door/appointment columns
   const [leads,        setLeads]        = useState([])
   const [officeGoals,  setOfficeGoals]  = useState({})   // { '': company, Phoenix: n, … }
   const [repGoalMap,   setRepGoalMap]   = useState({})
@@ -524,18 +528,18 @@ export default function Dashboard() {
   // this page exists, per Keaton: pulling numbers for team leaders.
   async function copyTable() {
     if (!node) return
-    const cols = ['Name', ...(showActivity ? ['Set','Ran'] : []),
-                  'Revenue','Deals','Avg deal','Markup','Commission']
-    const line = (label, st) => [label,
-      ...(showActivity ? [st.set ?? 0, st.ran ?? 0] : []),
-      fmt(st.revenue), st.deals,
-      st.avgDeal != null ? fmt(st.avgDeal) : '',
-      st.markupPct != null ? st.markupPct.toFixed(1) + '%' : '',
-      fmt(st.commission)]
+    const cols = ['Name', 'Revenue','Deals','Set','Close ratio','Markup','Commission']
+    const line = (label, st, who = {}) => {
+      const cr = closeRatio(st, who)
+      return [label, fmt(st.revenue), st.deals, st.set ?? 0,
+        cr.pct != null ? `${cr.pct.toFixed(0)}% (${cr.sub})` : `— (${cr.sub})`,
+        st.markupPct != null ? st.markupPct.toFixed(1) + '%' : '',
+        fmt(st.commission)]
+    }
     const rows = [
       { section: `${node.fullTitle || node.title} · ${dateFrom} to ${dateTo}` },
-      ...(node.children.length ? node.children.map(c => line(c.label, c.stats)) : []),
-      line('TOTAL', node.stats),
+      ...(node.children.length ? node.children.map(c => line(c.label, c.stats, { isPerson: c.kind === 'rep', role: usersById[c.key]?.sales_role })) : []),
+      line('TOTAL', node.stats, { isPerson: node.level === 'rep', role: node.level === 'rep' ? usersById[scope.key]?.sales_role : null }),
     ]
     if (await copyRichTable(cols, rows, { rightFrom: 1 })) {
       setCopied(true); setTimeout(() => setCopied(false), 1800)
@@ -979,61 +983,15 @@ export default function Dashboard() {
         )}
       </Card>
 
-      {/* ── Appointments & field ────────────────────────────────────────
-          Appointment COUNTS, never deals — the label says so because "Set"
-          meaning two different things across two pages is what made the old
-          Dashboard and Performance page impossible to read together. */}
-      {node && (
-        <Card>
-          <h3 className="text-[15px] font-bold text-bank-tx mb-0.5">
-            {node.level === 'rep' ? `${node.title}'s appointments` : 'Appointments'}
-          </h3>
-          <p className="text-[13px] text-bank-mu mb-3">Appointment counts, never deals</p>
-          {node.showFunnel ? (
-            <div className="grid grid-cols-3 gap-2">
-              {[
-                ['Set',   node.stats.set,  node.stats.showRate != null ? `${node.stats.showRate.toFixed(0)}% have run` : null],
-                ['Ran',   node.stats.ran,  node.stats.dealCloseRate != null ? `${node.stats.dealCloseRate.toFixed(0)}% closed` : null],
-                // SOLD IS THE DEAL COUNT, not RepCard's "sold" disposition —
-                // reps don't reliably update their leads, so the CRM's own
-                // outcome always undercounts. Same figure as the Deals tile
-                // above, on purpose: one number per thing.
-                ['Sold',  node.stats.deals, node.stats.setCloseRate != null ? `${node.stats.setCloseRate.toFixed(0)}% of set` : null],
-              ].map(([k, v, sub]) => (
-                <div key={k} className="rounded-xl px-3 py-2.5 min-w-0" style={SURFACE.well}>
-                  <p className={label}>{k}</p>
-                  <p className="text-[20px] font-bold text-bank-tx tabular-nums">{(v ?? 0).toLocaleString()}</p>
-                  {sub && <p className="text-[13px] text-bank-mu mt-0.5 truncate">{sub}</p>}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-[13px] text-bank-mu leading-relaxed">{node.funnelNote}</p>
-          )}
-          {node.showFunnel && node.stats.pastDue > 0 && (
-            <a href="/leads?missing=info"
-              className="mt-2.5 inline-flex items-start gap-1.5 text-[13px] hover:underline min-h-[44px] md:min-h-0" style={{ color: WARN }}>
-              <AlertCircle size={13} className="mt-0.5 flex-shrink-0" />
-              <span>{node.stats.pastDue} appointment{node.stats.pastDue === 1 ? '' : 's'} past their date with no outcome logged — they count as neither ran nor cancelled. Fix in Leads →</span>
-            </a>
-          )}
-          {node.level === 'rep' && node.showFunnel && (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2">
-              {[
-                ['Self-gen ran', node.stats.sgRan, null],
-                ['Leads ran',    node.stats.leadRan, null],
-                ['Self-gen deals', node.stats.deals, node.stats.sgCloseRate != null ? `${node.stats.sgCloseRate.toFixed(0)}% close` : null],
-                ['Lead closes',  node.stats.leadCloses, node.stats.leadCloseRate != null ? `${node.stats.leadCloseRate.toFixed(0)}% close` : null],
-              ].map(([k, v, sub]) => (
-                <div key={k} className="rounded-xl px-3 py-2 min-w-0" style={SURFACE.well}>
-                  <p className={label}>{k}</p>
-                  <p className="text-[16px] font-bold text-bank-tx tabular-nums">{v ?? 0}</p>
-                  {sub && <p className="text-[13px] text-bank-mu">{sub}</p>}
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
+      {/* The appointments box is gone (Garrison, Nov 14 2026): Set and Close
+          ratio are columns of the breakdown below. Only its past-due warning
+          survives, because nothing else on the page says it. */}
+      {node?.showFunnel && node.stats.pastDue > 0 && (
+        <a href="/leads?missing=info"
+          className="inline-flex items-start gap-1.5 text-[13px] hover:underline min-h-[44px] md:min-h-0" style={{ color: WARN }}>
+          <AlertCircle size={13} className="mt-0.5 flex-shrink-0" />
+          <span>{node.stats.pastDue} appointment{node.stats.pastDue === 1 ? '' : 's'} past their date with no outcome logged — they count as neither ran nor cancelled. Fix in Leads →</span>
+        </a>
       )}
 
       {/* ── The drill table ─────────────────────────────────────────────
@@ -1090,11 +1048,7 @@ export default function Dashboard() {
                   {copiedBoard ? <Check size={12} /> : <Copy size={12} />}{copiedBoard ? 'Copied' : 'Copy table'}
                 </SecondaryButton>
               </div>
-            ) : (
-              <Pill onClick={() => setShowActivity(v => !v)} active={showActivity} className={showActivity ? '' : 'border-bank-line'}>
-                {showActivity ? '✓' : '+'} Appointments
-              </Pill>
-            )}
+            ) : null}
           </div>
 
           {isBoard ? (
@@ -1197,9 +1151,7 @@ export default function Dashboard() {
                   <thead>
                     <tr>
                       <th className={`${TH} text-left pr-2`}>{node.childKind}</th>
-                      {showActivity && ['Set','Ran'].map(h =>
-                        <th key={h} className={`${TH} text-right px-2`}>{h}</th>)}
-                      {['Revenue','Deals','Avg deal','Markup','Commission','Goal'].map(h =>
+                      {['Revenue','Deals','Set','Close ratio','Markup','Commission','Goal'].map(h =>
                         <th key={h} className={`${TH} text-right px-2`}>{h}</th>)}
                     </tr>
                   </thead>
@@ -1227,14 +1179,14 @@ export default function Dashboard() {
                             </span>
                             {c.sub && <span className={TD_SUB}>{c.sub}</span>}
                           </td>
-                          <StatCells st={st} prev={c.prev} showActivity={showActivity} flagSet={!!fl.set} />
+                          <StatCells st={st} prev={c.prev} flagSet={!!fl.set} isPerson={c.kind === 'rep'} role={c.kind === 'rep' ? usersById[c.key]?.sales_role : null} />
                           <GoalCell pct={gp} />
                         </tr>
                         {isTeamAcc && expanded && teamRepRows(c.key).map(r => {
                           const rg = repGoalMap[r.id]
                           const rgp = rg ? (r.revenue / rg) * 100 : null
                           const repOpen = expandedReps.has(r.id)
-                          const drillColCount = 1 + (showActivity ? 2 : 0) + 6
+                          const drillColCount = 1 + 6 + 1
                           return (
                             <Fragment key={`rep-${c.key}-${r.id}`}>
                             <tr
@@ -1244,7 +1196,7 @@ export default function Dashboard() {
                               <td className="py-2 pr-2 pl-7">
                                 <span className="text-bank-mu text-[13px]">{r.ghost && !isAdmin ? 'Hidden' : r.name}<span className="text-bank-gold-tx">{repOpen ? ' ⌄' : ' ›'}</span></span>
                               </td>
-                              <StatCells st={r} prev={r.prev} showActivity={showActivity} />
+                              <StatCells st={r} prev={r.prev} isPerson role={usersById[r.id]?.sales_role} />
                               <GoalCell pct={rgp} />
                             </tr>
                             {repOpen && (
@@ -1262,7 +1214,7 @@ export default function Dashboard() {
                     })}
                     <tr className="border-t border-bank-line" style={{ background: 'var(--raise)' }}>
                       <td className="py-2 pr-2 font-bold text-bank-tx">{node.title}</td>
-                      <StatCells st={node.stats} prev={node.prev} showActivity={showActivity} bold />
+                      <StatCells st={node.stats} prev={node.prev} bold isPerson={node.level === 'rep'} role={node.level === 'rep' ? usersById[scope.key]?.sales_role : null} />
                       <GoalCell pct={nodeGoalPct} bold />
                     </tr>
                   </tbody>
@@ -1285,7 +1237,7 @@ export default function Dashboard() {
                     <Expandable key={`m-${c.kind}-${c.key}`}
                       title={c.ghost && !isAdmin ? 'Hidden' : c.label} meta={c.sub || null}
                       right={<RowRight revenue={st.revenue} deals={st.deals} />}>
-                      <MobileStats st={st} prev={c.prev} showActivity={showActivity} goalPct={gp} flagSet={!!fl.set} />
+                      <MobileStats st={st} prev={c.prev} goalPct={gp} flagSet={!!fl.set} isPerson={c.kind === 'rep'} role={c.kind === 'rep' ? usersById[c.key]?.sales_role : null} />
                       {isTeamAcc && (
                         <div className="border-t border-bank-line">
                           <p className="px-4 pt-2 pb-1 text-[13px] text-bank-fa uppercase tracking-wider font-semibold">Reps</p>
@@ -1297,7 +1249,7 @@ export default function Dashboard() {
                               <Expandable key={`m-rep-${c.key}-${r.id}`} className="pl-3"
                                 title={r.ghost && !isAdmin ? 'Hidden' : r.name}
                                 right={<RowRight revenue={r.revenue} deals={r.deals} />}>
-                                <MobileStats st={r} prev={r.prev} showActivity={showActivity} goalPct={rgp} />
+                                <MobileStats st={r} prev={r.prev} goalPct={rgp} isPerson role={usersById[r.id]?.sales_role} />
                                 <div className="px-4 pb-3" style={{ background: 'var(--bg)' }}>
                                   <RepDealsInline deals={repDealsFor(deals, r.id, { from: dateFrom, to: dateTo })} repId={r.id} />
                                 </div>
@@ -1320,7 +1272,7 @@ export default function Dashboard() {
                   <span className="text-[13px] font-bold text-bank-tx truncate">{node.title}</span>
                   <RowRight revenue={node.stats.revenue} deals={node.stats.deals} />
                 </div>
-                <MobileStats st={node.stats} prev={node.prev} showActivity={showActivity} goalPct={nodeGoalPct} />
+                <MobileStats st={node.stats} prev={node.prev} goalPct={nodeGoalPct} isPerson={node.level === 'rep'} role={node.level === 'rep' ? usersById[scope.key]?.sales_role : null} />
               </div>
             </>
           ) : node.level === 'rep' ? (

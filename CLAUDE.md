@@ -1338,6 +1338,19 @@ in range, a rep who left) falls back to company rather than rendering empty.
 - The **weekly goal block renders at COMPANY SCOPE ONLY**: `weekly_goal` is one
   company-wide setting, so at team scope the bar would be that team's revenue
   against the company's target — precise-looking and meaningless.
+- **Breakdown table columns are Revenue · Deals · Set · Close ratio · Markup ·
+  Commission · Goal** (Garrison, Nov 14 2026). The "Appointments" box and the
+  "+ Appointments" toggle are GONE; only its past-due warning line survives.
+  `Set` = every RepCard calendar appointment with a day and time, booked in
+  range, any outcome. `Close ratio` depends on `profiles.sales_role`: a SETTER
+  reads deals owned ÷ sets (`setCloseRate`); a CLOSER or BOTH reads deals they
+  closed ÷ appointments assigned to them (`closes` / `assigned`, new in
+  perfSummary — assigned = closer on the appointment, else the setter, any
+  status); unset falls back to the setter view if they set anything. Teams,
+  offices and the company always read deals ÷ sets. The sub-line always names
+  the denominator ("4 of 6 set", "1 of 2 assigned"). Avg deal left the table;
+  the Avg Deal Size KPI tile stays. Pinned by test/perf-close-ratio.test.mjs.
+  Demo mode now carries 12 appointments (`DEMO_LEADS`) so the columns show.
 - **`profiles.sales_role`** (migration 061, Nov 14 2026): `setter` | `closer` |
   `both` | NULL, set in the Add/Edit person form, shown as a tag on the Admin
   roster and after the team name on My Card, and the Dashboard leaderboard's

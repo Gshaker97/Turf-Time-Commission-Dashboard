@@ -266,3 +266,30 @@ export const DEMO_COMPETITIONS = (() => {
     // Goal/credit params from migration 015 — same defaults the DB seeds.
   ].map(c => ({ goal_mode: 'race', goal_target: null, credit_mode: 'both', credit_split_pct: 0.5, ...c }))
 })()
+
+// ── Demo appointments (RepCard feed shape) ────────────────────
+// Enough calendar to exercise the Dashboard's Set / Close ratio columns:
+// setters whose sets a closer sat, closers with assigned appointments, a
+// "both" who sets and sits their own, plus a no-show and one still to come.
+const atHour = (daysBack, hour) => { const d = new Date(); d.setDate(d.getDate() - daysBack); d.setHours(hour, 0, 0, 0); return d.toISOString() }
+const who = (id) => { const u = DEMO_USERS.find(x => x.id === id); return u ? { id: u.id, name: u.name } : null }
+const lead = (n, daysBack, hour, setter, closer, status, customer, address) => ({
+  id: `lead-demo-${n}`, source: 'repcard', external_id: `demo-${n}`, customer_name: customer, address,
+  appointment_at: atHour(daysBack, hour), set_at: atHour(daysBack + 2, 9), status, disposition: null,
+  setter_id: setter, closer_id: closer, setter_name: who(setter)?.name ?? null, closer_name: who(closer)?.name ?? null,
+  setter: who(setter), closer: who(closer), office: 'Tucson', notes: null, deal_id: null, pinned: false, ignored: false,
+})
+export const DEMO_LEADS = [
+  lead(1,  1, 10, 'u-stephen',  'u-conner', 'sold',      'Whitaker',  '9 Birchwood Ct'),
+  lead(2,  3, 14, 'u-stephen',  'u-conner', 'completed', 'Reyes',     '44 Palo Verde Dr'),
+  lead(3,  5, 11, 'u-stephen',  'u-ricky',  'no_show',   'Okafor',    '12 Saguaro Ln'),
+  lead(4, -2, 15, 'u-stephen',  null,       'scheduled', 'Lindqvist', '301 Mesa View'),
+  lead(5,  2, 13, 'u-charlieh', 'u-jared',  'sold',      'Yamamoto',  '71 Clover Way'),
+  lead(6,  6, 10, 'u-charlieh', 'u-jared',  'completed', 'Brennan',   '8 Ocotillo Ct'),
+  lead(7,  4, 16, 'u-bryan',    'u-ricky',  'completed', 'Delgado',   '19 Canyon Rd'),
+  lead(8,  8, 12, 'u-bryan',    'u-conner', 'canceled',  'Pham',      '5 Agave Pl'),
+  lead(9,  2, 10, 'u-jc',       'u-jc',     'sold',      'Anderson',  '142 Oak St'),
+  lead(10, 7, 14, 'u-jc',       'u-jc',     'completed', 'Mbatha',    '60 Cholla Ave'),
+  lead(11, 1, 9,  'u-casey',    'u-casey',  'completed', 'Rossi',     '77 Yucca Way'),
+  lead(12, 9, 11, null,         'u-ricky',  'completed', 'Walk-in',   '2 Main St'),
+]

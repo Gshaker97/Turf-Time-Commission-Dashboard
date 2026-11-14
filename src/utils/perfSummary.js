@@ -30,11 +30,11 @@
 //     its rep rows. Current members with nothing in the range still get a
 //     row (zeros) so an idle rep is visible, not hidden.
 // ============================================================
-import { dealAmounts, countsInTotals } from './commission'
-import { saleOwnerId, teamOfSale, teamLabel } from './team'
-import { RAN_STATUSES, apptDay } from './estimates'
-import { summarizeActivity } from './fieldActivity'
-import { nonRepSet, isNonRep, ranPast } from './leadGaps'
+import { dealAmounts, countsInTotals } from './commission.js'
+import { saleOwnerId, teamOfSale, teamLabel } from './team.js'
+import { RAN_STATUSES, apptDay } from './estimates.js'
+import { summarizeActivity } from './fieldActivity.js'
+import { nonRepSet, isNonRep, ranPast } from './leadGaps.js'
 
 const UNASSIGNED = 'unassigned'
 
@@ -46,7 +46,7 @@ const localToday = () => {
 }
 
 function newStats() {
-  return { revenue: 0, job: 0, deals: 0, selfGen: 0, leadCloses: 0, leadRevenue: 0, commission: 0, set: 0, setRan: 0, ran: 0, sgRan: 0, leadRan: 0, pastDue: 0, activityRows: [] }
+  return { revenue: 0, job: 0, deals: 0, selfGen: 0, leadCloses: 0, leadRevenue: 0, commission: 0, set: 0, setRan: 0, ran: 0, sgRan: 0, leadRan: 0, pastDue: 0, assigned: 0, closes: 0, activityRows: [] }
 }
 
 // A deal-over-appointment rate, or null when it can't be read as a rate:
@@ -102,6 +102,15 @@ function finish(s) {
     // the others: a rep can close without ever logging an appointment.
     dealCloseRate: rateOrNull(s.deals, s.ran),
     setCloseRate:  rateOrNull(s.deals, s.set),
+    // CLOSER'S VIEW (per Garrison, Nov 14 2026): of every appointment handed
+    // to this person — the closer on the appointment, or the setter when
+    // nobody else was — how many became a deal THEY closed. `assigned` counts
+    // every calendar appointment with a day and time regardless of outcome,
+    // so a no-show counts against the closer the way an unsold run does.
+    // The Dashboard picks this for closers/both and `setCloseRate` for
+    // setters (profiles.sales_role); groups always read as a setting unit.
+    assigned: s.assigned, closes: s.closes,
+    closerCloseRate: rateOrNull(s.closes, s.assigned),
     doors: act.doors, knockDays: act.knockDays, doorsPerDay: act.doorsPerDay,
     firstKnock: act.firstKnock, lastKnock: act.lastKnock, fieldMinutes: act.fieldMinutes,
     hasActivity: act.rows > 0,
@@ -213,6 +222,14 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
         team(key).totals.selfGen += 1; ot.totals.selfGen += 1; off.selfGen += 1; org.selfGen += 1
       }
     }
+    // WHO CLOSED IT: the closer when one is recorded, else the owner (a deal
+    // with no distinct closer was closed by whoever owns it). Feeds the
+    // closer's close ratio only — never a second deal count.
+    const closedBy = (d.closer_id && !out(d.closer_id)) ? d.closer_id : owner
+    if (closedBy) {
+      const kc = teamOf(closedBy, d.sale_date)
+      org.closes += 1; team(kc).totals.closes += 1; rep(kc, closedBy).closes += 1
+    }
     // Commission follows each rep's own share to each rep's own team — inside
     // the office as well as outside it, so the two never disagree.
     if (d.setter_id) {
@@ -282,6 +299,13 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
       // counted whenever it ran. `sgRan / set` would mix two date bases now
       // that the two columns key off different days.
       if (ran) { org.setRan += 1; team(k).totals.setRan += 1; rep(k, setter).setRan += 1 }
+    }
+    // ASSIGNED: the closer's denominator. Every appointment on the calendar
+    // with a day and time in range, any status, credited to whoever it was
+    // handed to (closer on the appointment, else the setter sat their own).
+    if (ranIn) {
+      const rb = l.closer_id || l.setter_id
+      if (rb && !out(rb)) { const k = teamOf(rb, day); org.assigned += 1; team(k).totals.assigned += 1; rep(k, rb).assigned += 1 }
     }
     if (!ran || !ranIn) continue
     // SELF-GEN RAN = "an appointment I generated ran", credited to the

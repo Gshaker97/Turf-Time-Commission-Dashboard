@@ -15,7 +15,7 @@
 // pure and testable. Both sides are ISO-8601 UTC, so comparing as strings
 // is exact — this is a timestamptz, never sliced to a calendar day.
 // ============================================================
-import { RAN_STATUSES } from './estimates'
+import { RAN_STATUSES } from './estimates.js'
 
 // Its time has passed and the CRM never sent an outcome, so it counts as
 // neither ran nor cancelled anywhere. Exported because perfSummary tallies the
