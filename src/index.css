@@ -27,6 +27,9 @@
 }
 
 @layer base {
+  /* While the app shell is mounted the window never scrolls: the shell is
+     exactly the visible height (100dvh) and <main> is the only scroller. */
+  body.app-shell { overflow: hidden; overscroll-behavior: none; }
   html, body, #root {
     height: 100%;
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
