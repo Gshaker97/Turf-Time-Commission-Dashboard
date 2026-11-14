@@ -70,6 +70,7 @@ import {
   DEMO_SETTINGS,
   DEMO_COMPETITIONS,
   DEMO_AUDIT_OVERRIDES,
+  DEMO_LEADS,
 } from './demoData'
 
 // Local mutable copies for demo CRUD
@@ -633,7 +634,7 @@ export async function deleteRepGoal(subjectId, scope, year, month) {
 }
 
 // ── Leads / appointments (fed by the CRM, migration 041) ──────
-let _leads = []   // demo store
+let _leads = DEMO_LEADS.map(l => ({ ...l }))   // demo store
 
 export async function fetchLeads() {
   if (DEMO_MODE) return { data: _leads.map(l => ({ ...l })), error: null }
