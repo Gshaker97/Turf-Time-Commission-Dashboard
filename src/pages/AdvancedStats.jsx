@@ -54,6 +54,13 @@ const whenLabel = (iso) => {
   return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 }
 const isSetter = (role) => role === 'setter' || role === 'both' || !role
+
+// The last load, kept for the life of the tab. Five reads (deals, people, team
+// changes, every appointment, every door-knock day) take a few seconds on
+// production, and nothing about them is per-visit — so a return to this page
+// paints the previous data at once and refreshes underneath. Lost on a full
+// reload, which is also how to force a clean read.
+let lastLoad = null
 const isCloser = (role) => role === 'closer' || role === 'both' || !role
 
 // ── Column sets ─────────────────────────────────────────────────────────────
@@ -167,12 +174,12 @@ export default function AdvancedStats() {
     setSearchParams(sp)
   }
 
-  const [deals, setDeals] = useState([])
-  const [users, setUsers] = useState([])
-  const [teamChanges, setTeamChanges] = useState([])
-  const [leads, setLeads] = useState([])
-  const [activity, setActivity] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [deals, setDeals] = useState(() => lastLoad?.deals ?? [])
+  const [users, setUsers] = useState(() => lastLoad?.users ?? [])
+  const [teamChanges, setTeamChanges] = useState(() => lastLoad?.teamChanges ?? [])
+  const [leads, setLeads] = useState(() => lastLoad?.leads ?? [])
+  const [activity, setActivity] = useState(() => lastLoad?.activity ?? [])
+  const [loading, setLoading] = useState(!lastLoad)
   const [dateFrom, setDateFrom] = useState(getPresetRange('mtd').from)
   const [dateTo, setDateTo] = useState(getPresetRange('mtd').to)
   const [preset, setPreset] = useState('mtd')
@@ -182,7 +189,9 @@ export default function AdvancedStats() {
   const loadData = () =>
     Promise.all([fetchCompanyDeals(), fetchUsers(), fetchTeamChanges(), fetchLeads(), fetchFieldActivity()])
       .then(([{ data: d }, { data: u }, { data: tc }, { data: l }, { data: fa }]) => {
-        setDeals(activeDeals(d ?? [])); setUsers(u ?? []); setTeamChanges(tc ?? []); setLeads(l ?? []); setActivity(fa ?? [])
+        const next = { deals: activeDeals(d ?? []), users: u ?? [], teamChanges: tc ?? [], leads: l ?? [], activity: fa ?? [] }
+        lastLoad = next
+        setDeals(next.deals); setUsers(next.users); setTeamChanges(next.teamChanges); setLeads(next.leads); setActivity(next.activity)
       })
   useEffect(() => { loadData().finally(() => setLoading(false)) }, [])
   useRefreshOnFocus(loadData)
