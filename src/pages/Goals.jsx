@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, Fragment } from 'react'
+import { useEffect, useMemo, useRef, useState, Fragment, createContext, useContext } from 'react'
 import { format } from 'date-fns'
-import { Target, Flame } from 'lucide-react'
+import { Target, Flame, ChevronDown } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchDeals, fetchUsers, fetchWeeklyStats, fetchPersonalGoals, fetchLeads, upsertPersonalGoal, saveRepGoal } from '../lib/db'
 import { useSettings } from '../contexts/SettingsContext'
@@ -11,30 +11,33 @@ import {
   metricProgress, suggestFromRevenue, estimateStreak,
 } from '../utils/goals'
 import { toast } from '../lib/toast'
+import { Card, LoadingBlock, PrimaryButton } from '../components/ui'
 
 const todayISO = () => format(new Date(), 'yyyy-MM-dd')
-const PALETTE = ['#00b894', '#74b9ff', '#a78bfa', '#fbbf24', '#fb923c', '#f87171', '#34d399', '#60a5fa']
-const STATUS_COLOR = { done: '#4ade80', ahead: '#00b894', behind: '#fbbf24' }
+// Phones render RepRow as a card; the desktop table leaves this false.
+const PhoneMode = createContext(false)
 
-// One metric cell: "value / goal" over a slim bar colored by pace. Clicking
-// the goal number (when you can edit this rep) turns it into an input in
-// place — blur/Enter saves, Escape cancels.
-function MetricCell({ value, prog, editable, isEditing, onStartEdit, onDoneEdit, inputValue, onSave, money, inputKey }) {
+// Team dots on the palette (no gold — gold is for a met goal's bar).
+const PALETTE = ['#ede7da', '#a19e97', '#a9c4b2', '#d2a074', '#d98c80', '#8c8a84']
+// Pace: a MET goal fills gold; on pace is sage; behind is amber.
+const STATUS_COLOR = { done: '#bfa46c', ahead: '#a9c4b2', behind: '#d2a074' }
+
+// One metric: "value / goal" over a slim bar colored by pace. Clicking the
+// goal number (when you can edit this rep) turns it into an input in place —
+// blur/Enter saves, Escape cancels. MetricBody is the shared content; the
+// desktop table wraps it in a <td>, the phone card in a labelled block.
+function MetricBody({ value, prog, editable, isEditing, onStartEdit, onDoneEdit, inputValue, onSave, money, inputKey }) {
   const skipRef = useRef(false)
-  const color = prog ? STATUS_COLOR[prog.status] : 'rgba(255,255,255,0.12)'
-  const title = !prog ? (editable ? 'Click to set a goal' : 'No goal set')
-    : prog.status === 'done' ? 'Goal hit'
-    : prog.status === 'ahead' ? 'On pace'
-    : `Behind pace by ${money ? fmt(prog.gap) : Math.ceil(prog.gap)}`
+  const color = prog ? STATUS_COLOR[prog.status] : 'var(--line)'
   const goalText = inputValue != null ? (money ? fmt(inputValue) : String(inputValue)) : null
   return (
-    <td className="px-2.5 py-2.5 align-middle" title={title}>
-      <div className="text-[11.5px] leading-none whitespace-nowrap">
-        <span className="font-bold text-white">{money ? fmt(value) : value}</span>
+    <>
+      <div className="text-[13px] leading-none whitespace-nowrap flex items-center">
+        <span className="font-bold text-bank-tx tabular-nums">{money ? fmt(value) : value}</span>
         {isEditing ? (
           <>
-            <span className="text-white/25"> / </span>
-            <input autoFocus type="number" min="0" step={money ? 'any' : 1} key={inputKey}
+            <span className="text-bank-fa"> / </span>
+            <input autoFocus type="number" min="0" step={money ? 'any' : 1} key={inputKey} aria-label="Goal"
               defaultValue={inputValue ?? ''} placeholder="—"
               onFocus={e => e.target.select()}
               onBlur={e => { if (skipRef.current) { skipRef.current = false; onDoneEdit(); return } onSave(e.target.value) }}
@@ -42,22 +45,37 @@ function MetricCell({ value, prog, editable, isEditing, onStartEdit, onDoneEdit,
                 if (e.key === 'Enter') e.currentTarget.blur()
                 if (e.key === 'Escape') { skipRef.current = true; e.currentTarget.blur() }
               }}
-              className="w-[62px] rounded px-1 py-0.5 text-[11.5px] font-semibold text-teal text-right focus:outline-none"
-              style={{ background: '#1a1a1a', border: '1px solid rgba(0,184,148,0.4)' }} />
+              className="w-[72px] rounded px-1 py-0.5 min-h-[44px] lg:min-h-0 text-[13px] font-semibold text-bank-gold-tx text-right focus:outline-none"
+              style={{ background: 'var(--bg)', border: '1px solid rgba(191,164,108,0.5)' }} />
           </>
         ) : editable ? (
           <button onClick={onStartEdit} title="Click to type this goal"
-            className="text-white/35 hover:text-teal rounded px-1 -mx-0.5 py-0.5 -my-0.5 hover:bg-teal/10 transition-colors">
-            / {goalText ?? <span className="underline decoration-dotted decoration-white/25">set</span>}
+            className="text-bank-mu hover:text-bank-gold-tx rounded px-1 -mx-0.5 min-h-[44px] lg:min-h-0 lg:py-0.5 hover:bg-bank-raise transition-colors">
+            / {goalText ?? <span className="underline decoration-dotted decoration-bank-fa">set</span>}
           </button>
         ) : (
-          <span className="text-white/35"> / {goalText ?? '—'}</span>
+          <span className="text-bank-mu"> / {goalText ?? '—'}</span>
         )}
       </div>
-      <div className="h-[4px] rounded-full overflow-hidden mt-1.5 max-w-[120px]" style={{ background: 'rgba(255,255,255,0.06)' }}>
+      <div className="h-[4px] rounded-full overflow-hidden mt-1.5 max-w-[140px]" style={{ background: 'var(--raise)' }}>
         <div className="h-full rounded-full transition-all duration-500" style={{ width: `${(prog?.frac ?? 0) * 100}%`, background: color }} />
       </div>
-    </td>
+    </>
+  )
+}
+const metricTitle = (prog, editable, money) => !prog ? (editable ? 'Click to set a goal' : 'No goal set')
+  : prog.status === 'done' ? 'Goal hit'
+  : prog.status === 'ahead' ? 'On pace'
+  : `Behind pace by ${money ? fmt(prog.gap) : Math.ceil(prog.gap)}`
+function MetricCell(props) {
+  return <td className="px-2.5 py-2.5 align-middle" title={metricTitle(props.prog, props.editable, props.money)}><MetricBody {...props} /></td>
+}
+function MetricField({ label, ...props }) {
+  return (
+    <div title={metricTitle(props.prog, props.editable, props.money)}>
+      <p className="text-[13px] text-bank-fa mb-1">{label}</p>
+      <MetricBody {...props} />
+    </div>
   )
 }
 
@@ -71,6 +89,7 @@ export default function Goals() {
   const [goals, setGoals] = useState([])
   const [loading, setLoading] = useState(true)
   const [editCell, setEditCell] = useState(null)   // "repId|period|field" being typed
+  const [openRep, setOpenRep] = useState(null)     // phone: which rep's card is open
 
   useEffect(() => {
     Promise.all([fetchDeals(), fetchUsers(), fetchWeeklyStats(), fetchPersonalGoals(), fetchLeads()])
@@ -171,6 +190,9 @@ export default function Goals() {
   }
 
   function RepRow({ rep }) {
+    // mode 'table' renders the desktop <tr>s; 'card' the phone row (name ·
+    // month revenue) that opens to all six metrics. Same data, editors, saves.
+    const mode = useContext(PhoneMode) ? 'card' : 'table'
     const editable = canEditRep(rep)
     const wGoal = resolveGoal(goals, rep.id, 'week', periods.week.start)
     const mGoal = resolveGoal(goals, rep.id, 'month', periods.month.start)
@@ -185,101 +207,146 @@ export default function Goals() {
     const sug = editable && mGoal?.revenue_target > 0 && (mGoal.est_target == null || mGoal.deals_target == null)
       ? suggestFromRevenue(deals, weeklyStats, rep.id, Number(mGoal.revenue_target), today, estOpts) : null
 
-    const cells = (goal, prod, elapsed, periodKey) => (<>
-      {[['est_target', prod.sgEst, false], ['deals_target', prod.deals, false], ['revenue_target', prod.revenue, true]].map(([field, value, money]) => {
+    const metricProps = (goal, prod, elapsed, periodKey) =>
+      [['est_target', prod.sgEst, false, 'SG Est'], ['deals_target', prod.deals, false, 'Deals'], ['revenue_target', prod.revenue, true, 'Revenue']].map(([field, value, money, label]) => {
         const cellId = `${rep.id}|${periodKey}|${field}`
-        return (
-          <MetricCell key={cellId} value={value} money={money}
-            prog={metricProgress(value, goal?.[field], elapsed)}
-            editable={editable} isEditing={editCell === cellId}
-            onStartEdit={() => setEditCell(cellId)}
-            onDoneEdit={() => setEditCell(null)}
-            inputValue={goal?.[field]}
-            inputKey={`${cellId}-${goal?.[field] ?? ''}`}
-            onSave={v => { setEditCell(null); saveGoalField(rep, periodKey, field, v) }} />
-        )
-      })}
-    </>)
+        return {
+          key: cellId, label, value, money,
+          prog: metricProgress(value, goal?.[field], elapsed),
+          editable, isEditing: editCell === cellId,
+          onStartEdit: () => setEditCell(cellId),
+          onDoneEdit: () => setEditCell(null),
+          inputValue: goal?.[field],
+          inputKey: `${cellId}-${goal?.[field] ?? ''}`,
+          onSave: (v) => { setEditCell(null); saveGoalField(rep, periodKey, field, v) },
+        }
+      })
+    const weekCells = metricProps(wGoal, wProd, wEl, 'week')
+    const monthCells = metricProps(mGoal, mProd, mEl, 'month')
+
+    const nameBlock = (
+      <>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[13px] font-semibold text-bank-tx whitespace-nowrap">{rep.name}</span>
+          {streak > 1 && (
+            <span className="flex items-center text-[13px] font-bold whitespace-nowrap" style={{ color: 'var(--warn)' }}
+              title={`${streak} straight weeks hitting the estimate goal`}>
+              <Flame size={11} />{streak}
+            </span>
+          )}
+        </div>
+        <p className="text-[13px] text-bank-fa mt-0.5 whitespace-nowrap">
+          {noGoals ? <span className="font-semibold" style={{ color: 'var(--warn)' }}>no goals set</span>
+            : <>Leads: {mProd.leadsRan} ran · {mProd.leadsClosed} closed</>}
+        </p>
+      </>
+    )
+    const suggestion = sug && (
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
+        <span className="text-bank-mu">
+          {fmt(Number(mGoal.revenue_target))}/mo ≈ <b className="text-bank-tx">{sug.month.deals} deals · {sug.month.est} est</b>
+          <span className="text-bank-fa"> ({Math.round(sug.closeRate * 100)}% close · {fmt(sug.avgDeal)} avg)</span>
+          {' '}→ <b className="text-bank-tx">{sug.week.est} est / wk</b>
+        </span>
+        <PrimaryButton onClick={() => applySuggestion(rep, sug, mGoal)} className="px-3 py-1.5 whitespace-nowrap">Use as targets</PrimaryButton>
+      </div>
+    )
+
+    if (mode === 'card') {
+      const isOpen = openRep === rep.id
+      const monthRev = monthCells[2]
+      return (
+        <div className="border-t border-bank-line">
+          <button onClick={() => setOpenRep(isOpen ? null : rep.id)} aria-expanded={isOpen}
+            className="w-full flex items-center gap-3 px-4 py-3 min-h-[44px] text-left hover:bg-bank-raise transition-colors">
+            <div className="min-w-0 flex-1">{nameBlock}</div>
+            <div className="text-right flex-shrink-0">
+              <p className="text-[12px] text-bank-fa uppercase">Month revenue</p>
+              <p className="text-[13px] font-bold text-bank-tx tabular-nums">{fmt(monthRev.value)}<span className="text-bank-mu font-normal"> / {monthRev.inputValue != null ? fmt(monthRev.inputValue) : '—'}</span></p>
+            </div>
+            <ChevronDown size={16} className={`text-bank-fa flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {isOpen && (
+            <div className="px-4 pb-4 space-y-4" style={{ background: 'var(--bg)' }}>
+              <div className="pt-3">
+                <p className="text-[13px] font-semibold text-bank-mu uppercase tracking-wide mb-2">This Week <span className="text-bank-fa normal-case tracking-normal font-normal">{periods.week.sub}</span></p>
+                <div className="grid grid-cols-3 gap-3">{weekCells.map(({ key, ...c }) => <MetricField key={key} {...c} />)}</div>
+              </div>
+              <div>
+                <p className="text-[13px] font-semibold text-bank-mu uppercase tracking-wide mb-2">This Month <span className="text-bank-fa normal-case tracking-normal font-normal">{periods.month.sub}</span></p>
+                <div className="grid grid-cols-3 gap-3">{monthCells.map(({ key, ...c }) => <MetricField key={key} {...c} />)}</div>
+              </div>
+              {suggestion}
+            </div>
+          )}
+        </div>
+      )
+    }
 
     return (
       <Fragment>
-        <tr className="border-t" style={{ borderColor: '#262626' }}>
-          <td className="px-3 py-2.5 align-middle">
-            <div className="flex items-center gap-1.5">
-              <span className="text-[12.5px] font-semibold text-white whitespace-nowrap">{rep.name}</span>
-              {streak > 1 && (
-                <span className="flex items-center text-[10px] font-bold text-amber-300 whitespace-nowrap"
-                  title={`${streak} straight weeks hitting the estimate goal`}>
-                  <Flame size={10} />{streak}
-                </span>
-              )}
-            </div>
-            <p className="text-[9.5px] text-white/25 mt-0.5 whitespace-nowrap">
-              {noGoals ? <span className="text-amber-400/80 font-semibold">no goals set</span>
-                : <>Leads: {mProd.leadsRan} ran · {mProd.leadsClosed} closed</>}
-            </p>
-          </td>
-          {cells(wGoal, wProd, wEl, 'week')}
-          {cells(mGoal, mProd, mEl, 'month')}
+        <tr className="border-t border-bank-line">
+          <td className="px-3 py-2.5 align-middle">{nameBlock}</td>
+          {weekCells.map(({ key, ...c }) => <MetricCell key={key} {...c} />)}
+          {monthCells.map(({ key, ...c }) => <MetricCell key={key} {...c} />)}
         </tr>
         {sug && (
-          <tr style={{ background: 'rgba(0,184,148,0.04)' }}>
-            <td colSpan={7} className="px-3 pb-2.5">
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-                <span className="text-white/50">
-                  {fmt(Number(mGoal.revenue_target))}/mo ≈ <b className="text-white/80">{sug.month.deals} deals · {sug.month.est} est</b>
-                  <span className="text-white/30"> ({Math.round(sug.closeRate * 100)}% close · {fmt(sug.avgDeal)} avg)</span>
-                  {' '}→ <b className="text-white/80">{sug.week.est} est / wk</b>
-                </span>
-                <button onClick={() => applySuggestion(rep, sug, mGoal)}
-                  className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-dark bg-teal hover:opacity-90 whitespace-nowrap">
-                  Use as targets
-                </button>
-              </div>
-            </td>
+          <tr style={{ background: 'rgba(191,164,108,0.06)' }}>
+            <td colSpan={7} className="px-3 pb-2.5 pt-1">{suggestion}</td>
           </tr>
         )}
       </Fragment>
     )
   }
 
-  if (loading) return <div className="p-8 text-white/40 text-sm">Loading…</div>
+  if (loading) return <LoadingBlock text="Loading goals…" />
 
-  const th = 'px-2.5 pb-2 text-left text-[9px] font-bold uppercase tracking-widest text-white/30'
+  const th = 'px-2.5 pb-2 text-left text-[13px] font-semibold uppercase tracking-wide text-bank-fa'
+  const teamHead = (t, r) => (
+    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+      <span className="flex items-center gap-1.5">
+        <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: t.color }} />
+        <span className="text-[13px] font-bold text-bank-tx">{t.name}</span>
+      </span>
+      <span className="text-[13px] text-bank-mu">
+        {fmt(r.rev)}{r.revGoal > 0 ? ` / ${fmt(r.revGoal)}` : ''} · {r.dealsN}{r.dealsGoal > 0 ? `/${r.dealsGoal}` : ''} deals this month
+      </span>
+    </div>
+  )
 
   return (
-    <div className="space-y-4 pb-8">
+    <div className="space-y-4 pb-8 max-w-[1400px] mx-auto" style={{ color: 'var(--tx)' }}>
       <div>
-        <h1 className="text-lg md:text-xl font-bold text-white flex items-center gap-2">
-          <Target size={18} className="text-teal" /> Goals
+        <h1 className="text-lg md:text-xl font-bold text-bank-tx flex items-center gap-2">
+          <Target size={18} className="text-bank-mu" /> Goals
         </h1>
-        <p className="text-[12px] text-white/40 mt-0.5">
+        <p className="text-[13px] text-bank-mu mt-0.5">
           Weekly + monthly commitments per rep — click any goal number to type it. Estimate goals are self-gen;
           leads count toward overall production. Goals carry forward until changed. Reps edit their own; managers edit their team's.
         </p>
       </div>
 
-      <div className="rounded-xl" style={{ background: '#1e1e1e', border: '1px solid #282828' }}>
-        <div className="overflow-x-auto">
+      <Card padded={false}>
+        {/* Desktop table */}
+        <div className="hidden lg:block overflow-x-auto">
           <table className="w-full min-w-[920px]">
             <thead>
               <tr>
                 <th className={`${th} px-3 pt-3`} rowSpan={2} style={{ verticalAlign: 'bottom' }}>Rep</th>
                 <th className="px-2.5 pt-3 pb-1 text-left" colSpan={3}>
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-white/45">This Week</span>
-                  <span className="text-[10px] text-white/25 ml-2 normal-case tracking-normal font-normal">{periods.week.sub}</span>
+                  <span className="text-[13px] font-bold uppercase tracking-wide text-bank-mu">This Week</span>
+                  <span className="text-[13px] text-bank-fa ml-2 normal-case tracking-normal font-normal">{periods.week.sub}</span>
                 </th>
-                <th className="px-2.5 pt-3 pb-1 text-left" colSpan={3}
-                  style={{ borderLeft: '1px solid #2a2a2a' }}>
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-white/45">This Month</span>
-                  <span className="text-[10px] text-white/25 ml-2 normal-case tracking-normal font-normal">{periods.month.sub}</span>
+                <th className="px-2.5 pt-3 pb-1 text-left border-l border-bank-line" colSpan={3}>
+                  <span className="text-[13px] font-bold uppercase tracking-wide text-bank-mu">This Month</span>
+                  <span className="text-[13px] text-bank-fa ml-2 normal-case tracking-normal font-normal">{periods.month.sub}</span>
                 </th>
               </tr>
               <tr>
                 <th className={th}>SG Est</th>
                 <th className={th}>Deals</th>
                 <th className={th}>Revenue</th>
-                <th className={th} style={{ borderLeft: '1px solid #2a2a2a' }}>SG Est</th>
+                <th className={`${th} border-l border-bank-line`}>SG Est</th>
                 <th className={th}>Deals</th>
                 <th className={th}>Revenue</th>
               </tr>
@@ -289,18 +356,8 @@ export default function Goals() {
                 const r = teamRollup(t.rows)
                 return (
                   <Fragment key={t.key}>
-                    <tr className="border-t" style={{ borderColor: '#2a2a2a', background: '#232323' }}>
-                      <td colSpan={7} className="px-3 py-2">
-                        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
-                          <span className="flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: t.color }} />
-                            <span className="text-[12px] font-bold text-white">{t.name}</span>
-                          </span>
-                          <span className="text-[10.5px] text-white/35">
-                            {fmt(r.rev)}{r.revGoal > 0 ? ` / ${fmt(r.revGoal)}` : ''} · {r.dealsN}{r.dealsGoal > 0 ? `/${r.dealsGoal}` : ''} deals this month
-                          </span>
-                        </div>
-                      </td>
+                    <tr className="border-t border-bank-line" style={{ background: 'var(--raise)' }}>
+                      <td colSpan={7} className="px-3 py-2">{teamHead(t, r)}</td>
                     </tr>
                     {t.rows.map(rep => <RepRow key={rep.id} rep={rep} />)}
                   </Fragment>
@@ -309,7 +366,19 @@ export default function Goals() {
             </tbody>
           </table>
         </div>
-      </div>
+        {/* Phones: team header + compact rep rows that open to all six metrics */}
+        <div className="lg:hidden">
+          {teams.map(t => {
+            const r = teamRollup(t.rows)
+            return (
+              <div key={t.key}>
+                <div className="px-4 py-2.5 border-t border-bank-line first:border-0" style={{ background: 'var(--raise)' }}>{teamHead(t, r)}</div>
+                <PhoneMode.Provider value={true}>{t.rows.map(rep => <RepRow key={rep.id} rep={rep} />)}</PhoneMode.Provider>
+              </div>
+            )
+          })}
+        </div>
+      </Card>
     </div>
   )
 }

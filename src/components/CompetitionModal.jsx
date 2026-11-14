@@ -3,16 +3,32 @@ import { X, Plus, Trash2 } from 'lucide-react'
 import { COMP_TYPES, COMP_METRICS, COMP_GOAL_MODES, COMP_CREDIT_MODES, teamAvgRoster } from '../utils/competition'
 import { headIdSet, teamLabel } from '../utils/team'
 import { weeksInRange } from '../utils/dateRanges'
+import { SURFACE, GOLD_WASH, FieldLabel, Input, Select, PrimaryButton, SecondaryButton, IconButton } from './ui'
 
-const inputCls = 'w-full px-3 py-2 rounded-lg text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-teal/40 transition-colors'
-const inputStyle = { background: '#1a1a1a', border: '1px solid #3a3a3a' }
-const Inp = (props) => <input {...props} style={inputStyle} className={inputCls} />
-const Sel = ({ children, ...props }) => <select {...props} style={inputStyle} className={inputCls}>{children}</select>
+// Private Bank form controls (44px tall on phones). Styling only.
+const inputStyle = SURFACE.well
+const Inp = (props) => <Input {...props} style={inputStyle} />
+const Sel = ({ children, ...props }) => <Select {...props} style={inputStyle}>{children}</Select>
 const Field = ({ label, children }) => (
   <div>
-    <label className="block text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1.5">{label}</label>
+    <FieldLabel>{label}</FieldLabel>
     {children}
   </div>
+)
+const PANEL = { ...SURFACE.well, borderRadius: 12 }
+const WELL_INPUT = { ...SURFACE.raise }
+const eyebrow = 'text-[13px] font-semibold text-bank-fa uppercase tracking-wide'
+const smallIn = 'px-2.5 py-1.5 min-h-[44px] md:min-h-0 rounded-lg text-[13px] text-bank-tx placeholder-bank-fa focus:outline-none'
+const SLIDER = 'w-full accent-[#bfa46c] min-h-[44px] md:min-h-0'
+const linkBtn = 'inline-flex items-center gap-1 text-[13px] font-semibold text-bank-gold-tx hover:underline min-h-[44px] md:min-h-0'
+const chip = (on) => `px-2.5 py-1.5 min-h-[44px] md:min-h-0 rounded-full text-[13px] font-semibold transition-colors ${on ? 'text-bank-gold-tx' : 'text-bank-mu hover:text-bank-tx'}`
+const chipStyle = (on) => on ? GOLD_WASH : { border: '1px solid var(--line)' }
+const checkRow = 'w-full flex items-center gap-2.5 px-3 py-2 min-h-[44px] text-left hover:bg-bank-raise transition-colors border-b border-bank-line last:border-0'
+const Box = ({ on }) => (
+  <span className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0"
+    style={on ? { background: 'var(--gold)' } : { border: '1.5px solid var(--mu)' }}>
+    {on && <span className="text-[10px] font-bold" style={{ color: 'var(--gold-ink)' }}>✓</span>}
+  </span>
 )
 
 const BLANK = {
@@ -183,17 +199,19 @@ export default function CompetitionModal({ competition, users = [], deals = [], 
   const nameOf = (id) => users.find(u => u.id === id)?.name ?? '—'
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col justify-end md:justify-center md:items-center md:p-4">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full md:max-w-2xl rounded-t-2xl md:rounded-2xl overflow-y-auto shadow-2xl"
-        style={{ background: '#242424', border: '1px solid #333', maxHeight: '95dvh' }}>
+    // z-[60] so the sheet covers the mobile bottom nav; full height on phones with a sticky action bar.
+    <div className="fixed inset-0 z-[60] flex flex-col justify-end md:justify-center md:items-center md:p-4">
+      <div className="absolute inset-0" style={{ background: 'rgba(0,0,0,0.62)', backdropFilter: 'blur(3px)' }} onClick={onClose} />
+      <div className="relative w-full md:max-w-2xl h-[100dvh] md:h-auto md:max-h-[95dvh] rounded-none md:rounded-2xl overflow-y-auto flex flex-col"
+        style={{ ...SURFACE.card, boxShadow: 'var(--card-shadow), 0 24px 60px rgba(0,0,0,0.55)', color: 'var(--tx)' }}
+        role="dialog" aria-modal="true" aria-label={competition ? 'Edit Competition' : 'New Competition'}>
         <div className="flex items-center justify-between px-4 md:px-6 py-3 md:py-4 sticky top-0 z-10"
-          style={{ background: '#242424', borderBottom: '1px solid #2e2e2e' }}>
-          <h2 className="text-[15px] font-semibold text-white">{competition ? 'Edit Competition' : 'New Competition'}</h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg text-white/30 hover:text-white hover:bg-white/10 transition-colors"><X size={16} /></button>
+          style={{ background: 'var(--card)', borderBottom: '1px solid var(--line)' }}>
+          <h2 className="text-[15px] font-bold text-bank-tx">{competition ? 'Edit Competition' : 'New Competition'}</h2>
+          <IconButton onClick={onClose} aria-label="Close"><X size={16} /></IconButton>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-4 md:p-6 space-y-4" style={{ paddingBottom: 'max(24px, env(safe-area-inset-bottom))' }}>
+        <form onSubmit={handleSubmit} className="p-4 md:p-6 space-y-4 flex-1 flex flex-col">
           <Field label="Name *">
             <Inp required value={form.name} onChange={e => set('name', e.target.value)} placeholder="e.g. Top Closer — March" />
           </Field>
@@ -242,16 +260,16 @@ export default function CompetitionModal({ competition, users = [], deals = [], 
             </Sel>
           </Field>
           {form.credit_mode === 'lead_bonus' && (
-            <div className="rounded-lg px-3 py-3 space-y-2" style={inputStyle}>
-              <div className="flex items-center justify-between text-[12px]">
-                <span className="text-white/60">Setter 100%</span>
-                <span className="text-white/60">Closer {Math.round((Number(form.credit_split_pct) || 0) * 100)}%</span>
+            <div className="px-3 py-3 space-y-2" style={PANEL}>
+              <div className="flex items-center justify-between text-[13px]">
+                <span className="text-bank-mu">Setter 100%</span>
+                <span className="text-bank-mu">Closer {Math.round((Number(form.credit_split_pct) || 0) * 100)}%</span>
               </div>
-              <input type="range" min="0" max="100" step="5"
+              <input type="range" min="0" max="100" step="5" aria-label="Closer share on a lead"
                 value={Math.round((Number(form.credit_split_pct) || 0) * 100)}
                 onChange={e => set('credit_split_pct', Number(e.target.value) / 100)}
-                className="w-full accent-teal" />
-              <p className="text-[10px] text-white/30">
+                className={SLIDER} />
+              <p className="text-[13px] text-bank-mu">
                 The setter always keeps a full credit; the closer earns this much on top for closing
                 someone else&rsquo;s lead, so one lead is worth{' '}
                 {(1 + (Number(form.credit_split_pct) || 0)).toFixed(2).replace(/0+$/, '').replace(/\.$/, '')} to the contest.
@@ -262,16 +280,16 @@ export default function CompetitionModal({ competition, users = [], deals = [], 
             </div>
           )}
           {form.credit_mode === 'split' && (
-            <div className="rounded-lg px-3 py-3 space-y-2" style={inputStyle}>
-              <div className="flex items-center justify-between text-[12px]">
-                <span className="text-white/60">Setter {Math.round((1 - (Number(form.credit_split_pct) || 0)) * 100)}%</span>
-                <span className="text-white/60">Closer {Math.round((Number(form.credit_split_pct) || 0) * 100)}%</span>
+            <div className="px-3 py-3 space-y-2" style={PANEL}>
+              <div className="flex items-center justify-between text-[13px]">
+                <span className="text-bank-mu">Setter {Math.round((1 - (Number(form.credit_split_pct) || 0)) * 100)}%</span>
+                <span className="text-bank-mu">Closer {Math.round((Number(form.credit_split_pct) || 0) * 100)}%</span>
               </div>
-              <input type="range" min="0" max="100" step="5"
+              <input type="range" min="0" max="100" step="5" aria-label="Closer share of a split"
                 value={Math.round((Number(form.credit_split_pct) || 0) * 100)}
                 onChange={e => set('credit_split_pct', Number(e.target.value) / 100)}
-                className="w-full accent-teal" />
-              <p className="text-[10px] text-white/30">On a lead (setter ≠ closer), each earns this share of the deal toward the contest. Self-gen deals count fully for the one rep.</p>
+                className={SLIDER} />
+              <p className="text-[13px] text-bank-mu">On a lead (setter ≠ closer), each earns this share of the deal toward the contest. Self-gen deals count fully for the one rep.</p>
             </div>
           )}
 
@@ -281,40 +299,36 @@ export default function CompetitionModal({ competition, users = [], deals = [], 
           <Field label="Rules">
             <textarea value={form.rules} onChange={e => set('rules', e.target.value)} rows={2}
               placeholder="How it's scored, the prize, fine print…" style={inputStyle}
-              className="w-full px-3 py-2 rounded-lg text-[13px] text-white placeholder-white/20 focus:outline-none resize-none" />
+              className="w-full px-3 py-2 rounded-lg text-[13px] text-bank-tx placeholder-bank-fa focus:outline-none resize-none" />
           </Field>
 
           {isSquads && (
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="text-[10px] font-semibold text-white/30 uppercase tracking-widest">Sides — group teams &amp; reps</label>
-                <button type="button" onClick={addSide}
-                  className="flex items-center gap-1 text-[11px] font-semibold text-teal hover:underline"><Plus size={12} /> Add side</button>
+                <label className={eyebrow}>Sides — group teams &amp; reps</label>
+                <button type="button" onClick={addSide} className={linkBtn}><Plus size={12} /> Add side</button>
               </div>
               {form.sides.length === 0 && (
-                <p className="text-[12px] text-white/40 rounded-lg px-3 py-2.5" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+                <p className="text-[13px] text-bank-mu px-3 py-2.5" style={PANEL}>
                   Add at least two sides. Each side can be one team, several teams grouped together, individual reps, or any mix.
                 </p>
               )}
               <div className="space-y-2">
                 {form.sides.map(s => (
-                  <div key={s.id} className="rounded-lg p-3 space-y-2" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+                  <div key={s.id} className="p-3 space-y-2" style={PANEL}>
                     <div className="flex items-center gap-2">
-                      <input value={s.name} onChange={e => patchSide(s.id, { name: e.target.value })} placeholder="Side name"
-                        style={{ background: '#141414', border: '1px solid #3a3a3a' }}
-                        className="flex-1 px-2.5 py-1.5 rounded-lg text-[13px] font-semibold text-white placeholder-white/20 focus:outline-none" />
-                      <button type="button" onClick={() => removeSide(s.id)}
-                        className="p-1.5 rounded text-white/25 hover:text-red-400" title="Remove side"><Trash2 size={13} /></button>
+                      <input value={s.name} onChange={e => patchSide(s.id, { name: e.target.value })} placeholder="Side name" aria-label="Side name"
+                        style={WELL_INPUT} className={`${smallIn} flex-1 font-semibold`} />
+                      <IconButton onClick={() => removeSide(s.id)} title="Remove side" aria-label="Remove side"><Trash2 size={13} /></IconButton>
                     </div>
                     <div>
-                      <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mb-1">Whole teams</p>
+                      <p className={`${eyebrow} mb-1`}>Whole teams</p>
                       <div className="flex flex-wrap gap-1.5">
                         {teamHeads.map(h => {
                           const on = (s.team_ids || []).includes(h.id)
                           return (
                             <button key={h.id} type="button" onClick={() => patchSide(s.id, { team_ids: toggleIn(s.team_ids, h.id) })}
-                              className={`px-2 py-1 rounded-full text-[11px] font-semibold transition-colors ${on ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}
-                              style={on ? undefined : { border: '1px solid #3a3a3a' }}>
+                              aria-pressed={on} className={chip(on)} style={chipStyle(on)}>
                               {teamLabel(h)}
                             </button>
                           )
@@ -322,80 +336,73 @@ export default function CompetitionModal({ competition, users = [], deals = [], 
                       </div>
                     </div>
                     <details>
-                      <summary className="text-[11px] text-white/40 cursor-pointer hover:text-white/70 select-none">
+                      <summary className="text-[13px] text-bank-mu cursor-pointer hover:text-bank-tx select-none min-h-[44px] md:min-h-0 flex items-center">
                         Individual reps ({(s.rep_ids || []).length} added)
                       </summary>
-                      <div className="mt-1.5 rounded-lg max-h-40 overflow-y-auto" style={{ background: '#141414', border: '1px solid #2a2a2a' }}>
+                      <div className="mt-1.5 rounded-lg max-h-40 overflow-y-auto" style={WELL_INPUT}>
                         {sellers.map(u => {
                           const on = (s.rep_ids || []).includes(u.id)
                           return (
                             <button key={u.id} type="button" onClick={() => patchSide(s.id, { rep_ids: toggleIn(s.rep_ids, u.id) })}
-                              className="w-full flex items-center gap-2.5 px-3 py-1.5 text-left hover:bg-white/[0.04] transition-colors border-b border-white/5 last:border-0">
-                              <span className="w-3.5 h-3.5 rounded flex items-center justify-center flex-shrink-0"
-                                style={on ? { background: '#00b894' } : { border: '1.5px solid rgba(255,255,255,0.3)' }}>
-                                {on && <span className="text-dark text-[9px] font-bold">✓</span>}
-                              </span>
-                              <span className="text-[12px] text-white/85">{u.name}</span>
-                              <span className="text-[9px] text-white/30 ml-auto uppercase">{u.role}</span>
+                              aria-pressed={on} className={checkRow}>
+                              <Box on={on} />
+                              <span className="text-[13px] text-bank-tx">{u.name}</span>
+                              <span className="text-[12px] text-bank-fa ml-auto uppercase">{u.role}</span>
                             </button>
                           )
                         })}
                       </div>
-                      <p className="text-[10px] text-white/30 mt-1">Adds a rep on top of the whole teams — e.g. an unmanaged rep joining a side.</p>
+                      <p className="text-[13px] text-bank-mu mt-1">Adds a rep on top of the whole teams — e.g. an unmanaged rep joining a side.</p>
                     </details>
                   </div>
                 ))}
               </div>
               {form.sides.length > 0 && (
                 <details className="mt-2">
-                  <summary className="text-[11px] text-white/40 cursor-pointer hover:text-white/70 select-none">Manual score overrides (optional)</summary>
+                  <summary className="text-[13px] text-bank-mu cursor-pointer hover:text-bank-tx select-none min-h-[44px] md:min-h-0 flex items-center">Manual score overrides (optional)</summary>
                   <div className="mt-2 space-y-1.5">
                     {form.sides.map(s => (
                       <div key={s.id} className="flex items-center gap-2">
-                        <span className="text-[12px] text-white/60 flex-1 truncate">{s.name || 'Unnamed side'}</span>
-                        <input type="number" step="any" value={form.manual_scores?.[s.id] ?? ''}
+                        <span className="text-[13px] text-bank-mu flex-1 truncate">{s.name || 'Unnamed side'}</span>
+                        <input type="number" step="any" value={form.manual_scores?.[s.id] ?? ''} aria-label={`Manual score for ${s.name || 'side'}`}
                           onChange={e => setManual(s.id, e.target.value)} placeholder="auto"
-                          style={inputStyle} className="w-28 px-2 py-1.5 rounded-lg text-[12px] text-white text-right focus:outline-none" />
+                          style={inputStyle} className={`${smallIn} w-28 text-right`} />
                       </div>
                     ))}
-                    <p className="text-[10px] text-white/30">Leave blank to use the value calculated from deals.</p>
+                    <p className="text-[13px] text-bank-mu">Leave blank to use the value calculated from deals.</p>
                   </div>
                 </details>
               )}
-              <p className="text-[10px] text-white/30 mt-1.5">
+              <p className="text-[13px] text-bank-mu mt-1.5">
                 Team membership follows the sale date — a deal counts for the side its rep's team owned when it was sold, so mid-contest roster moves never rewrite the score.
               </p>
             </div>
           )}
 
           {form.type === 'company' ? (
-            <p className="text-[12px] text-white/40 rounded-lg px-3 py-2.5" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+            <p className="text-[13px] text-bank-mu px-3 py-2.5" style={PANEL}>
               Company-wide automatically includes every rep and manager — no need to pick participants.
             </p>
           ) : isSquads ? null : (
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="text-[10px] font-semibold text-white/30 uppercase tracking-widest">
+                <label className={eyebrow}>
                   {form.type === 'team' ? 'Teams (pick managers)' : isTeamAvg ? 'Teams competing' : 'Participants'}
                 </label>
-                <span className="text-[11px] text-white/30">{form.participant_ids.length} selected</span>
+                <span className="text-[13px] text-bank-mu">{form.participant_ids.length} selected</span>
               </div>
-              <div className="rounded-lg max-h-52 overflow-y-auto" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+              <div className="rounded-lg max-h-52 overflow-y-auto" style={PANEL}>
                 {pickList.map(u => {
                   const on = picked.has(u.id)
                   return (
-                    <button key={u.id} type="button" onClick={() => togglePick(u.id)}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/[0.04] transition-colors border-b border-white/5 last:border-0">
-                      <span className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0"
-                        style={on ? { background: '#00b894' } : { border: '1.5px solid rgba(255,255,255,0.3)' }}>
-                        {on && <span className="text-dark text-[10px] font-bold">✓</span>}
-                      </span>
-                      <span className="text-[13px] text-white/85">{isTeamPick ? teamLabel(u) : u.name}</span>
-                      <span className="text-[10px] text-white/30 ml-auto uppercase">{u.role}</span>
+                    <button key={u.id} type="button" onClick={() => togglePick(u.id)} aria-pressed={on} className={checkRow}>
+                      <Box on={on} />
+                      <span className="text-[13px] text-bank-tx">{isTeamPick ? teamLabel(u) : u.name}</span>
+                      <span className="text-[12px] text-bank-fa ml-auto uppercase">{u.role}</span>
                     </button>
                   )
                 })}
-                {pickList.length === 0 && <div className="px-3 py-3 text-[12px] text-white/30">No people available.</div>}
+                {pickList.length === 0 && <div className="px-3 py-3 text-[13px] text-bank-mu">No people available.</div>}
               </div>
 
               {/* Team Average: who counts toward each team's average. Untick a
@@ -404,10 +411,10 @@ export default function CompetitionModal({ competition, users = [], deals = [], 
               {isTeamAvg && form.participant_ids.length > 0 && (
                 <div className="mt-3">
                   <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-[10px] font-semibold text-white/30 uppercase tracking-widest">Who counts toward the average</label>
-                    <span className="text-[11px] text-white/30">{form.excluded_ids?.length || 0} left out</span>
+                    <label className={eyebrow}>Who counts toward the average</label>
+                    <span className="text-[13px] text-bank-mu">{form.excluded_ids?.length || 0} left out</span>
                   </div>
-                  <div className="rounded-lg divide-y divide-white/5 max-h-72 overflow-y-auto" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+                  <div className="rounded-lg divide-y divide-bank-line max-h-72 overflow-y-auto" style={PANEL}>
                     {form.participant_ids.map(hid => {
                       const head = users.find(u => u.id === hid)
                       if (!head) return null
@@ -416,20 +423,20 @@ export default function CompetitionModal({ competition, users = [], deals = [], 
                       return (
                         <div key={hid} className="px-3 py-2">
                           <div className="flex items-center justify-between mb-1">
-                            <span className="text-[12px] font-semibold text-white/80">{teamLabel(head)}</span>
-                            <span className="text-[10px] text-white/30">{counted} of {roster.length} count</span>
+                            <span className="text-[13px] font-semibold text-bank-tx">{teamLabel(head)}</span>
+                            <span className="text-[13px] text-bank-mu">{counted} of {roster.length} count</span>
                           </div>
                           <div className="flex flex-wrap gap-1.5">
                             {roster.map(u => {
                               const on = !excluded.has(u.id)
                               return (
-                                <button key={u.id} type="button" onClick={() => toggleExcluded(u.id)}
+                                <button key={u.id} type="button" onClick={() => toggleExcluded(u.id)} aria-pressed={on}
                                   title={on ? 'Counts — click to leave out' : 'Left out — click to count'}
-                                  className={`px-2 py-1 rounded-full text-[11px] font-medium transition-colors ${on ? 'text-white/85' : 'text-white/30 line-through'}`}
-                                  style={on ? { background: '#00b89422', border: '1px solid #00b89466' } : { border: '1px solid #3a3a3a' }}>
+                                  className={`px-2.5 py-1.5 min-h-[44px] md:min-h-0 rounded-full text-[13px] font-medium transition-colors ${on ? 'text-bank-gold-tx' : 'text-bank-fa line-through'}`}
+                                  style={chipStyle(on)}>
                                   {u.name}
-                                  {u.id === head.id ? <span className="text-[9px] uppercase tracking-wide opacity-60"> · {u.role}</span> : ''}
-                                  {u.active === false ? <span className="text-[9px] uppercase tracking-wide opacity-60"> · deactivated</span> : ''}
+                                  {u.id === head.id ? <span className="text-[12px] uppercase tracking-wide opacity-70"> · {u.role}</span> : ''}
+                                  {u.active === false ? <span className="text-[12px] uppercase tracking-wide opacity-70"> · deactivated</span> : ''}
                                 </button>
                               )
                             })}
@@ -440,13 +447,13 @@ export default function CompetitionModal({ competition, users = [], deals = [], 
                     {strayExcluded.length > 0 && (
                       <div className="px-3 py-2">
                         <div className="flex items-center justify-between mb-1">
-                          <span className="text-[12px] font-semibold text-amber-300/80">Also left out (not on a picked team)</span>
-                          <span className="text-[10px] text-white/30">dropped on save</span>
+                          <span className="text-[13px] font-semibold" style={{ color: 'var(--warn)' }}>Also left out (not on a picked team)</span>
+                          <span className="text-[13px] text-bank-mu">dropped on save</span>
                         </div>
                         <div className="flex flex-wrap gap-1.5">
                           {strayExcluded.map(id => (
                             <button key={id} type="button" onClick={() => toggleExcluded(id)} title="Click to remove from the left-out list"
-                              className="px-2 py-1 rounded-full text-[11px] font-medium text-white/30 line-through" style={{ border: '1px solid #3a3a3a' }}>
+                              className="px-2.5 py-1.5 min-h-[44px] md:min-h-0 rounded-full text-[13px] font-medium text-bank-fa line-through" style={{ border: '1px solid var(--line)' }}>
                               {nameOf(id)}
                             </button>
                           ))}
@@ -454,7 +461,7 @@ export default function CompetitionModal({ competition, users = [], deals = [], 
                       </div>
                     )}
                   </div>
-                  <p className="text-[10px] text-white/30 mt-1.5">
+                  <p className="text-[13px] text-bank-mu mt-1.5">
                     Each team's score is its {form.metric === 'deals' ? 'deal count' : 'baseline revenue'} ÷ the people who count.
                     Someone left out contributes no deals and isn't counted as a rep. Listed: everyone on the team as of the
                     contest's end (today while it runs) plus anyone who earned credit in the window — the same people the score divides by.
@@ -466,17 +473,17 @@ export default function CompetitionModal({ competition, users = [], deals = [], 
               {/* Optional manual score overrides */}
               {form.participant_ids.length > 0 && (
                 <details className="mt-2">
-                  <summary className="text-[11px] text-white/40 cursor-pointer hover:text-white/70 select-none">Manual score overrides (optional)</summary>
+                  <summary className="text-[13px] text-bank-mu cursor-pointer hover:text-bank-tx select-none min-h-[44px] md:min-h-0 flex items-center">Manual score overrides (optional)</summary>
                   <div className="mt-2 space-y-1.5">
                     {form.participant_ids.map(id => (
                       <div key={id} className="flex items-center gap-2">
-                        <span className="text-[12px] text-white/60 flex-1 truncate">{isTeamPick ? teamLabel(users.find(x => x.id === id)) : nameOf(id)}</span>
-                        <input type="number" step="any" value={form.manual_scores?.[id] ?? ''}
+                        <span className="text-[13px] text-bank-mu flex-1 truncate">{isTeamPick ? teamLabel(users.find(x => x.id === id)) : nameOf(id)}</span>
+                        <input type="number" step="any" value={form.manual_scores?.[id] ?? ''} aria-label="Manual score"
                           onChange={e => setManual(id, e.target.value)} placeholder="auto"
-                          style={inputStyle} className="w-28 px-2 py-1.5 rounded-lg text-[12px] text-white text-right focus:outline-none" />
+                          style={inputStyle} className={`${smallIn} w-28 text-right`} />
                       </div>
                     ))}
-                    <p className="text-[10px] text-white/30">Leave blank to use the value calculated from deals.</p>
+                    <p className="text-[13px] text-bank-mu">Leave blank to use the value calculated from deals.</p>
                   </div>
                 </details>
               )}
@@ -486,58 +493,49 @@ export default function CompetitionModal({ competition, users = [], deals = [], 
           {/* ── Rounds (optional, any type) ── */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className="text-[10px] font-semibold text-white/30 uppercase tracking-widest">Rounds (optional)</label>
+              <label className={eyebrow}>Rounds (optional)</label>
               <div className="flex items-center gap-3">
                 {form.start_date && form.end_date && (
                   <button type="button" onClick={autoWeeklyRounds}
-                    className="text-[11px] font-semibold text-white/40 hover:text-teal transition-colors"
+                    className="text-[13px] font-semibold text-bank-mu hover:text-bank-tx transition-colors min-h-[44px] md:min-h-0"
                     title="One round per Sun–Sat week across the competition dates">
                     Auto-split into weeks
                   </button>
                 )}
-                <button type="button" onClick={addRound}
-                  className="flex items-center gap-1 text-[11px] font-semibold text-teal hover:underline"><Plus size={12} /> Add round</button>
+                <button type="button" onClick={addRound} className={linkBtn}><Plus size={12} /> Add round</button>
               </div>
             </div>
             {form.rounds.length === 0 ? (
-              <p className="text-[11px] text-white/30 rounded-lg px-3 py-2" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+              <p className="text-[13px] text-bank-mu px-3 py-2.5" style={PANEL}>
                 No rounds — the competition runs as one race. Add rounds to give each stretch its own dates and prize (every round starts fresh at zero).
               </p>
             ) : (
               <div className="space-y-1.5">
                 {form.rounds.map(r => (
-                  <div key={r.id} className="rounded-lg p-2.5 grid grid-cols-2 md:grid-cols-[110px_1fr_1fr_1.4fr_28px] gap-1.5 items-center"
-                    style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
-                    <input value={r.name} onChange={e => patchRound(r.id, { name: e.target.value })} placeholder="Round name"
-                      style={{ background: '#141414', border: '1px solid #3a3a3a' }}
-                      className="px-2 py-1.5 rounded-lg text-[12px] font-semibold text-white placeholder-white/20 focus:outline-none" />
-                    <input type="date" value={r.start} onChange={e => patchRound(r.id, { start: e.target.value })}
-                      style={{ background: '#141414', border: '1px solid #3a3a3a' }}
-                      className="px-2 py-1.5 rounded-lg text-[12px] text-white focus:outline-none" />
-                    <input type="date" value={r.end} onChange={e => patchRound(r.id, { end: e.target.value })}
-                      style={{ background: '#141414', border: '1px solid #3a3a3a' }}
-                      className="px-2 py-1.5 rounded-lg text-[12px] text-white focus:outline-none" />
-                    <input value={r.prize} onChange={e => patchRound(r.id, { prize: e.target.value })} placeholder="Prize (e.g. $250)"
-                      style={{ background: '#141414', border: '1px solid #3a3a3a' }}
-                      className="px-2 py-1.5 rounded-lg text-[12px] text-white placeholder-white/20 focus:outline-none col-span-2 md:col-span-1" />
-                    <button type="button" onClick={() => removeRound(r.id)}
-                      className="p-1.5 rounded text-white/25 hover:text-red-400 justify-self-end" title="Remove round"><Trash2 size={13} /></button>
+                  <div key={r.id} className="p-2.5 grid grid-cols-2 md:grid-cols-[110px_1fr_1fr_1.4fr_44px] gap-1.5 items-center" style={PANEL}>
+                    <input value={r.name} onChange={e => patchRound(r.id, { name: e.target.value })} placeholder="Round name" aria-label="Round name"
+                      style={WELL_INPUT} className={`${smallIn} font-semibold`} />
+                    <input type="date" value={r.start} onChange={e => patchRound(r.id, { start: e.target.value })} aria-label="Round start"
+                      style={WELL_INPUT} className={smallIn} />
+                    <input type="date" value={r.end} onChange={e => patchRound(r.id, { end: e.target.value })} aria-label="Round end"
+                      style={WELL_INPUT} className={smallIn} />
+                    <input value={r.prize} onChange={e => patchRound(r.id, { prize: e.target.value })} placeholder="Prize (e.g. $250)" aria-label="Round prize"
+                      style={WELL_INPUT} className={`${smallIn} col-span-2 md:col-span-1`} />
+                    <IconButton onClick={() => removeRound(r.id)} title="Remove round" aria-label="Remove round" className="justify-self-end"><Trash2 size={13} /></IconButton>
                   </div>
                 ))}
-                <p className="text-[10px] text-white/30">Each round is scored fresh from zero; overall standings across the whole date range show alongside. Winners are auto-crowned when a round ends — you can override on the card for ties.</p>
+                <p className="text-[13px] text-bank-mu">Each round is scored fresh from zero; overall standings across the whole date range show alongside. Winners are auto-crowned when a round ends — you can override on the card for ties.</p>
               </div>
             )}
           </div>
 
-          <div className="flex gap-3 pt-1">
-            <button type="submit" disabled={saving || !form.name.trim()}
-              className="flex-1 py-3 rounded-xl text-[14px] font-bold text-dark bg-teal hover:bg-teal-dark disabled:opacity-50 transition-colors">
+          {/* Actions — on phones this bar sticks to the bottom of the sheet */}
+          <div className="sticky bottom-0 -mx-4 md:mx-0 px-4 md:px-0 pt-3 pb-3 md:pb-0 mt-auto flex gap-3 md:static"
+            style={{ background: 'var(--card)', borderTop: '1px solid var(--line)', paddingBottom: 'max(12px, env(safe-area-inset-bottom))' }}>
+            <PrimaryButton type="submit" disabled={saving || !form.name.trim()} className="flex-1 py-3 text-[14px]">
               {saving ? 'Saving…' : competition ? 'Save changes' : 'Create competition'}
-            </button>
-            <button type="button" onClick={onClose}
-              className="px-6 py-3 rounded-xl text-[13px] font-medium text-white/50 hover:text-white transition-colors" style={{ border: '1px solid #3a3a3a' }}>
-              Cancel
-            </button>
+            </PrimaryButton>
+            <SecondaryButton type="button" onClick={onClose} className="px-6 min-h-[44px]">Cancel</SecondaryButton>
           </div>
         </form>
       </div>

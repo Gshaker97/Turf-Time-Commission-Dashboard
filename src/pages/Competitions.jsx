@@ -18,6 +18,7 @@ import { useSettings } from '../contexts/SettingsContext'
 import CompetitionModal from '../components/CompetitionModal'
 import { toast } from '../lib/toast'
 import { confirmDialog, promptDialog } from '../lib/dialog'
+import { SURFACE, GOLD_WASH, Card, Pill, PillGroup, PrimaryButton, SecondaryButton, IconButton, LoadingBlock, EmptyBlock } from '../components/ui'
 
 // LOCAL date, never UTC — .toISOString() flips to tomorrow at 5pm Arizona,
 // which ended rounds/comps 7 hours early.
@@ -28,12 +29,16 @@ const fmtRange = (a, b) => {
   if (a && b) return `${f(a)} – ${f(b)}`
   return a ? `From ${f(a)}` : `Through ${f(b)}`
 }
+// Status tones on the palette; the label is always printed beside the colour.
 const STATUS = {
-  active:   { label: 'Active',   color: '#00b894' },
-  upcoming: { label: 'Upcoming', color: '#fdcb6e' },
-  ended:    { label: 'Ended',    color: '#94a3b8' },
+  active:   { label: 'Active',   color: '#a9c4b2' },
+  upcoming: { label: 'Upcoming', color: '#d2a074' },
+  ended:    { label: 'Ended',    color: '#8c8a84' },
 }
-const RANK_COLOR = { 1: '#fbbf24', 2: '#cbd5e1', 3: '#fb923c' }
+// Medals are emoji; the rank number itself stays neutral (gold is the viewer's own score).
+const RANK_COLOR = { 1: '#ede7da', 2: '#a19e97', 3: '#a19e97' }
+const POS = 'var(--pos)', WARN = 'var(--warn)', NEG = 'var(--neg)'
+const WELL = { ...SURFACE.well, borderRadius: 12 }
 
 function StandRow({ e, comp, deals, users, canManage, mine, teamCtx, onToggleComp }) {
   const metric = comp.metric
@@ -55,44 +60,45 @@ function StandRow({ e, comp, deals, users, canManage, mine, teamCtx, onToggleCom
   const counted = entryDeals.filter(x => !x.canceled && !x.excluded && !x.hidden).length
 
   return (
-    <div className="rounded-lg" style={mine ? { background: '#00b89415', border: '1px solid #00b89430' } : undefined}>
-      <div className={`flex items-center gap-3 px-3 py-2 rounded-lg ${clickable ? 'cursor-pointer hover:bg-white/[0.04]' : ''}`}
+    <div className="rounded-xl" style={mine ? GOLD_WASH : undefined}>
+      <div className={`flex items-center gap-3 px-3 py-2 min-h-[44px] rounded-xl ${clickable ? 'cursor-pointer hover:bg-bank-raise' : ''}`}
         onClick={clickable ? onClickUnlessSelecting(() => setOpen(o => !o)) : undefined}
         title={clickable ? 'Click to verify the deals counted' : undefined}>
-        <span className="w-6 text-center text-[12px] font-bold flex-shrink-0" style={{ color: rc || 'rgba(255,255,255,0.4)' }}>
+        <span className="w-6 text-center text-[13px] font-bold flex-shrink-0" style={{ color: rc || 'var(--mu)' }}>
           {e.rank <= 3 ? ['🥇', '🥈', '🥉'][e.rank - 1] : e.rank}
         </span>
-        <span className="flex-1 min-w-0 truncate text-[13px] text-white/85">{e.name}{mine && <span className="text-teal text-[11px]"> · you</span>}</span>
-        {e.manual && <span className="text-[9px] uppercase text-white/30 tracking-wide">manual</span>}
+        <span className="flex-1 min-w-0 truncate text-[13px] text-bank-tx">{e.name}{mine && <span className="text-bank-gold-tx text-[13px]"> · you</span>}</span>
+        {e.manual && <span className="text-[12px] uppercase text-bank-fa tracking-wide">manual</span>}
         {e.earned && (
-          <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full"
-            style={{ color: '#00b894', border: '1px solid #00b89455' }}>🎉 Earned</span>
+          <span className="text-[12px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full"
+            style={{ color: POS, border: '1px solid rgba(169,196,178,0.45)' }}>🎉 Earned</span>
         )}
-        <span className="text-[13px] font-bold text-white whitespace-nowrap">
+        {/* The viewer's own score is the one gold number on this page. */}
+        <span className="text-[13px] font-bold whitespace-nowrap tabular-nums" style={{ color: mine ? 'var(--gold-tx)' : 'var(--tx)' }}>
           {fmtScore(e.score, metric, perRep)}
           {perRep
-            ? (!e.manual && <span className="text-white/40 font-normal text-[11px]"> · {fmtScore(e.total, metric)} ÷ {e.count} rep{e.count === 1 ? '' : 's'}</span>)
-            : (metric === 'deals' && e.revenue > 0 && <span className="text-white/40 font-normal text-[11px]"> · {fmt(e.revenue)}</span>)}
+            ? (!e.manual && <span className="text-bank-mu font-normal text-[13px]"> · {fmtScore(e.total, metric)} ÷ {e.count} rep{e.count === 1 ? '' : 's'}</span>)
+            : (metric === 'deals' && e.revenue > 0 && <span className="text-bank-mu font-normal text-[13px]"> · {fmt(e.revenue)}</span>)}
         </span>
-        {clickable && <ChevronDown size={12} className={`text-white/25 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />}
+        {clickable && <ChevronDown size={12} className={`text-bank-fa flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />}
       </div>
       {hasTarget && (
         <div className="px-3 pb-2 -mt-0.5 flex items-center gap-2">
           <span className="w-6 flex-shrink-0" />
-          <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: '#ffffff12' }}>
+          <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--raise)' }}>
             <div className="h-full rounded-full transition-all"
-              style={{ width: `${(e.progress || 0) * 100}%`, background: e.earned ? '#00b894' : '#2dd4bf' }} />
+              style={{ width: `${(e.progress || 0) * 100}%`, background: e.earned ? POS : 'var(--tx)' }} />
           </div>
-          <span className="text-[10px] text-white/30 whitespace-nowrap">of {fmtScore(e.target, metric, perRep)}</span>
+          <span className="text-[13px] text-bank-mu whitespace-nowrap">of {fmtScore(e.target, metric, perRep)}</span>
         </div>
       )}
       {open && (
-        <div className="mx-3 mb-2 rounded-lg p-2" style={{ background: '#141414', border: '1px solid #262626' }}>
+        <div className="mx-3 mb-2 p-2" style={WELL}>
           {entryDeals.length === 0 ? (
-            <p className="text-[11px] text-white/30 px-1 py-1.5">No deals in this window.</p>
+            <p className="text-[13px] text-bank-mu px-1 py-1.5">No deals in this window.</p>
           ) : (
             <>
-              <div className="flex items-center justify-between px-1 pb-1.5 mb-1 border-b border-white/5 text-[9px] font-bold uppercase tracking-wider text-white/30">
+              <div className="flex items-center justify-between px-1 pb-1.5 mb-1 border-b border-bank-line text-[13px] font-bold uppercase tracking-wide text-bank-fa">
                 <span>{counted} deal{counted === 1 ? '' : 's'} counted</span>
                 <span>Counts toward score</span>
               </div>
@@ -103,19 +109,19 @@ function StandRow({ e, comp, deals, users, canManage, mine, teamCtx, onToggleCom
                 const dead = canceled || excluded || hidden
                 return (
                   <div key={deal.id} className={`px-1 py-1 ${dead ? 'opacity-60' : ''}`}>
-                    <div className="flex items-center gap-2 text-[11px]">
-                      <span className={`flex-1 min-w-0 truncate ${dead ? 'line-through text-white/40' : 'text-white/75'}`}>{deal.deal_name || '—'}</span>
-                      {canceled && <span className="text-[8px] font-bold uppercase tracking-wide text-red-400 whitespace-nowrap">canceled</span>}
-                      {hidden && !canceled && <span className="text-[8px] font-bold uppercase tracking-wide text-white/40 whitespace-nowrap">hidden</span>}
+                    <div className="flex items-center gap-2 text-[13px]">
+                      <span className={`flex-1 min-w-0 truncate ${dead ? 'line-through text-bank-fa' : 'text-bank-tx'}`}>{deal.deal_name || '—'}</span>
+                      {canceled && <span className="text-[12px] font-bold uppercase tracking-wide whitespace-nowrap" style={{ color: NEG }}>canceled</span>}
+                      {hidden && !canceled && <span className="text-[12px] font-bold uppercase tracking-wide text-bank-fa whitespace-nowrap">hidden</span>}
                       {excluded && !canceled && !hidden && (
-                        <span className="text-[8px] font-bold uppercase tracking-wide text-amber-300 whitespace-nowrap"
+                        <span className="text-[12px] font-bold uppercase tracking-wide whitespace-nowrap" style={{ color: WARN }}
                           title={deal.comp_excluded_note || 'Pulled out of every competition'}>excluded</span>
                       )}
-                      {credit !== 1 && <span className={`whitespace-nowrap ${dead ? 'text-white/25' : 'text-white/30'}`}>{Math.round(credit * 100)}%</span>}
+                      {credit !== 1 && <span className="whitespace-nowrap text-bank-fa">{Math.round(credit * 100)}%</span>}
                       {metric === 'deals' && (
-                        <span className={`whitespace-nowrap ${dead ? 'line-through text-white/25' : 'text-white/40'}`}>{fmt(Number(deal.baseline_revenue) || 0)}</span>
+                        <span className={`whitespace-nowrap ${dead ? 'line-through text-bank-fa' : 'text-bank-mu'}`}>{fmt(Number(deal.baseline_revenue) || 0)}</span>
                       )}
-                      <span className={`font-semibold whitespace-nowrap w-20 text-right ${dead ? 'line-through text-red-400/60' : 'text-white/80'}`}>
+                      <span className={`font-semibold whitespace-nowrap w-20 text-right tabular-nums ${dead ? 'line-through' : 'text-bank-tx'}`} style={dead ? { color: NEG, opacity: 0.7 } : undefined}>
                         {fmtScore(dead ? value * credit : contribution, metric)}
                       </span>
                       {/* Exclude / put back — this is where the need shows up
@@ -123,19 +129,18 @@ function StandRow({ e, comp, deals, users, canManage, mine, teamCtx, onToggleCom
                           in the deal editor. Canceled/hidden deals already
                           count nowhere, so there is nothing to exclude. */}
                       {canManage && onToggleComp && !canceled && !hidden ? (
-                        <button
+                        <IconButton
                           onClick={(ev) => { ev.stopPropagation(); onToggleComp(deal) }}
                           title={excluded
                             ? 'Put this deal back into every competition'
                             : 'Exclude this deal from every competition (it still pays commission)'}
-                          className={`p-1 rounded flex-shrink-0 transition-colors ${excluded
-                            ? 'text-amber-300 hover:bg-amber-300/10'
-                            : 'text-white/20 hover:text-amber-300 hover:bg-amber-300/10'}`}>
+                          aria-label={excluded ? 'Put this deal back into every competition' : 'Exclude this deal from every competition'}
+                          tone={excluded ? WARN : undefined} className="flex-shrink-0 md:!p-1">
                           <Ban size={12} />
-                        </button>
+                        </IconButton>
                       ) : <span className="w-[22px] flex-shrink-0" />}
                     </div>
-                    <p className="text-[10px] text-white/30 truncate">
+                    <p className="text-[13px] text-bank-fa truncate">
                       Set: {personName(deal.setter, deal.setter_id)} · Closed: {personName(deal.closer, deal.closer_id)}
                       {' '}· Sold {fmtDate(deal.sale_date)} · Install {fmtDate(deal.install_date)}
                       {excluded && deal.comp_excluded_note ? ` · excluded: ${deal.comp_excluded_note}` : ''}
@@ -143,13 +148,13 @@ function StandRow({ e, comp, deals, users, canManage, mine, teamCtx, onToggleCom
                   </div>
                 )
               })}
-              <div className="flex items-center justify-between px-1 pt-1.5 mt-1 border-t border-white/5 text-[11px]">
-                <span className="font-bold text-white/50 uppercase tracking-wider text-[9px]">{perRep ? 'Average' : 'Total'}</span>
-                <span className="font-bold text-teal">
-                  {perRep && <span className="text-white/50 font-semibold">{fmtScore(e.total, metric)} ÷ {e.count} rep{e.count === 1 ? '' : 's'} = </span>}
+              <div className="flex items-center justify-between px-1 pt-1.5 mt-1 border-t border-bank-line text-[13px]">
+                <span className="font-bold text-bank-fa uppercase tracking-wide text-[13px]">{perRep ? 'Average' : 'Total'}</span>
+                <span className="font-bold text-bank-tx tabular-nums">
+                  {perRep && <span className="text-bank-mu font-semibold">{fmtScore(e.total, metric)} ÷ {e.count} rep{e.count === 1 ? '' : 's'} = </span>}
                   {fmtScore(e.score, metric, perRep)}
                   {!perRep && metric === 'deals' && (
-                    <span className="text-white/50 font-semibold"> · {fmt(entryDeals.reduce((s, x) => s + ((x.canceled || x.excluded || x.hidden) ? 0 : (Number(x.deal.baseline_revenue) || 0) * x.credit), 0))}</span>
+                    <span className="text-bank-mu font-semibold"> · {fmt(entryDeals.reduce((s, x) => s + ((x.canceled || x.excluded || x.hidden) ? 0 : (Number(x.deal.baseline_revenue) || 0) * x.credit), 0))}</span>
                   )}
                 </span>
               </div>
@@ -161,7 +166,7 @@ function StandRow({ e, comp, deals, users, canManage, mine, teamCtx, onToggleCom
   )
 }
 
-const ROUND_ST = { active: '#00b894', upcoming: '#fdcb6e', ended: '#94a3b8' }
+const ROUND_ST = { active: '#a9c4b2', upcoming: '#d2a074', ended: '#8c8a84' }
 
 function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, teamCtx, onEdit, onDelete, onExport, onCopy, onRoundWinner, onToggleComp, copied, exporting }) {
   // EVERY entrant is listed by default (per Keaton: "show me everyone's scores
@@ -210,18 +215,19 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, te
     ? roundWinner(comp, selRound, deals, users, opts) : null
 
   return (
-    <div className="rounded-xl overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+    <Card padded={false}>
       <div className="p-4">
-        <div className="flex items-start justify-between gap-3">
+        {/* Phones stack the manage icons under the title so the copy keeps its width. */}
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-2 md:gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="text-[15px] font-bold text-white truncate">{comp.name}</h3>
-              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap" style={{ color: st.color, border: `1px solid ${st.color}40` }}>{st.label}</span>
+              <h3 className="text-[15px] font-bold text-bank-tx truncate">{comp.name}</h3>
+              <span className="text-[12px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap" style={{ color: st.color, border: `1px solid ${st.color}66` }}>{st.label}</span>
             </div>
-            <p className="text-[11px] text-white/40 mt-0.5">
+            <p className="text-[13px] text-bank-mu mt-0.5">
               {typeLabel(comp.type)} · {metricLabel(comp.metric)} · {fmtRange(comp.start_date, comp.end_date)}
             </p>
-            <p className="text-[10px] text-white/30 mt-0.5">
+            <p className="text-[13px] text-bank-fa mt-0.5">
               {creditLabel(comp.credit_mode)}
               {comp.goal_mode === 'target' && comp.goal_target ? ` · Goal ${fmtScore(Number(comp.goal_target), comp.metric, perRepComp(comp))}` : ''}
               {perRepComp(comp) && (comp.excluded_ids || []).length > 0 && (
@@ -230,14 +236,14 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, te
                 </span>
               )}
             </p>
-            {comp.description && <p className="text-[12px] text-white/55 mt-1.5">{comp.description}</p>}
+            {comp.description && <p className="text-[13px] text-bank-mu mt-1.5">{comp.description}</p>}
           </div>
           {canManage && (
-            <div className="flex items-center gap-1 flex-shrink-0">
-              <button onClick={() => onCopy(comp)} disabled={exporting} className={`p-1.5 rounded transition-colors disabled:opacity-40 ${copied ? 'text-emerald-400' : 'text-white/30 hover:text-teal hover:bg-teal/10'}`} title="Copy standings image to clipboard (paste into Canva)">{copied ? <Check size={13} /> : <Copy size={13} />}</button>
-              <button onClick={() => onExport(comp)} disabled={exporting} className="p-1.5 rounded text-white/30 hover:text-teal hover:bg-teal/10 transition-colors disabled:opacity-40" title="Download standings as an image (PNG)"><Download size={13} /></button>
-              <button onClick={() => onEdit(comp)} className="p-1.5 rounded text-white/30 hover:text-teal hover:bg-teal/10 transition-colors" title="Edit"><Pencil size={13} /></button>
-              <button onClick={() => onDelete(comp)} className="p-1.5 rounded text-white/30 hover:text-red-400 hover:bg-red-500/10 transition-colors" title="Delete"><Trash2 size={13} /></button>
+            <div className="flex items-center gap-0.5 flex-shrink-0 -ml-2 md:ml-0">
+              <IconButton onClick={() => onCopy(comp)} disabled={exporting} tone={copied ? POS : undefined} title="Copy standings image to clipboard (paste into Canva)" aria-label="Copy standings image">{copied ? <Check size={14} /> : <Copy size={14} />}</IconButton>
+              <IconButton onClick={() => onExport(comp)} disabled={exporting} title="Download standings as an image (PNG)" aria-label="Download standings image"><Download size={14} /></IconButton>
+              <IconButton onClick={() => onEdit(comp)} title="Edit" aria-label="Edit competition"><Pencil size={14} /></IconButton>
+              <IconButton onClick={() => onDelete(comp)} title="Delete" aria-label="Delete competition" className="hover:!text-bank-neg"><Trash2 size={14} /></IconButton>
             </div>
           )}
         </div>
@@ -246,9 +252,9 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, te
         {rounds.length > 0 && (
           <div className="mt-3">
             <div className="flex flex-wrap gap-1.5">
-              <button onClick={() => setRoundSel('overall')}
-                className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors ${sel === 'overall' ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}
-                style={sel === 'overall' ? undefined : { border: '1px solid #333' }}>
+              <button onClick={() => setRoundSel('overall')} aria-pressed={sel === 'overall'}
+                className={`px-2.5 py-1 min-h-[44px] md:min-h-0 rounded-full text-[13px] font-semibold transition-colors ${sel === 'overall' ? 'text-bank-gold-tx' : 'text-bank-mu hover:text-bank-tx'}`}
+                style={sel === 'overall' ? GOLD_WASH : { border: '1px solid var(--line)' }}>
                 Overall
               </button>
               {rounds.map(r => {
@@ -256,9 +262,9 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, te
                 const w = rs === 'ended' ? roundWinner(comp, r, deals, users, opts) : null
                 const on = sel === r.id
                 return (
-                  <button key={r.id} onClick={() => setRoundSel(r.id)}
-                    className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors ${on ? 'bg-teal text-dark' : 'text-white/50 hover:text-white'}`}
-                    style={on ? undefined : { border: `1px solid ${ROUND_ST[rs]}40` }}
+                  <button key={r.id} onClick={() => setRoundSel(r.id)} aria-pressed={on}
+                    className={`px-2.5 py-1 min-h-[44px] md:min-h-0 rounded-full text-[13px] font-semibold transition-colors ${on ? 'text-bank-gold-tx' : 'text-bank-mu hover:text-bank-tx'}`}
+                    style={on ? GOLD_WASH : { border: `1px solid ${ROUND_ST[rs]}66` }}
                     title={`${fmtRange(r.start, r.end)}${r.prize ? ` · ${r.prize}` : ''}`}>
                     {r.name}{rs === 'active' && !on ? ' ·' : ''}{w ? ` 🏆 ${w.name.split(' ')[0]}` : ''}
                   </button>
@@ -266,24 +272,23 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, te
               })}
             </div>
             {selRound && (
-              <div className="mt-2 rounded-lg px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]"
-                style={{ background: '#171717', border: '1px solid #262626' }}>
-                <span className="font-bold text-white">{selRound.name}</span>
-                <span className="text-white/40">{fmtRange(selRound.start, selRound.end)}</span>
+              <div className="mt-2 px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]" style={WELL}>
+                <span className="font-bold text-bank-tx">{selRound.name}</span>
+                <span className="text-bank-mu">{fmtRange(selRound.start, selRound.end)}</span>
                 <span className="font-semibold" style={{ color: ROUND_ST[roundStatus(selRound, todayISO())] }}>
                   {STATUS[roundStatus(selRound, todayISO())].label}
                 </span>
-                {selRound.prize && <span className="text-amber-300">🎁 {selRound.prize}</span>}
+                {selRound.prize && <span style={{ color: WARN }}>🎁 {selRound.prize}</span>}
                 {selWinner && (
-                  <span className="text-white/70">🏆 <span className="font-semibold text-white">{selWinner.name}</span>
-                    {selWinner.overridden && <span className="text-white/30"> (set by admin)</span>}
+                  <span className="text-bank-mu">🏆 <span className="font-semibold text-bank-tx">{selWinner.name}</span>
+                    {selWinner.overridden && <span className="text-bank-fa"> (set by admin)</span>}
                   </span>
                 )}
                 {canManage && selRound && roundStatus(selRound, todayISO()) === 'ended' && (
                   <select value={selRound.winner_id ?? ''}
                     onChange={e => onRoundWinner(comp, selRound.id, e.target.value || null)}
-                    style={{ background: '#1e1e1e', border: '1px solid #333' }}
-                    className="ml-auto px-2 py-1 rounded-lg text-[11px] text-white focus:outline-none"
+                    style={SURFACE.raise} aria-label="Round winner"
+                    className="ml-auto px-2 py-1 min-h-[44px] md:min-h-0 rounded-lg text-[13px] text-bank-tx focus:outline-none"
                     title="Override the round winner (ties, adjustments)">
                     <option value="">Winner: auto</option>
                     {standings.map(s => <option key={s.id} value={s.id}>Winner: {s.name}</option>)}
@@ -297,22 +302,22 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, te
         {/* Standings */}
         <div className="mt-3 space-y-0.5">
           {standings.length === 0 ? (
-            <p className="text-[12px] text-white/30 px-3 py-2">No participants yet.</p>
+            <p className="text-[13px] text-bank-mu px-3 py-2">No participants yet.</p>
           ) : (
             top.map(e => <StandRow key={e.id} e={e} comp={dispComp} deals={deals} users={users} canManage={canManage} mine={isMine(e)} teamCtx={teamCtx} onToggleComp={onToggleComp} />)
           )}
           {/* If the viewer is outside the visible top and not shown, pin their row */}
           {!open && myEntry && myEntry.rank > 5 && (
             <>
-              <p className="text-center text-white/20 text-[11px]">···</p>
+              <p className="text-center text-bank-fa text-[13px]">···</p>
               <StandRow e={myEntry} comp={dispComp} deals={deals} users={users} canManage={canManage} mine teamCtx={teamCtx} onToggleComp={onToggleComp} />
             </>
           )}
         </div>
 
         {(standings.length > 5 || comp.rules) && (
-          <button onClick={() => setOpen(o => !o)}
-            className="mt-2 flex items-center gap-1 text-[11px] text-white/40 hover:text-white transition-colors">
+          <button onClick={() => setOpen(o => !o)} aria-expanded={open}
+            className="mt-2 flex items-center gap-1 text-[13px] text-bank-mu hover:text-bank-tx transition-colors min-h-[44px] md:min-h-0">
             <ChevronDown size={13} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
             {standings.length > 5
               ? (open ? 'Show top 5 only' : `Show all ${standings.length}`)
@@ -321,20 +326,20 @@ function CompetitionCard({ comp, deals, users, profileId, canManage, isAdmin, te
         )}
 
         {open && comp.rules && (
-          <div className="mt-3 rounded-lg p-3 text-[12px] text-white/60 leading-snug" style={{ background: '#171717', border: '1px solid #262626' }}>
-            <p className="text-[10px] font-bold uppercase tracking-wider text-white/30 mb-1">Rules</p>
+          <div className="mt-3 p-3 text-[13px] text-bank-mu leading-snug" style={WELL}>
+            <p className="text-[13px] font-bold uppercase tracking-wide text-bank-fa mb-1">Rules</p>
             {comp.rules}
           </div>
         )}
       </div>
-    </div>
+    </Card>
   )
 }
 
 // A clean, share-ready render of one competition's standings — same look as the
 // live card, minus the admin buttons / drill-downs — captured to a PNG for
 // dropping into Canva, slides, etc. Rendered off-screen only while exporting.
-const exHeadCol  = 'rgba(255,255,255,0.3)'
+const exHeadCol  = '#8c8a84'
 function CompetitionExportCard({ comp, deals, users, ghostIds, teamCtx }) {
   // Hide ghost names (this image is a team-facing artifact, like what non-admins see).
   const standings = competitionStandings(comp, deals, users, { hiddenIds: ghostIds, teamCtx })
@@ -342,15 +347,15 @@ function CompetitionExportCard({ comp, deals, users, ghostIds, teamCtx }) {
   const status = competitionStatus(comp, todayISO())
   const st = STATUS[status]
   return (
-    <div style={{ width: 880, background: '#1a1a1a', padding: 28, fontFamily: 'Inter, Arial, sans-serif' }}>
-      <div style={{ background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 16, padding: 24 }}>
+    <div style={{ width: 880, background: '#131416', padding: 28, fontFamily: 'Inter, Arial, sans-serif' }}>
+      <div style={{ background: '#1c1e21', border: '1px solid #2c2f33', borderRadius: 16, padding: 24 }}>
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
           <span style={{ fontSize: 22 }}>🏆</span>
-          <h3 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>{comp.name}</h3>
+          <h3 style={{ fontSize: 22, fontWeight: 800, color: '#ede7da', margin: 0 }}>{comp.name}</h3>
           <span style={{ fontSize: 11, fontWeight: 600, color: st.color, border: `1px solid ${st.color}40`, borderRadius: 999, padding: '2px 10px' }}>{st.label}</span>
         </div>
-        <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', margin: '2px 0 0' }}>
+        <p style={{ fontSize: 13, color: '#a19e97', margin: '2px 0 0' }}>
           {typeLabel(comp.type)} · {metricLabel(comp.metric)} · {fmtRange(comp.start_date, comp.end_date)}
         </p>
         <p style={{ fontSize: 11, color: exHeadCol, margin: '2px 0 0' }}>
@@ -358,7 +363,7 @@ function CompetitionExportCard({ comp, deals, users, ghostIds, teamCtx }) {
           {comp.goal_mode === 'target' && comp.goal_target ? ` · Goal ${fmtScore(Number(comp.goal_target), comp.metric, perRep)}` : ''}
           {perRep && (comp.excluded_ids || []).length > 0 ? ` · ${comp.excluded_ids.length} rep${comp.excluded_ids.length === 1 ? '' : 's'} excluded` : ''}
         </p>
-        {comp.description && <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.55)', margin: '8px 0 0' }}>{comp.description}</p>}
+        {comp.description && <p style={{ fontSize: 13, color: '#a19e97', margin: '8px 0 0' }}>{comp.description}</p>}
 
         {/* Standings (full) */}
         <div style={{ marginTop: 16 }}>
@@ -369,24 +374,24 @@ function CompetitionExportCard({ comp, deals, users, ghostIds, teamCtx }) {
             const hasTarget = e.target > 0
             return (
               <div key={e.id} style={{ marginBottom: 6 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 12px', borderRadius: 8, background: e.rank <= 3 && rc ? rc + '14' : '#181818' }}>
-                  <span style={{ width: 28, textAlign: 'center', fontSize: 15, fontWeight: 700, color: rc || 'rgba(255,255,255,0.45)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 12px', borderRadius: 8, background: e.rank <= 3 ? '#23262a' : '#131416' }}>
+                  <span style={{ width: 28, textAlign: 'center', fontSize: 15, fontWeight: 700, color: rc || '#a19e97' }}>
                     {e.rank <= 3 ? ['🥇', '🥈', '🥉'][e.rank - 1] : e.rank}
                   </span>
-                  <span style={{ flex: 1, fontSize: 14, color: 'rgba(255,255,255,0.9)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.name}</span>
-                  {e.earned && <span style={{ fontSize: 10, fontWeight: 700, color: '#00b894', border: '1px solid #00b89455', borderRadius: 999, padding: '2px 8px' }}>🎉 Earned</span>}
-                  <span style={{ fontSize: 14, fontWeight: 700, color: '#fff', whiteSpace: 'nowrap' }}>
+                  <span style={{ flex: 1, fontSize: 14, color: '#ede7da', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.name}</span>
+                  {e.earned && <span style={{ fontSize: 11, fontWeight: 700, color: '#a9c4b2', border: '1px solid #a9c4b2', borderRadius: 999, padding: '2px 8px' }}>🎉 Earned</span>}
+                  <span style={{ fontSize: 14, fontWeight: 700, color: '#ede7da', whiteSpace: 'nowrap' }}>
                     {fmtScore(e.score, comp.metric, perRep)}
                     {perRep
-                      ? (!e.manual && <span style={{ color: 'rgba(255,255,255,0.45)', fontWeight: 400, fontSize: 12 }}> · {fmtScore(e.total, comp.metric)} ÷ {e.count} rep{e.count === 1 ? '' : 's'}</span>)
-                      : (comp.metric === 'deals' && e.revenue > 0 && <span style={{ color: 'rgba(255,255,255,0.45)', fontWeight: 400, fontSize: 12 }}> · {fmt(e.revenue)}</span>)}
+                      ? (!e.manual && <span style={{ color: '#a19e97', fontWeight: 400, fontSize: 12 }}> · {fmtScore(e.total, comp.metric)} ÷ {e.count} rep{e.count === 1 ? '' : 's'}</span>)
+                      : (comp.metric === 'deals' && e.revenue > 0 && <span style={{ color: '#a19e97', fontWeight: 400, fontSize: 12 }}> · {fmt(e.revenue)}</span>)}
                   </span>
                 </div>
                 {hasTarget && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 12px 6px' }}>
                     <span style={{ width: 28, flexShrink: 0 }} />
-                    <div style={{ flex: 1, height: 6, borderRadius: 999, background: '#ffffff12', overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${Math.min((e.progress || 0) * 100, 100)}%`, background: e.earned ? '#00b894' : '#2dd4bf', borderRadius: 999 }} />
+                    <div style={{ flex: 1, height: 6, borderRadius: 999, background: '#23262a', overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${Math.min((e.progress || 0) * 100, 100)}%`, background: e.earned ? '#a9c4b2' : '#ede7da', borderRadius: 999 }} />
                     </div>
                     <span style={{ fontSize: 10, color: exHeadCol, whiteSpace: 'nowrap' }}>of {fmtScore(e.target, comp.metric, perRep)}</span>
                   </div>
@@ -397,8 +402,8 @@ function CompetitionExportCard({ comp, deals, users, ghostIds, teamCtx }) {
         </div>
 
         {/* Footer / branding */}
-        <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid #262626', display: 'flex', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: '#00b894', letterSpacing: 0.5 }}>TURF TIME</span>
+        <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid #2c2f33', display: 'flex', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#bfa46c', letterSpacing: 0.5 }}>TURF TIME</span>
           <span style={{ fontSize: 11, color: exHeadCol }}>{format(new Date(), 'MMM d, yyyy')}</span>
         </div>
       </div>
@@ -408,7 +413,7 @@ function CompetitionExportCard({ comp, deals, users, ghostIds, teamCtx }) {
 
 const slugName = (s) => String(s || 'competition').replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '') || 'competition'
 
-// One record tile: value (gold = company, teal = rep), holder, when — plus a
+// One record tile: value (ivory; the `teal` prop is the legacy rep flag), holder, when — plus a
 // live chip when the current period is chasing (watch) or beating (new) it.
 function RecordTile({ label, value, holder, when, teal, rec, metric }) {
   const fmtVal = (v) => metric === 'deals' ? `${v} deal${v === 1 ? '' : 's'}` : fmt(v)
@@ -424,16 +429,16 @@ function RecordTile({ label, value, holder, when, teal, rec, metric }) {
       ? `🔥 RECORD WATCH — ${chaser}${fmtVal(rec.current.value)} so far`
       : null
   return (
-    <div className="rounded-lg p-3 relative" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
-      <p className="text-[8.5px] font-bold uppercase tracking-widest text-white/30 pr-2">{label}</p>
-      <p className="text-[18px] font-extrabold mt-1 leading-tight" style={{ color: teal ? '#00b894' : '#fbbf24' }}>
+    <div className="rounded-xl p-3 relative" style={SURFACE.raise}>
+      <p className="text-[13px] font-semibold uppercase tracking-wide text-bank-fa pr-2 leading-tight">{label}</p>
+      <p className={`text-[18px] font-extrabold mt-1 leading-tight tabular-nums text-bank-tx`} data-rep={teal ? 1 : undefined}>
         {value != null ? fmtVal(value) : '—'}
       </p>
-      {holder && <p className="text-[11px] text-white/55 mt-0.5"><span className="font-semibold text-white/85">{holder}</span></p>}
-      {when && <p className="text-[10px] text-white/30 mt-0.5">{when}</p>}
+      {holder && <p className="text-[13px] text-bank-mu mt-0.5"><span className="font-semibold text-bank-tx">{holder}</span></p>}
+      {when && <p className="text-[13px] text-bank-fa mt-0.5">{when}</p>}
       {chip && (
-        <p className="text-[8.5px] font-extrabold tracking-wide mt-1.5 px-2 py-0.5 rounded-full inline-block"
-          style={{ color: '#fbbf24', border: '1px solid rgba(251,191,36,0.45)', background: 'rgba(251,191,36,0.08)' }}>
+        <p className="text-[12px] font-extrabold tracking-wide mt-1.5 px-2 py-0.5 rounded-full inline-block"
+          style={{ color: WARN, border: '1px solid rgba(210,160,116,0.45)', background: 'rgba(210,160,116,0.10)' }}>
           {chip}
         </p>
       )}
@@ -449,22 +454,21 @@ function PersonalBestRow({ r }) {
   const isNew = r.status === 'new'
   const val = (v) => (r.unit === 'deals' ? `${v} deal${v === 1 ? '' : 's'}` : fmt(v))
   return (
-    <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg"
-      style={{
-        background: isNew ? 'rgba(251,191,36,0.07)' : '#242424',
-        border: `1px solid ${isNew ? 'rgba(251,191,36,0.4)' : '#2e2e2e'}`,
-      }}>
+    <div className="flex items-center gap-2.5 px-3 py-2 rounded-xl"
+      style={isNew
+        ? { background: 'rgba(210,160,116,0.10)', border: '1px solid rgba(210,160,116,0.4)' }
+        : SURFACE.raise}>
       <span className="text-[13px] flex-shrink-0">{isNew ? '\u{1F525}' : '\u2191'}</span>
       <span className="min-w-0 flex-1">
-        <span className="block text-[12.5px] font-semibold text-white truncate">{r.name}</span>
-        <span className="block text-[10px] text-white/35 truncate">
+        <span className="block text-[13px] font-semibold text-bank-tx truncate">{r.name}</span>
+        <span className="block text-[13px] text-bank-mu truncate">
           {r.title} · {r.periodLabel}
         </span>
       </span>
       <span className="text-right flex-shrink-0">
         <span className="block text-[13px] font-extrabold tabular-nums"
-          style={{ color: isNew ? '#fbbf24' : '#00b894' }}>{val(r.value)}</span>
-        <span className="block text-[10px] text-white/35 tabular-nums">
+          style={{ color: isNew ? WARN : 'var(--tx)' }}>{val(r.value)}</span>
+        <span className="block text-[13px] text-bank-mu tabular-nums">
           {isNew ? `past ${val(r.best)} · ${r.bestLabel}`
             : r.value >= r.best ? `matched ${val(r.best)} · ${r.bestLabel}`
             : `${Math.round(r.pct * 100)}% of ${val(r.best)} · ${r.bestLabel}`}
@@ -608,7 +612,7 @@ function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
   async function copyImage() {
     const node = cardRef.current
     if (!node) return
-    const opts = { pixelRatio: 2, cacheBust: true, backgroundColor: '#1e1e1e',
+    const opts = { pixelRatio: 2, cacheBust: true, backgroundColor: '#1c1e21',
                    filter: (n) => !(n.dataset && n.dataset.noExport) }
     try {
       const blob = await toBlob(node, opts)
@@ -629,32 +633,26 @@ function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
 
   if (!hasAny) return null
   return (
-    <div ref={cardRef} className="mt-6 rounded-xl p-4 md:p-5" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
+    <div ref={cardRef} className="mt-6 rounded-2xl p-4 md:p-5" style={SURFACE.card}>
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="flex items-baseline gap-2.5 flex-wrap">
-          <h2 className="text-[15px] font-extrabold text-white">📖 Record Book</h2>
-          <p className="text-[11px] text-white/35">All-time bests · completed periods only · since {dataStartDate ? format(new Date(dataStartDate + 'T12:00:00'), 'MMMM yyyy') : 'the beginning'}</p>
+          <h2 className="text-[15px] font-extrabold text-bank-tx">📖 Record Book</h2>
+          <p className="text-[13px] text-bank-mu">All-time bests · completed periods only · since {dataStartDate ? format(new Date(dataStartDate + 'T12:00:00'), 'MMMM yyyy') : 'the beginning'}</p>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0" data-no-export="1">
-          <button onClick={copyImage}
-            title="Copy the card as a picture — exactly what you see, chips and all. Best for a slide."
-            className={`px-2.5 py-1.5 rounded-lg text-[11.5px] font-semibold inline-flex items-center gap-1.5 transition-colors ${
-              copiedImg ? 'text-emerald-400' : 'text-white/45 hover:text-teal'}`}
-            style={{ background: '#242424', border: '1px solid #333' }}>
+          <SecondaryButton onClick={copyImage} active={copiedImg}
+            title="Copy the card as a picture — exactly what you see, chips and all. Best for a slide.">
             {copiedImg ? <Check size={12} /> : <ImageIcon size={12} />}{copiedImg ? 'Copied' : 'Copy image'}
-          </button>
-          <button onClick={copyBook}
-            title="Copy as a table you can restyle — pastes into Canva, Sheets or Docs as editable text"
-            className={`px-2.5 py-1.5 rounded-lg text-[11.5px] font-semibold inline-flex items-center gap-1.5 transition-colors ${
-              copied ? 'text-emerald-400' : 'text-white/45 hover:text-teal'}`}
-            style={{ background: '#242424', border: '1px solid #333' }}>
+          </SecondaryButton>
+          <SecondaryButton onClick={copyBook} active={copied}
+            title="Copy as a table you can restyle — pastes into Canva, Sheets or Docs as editable text">
             {copied ? <Check size={12} /> : <Copy size={12} />}{copied ? 'Copied' : 'Copy table'}
-          </button>
+          </SecondaryButton>
         </div>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-3">
         <div>
-          <p className="text-[9px] font-bold uppercase tracking-widest text-white/30 mb-2">Company records</p>
+          <p className="text-[13px] font-bold uppercase tracking-wide text-bank-fa mb-2">Company records</p>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5">
             <RecordTile label="Biggest Month — Revenue" value={c.revMonth.best?.value} when={c.revMonth.best?.label} rec={c.revMonth} />
             <RecordTile label="Biggest Week — Revenue"  value={c.revWeek.best?.value}  when={c.revWeek.best?.label}  rec={c.revWeek} />
@@ -665,7 +663,7 @@ function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
           </div>
         </div>
         <div>
-          <p className="text-[9px] font-bold uppercase tracking-widest text-white/30 mb-2">Rep records</p>
+          <p className="text-[13px] font-bold uppercase tracking-wide text-bank-fa mb-2">Rep records</p>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5">
             <RecordTile teal label="Biggest Rep Month" value={r.revMonth.best?.value} holder={r.revMonth.best?.holderName} when={r.revMonth.best?.label} rec={r.revMonth} />
             <RecordTile teal label="Biggest Rep Week"  value={r.revWeek.best?.value}  holder={r.revWeek.best?.holderName}  when={r.revWeek.best?.label}  rec={r.revWeek} />
@@ -679,7 +677,7 @@ function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
 
       {t && Object.values(t).some(x => x.best) && (
         <div className="mt-4">
-          <p className="text-[9px] font-bold uppercase tracking-widest text-white/30 mb-2">Team records</p>
+          <p className="text-[13px] font-bold uppercase tracking-wide text-bank-fa mb-2">Team records</p>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5">
             <RecordTile label="Biggest Team Month" value={t.revMonth.best?.value} holder={t.revMonth.best?.holderName} when={t.revMonth.best?.label} rec={t.revMonth} />
             <RecordTile label="Biggest Team Week"  value={t.revWeek.best?.value}  holder={t.revWeek.best?.holderName}  when={t.revWeek.best?.label}  rec={t.revWeek} />
@@ -699,31 +697,24 @@ function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
       {(r.revMonth?.best || pbWatch.length > 0) && (
         <div className="mt-4">
           <div className="flex items-center gap-2 mb-2 flex-wrap">
-            <p className="text-[9px] font-bold uppercase tracking-widest text-white/30">Personal bests in play</p>
+            <p className="text-[13px] font-bold uppercase tracking-wide text-bank-fa">Personal bests in play</p>
             {/* Period picker. Lives here and NOT on the record tiles above:
                 those are all-time bests by definition, and narrowing them to
                 one month turns "biggest rep month ever" into "September's
                 top rep", which the Dashboard already does properly. */}
-            <div className="flex items-center gap-1" data-no-export="1">
+            <PillGroup data-no-export="1">
               {Object.entries(PB_PERIODS).map(([k, v]) => (
-                <button key={k} onClick={() => { setPbPeriod(k); setPbBack(0) }}
-                  className={`px-2 py-0.5 rounded-full text-[10px] transition-colors ${pbPeriod === k
-                    ? 'bg-teal text-dark font-bold' : 'text-white/40 hover:text-white'}`}
-                  style={pbPeriod === k ? undefined : { border: '1px solid #3a3a3a' }}>
-                  {v.label}
-                </button>
+                <Pill key={k} active={pbPeriod === k} onClick={() => { setPbPeriod(k); setPbBack(0) }}>{v.label}</Pill>
               ))}
-            </div>
+            </PillGroup>
             {/* A stepper rather than "This / Last" — on Oct 5, "last month"
                 is September and the label should just say so. */}
             <div className="flex items-center gap-1 ml-0.5">
-              <button onClick={() => setPbBack(n => n + 1)} aria-label="Earlier" data-no-export="1"
-                className="w-5 h-5 rounded text-white/40 hover:text-white hover:bg-white/5 leading-none">‹</button>
-              <span className="text-[10.5px] font-semibold text-white/70 min-w-[92px] text-center">{pbLabel}</span>
-              <button onClick={() => setPbBack(n => Math.max(0, n - 1))} disabled={pbBack === 0} aria-label="Later" data-no-export="1"
-                className="w-5 h-5 rounded text-white/40 hover:text-white hover:bg-white/5 disabled:opacity-20 disabled:hover:bg-transparent leading-none">›</button>
+              <IconButton onClick={() => setPbBack(n => n + 1)} aria-label="Earlier" data-no-export="1" className="text-[16px] leading-none">‹</IconButton>
+              <span className="text-[13px] font-semibold text-bank-tx min-w-[92px] text-center">{pbLabel}</span>
+              <IconButton onClick={() => setPbBack(n => Math.max(0, n - 1))} disabled={pbBack === 0} aria-label="Later" data-no-export="1" className="text-[16px] leading-none">›</IconButton>
             </div>
-            <p className="text-[10px] text-white/25">
+            <p className="text-[13px] text-bank-fa">
               {pbWatch.length
                 ? `each rep against their own history · ${pbWatch.filter(x => x.status === 'new').length} set, ${pbWatch.filter(x => x.status === 'watch').length} closing in`
                 : 'each rep against their own history'}
@@ -734,7 +725,7 @@ function RecordBook({ deals, users, isAdmin, dataStartDate, teamCtx }) {
               {pbWatch.map(x => <PersonalBestRow key={x.id} r={x} />)}
             </div>
           ) : (
-            <p className="text-[11.5px] text-white/25 py-1.5">
+            <p className="text-[13px] text-bank-mu py-1.5">
               Nobody reached 85% of their own best in {pbLabel}.
             </p>
           )}
@@ -756,21 +747,21 @@ function PastCompRow(props) {
   )
   return (
     <div>
-      <button onClick={() => setExpand(e => !e)}
-        className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-left hover:bg-white/[0.03] transition-colors"
-        style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-        <Trophy size={14} className="text-white/25 flex-shrink-0" />
+      <button onClick={() => setExpand(e => !e)} aria-expanded={expand}
+        className="w-full flex items-center gap-3 px-3.5 py-2.5 min-h-[44px] rounded-xl text-left hover:bg-bank-raise transition-colors"
+        style={SURFACE.card}>
+        <Trophy size={14} className="text-bank-fa flex-shrink-0" />
         <span className="min-w-0 flex-1">
-          <span className="text-[13px] font-semibold text-white/85 truncate block">{comp.name}</span>
-          <span className="text-[10px] text-white/30">{typeLabel(comp.type)} · {fmtRange(comp.start_date, comp.end_date)}</span>
+          <span className="text-[13px] font-semibold text-bank-tx truncate block">{comp.name}</span>
+          <span className="text-[13px] text-bank-mu">{typeLabel(comp.type)} · {fmtRange(comp.start_date, comp.end_date)}</span>
         </span>
         {winner && winner.score > 0 && (
-          <span className="text-[12px] text-white/60 whitespace-nowrap">
-            🏆 <span className="font-semibold text-white/85">{winner.name}</span>
-            <span className="text-white/35"> · {fmtScore(winner.score, comp.metric, perRepComp(comp))}</span>
+          <span className="text-[13px] text-bank-mu whitespace-nowrap">
+            🏆 <span className="font-semibold text-bank-tx">{winner.name}</span>
+            <span className="text-bank-fa"> · {fmtScore(winner.score, comp.metric, perRepComp(comp))}</span>
           </span>
         )}
-        <ChevronDown size={13} className={`text-white/25 flex-shrink-0 transition-transform ${expand ? 'rotate-180' : ''}`} />
+        <ChevronDown size={14} className={`text-bank-fa flex-shrink-0 transition-transform ${expand ? 'rotate-180' : ''}`} />
       </button>
       {expand && <div className="mt-2"><CompetitionCard {...props} /></div>}
     </div>
@@ -961,42 +952,35 @@ export default function Competitions() {
   }
 
   return (
-    <div style={{ background: '#1a1a1a', color: '#fff', minHeight: '100%' }}>
-      <div className="mb-4 flex items-start justify-between gap-3">
+    <div style={{ color: 'var(--tx)', minHeight: '100%' }} className="max-w-[1400px] mx-auto">
+      <div className="mb-4 flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-lg md:text-xl font-bold text-white flex items-center gap-2"><Trophy size={18} className="text-teal" /> Competitions</h1>
-          <p className="text-[12px] text-white/40 mt-0.5">See how you stack up in the contests we're running.</p>
+          <h1 className="text-lg md:text-xl font-bold text-bank-tx flex items-center gap-2"><Trophy size={18} className="text-bank-mu" /> Competitions</h1>
+          <p className="text-[13px] text-bank-mu mt-0.5">See how you stack up in the contests we're running.</p>
         </div>
         {canManage && (
           <div className="flex items-center gap-2 flex-shrink-0">
             {sorted.length > 0 && (
-              <button onClick={exportAll} disabled={exporting}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-bold text-white/70 hover:text-white transition-colors disabled:opacity-50"
-                style={{ background: '#1e1e1e', border: '1px solid #2e2e2e' }}
+              <SecondaryButton onClick={exportAll} disabled={exporting}
                 title="Download a PNG of every competition's standings (one per slide)">
                 <Download size={15} /> {exporting ? 'Exporting…' : 'Export all'}
-              </button>
+              </SecondaryButton>
             )}
-            <button onClick={() => { setEditComp(null); setModal(true) }}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-bold text-dark bg-teal hover:bg-teal-dark transition-colors">
+            <PrimaryButton onClick={() => { setEditComp(null); setModal(true) }} className="px-3 py-2 min-h-[44px] md:min-h-0">
               <Plus size={15} /> New
-            </button>
+            </PrimaryButton>
           </div>
         )}
       </div>
 
       {loading ? (
-        <div className="py-16 text-center text-white/30 text-sm">Loading…</div>
+        <LoadingBlock text="Loading competitions…" />
       ) : sorted.length === 0 ? (
-        <div className="rounded-xl p-10 text-center text-white/40 text-[13px]" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-          No competitions yet.{canManage ? ' Click “New” to start one.' : ' Check back soon!'}
-        </div>
+        <Card padded={false}><EmptyBlock className="py-10">No competitions yet.{canManage ? ' Click “New” to start one.' : ' Check back soon!'}</EmptyBlock></Card>
       ) : (
         <>
           {liveComps.length === 0 ? (
-            <div className="rounded-xl p-8 text-center text-white/40 text-[13px]" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-              No active competitions right now.{canManage ? ' Click “New” to start one.' : ''}
-            </div>
+            <Card padded={false}><EmptyBlock>No active competitions right now.{canManage ? ' Click “New” to start one.' : ''}</EmptyBlock></Card>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
               {liveComps.map(comp => (
@@ -1013,8 +997,8 @@ export default function Competitions() {
           {/* Finished competitions — auto-minimized, expandable for reference */}
           {pastComps.length > 0 && (
             <div className="mt-6">
-              <button onClick={() => setShowPast(s => !s)}
-                className="flex items-center gap-1.5 text-[12px] font-semibold text-white/40 hover:text-white transition-colors mb-2">
+              <button onClick={() => setShowPast(s => !s)} aria-expanded={showPast}
+                className="flex items-center gap-1.5 text-[13px] font-semibold text-bank-mu hover:text-bank-tx transition-colors mb-2 min-h-[44px] md:min-h-0">
                 <ChevronDown size={14} className={`transition-transform ${showPast ? 'rotate-180' : ''}`} />
                 Past competitions ({pastComps.length})
               </button>
