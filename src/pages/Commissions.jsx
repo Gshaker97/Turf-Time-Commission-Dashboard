@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronLeft, ChevronRight, CalendarClock, AlertTriangle, CircleDashed, Lock, CheckCircle2, Loader2 } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, CalendarClock, AlertTriangle } from 'lucide-react'
 import { format } from 'date-fns'
 import { fetchDeals, fetchUsers, fetchPayrollAdjustments, logClientError } from '../lib/db'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
@@ -11,6 +11,7 @@ import { onClickUnlessSelecting } from '../utils/selection'
 import { buildLedger, openDebts, recoveryLine } from '../utils/deductions'
 import DateRangeFilter from '../components/DateRangeFilter'
 import { standingRows, PAID, ISSUE } from './commissionsStanding'
+import { SURFACE, WARN_BORDER, amountColor, plural, KpiFigure, StatusChip, DealStatusChip, Expandable, PrimaryButton, Pill, LoadingBlock, ErrorBlock, EmptyBlock } from '../components/ui'
 
 // LOCAL dates, never UTC — .toISOString() rolls to tomorrow at 5pm Arizona.
 const todayISO = () => format(new Date(), 'yyyy-MM-dd')
@@ -83,56 +84,7 @@ function myParts(deal, id) {
   return parts
 }
 
-// ── Private Bank tokens, as plain styles (var()-backed colours can't take
-//    Tailwind opacity modifiers, so the few surfaces are spelled out once) ──
-const CARD  = { background: 'var(--card)',  border: '1px solid var(--line)', boxShadow: 'var(--card-shadow)' }
-const RAISE = { background: 'var(--raise)', border: '1px solid var(--line)' }
-const WELL  = { background: 'var(--bg)',    border: '1px solid var(--line)' }
-const WARN_BORDER = 'rgba(210,160,116,0.45)'   // --warn at 45%
-// Amount colour: negatives read as deductions, paid money as "in the bank",
-// everything else as plain ivory. Gold is reserved for the paycheck total.
-const amountColor = (n, isPaid) => n < 0 ? 'var(--neg)' : isPaid ? 'var(--pos)' : 'var(--tx)'
-const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
-
-function Card({ label, value, color, sub }) {
-  return (
-    <div style={{ ...CARD, borderRadius: 14 }} className="p-4">
-      <div className="text-[13px] uppercase tracking-wider text-bank-fa font-semibold mb-1.5">{label}</div>
-      <div className="text-[22px] md:text-2xl font-bold truncate tabular-nums" style={{ color: color || 'var(--tx)' }}>{value}</div>
-      {sub && <div className="text-[13px] text-bank-mu mt-0.5">{sub}</div>}
-    </div>
-  )
-}
-
-// Deal status pill — colour comes from Settings (statusColor) exactly as
-// before; the text label is always present so colour is never the only cue.
-function StatusChip({ status, statusColor }) {
-  const color = statusColor(status)
-  return (
-    <span className="text-[12px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0"
-      style={{ color, border: `1px solid ${color}55` }}>{status}</span>
-  )
-}
-
-// A clearly labelled row that opens to show its detail. Used for every piece
-// of secondary information on the page so nothing is an always-open table.
-function Expandable({ title, meta, right, children, defaultOpen = false, tone, className = '' }) {
-  const [open, setOpen] = useState(defaultOpen)
-  return (
-    <div className={`border-b border-bank-line last:border-0 ${className}`}>
-      <button onClick={onClickUnlessSelecting(() => setOpen(o => !o))} aria-expanded={open}
-        className="w-full flex items-center gap-3 px-4 py-3 min-h-[44px] text-left hover:bg-bank-raise transition-colors">
-        <div className="min-w-0 flex-1">
-          <p className="text-[13px] font-semibold truncate" style={{ color: tone || 'var(--tx)' }}>{title}</p>
-          {meta && <p className="text-[13px] text-bank-mu mt-0.5 truncate">{meta}</p>}
-        </div>
-        {right}
-        <ChevronDown size={16} className={`text-bank-fa flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open && children}
-    </div>
-  )
-}
+const CARD = SURFACE.card, RAISE = SURFACE.raise, WELL = SURFACE.well
 
 function DealRow({ deal, id, statusColor }) {
   const [open, setOpen] = useState(false)
@@ -150,7 +102,7 @@ function DealRow({ deal, id, statusColor }) {
           <p className="text-[13px] font-semibold text-bank-tx truncate">{deal.deal_name}</p>
           <p className="text-[13px] text-bank-mu mt-0.5">{parts.map(p => p.role).join(' · ') || '—'}</p>
         </div>
-        <StatusChip status={deal.status} statusColor={statusColor} />
+        <DealStatusChip status={deal.status} statusColor={statusColor} />
         <div className="text-right flex-shrink-0 w-[92px]">
           <p className="text-[14px] font-bold tabular-nums" style={{ color: amountColor(take, isPaid) }}>{fmt(take)}</p>
         </div>
@@ -276,7 +228,7 @@ function PipelineRow({ deal, id, users, statusColor }) {
           </div>
         </div>
         <div className="flex flex-col items-end gap-1 flex-shrink-0">
-          <StatusChip status={deal.status} statusColor={statusColor} />
+          <DealStatusChip status={deal.status} statusColor={statusColor} />
           <span className="text-[14px] font-bold tabular-nums" style={{ color: amountColor(myTake, isPaid) }}>
             {fmt(myTake)}
           </span>
@@ -286,35 +238,13 @@ function PipelineRow({ deal, id, users, statusColor }) {
   )
 }
 
-// ── "Where your money stands" chips: label + icon + colour, so each state is
-//    readable without colour. ─────────────────────────────────────────────────
-function StandingChip({ kind }) {
-  if (kind === 'projected') return (
-    <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold px-2.5 py-1 rounded-full text-bank-mu"
-      style={{ border: '1px dashed var(--mu)' }}><CircleDashed size={13} aria-hidden="true" />Projected</span>
-  )
-  if (kind === 'finalized') return (
-    <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold px-2.5 py-1 rounded-full text-bank-tx"
-      style={{ border: '1px solid var(--tx)' }}><Lock size={13} aria-hidden="true" />Finalized</span>
-  )
-  if (kind === 'onhold') return (
-    <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold px-2.5 py-1 rounded-full"
-      style={{ border: '1px solid var(--warn)', color: 'var(--warn)' }}><AlertTriangle size={13} aria-hidden="true" />On hold</span>
-  )
-  return (
-    <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold px-2.5 py-1 rounded-full"
-      style={{ color: 'var(--pos)', border: '1px solid transparent' }}>
-      <CheckCircle2 size={15} aria-hidden="true" style={{ fill: 'var(--pos)', color: 'var(--card)' }} />Paid</span>
-  )
-}
-
 function StandingRow({ row, hint, children }) {
   const [open, setOpen] = useState(false)
   return (
     <div className="border-b border-bank-line last:border-0">
       <button onClick={onClickUnlessSelecting(() => setOpen(o => !o))} aria-expanded={open}
         className="w-full flex items-center gap-3 px-4 py-3 min-h-[56px] text-left hover:bg-bank-raise transition-colors">
-        <StandingChip kind={row.key} />
+        <StatusChip kind={row.key} />
         <span className="text-[13px] text-bank-mu min-w-0 flex-1 truncate">{plural(row.deals.length, 'job')}{hint ? ` · ${hint}` : ''}</span>
         <span className="text-[16px] font-bold tabular-nums" style={{ color: row.key === 'paid' ? 'var(--pos)' : 'var(--tx)' }}>{fmt(row.total)}</span>
         <ChevronDown size={16} className={`text-bank-fa flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
@@ -344,7 +274,7 @@ function EarnedRow({ r, basis, users, statusColor, showOverride }) {
           <p className="text-[13px] font-semibold text-bank-tx truncate">{d.deal_name}</p>
           <p className="text-[13px] text-bank-mu mt-0.5 whitespace-nowrap">{fmtDay(r.date)}</p>
         </div>
-        <StatusChip status={d.status} statusColor={statusColor} />
+        <DealStatusChip status={d.status} statusColor={statusColor} />
         <span className="text-[14px] font-bold tabular-nums w-[92px] text-right" style={{ color: amountColor(r.total, isPaid) }}>{fmt(r.total)}</span>
         <ChevronDown size={14} className={`text-bank-fa flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -367,23 +297,6 @@ function EarnedRow({ r, basis, users, statusColor, showOverride }) {
           </dl>
         </div>
       )}
-    </div>
-  )
-}
-
-function StateCard({ kind, message }) {
-  if (kind === 'loading') return (
-    <div style={{ ...CARD, borderRadius: 14 }} className="p-6 flex items-center justify-center gap-3 text-bank-mu text-[13px]" role="status" aria-live="polite">
-      <Loader2 size={16} className="animate-spin text-bank-fa" aria-hidden="true" /> Loading your commissions…
-    </div>
-  )
-  return (
-    <div style={{ ...CARD, borderRadius: 14, borderColor: 'var(--neg)' }} className="p-5 flex items-start gap-3" role="alert">
-      <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" style={{ color: 'var(--neg)' }} aria-hidden="true" />
-      <div className="min-w-0">
-        <p className="text-[13px] font-semibold text-bank-tx">Couldn't load deals</p>
-        <p className="text-[13px] text-bank-mu mt-0.5 break-words">Couldn't load deals: {message}</p>
-      </div>
     </div>
   )
 }
@@ -666,16 +579,11 @@ export default function Commissions() {
   }, [viewUser, allMine, id])
 
   const tabBtn = (key, label) => (
-    <button key={key} onClick={() => setTab(key)} aria-pressed={tab === key}
-      className={`px-3 py-2 min-h-[44px] md:min-h-0 md:py-1.5 rounded-lg text-[13px] font-semibold transition-colors ${
-        tab === key ? 'text-bank-gold-tx' : 'text-bank-mu hover:text-bank-tx'}`}
-      style={tab === key ? RAISE : undefined}>
-      {label}
-    </button>
+    <Pill key={key} onClick={() => setTab(key)} active={tab === key}>{label}</Pill>
   )
 
   const paidList = paidGroups.length === 0 ? (
-    <div className="px-4 py-8 text-bank-mu text-[13px] text-center">Nothing paid out yet.</div>
+    <EmptyBlock>Nothing paid out yet.</EmptyBlock>
   ) : (
     paidGroups.map(g => (
       <div key={g.key}>
@@ -718,7 +626,7 @@ export default function Commissions() {
         </div>
       </div>
 
-      {loading ? <StateCard kind="loading" /> : loadError ? <StateCard kind="error" message={loadError} /> : (
+      {loading ? <LoadingBlock text="Loading your commissions…" /> : loadError ? <ErrorBlock title="Couldn't load deals" message={`Couldn't load deals: ${loadError}`} /> : (
         <div className="space-y-3 md:space-y-4">
 
           {/* ── 1. Next payday: the date, the count, the amount, one button ── */}
@@ -775,12 +683,10 @@ export default function Commissions() {
             )}
 
             {selPayday && (
-              <button onClick={showPaycheck} aria-expanded={payOpen} aria-controls="paycheck-breakdown"
-                className="mt-4 inline-flex items-center gap-2 px-4 py-2.5 min-h-[44px] rounded-xl text-[13px] font-bold transition-colors hover:brightness-105"
-                style={{ background: 'var(--gold)', color: 'var(--gold-ink)' }}>
+              <PrimaryButton onClick={showPaycheck} aria-expanded={payOpen} aria-controls="paycheck-breakdown" className="mt-4">
                 {payOpen ? 'Hide paycheck details' : 'See what’s in this paycheck'}
                 <ChevronDown size={15} className={`transition-transform ${payOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
-              </button>
+              </PrimaryButton>
             )}
           </section>
 
@@ -881,9 +787,9 @@ export default function Commissions() {
 
           {/* Owed / Paid — the two numbers that matter */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <Card label="Owed to you" value={fmt(pipelineTotal)}
+            <KpiFigure label="Owed to you" value={fmt(pipelineTotal)}
               sub={`${plural(pipelineDeals.length, 'unpaid deal')}${overdue > 0 ? ` · ${fmt(overdue)} overdue` : ''}`} />
-            <Card label="Paid out" value={fmt(paidTotals.total)} color="var(--pos)"
+            <KpiFigure label="Paid out" value={fmt(paidTotals.total)} color="var(--pos)"
               sub={`all time · ${fmt(paidTotals.mtd)} this month`} />
           </div>
 
@@ -906,7 +812,7 @@ export default function Commissions() {
 
             {tab === 'owed' ? (
               pipelineWeeks.length === 0 ? (
-                <div className="px-4 py-8 text-bank-mu text-[13px] text-center">No unpaid deals — you're all caught up!</div>
+                <EmptyBlock>No unpaid deals — you're all caught up!</EmptyBlock>
               ) : (
                 pipelineWeeks.map(week => (
                   <PipelineWeekGroup key={week.key} week={week} id={id} users={users} statusColor={statusColor} />
@@ -924,12 +830,7 @@ export default function Commissions() {
                 {/* Date basis */}
                 <div className="flex flex-wrap gap-1 p-1 rounded-xl w-fit" style={WELL} role="group" aria-label="Date basis">
                   {EARNED_BASES.map(b => (
-                    <button key={b.key} onClick={() => setEarnedBasis(b.key)} aria-pressed={earnedBasis === b.key}
-                      className={`px-3 py-2 min-h-[44px] md:min-h-0 md:py-1 rounded-lg text-[13px] font-semibold transition-colors ${
-                        earnedBasis === b.key ? 'text-bank-gold-tx' : 'text-bank-mu hover:text-bank-tx'}`}
-                      style={earnedBasis === b.key ? RAISE : undefined}>
-                      {b.label}
-                    </button>
+                    <Pill key={b.key} onClick={() => setEarnedBasis(b.key)} active={earnedBasis === b.key}>{b.label}</Pill>
                   ))}
                 </div>
 
@@ -938,18 +839,18 @@ export default function Commissions() {
                 <div className={`grid grid-cols-1 ${showOverride ? 'md:grid-cols-4' : 'md:grid-cols-2'} gap-3`}>
                   {showOverride ? (
                     <>
-                      <Card label="Rep Commission" value={fmt(earnedTotals.rep)}
+                      <KpiFigure label="Rep Commission" value={fmt(earnedTotals.rep)}
                         sub={`setter + closer · by ${basisLabel(earnedBasis)}`} />
-                      <Card label="Override" value={fmt(earnedTotals.override)}
+                      <KpiFigure label="Override" value={fmt(earnedTotals.override)}
                         sub={`mgr · dir · VP · by ${basisLabel(earnedBasis)}`} />
-                      <Card label={`Total Earned — by ${basisLabel(earnedBasis)}`} value={fmt(earnedTotals.total)}
+                      <KpiFigure label={`Total Earned — by ${basisLabel(earnedBasis)}`} value={fmt(earnedTotals.total)}
                         sub={presetLabel(earnedPreset)} />
                     </>
                   ) : (
-                    <Card label={`Commission Earned — by ${basisLabel(earnedBasis)}`} value={fmt(earnedTotals.total)}
+                    <KpiFigure label={`Commission Earned — by ${basisLabel(earnedBasis)}`} value={fmt(earnedTotals.total)}
                       sub={`setter + closer · ${presetLabel(earnedPreset)}`} />
                   )}
-                  <Card label="Deal Count" value={String(earnedTotals.count)}
+                  <KpiFigure label="Deal Count" value={String(earnedTotals.count)}
                     sub={`by ${basisLabel(earnedBasis)}`} />
                 </div>
 
@@ -976,9 +877,7 @@ export default function Commissions() {
                 </div>
 
                 {earnedRows.length === 0 ? (
-                  <div className="px-4 py-8 text-bank-mu text-[13px] text-center">
-                    Nothing earned in this range by {basisLabel(earnedBasis)}.
-                  </div>
+                  <EmptyBlock>Nothing earned in this range by {basisLabel(earnedBasis)}.</EmptyBlock>
                 ) : (
                   <>
                     {/* Phones: one compact row per job, tap to expand. */}
@@ -1045,7 +944,7 @@ export default function Commissions() {
                                   {fmt(r.total)}
                                 </td>
                                 <td className="px-3 py-3 whitespace-nowrap">
-                                  <StatusChip status={d.status} statusColor={statusColor} />
+                                  <DealStatusChip status={d.status} statusColor={statusColor} />
                                 </td>
                               </tr>
                             )

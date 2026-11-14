@@ -11,6 +11,7 @@ import { personalBests } from "../utils/records";
 import { useSettings } from "../contexts/SettingsContext";
 import { useAuth } from "../contexts/AuthContext";
 import { competitionStandings, competitionStatus, fmtScore } from "../utils/competition";
+import { SURFACE, Card, Eyebrow, SecondaryButton, LoadingBlock, EmptyBlock } from "../components/ui";
 
 const money = (n) => "$" + Math.round(Number(n) || 0).toLocaleString("en-US");
 const SELLER = (u) => ["rep", "manager", "director", "vp"].includes(u.role);
@@ -30,36 +31,38 @@ function getMonths(n = 12) {
   return months;
 }
 
-function rateColor(r) {
-  if (r == null) return "#6b7280";
-  if (r >= 40) return "#4ade80";
-  if (r >= 25) return "#fbbf24";
-  return "#fb923c";
-}
+// Closing-rate tone on the tokens: strong = sage, middling = amber, weak = rose.
+// Returned as CSS values for the page and as hex for the canvas card.
+const RATE_HEX = { pos: "#a9c4b2", warn: "#d2a074", neg: "#d98c80", mu: "#a19e97" };
+function rateKey(r) { if (r == null) return "mu"; if (r >= 40) return "pos"; if (r >= 25) return "warn"; return "neg"; }
+const rateColor = (r) => `var(--${rateKey(r)})`;
+const rateHex   = (r) => RATE_HEX[rateKey(r)];
 
 // A compact derived-average cell for the RepCard metrics row.
 function Avg({ label, value, sub }) {
   return (
-    <div className="text-center">
-      <p className="text-[9px] uppercase tracking-[0.12em] text-white/35 font-bold">{label}</p>
-      <p className="text-[20px] md:text-[22px] font-bold text-white mt-0.5 tabular-nums">{value}</p>
-      <p className="text-[9px] text-white/25">{sub}</p>
+    <div className="text-center min-w-0">
+      <p className="text-[13px] uppercase tracking-wide text-bank-fa font-semibold truncate">{label}</p>
+      <p className="text-[20px] md:text-[22px] font-bold text-bank-tx mt-0.5 tabular-nums">{value}</p>
+      <p className="text-[13px] text-bank-mu truncate">{sub}</p>
     </div>
   );
 }
 
-function StatTile({ icon: Icon, label, value, sub, color = "#00b894", trend, onClick }) {
+// One stat tile. `color` is only ever the page's single gold number
+// (var(--gold-tx)) or a closing-rate tone; everything else is ivory.
+function StatTile({ icon: Icon, label, value, sub, color, trend, onClick }) {
   const Tag = onClick ? "button" : "div";
   return (
     <Tag onClick={onClick ? onClickUnlessSelecting(onClick) : undefined}
-      className={`rounded-xl p-3 md:p-4 min-w-0 text-left w-full ${onClick ? "cursor-pointer hover:border-white/25 transition-colors" : ""}`}
-      style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
+      className={`rounded-2xl p-3.5 md:p-4 min-w-0 min-h-[44px] text-left w-full ${onClick ? "cursor-pointer hover:bg-bank-raise transition-colors" : ""}`}
+      style={SURFACE.card}>
       <div className="flex items-center gap-1.5 mb-1.5">
-        <Icon size={12} style={{ color }} />
-        <p className="text-[9px] md:text-[10px] uppercase tracking-widest text-white/30 font-semibold leading-tight">{label}</p>
+        <Icon size={13} className="text-bank-fa flex-shrink-0" aria-hidden="true" />
+        <p className="text-[13px] uppercase tracking-wide text-bank-fa font-semibold leading-tight truncate">{label}</p>
       </div>
-      <p className="text-[17px] md:text-[22px] font-bold leading-none truncate" style={{ color }}>{value}</p>
-      {trend ? <div className="mt-1">{trend}</div> : sub && <p className="text-[10px] text-white/30 mt-1 truncate">{sub}</p>}
+      <p className="text-[20px] md:text-[24px] font-bold leading-none truncate tabular-nums" style={{ color: color || "var(--tx)" }}>{value}</p>
+      {trend ? <div className="mt-1.5">{trend}</div> : sub && <p className="text-[13px] text-bank-mu mt-1.5 truncate">{sub}</p>}
     </Tag>
   );
 }
@@ -328,29 +331,29 @@ export default function Home() {
     const ctx = cv.getContext("2d");
     const rr = (x, y, w, h, r) => { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); };
 
-    ctx.fillStyle = "#141414"; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "#131416"; ctx.fillRect(0, 0, W, H);
     // header band
-    const g = ctx.createLinearGradient(0, 0, W, 300); g.addColorStop(0, "#0e3b35"); g.addColorStop(1, "#143d52");
+    const g = ctx.createLinearGradient(0, 0, W, 300); g.addColorStop(0, "#1c1e21"); g.addColorStop(1, "#23262a");
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, 300);
     // avatar
-    ctx.beginPath(); ctx.arc(P + 56, 150, 56, 0, Math.PI * 2); ctx.fillStyle = "#00b894"; ctx.fill();
-    ctx.fillStyle = "#0b0b0b"; ctx.font = "bold 46px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.beginPath(); ctx.arc(P + 56, 150, 56, 0, Math.PI * 2); ctx.fillStyle = "#bfa46c"; ctx.fill();
+    ctx.fillStyle = "#191509"; ctx.font = "bold 46px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(initials, P + 56, 152);
     // name + sub
     ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
-    ctx.fillStyle = "#fff"; ctx.font = "bold 52px Arial"; ctx.fillText(viewUser?.name || "", P + 130, 140);
-    ctx.fillStyle = "rgba(255,255,255,0.55)"; ctx.font = "28px Arial";
+    ctx.fillStyle = "#ede7da"; ctx.font = "bold 52px Arial"; ctx.fillText(viewUser?.name || "", P + 130, 140);
+    ctx.fillStyle = "#a19e97"; ctx.font = "28px Arial";
     ctx.fillText(`${(viewUser?.role || "").toUpperCase()} · ${mr.label}`, P + 132, 184);
     // rank (right)
     ctx.textAlign = "right";
-    ctx.fillStyle = "rgba(255,255,255,0.5)"; ctx.font = "bold 22px Arial"; ctx.fillText("COMPANY RANK", W - P, 110);
-    ctx.fillStyle = "#fbbf24"; ctx.font = "bold 96px Arial";
+    ctx.fillStyle = "#8c8a84"; ctx.font = "bold 22px Arial"; ctx.fillText("COMPANY RANK", W - P, 110);
+    ctx.fillStyle = "#ede7da"; ctx.font = "bold 96px Arial";
     ctx.fillText(rank.ranked ? `#${rank.rank}` : "—", W - P, 200);
-    if (rank.ranked) { ctx.fillStyle = "rgba(255,255,255,0.5)"; ctx.font = "24px Arial"; ctx.fillText(`of ${rank.total}`, W - P, 240); }
+    if (rank.ranked) { ctx.fillStyle = "#a19e97"; ctx.font = "24px Arial"; ctx.fillText(`of ${rank.total}`, W - P, 240); }
     ctx.textAlign = "left";
 
     // gap / best ribbon
-    ctx.fillStyle = "rgba(255,255,255,0.85)"; ctx.font = "26px Arial";
+    ctx.fillStyle = "#ede7da"; ctx.font = "26px Arial";
     const ribbon = isBest ? "🔥 Personal best month"
       : rank.ranked ? (rank.ahead ? `${money(rank.gapAhead)} to pass ${rank.ahead.name}` : "🏆 #1 in the company")
       : "Make your first sale to hit the board";
@@ -358,25 +361,25 @@ export default function Home() {
 
     // stat cards
     const tiles = [
-      ["REVENUE", money(stats.sgRevenue), "#2dd4bf"],
-      ["COMMISSION", money(stats.commission), "#34d399"],
-      ["DEALS", String(stats.sgCloses), "#fff"],
-      ["CLOSING %", stats.sgRate == null ? "—" : `${stats.sgRate.toFixed(0)}%`, rateColor(stats.sgRate)],
-      ["ESTIMATES", String(stats.sgEst), "#74b9ff"],
-      [stats.hasLeads ? "LEADS CLOSED" : "WIN STREAK", stats.hasLeads ? String(stats.ldCloses) : `${momentum.streak} wk`, "#fbbf24"],
+      ["REVENUE", money(stats.sgRevenue), "#ede7da"],
+      ["COMMISSION", money(stats.commission), "#cdb684"],   // the one gold number
+      ["DEALS", String(stats.sgCloses), "#ede7da"],
+      ["CLOSING %", stats.sgRate == null ? "—" : `${stats.sgRate.toFixed(0)}%`, rateHex(stats.sgRate)],
+      ["ESTIMATES", String(stats.sgEst), "#ede7da"],
+      [stats.hasLeads ? "LEADS CLOSED" : "WIN STREAK", stats.hasLeads ? String(stats.ldCloses) : `${momentum.streak} wk`, "#ede7da"],
     ];
     const cw = (W - P * 2 - 40) / 2, ch = 190, gap = 40;
     tiles.forEach((t, i) => {
       const col = i % 2, row = Math.floor(i / 2);
       const x = P + col * (cw + 40), y = 340 + row * (ch + gap);
-      ctx.fillStyle = "#1e1e1e"; rr(x, y, cw, ch, 24); ctx.fill();
-      ctx.strokeStyle = "#2a2a2a"; ctx.lineWidth = 2; rr(x, y, cw, ch, 24); ctx.stroke();
-      ctx.fillStyle = "rgba(255,255,255,0.4)"; ctx.font = "bold 26px Arial"; ctx.fillText(t[0], x + 34, y + 62);
+      ctx.fillStyle = "#1c1e21"; rr(x, y, cw, ch, 24); ctx.fill();
+      ctx.strokeStyle = "#2c2f33"; ctx.lineWidth = 2; rr(x, y, cw, ch, 24); ctx.stroke();
+      ctx.fillStyle = "#a19e97"; ctx.font = "bold 26px Arial"; ctx.fillText(t[0], x + 34, y + 62);
       ctx.fillStyle = t[2]; ctx.font = "bold 70px Arial"; ctx.fillText(t[1], x + 34, y + 145);
     });
 
     // footer
-    ctx.textAlign = "center"; ctx.fillStyle = "#00b894"; ctx.font = "bold 30px Arial";
+    ctx.textAlign = "center"; ctx.fillStyle = "#bfa46c"; ctx.font = "bold 30px Arial";
     ctx.fillText("TURF TIME", W / 2, H - 46);
 
     cv.toBlob(async (blob) => {
@@ -395,112 +398,110 @@ export default function Home() {
     }, "image/png");
   }
 
-  if (loading) return <div className="text-white/30 text-sm py-16 text-center" style={{ background: "#1a1a1a", minHeight: "100%" }}>Loading…</div>;
+  if (loading) return <LoadingBlock text="Loading your card…" />;
 
   const lastLabel = momentum.daysSince == null ? "No sales yet"
     : momentum.daysSince === 0 ? "Today" : momentum.daysSince === 1 ? "Yesterday" : `${momentum.daysSince} days ago`;
 
-  return (
-    <div style={{ background: "#1a1a1a", color: "#fff", minHeight: "100%" }} className="pb-8">
+  const selectCls = "text-[13px] px-3 py-2 min-h-[44px] md:min-h-0 rounded-lg text-bank-tx focus:outline-none";
 
-      {/* Header */}
+  return (
+    <div style={{ color: "var(--tx)", minHeight: "100%" }} className="pb-8 max-w-[1200px] mx-auto">
+
+      {/* ── 1. Who I am ── */}
       <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-11 h-11 rounded-full flex items-center justify-center text-[15px] font-bold text-dark flex-shrink-0"
-            style={{ background: "linear-gradient(135deg,#2dd4bf,#00b894)" }}>{initials}</div>
+          <div className="w-11 h-11 rounded-full flex items-center justify-center text-[15px] font-bold flex-shrink-0 text-bank-tx"
+            style={SURFACE.raise}>{initials}</div>
           <div className="min-w-0">
-            <h1 className="text-lg md:text-xl font-bold text-white truncate">
-              {viewUser?.name}{viewingOther && <span className="text-[11px] font-semibold text-amber-300 ml-2">· viewing</span>}
+            <h1 className="text-lg md:text-xl font-bold text-bank-tx truncate">
+              {viewUser?.name}{viewingOther && <span className="text-[13px] font-semibold ml-2" style={{ color: "var(--warn)" }}>· viewing</span>}
             </h1>
-            <p className="text-[12px] text-white/40 capitalize">{viewUser?.role} · {mr.label}</p>
+            <p className="text-[13px] text-bank-mu capitalize">{viewUser?.role} · {mr.label}</p>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
           {isAdmin && (
             <select value={viewId || ""} onChange={e => setViewId(e.target.value || null)}
-              className="text-[12px] px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white max-w-[160px]"
-              title="View another person's card">
-              <option value="" style={{ background: "#2a2a2a" }}>My card</option>
+              className={`${selectCls} max-w-[160px]`} style={SURFACE.raise}
+              title="View another person's card" aria-label="View another person's card">
+              <option value="">My card</option>
               {users.filter(SELLER).slice().sort((a, b) => a.name.localeCompare(b.name)).map(u => (
-                <option key={u.id} value={u.id} style={{ background: "#2a2a2a" }}>{u.name}{u.ghost ? " (ghost)" : ""}</option>
+                <option key={u.id} value={u.id}>{u.name}{u.ghost ? " (ghost)" : ""}</option>
               ))}
             </select>
           )}
-          <button onClick={shareCard}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold transition-colors"
-            style={{ background: shared ? "#00b89420" : "#1e1e1e", border: `1px solid ${shared ? "#00b89455" : "#2a2a2a"}`, color: shared ? "#00b894" : "rgba(255,255,255,0.6)" }}
-            title="Copy a shareable card image">
+          <SecondaryButton onClick={shareCard} active={!!shared} title="Copy a shareable card image">
             {shared ? <Check size={14} /> : <Share2 size={14} />}
             {shared === "copied" ? "Copied" : shared === "downloaded" ? "Saved" : "Share"}
-          </button>
+          </SecondaryButton>
           <select value={selected} onChange={e => setSelected(Number(e.target.value))}
-            className="text-[12px] px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white">
-            {months.map((m, i) => <option key={i} value={i} style={{ background: "#2a2a2a" }}>{m.label}</option>)}
+            className={selectCls} style={SURFACE.raise} aria-label="Month">
+            {months.map((m, i) => <option key={i} value={i}>{m.label}</option>)}
           </select>
         </div>
       </div>
 
       {/* Rank hero */}
-      <div className="rounded-2xl p-4 md:p-5 mb-3 relative overflow-hidden"
-        style={{ background: "linear-gradient(135deg,#0e3b35,#143d52)", border: "1px solid #1c5a50" }}>
+      <Card className="mb-3 relative overflow-hidden">
         {isBest && (
-          <div className="absolute top-3 right-3 text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-full"
-            style={{ background: "#fb923c22", color: "#fdba74", border: "1px solid #fb923c55" }}>🔥 Personal best</div>
+          <div className="absolute top-3 right-3 text-[13px] font-bold uppercase tracking-wide px-2 py-1 rounded-full"
+            style={{ background: "rgba(210,160,116,0.14)", color: "var(--warn)", border: "1px solid rgba(210,160,116,0.4)" }}>🔥 Personal best</div>
         )}
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
-            <p className="text-[10px] uppercase tracking-widest text-white/50 font-semibold mb-1 flex items-center gap-1.5">
-              <Award size={13} className="text-amber-300" /> Company Rank
+            <p className="text-[13px] uppercase tracking-widest text-bank-fa font-semibold mb-1 flex items-center gap-1.5">
+              <Award size={13} className="text-bank-mu" aria-hidden="true" /> Company Rank
             </p>
             {rank.ranked ? (
               <>
-                <p className="text-[30px] md:text-[40px] font-extrabold leading-none text-white">
-                  #{rank.rank}<span className="text-[16px] md:text-[20px] font-bold text-white/40"> / {rank.total}</span>
+                <p className="text-[34px] md:text-[44px] font-extrabold leading-none text-bank-tx tabular-nums">
+                  #{rank.rank}<span className="text-[16px] md:text-[20px] font-bold text-bank-fa"> / {rank.total}</span>
                 </p>
-                <p className="text-[12px] md:text-[13px] mt-2 text-white/80">
+                <p className="text-[13px] mt-2 text-bank-mu">
                   {rank.ahead
-                    ? <><span className="font-bold text-amber-300">{money(rank.gapAhead)}</span> to pass <span className="font-semibold">{rank.ahead.name}</span></>
-                    : <>🏆 You're #1{rank.behind ? <> — leading {rank.behind.name} by <span className="font-bold text-amber-300">{money(rank.leadBehind)}</span></> : ""}</>}
+                    ? <><span className="font-bold text-bank-tx">{money(rank.gapAhead)}</span> to pass <span className="font-semibold text-bank-tx">{rank.ahead.name}</span></>
+                    : <>🏆 You're #1{rank.behind ? <> — leading {rank.behind.name} by <span className="font-bold text-bank-tx">{money(rank.leadBehind)}</span></> : ""}</>}
                 </p>
               </>
             ) : (
               <>
-                <p className="text-[22px] md:text-[26px] font-extrabold leading-tight text-white">Not ranked yet</p>
-                <p className="text-[12px] mt-1.5 text-white/60">Log a sale this month to hit the board, {firstName}.</p>
+                <p className="text-[22px] md:text-[26px] font-extrabold leading-tight text-bank-tx">Not ranked yet</p>
+                <p className="text-[13px] mt-1.5 text-bank-mu">Log a sale this month to hit the board, {firstName}.</p>
               </>
             )}
           </div>
-          <Trophy size={54} className="text-white/10 flex-shrink-0" />
+          <Trophy size={54} className="flex-shrink-0 text-bank-line" aria-hidden="true" />
         </div>
-      </div>
+      </Card>
 
       {/* Momentum strip */}
-      <div className="grid grid-cols-2 gap-2 md:gap-3 mb-3">
-        <div className="rounded-xl p-3 md:p-4 flex items-center gap-3" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
-          <Flame size={20} className="flex-shrink-0" style={{ color: momentum.streak > 0 ? "#fb923c" : "#4b5563" }} />
+      <div className="grid grid-cols-2 gap-2 md:gap-3 mb-4">
+        <div className="rounded-2xl p-3.5 md:p-4 flex items-center gap-3" style={SURFACE.card}>
+          <Flame size={20} className="flex-shrink-0" style={{ color: momentum.streak > 0 ? "var(--warn)" : "var(--fa)" }} aria-hidden="true" />
           <div className="min-w-0">
-            <p className="text-[17px] md:text-[20px] font-bold leading-none text-white">{momentum.streak} <span className="text-[12px] font-semibold text-white/40">{momentum.streak === 1 ? "week" : "weeks"}</span></p>
-            <p className="text-[10px] text-white/30 mt-1">win streak</p>
+            <p className="text-[18px] md:text-[20px] font-bold leading-none text-bank-tx">{momentum.streak} <span className="text-[13px] font-semibold text-bank-mu">{momentum.streak === 1 ? "week" : "weeks"}</span></p>
+            <p className="text-[13px] text-bank-mu mt-1">win streak</p>
           </div>
         </div>
-        <div className="rounded-xl p-3 md:p-4 flex items-center gap-3" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
-          <Clock size={20} className="text-teal flex-shrink-0" />
+        <div className="rounded-2xl p-3.5 md:p-4 flex items-center gap-3" style={SURFACE.card}>
+          <Clock size={20} className="text-bank-mu flex-shrink-0" aria-hidden="true" />
           <div className="min-w-0">
-            <p className="text-[15px] md:text-[18px] font-bold leading-none text-white truncate">{lastLabel}</p>
-            <p className="text-[10px] text-white/30 mt-1">last sale</p>
+            <p className="text-[16px] md:text-[18px] font-bold leading-none text-bank-tx truncate">{lastLabel}</p>
+            <p className="text-[13px] text-bank-mu mt-1">last sale</p>
           </div>
         </div>
       </div>
 
-      {/* Self-gen stats */}
-      <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold mb-2">Self-gen</p>
+      {/* ── 2. My numbers for {mr.label} ── */}
+      <Eyebrow className="mb-2">Self-gen</Eyebrow>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mb-3">
         <StatTile icon={DollarSign}    label="Revenue"    value={money(stats.sgRevenue)} sub="baseline you set · tap" onClick={() => toggleDrill("sgRevenue")} />
-        <StatTile icon={Layers}        label="Closes"     value={stats.sgCloses} sub="deals you set · tap" color="#fff" onClick={() => toggleDrill("sgCloses")} />
-        <StatTile icon={ClipboardList} label="Estimates"  value={stats.sgEst} sub="self-gen · tap" color="#74b9ff" onClick={() => toggleDrill("sgEst")} />
+        <StatTile icon={Layers}        label="Closes"     value={stats.sgCloses} sub="deals you set · tap" onClick={() => toggleDrill("sgCloses")} />
+        <StatTile icon={ClipboardList} label="Estimates"  value={stats.sgEst} sub="self-gen · tap" onClick={() => toggleDrill("sgEst")} />
         <StatTile icon={Percent}       label="Closing %"  value={stats.sgRate == null ? "—" : `${stats.sgRate.toFixed(0)}%`} color={rateColor(stats.sgRate)} onClick={() => toggleDrill("sgCloses")}
           trend={closeDelta == null ? null : (
-            <span className="text-[10px] font-semibold" style={{ color: closeDelta >= 0 ? "#4ade80" : "#f87171" }}>
+            <span className="text-[13px] font-semibold" style={{ color: closeDelta >= 0 ? "var(--pos)" : "var(--neg)" }}>
               {closeDelta >= 0 ? "▲" : "▼"} {Math.abs(closeDelta).toFixed(0)} pts vs last mo
             </span>
           )} />
@@ -508,62 +509,108 @@ export default function Home() {
 
       {/* Leads stats — only when the rep has run leads */}
       {stats.hasLeads && (<>
-        <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold mb-2">Leads</p>
+        <Eyebrow className="mb-2">Leads</Eyebrow>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mb-3">
-          <StatTile icon={DollarSign}    label="Lead Rev"   value={money(stats.ldRevenue)} sub="closed for setters · tap" color="#a78bfa" onClick={() => toggleDrill("ldRevenue")} />
-          <StatTile icon={Layers}        label="Leads Closed" value={stats.ldCloses} sub="you closed · tap" color="#fff" onClick={() => toggleDrill("ldCloses")} />
-          <StatTile icon={ClipboardList} label="Lead Est"   value={stats.ldEst} sub="leads ran · tap" color="#74b9ff" onClick={() => toggleDrill("ldEst")} />
+          <StatTile icon={DollarSign}    label="Lead Rev"   value={money(stats.ldRevenue)} sub="closed for setters · tap" onClick={() => toggleDrill("ldRevenue")} />
+          <StatTile icon={Layers}        label="Leads Closed" value={stats.ldCloses} sub="you closed · tap" onClick={() => toggleDrill("ldCloses")} />
+          <StatTile icon={ClipboardList} label="Lead Est"   value={stats.ldEst} sub="leads ran · tap" onClick={() => toggleDrill("ldEst")} />
           <StatTile icon={Percent}       label="Closing %"  value={stats.ldRate == null ? "—" : `${stats.ldRate.toFixed(0)}%`} color={rateColor(stats.ldRate)} onClick={() => toggleDrill("ldCloses")} />
         </div>
       </>)}
 
-      {/* Combined earnings */}
+      {/* Combined earnings — Commission is the one gold number on this page */}
       <div className="grid grid-cols-2 gap-2 md:gap-3 mb-3">
-        <StatTile icon={Wallet}     label="Commission" value={money(stats.commission)} sub="your total earnings · tap" color="#34d399" onClick={() => toggleDrill("commission")} />
-        <StatTile icon={TrendingUp} label="Avg Deal"   value={money(stats.avgDeal)} sub="per self-gen deal · tap" color="#fff" onClick={() => toggleDrill("avgDeal")} />
+        <StatTile icon={Wallet}     label="Commission" value={money(stats.commission)} sub="your total earnings · tap" color="var(--gold-tx)" onClick={() => toggleDrill("commission")} />
+        <StatTile icon={TrendingUp} label="Avg Deal"   value={money(stats.avgDeal)} sub="per self-gen deal · tap" onClick={() => toggleDrill("avgDeal")} />
       </div>
 
-      {/* Field activity · RepCard — doors + appointments straight off RepCard's
-          D2D leaderboard, so they match what the rep sees in RepCard. Hidden
-          entirely when RepCard isn't connected (no API token on the service). */}
+      {/* Stat drill-down — inline, directly under the tiles it explains */}
+      {drill && drillData && (
+        <Card padded={false} className="mb-3">
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-bank-line" style={{ background: "var(--bg)" }}>
+            <div className="min-w-0">
+              <p className="text-[13px] font-semibold text-bank-tx truncate">{drillData.title}</p>
+              <p className="text-[13px] text-bank-mu">{mr.label} · {drillData.total}</p>
+            </div>
+            <button onClick={() => setDrill(null)} aria-label="Close"
+              className="text-bank-mu hover:text-bank-tx p-2 -m-2 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center flex-shrink-0"><X size={15} /></button>
+          </div>
+          <div className="max-h-72 overflow-y-auto">
+            {drillData.rows.length === 0 ? (
+              <EmptyBlock className="py-6">Nothing here for {mr.label}.</EmptyBlock>
+            ) : drillData.rows.map(r => (
+              <div key={r.id} className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-bank-line last:border-0">
+                <div className="min-w-0">
+                  <p className="text-[13px] text-bank-tx truncate">{r.name}</p>
+                  {r.sub && <p className="text-[13px] text-bank-mu">{r.sub}</p>}
+                </div>
+                <span className="text-[13px] font-semibold text-bank-tx whitespace-nowrap tabular-nums">{r.value}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* Personal pace — part of this month's numbers */}
+      {pace && (
+        <Card className="mb-4">
+          <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
+            <Eyebrow className="flex items-center gap-1.5"><Target size={13} className="text-bank-mu" aria-hidden="true" /> Monthly pace</Eyebrow>
+            <p className="text-[13px] text-bank-mu">
+              <span className="font-bold text-bank-tx tabular-nums">{money(stats.sgRevenue)}</span> of {money(pace.goal)} target
+            </p>
+          </div>
+          <div className="h-2.5 rounded-full overflow-hidden" style={{ background: "var(--raise)" }}>
+            <div className="h-full rounded-full transition-all duration-700"
+              style={{ width: `${pace.pct}%`, background: pace.pct >= 100 ? "var(--pos)" : "var(--tx)" }} />
+          </div>
+          <p className="text-[13px] text-bank-mu mt-1.5">
+            Target = your trailing 3-month average +10%.{best ? ` · Best month: ${best.label} (${money(best.rev)})` : ""}
+          </p>
+        </Card>
+      )}
+
+      {/* ── 3. Field activity · RepCard — doors + appointments straight off
+          RepCard's D2D leaderboard, so they match what the rep sees in RepCard.
+          Hidden entirely when RepCard isn't connected (no API token). ── */}
       {repCard.configured !== false && (<>
         <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
-          <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold">Field activity · RepCard</p>
-          <div className="flex items-center gap-1 flex-wrap">
+          <Eyebrow>Field activity · RepCard</Eyebrow>
+          <div className="inline-flex flex-wrap gap-1 p-1 rounded-xl max-w-full" style={SURFACE.well} role="group" aria-label="Field activity range">
             {[["week", "This week"], ["month", "This month"], ["lastMonth", "Last month"], ["90d", "90 days"], ["custom", "Custom"]].map(([k, lbl]) => (
-              <button key={k} onClick={() => setFaPreset(k)}
-                className={`px-2 py-1 rounded-md text-[10px] font-semibold transition-colors ${faPreset === k ? "bg-teal text-dark" : "text-white/45 hover:text-white"}`}
-                style={faPreset === k ? {} : { background: "#1e1e1e", border: "1px solid #282828" }}>
+              <button key={k} onClick={() => setFaPreset(k)} aria-pressed={faPreset === k}
+                className={`px-3 py-2 min-h-[44px] md:min-h-0 md:py-1 rounded-lg text-[13px] font-semibold transition-colors ${faPreset === k ? "text-bank-gold-tx" : "text-bank-mu hover:text-bank-tx hover:bg-bank-raise"}`}
+                style={faPreset === k ? SURFACE.raise : undefined}>
                 {lbl}
               </button>
             ))}
           </div>
         </div>
         {faPreset === "custom" && (
-          <div className="flex items-center gap-2 mb-2">
-            <input type="date" value={faFrom} max={faTo || undefined} onChange={(e) => setFaFrom(e.target.value)}
-              className="text-[11px] px-2 py-1.5 rounded-lg border border-white/10 bg-white/5 text-white" />
-            <span className="text-[11px] text-white/30">to</span>
-            <input type="date" value={faTo} min={faFrom || undefined} onChange={(e) => setFaTo(e.target.value)}
-              className="text-[11px] px-2 py-1.5 rounded-lg border border-white/10 bg-white/5 text-white" />
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
+            <input type="date" value={faFrom} max={faTo || undefined} onChange={(e) => setFaFrom(e.target.value)} aria-label="From date"
+              className="text-[13px] px-2 py-1.5 min-h-[44px] md:min-h-0 rounded-lg text-bank-tx focus:outline-none" style={SURFACE.raise} />
+            <span className="text-[13px] text-bank-fa">to</span>
+            <input type="date" value={faTo} min={faFrom || undefined} onChange={(e) => setFaTo(e.target.value)} aria-label="To date"
+              className="text-[13px] px-2 py-1.5 min-h-[44px] md:min-h-0 rounded-lg text-bank-tx focus:outline-none" style={SURFACE.raise} />
           </div>
         )}
         <div className="grid grid-cols-3 gap-2 md:gap-3 mb-2">
-          <StatTile icon={DoorOpen}      label="Doors"     value={repCard.doors == null ? "—" : repCard.doors.toLocaleString("en-US")} sub={faRange.label} color="#74b9ff" />
-          <StatTile icon={CalendarCheck} label="Appts set" value={repCard.appts == null ? "—" : repCard.appts.toLocaleString("en-US")} sub={faRange.label} color="#a78bfa" />
-          <StatTile icon={Layers}        label="Closes"    value={repCard.closes == null ? "—" : repCard.closes.toLocaleString("en-US")} sub="your sales" color="#fff" />
+          <StatTile icon={DoorOpen}      label="Doors"     value={repCard.doors == null ? "—" : repCard.doors.toLocaleString("en-US")} sub={faRange.label} />
+          <StatTile icon={CalendarCheck} label="Appts set" value={repCard.appts == null ? "—" : repCard.appts.toLocaleString("en-US")} sub={faRange.label} />
+          <StatTile icon={Layers}        label="Closes"    value={repCard.closes == null ? "—" : repCard.closes.toLocaleString("en-US")} sub="your sales" />
         </div>
-        <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold mb-2">Averages · {faRange.label}</p>
-        <div className="rounded-xl px-4 py-3 mb-3 grid grid-cols-3 gap-3" style={{ background: "#1e1e1e", border: "1px solid #282828" }}>
+        <Eyebrow className="mb-2">Averages · {faRange.label}</Eyebrow>
+        <div className="rounded-2xl px-4 py-3 mb-4 grid grid-cols-3 gap-3" style={SURFACE.card}>
           <Avg label="Avg doors / day" sub="per day knocked" value={repCard.avgDoorsPerDay == null ? "—" : repCard.avgDoorsPerDay.toFixed(1)} />
           <Avg label="Doors / appt"    sub="to set one"      value={repCard.doorsPerAppt == null ? "—" : repCard.doorsPerAppt.toFixed(1)} />
           <Avg label="Appts / close"   sub="to close one"    value={repCard.apptsPerClose == null ? "—" : repCard.apptsPerClose.toFixed(1)} />
         </div>
       </>)}
 
-      {/* Personal bests — all-time, owner-credited, completed periods only */}
+      {/* ── 4. Personal bests — all-time, owner-credited, completed periods only ── */}
       {bests && (bests.bestMonth.best || bests.biggestDeal) && (<>
-        <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold mb-2">Personal bests</p>
+        <Eyebrow className="mb-2">Personal bests</Eyebrow>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mb-2">
           {[
             { label: "Best Month", v: bests.bestMonth.best ? fmt(bests.bestMonth.best.value) : "—", sub: bests.bestMonth.best?.label },
@@ -571,10 +618,10 @@ export default function Home() {
             { label: "Most Deals / Mo", v: bests.mostDealsMonth.best ? String(bests.mostDealsMonth.best.value) : "—", sub: bests.mostDealsMonth.best?.label },
             { label: "Biggest Deal", v: bests.biggestDeal ? fmt(bests.biggestDeal.value) : "—", sub: bests.biggestDeal?.when },
           ].map(t => (
-            <div key={t.label} className="rounded-xl p-3" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
-              <p className="text-[9px] uppercase tracking-widest text-white/30 font-semibold">{t.label}</p>
-              <p className="text-[16px] md:text-[18px] font-bold mt-1" style={{ color: "#fbbf24" }}>{t.v}</p>
-              {t.sub && <p className="text-[10px] text-white/30 mt-0.5">{t.sub}</p>}
+            <div key={t.label} className="rounded-2xl p-3.5" style={SURFACE.card}>
+              <p className="text-[13px] uppercase tracking-wide text-bank-fa font-semibold">{t.label}</p>
+              <p className="text-[18px] md:text-[20px] font-bold mt-1 text-bank-tx tabular-nums">{t.v}</p>
+              {t.sub && <p className="text-[13px] text-bank-mu mt-0.5">{t.sub}</p>}
             </div>
           ))}
         </div>
@@ -582,79 +629,29 @@ export default function Home() {
           const bm = bests.bestMonth;
           if (!bm.best || !bm.current || bm.current.value <= 0) return null;
           const gap = bm.best.value - bm.current.value;
+          const banner = { background: "rgba(210,160,116,0.10)", border: "1px solid rgba(210,160,116,0.4)", color: "var(--warn)" };
           if (gap <= 0) return (
-            <div className="flex items-center gap-2 rounded-xl px-3.5 py-2.5 mb-3 text-[12px]"
-              style={{ background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.3)", color: "#fde68a" }}>
-              <Flame size={14} /> <span><b>{fmt(bm.current.value)} this month</b> — a new personal best, and the month isn't over.</span>
+            <div className="flex items-center gap-2 rounded-2xl px-3.5 py-2.5 mb-4 text-[13px]" style={banner}>
+              <Flame size={14} aria-hidden="true" /> <span><b>{fmt(bm.current.value)} this month</b> — a new personal best, and the month isn't over.</span>
             </div>
           );
           if (bm.current.value >= bm.best.value * 0.8) return (
-            <div className="flex items-center gap-2 rounded-xl px-3.5 py-2.5 mb-3 text-[12px]"
-              style={{ background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.3)", color: "#fde68a" }}>
-              <Flame size={14} /> <span><b>{fmt(bm.current.value)} this month</b> — {fmt(gap)} away from your best month ever.</span>
+            <div className="flex items-center gap-2 rounded-2xl px-3.5 py-2.5 mb-4 text-[13px]" style={banner}>
+              <Flame size={14} aria-hidden="true" /> <span><b>{fmt(bm.current.value)} this month</b> — {fmt(gap)} away from your best month ever.</span>
             </div>
           );
           return null;
         })()}
       </>)}
 
-      {/* Stat drill-down — inline, subtle */}
-      {drill && drillData && (
-        <div className="rounded-xl mb-3 overflow-hidden" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
-          <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/5" style={{ background: "#171717" }}>
-            <div className="min-w-0">
-              <p className="text-[12px] font-semibold text-white truncate">{drillData.title}</p>
-              <p className="text-[10px] text-white/40">{mr.label} · {drillData.total}</p>
-            </div>
-            <button onClick={() => setDrill(null)} className="text-white/40 hover:text-white p-1 flex-shrink-0"><X size={15} /></button>
-          </div>
-          <div className="max-h-72 overflow-y-auto">
-            {drillData.rows.length === 0 ? (
-              <p className="px-4 py-6 text-center text-white/30 text-[12px]">Nothing here for {mr.label}.</p>
-            ) : drillData.rows.map(r => (
-              <div key={r.id} className="flex items-center justify-between gap-3 px-4 py-2 border-b border-white/5 last:border-0">
-                <div className="min-w-0">
-                  <p className="text-[12px] text-white/80 truncate">{r.name}</p>
-                  {r.sub && <p className="text-[10px] text-white/35">{r.sub}</p>}
-                </div>
-                <span className="text-[12px] font-semibold text-teal whitespace-nowrap">{r.value}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Personal pace */}
-      {pace && (
-        <div className="rounded-xl p-4 mb-3" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold flex items-center gap-1.5">
-              <Target size={12} className="text-teal" /> Monthly pace
-            </p>
-            <p className="text-[11px] text-white/40">
-              <span className="font-bold text-white">{money(stats.sgRevenue)}</span> of {money(pace.goal)} target
-            </p>
-          </div>
-          <div className="h-2.5 rounded-full overflow-hidden" style={{ background: "#2a2a2a" }}>
-            <div className="h-full rounded-full transition-all duration-700"
-              style={{ width: `${pace.pct}%`, background: pace.pct >= 100 ? "#4ade80" : "#00b894" }} />
-          </div>
-          <p className="text-[10px] text-white/30 mt-1.5">
-            Target = your trailing 3-month average +10%.{best ? ` · Best month: ${best.label} (${money(best.rev)})` : ""}
-          </p>
-        </div>
-      )}
-
-      {/* Active competitions */}
-      <div className="rounded-xl p-4 md:p-5" style={{ background: "#1e1e1e", border: "1px solid #2a2a2a" }}>
+      {/* ── 5. Competitions ── */}
+      <Card>
         <div className="flex items-center justify-between mb-3">
-          <p className="text-[10px] uppercase tracking-widest text-white/30 font-semibold flex items-center gap-1.5">
-            <Trophy size={13} className="text-amber-300" /> Your competitions
-          </p>
-          <Link to="/competitions" className="text-[11px] text-teal hover:underline">View all</Link>
+          <Eyebrow className="flex items-center gap-1.5"><Trophy size={13} className="text-bank-mu" aria-hidden="true" /> Your competitions</Eyebrow>
+          <Link to="/competitions" className="text-[13px] text-bank-gold-tx hover:underline min-h-[44px] md:min-h-0 inline-flex items-center">View all</Link>
         </div>
         {myComps.length === 0 ? (
-          <p className="text-[12px] text-white/30 py-2">You're not in any active competitions right now.</p>
+          <p className="text-[13px] text-bank-mu py-2">You're not in any active competitions right now.</p>
         ) : (
           <div className="space-y-2">
             {myComps.map(({ comp, mine, count, leader, ahead, gap }) => {
@@ -663,31 +660,31 @@ export default function Home() {
               const w = denom > 0 ? Math.min((mine.score / denom) * 100, 100) : 0;
               return (
                 <Link key={comp.id} to="/competitions"
-                  className="block rounded-lg px-3 py-2.5 hover:bg-white/[0.03] transition-colors"
-                  style={{ background: "#171717", border: "1px solid #262626" }}>
+                  className="block rounded-xl px-3.5 py-3 min-h-[44px] hover:bg-bank-raise transition-colors"
+                  style={SURFACE.well}>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[13px] font-semibold text-white truncate">{comp.name}</span>
-                    <span className="text-[12px] font-bold whitespace-nowrap" style={{ color: mine.rank === 1 ? "#fbbf24" : "#2dd4bf" }}>
+                    <span className="text-[13px] font-semibold text-bank-tx truncate">{comp.name}</span>
+                    <span className="text-[13px] font-bold whitespace-nowrap" style={{ color: mine.rank === 1 ? "var(--pos)" : "var(--tx)" }}>
                       {mine.earned ? "🎉 Earned" : `#${mine.rank} of ${count}`}
                     </span>
                   </div>
-                  <div className="text-[11px] text-white/40 mt-1">
-                    {comp.type === "team_avg" ? "Your team: " : "You: "}<span className="text-white/70 font-semibold">{fmtScore(mine.score, comp.metric, comp.type === "team_avg")}</span>
+                  <div className="text-[13px] text-bank-mu mt-1">
+                    {comp.type === "team_avg" ? "Your team: " : "You: "}<span className="text-bank-tx font-semibold">{fmtScore(mine.score, comp.metric, comp.type === "team_avg")}</span>
                     {target > 0
                       ? <> · target {fmtScore(target, comp.metric, comp.type === "team_avg")}</>
                       : ahead
-                        ? <> · <span className="text-amber-300">{fmtScore(gap, comp.metric, comp.type === "team_avg")}</span> to pass {ahead.name}</>
+                        ? <> · <span style={{ color: "var(--warn)" }}>{fmtScore(gap, comp.metric, comp.type === "team_avg")}</span> to pass {ahead.name}</>
                         : <> · 🏆 leading</>}
                   </div>
-                  <div className="h-1.5 rounded-full overflow-hidden mt-2" style={{ background: "#ffffff12" }}>
-                    <div className="h-full rounded-full" style={{ width: `${w}%`, background: mine.earned ? "#00b894" : "#2dd4bf" }} />
+                  <div className="h-1.5 rounded-full overflow-hidden mt-2" style={{ background: "var(--raise)" }}>
+                    <div className="h-full rounded-full" style={{ width: `${w}%`, background: mine.earned ? "var(--pos)" : "var(--tx)" }} />
                   </div>
                 </Link>
               );
             })}
           </div>
         )}
-      </div>
+      </Card>
     </div>
   );
 }

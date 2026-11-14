@@ -23,20 +23,24 @@ import { onClickUnlessSelecting } from '../utils/selection'
 import { copyTable as copyRichTable } from '../lib/clipboard'
 import { getPresetRange, getPreviousRange } from '../utils/dateRanges'
 import DateRangeFilter from '../components/DateRangeFilter'
+import { SURFACE, WARN_BORDER, plural, Card, KpiFigure, Pill, PillGroup, SecondaryButton, Expandable, LoadingBlock, EmptyBlock } from '../components/ui'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
+
+const POS = 'var(--pos)', NEG = 'var(--neg)', WARN = 'var(--warn)'
+const goalTone = (pct) => pct == null ? 'var(--fa)' : pct >= 100 ? POS : pct >= 80 ? 'var(--mu)' : WARN
 
 function Trend({ cur, prev, suffix = 'vs prev' }) {
   if (prev === null || prev === undefined) return null
   if (prev === 0 && cur === 0) return null
   const pct = prev > 0 ? ((cur - prev) / prev) * 100 : (cur > 0 ? 100 : 0)
   if (Math.abs(pct) < 0.1 && prev > 0)
-    return <div className="flex items-center gap-1 text-[10px] text-white/25"><Minus size={10} /> unchanged</div>
+    return <div className="flex items-center gap-1 text-[13px] text-bank-fa"><Minus size={12} /> unchanged</div>
   const up = pct >= 0
   const Icon = up ? TrendingUp : TrendingDown
   return (
-    <div className={`flex items-center gap-1 text-[10px] font-semibold ${up ? 'text-emerald-400' : 'text-red-400'}`}>
-      <Icon size={10} /><span>{Math.abs(pct).toFixed(1)}%</span>
-      <span className="text-white/25 font-normal">{suffix}</span>
+    <div className="flex items-center gap-1 text-[13px] font-semibold" style={{ color: up ? POS : NEG }}>
+      <Icon size={12} /><span>{Math.abs(pct).toFixed(1)}%</span>
+      <span className="text-bank-fa font-normal">{suffix}</span>
     </div>
   )
 }
@@ -46,13 +50,13 @@ function Trend({ cur, prev, suffix = 'vs prev' }) {
 function SortTh({ label, col, sort, onSort, title, first }) {
   const on = sort.key === col
   return (
-    <th className={`py-1.5 ${first ? 'pr-2' : 'px-2'}`} title={title}>
+    <th className={`py-2 ${first ? 'pr-2' : 'px-2'}`} title={title}>
       <button onClick={() => onSort(col)}
-        className={`w-full flex items-center gap-0.5 uppercase tracking-widest text-[9px] font-semibold transition-colors ${
-          first ? 'justify-start' : 'justify-end'} ${on ? 'text-teal' : 'text-white/30 hover:text-white/60'}`}>
+        className={`w-full flex items-center gap-0.5 uppercase tracking-wider text-[13px] font-semibold transition-colors ${
+          first ? 'justify-start' : 'justify-end'} ${on ? 'text-bank-tx' : 'text-bank-fa hover:text-bank-mu'}`}>
         <span>{label}</span>
-        {on ? (sort.dir === 'asc' ? <ChevronUp size={9} /> : <ChevronDown size={9} />)
-            : <ChevronsUpDown size={9} className="opacity-40" />}
+        {on ? (sort.dir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />)
+            : <ChevronsUpDown size={12} className="opacity-50" />}
       </button>
     </th>
   )
@@ -61,14 +65,66 @@ function SortTh({ label, col, sort, onSort, title, first }) {
 function Delta({ cur, prev }) {
   if (prev == null) return null
   if (!prev && !cur) return null
-  if (!prev) return <span className="block text-[10px] text-emerald-400/70 font-normal">new</span>
+  if (!prev) return <span className="block text-[13px] font-normal" style={{ color: POS }}>new</span>
   const pct = ((cur - prev) / Math.abs(prev)) * 100
-  if (Math.abs(pct) < 0.5) return <span className="block text-[10px] text-white/25 font-normal">flat</span>
+  if (Math.abs(pct) < 0.5) return <span className="block text-[13px] text-bank-fa font-normal">flat</span>
   const up = pct > 0
   return (
-    <span className={`block text-[10px] font-semibold ${up ? 'text-emerald-400/80' : 'text-red-400/80'}`}>
+    <span className="block text-[13px] font-semibold" style={{ color: up ? POS : NEG }}>
       {up ? '▲' : '▼'} {Math.abs(pct) >= 999 ? '999+' : Math.abs(pct).toFixed(0)}%
     </span>
+  )
+}
+
+const TH = 'text-[13px] uppercase tracking-wider text-bank-fa font-semibold py-2'
+const TD = 'text-right py-2 px-2 tabular-nums text-[13px]'
+const TD_SUB = 'block text-[13px] text-bank-fa font-normal'
+
+// One rep's deals, shown inline under the rep row in the team accordion (no
+// page shift). Mirrors the rep-scope deals table. Table on desktop, rows on
+// phones so nothing scrolls sideways.
+function RepDealsInline({ deals, repId }) {
+  return (
+    <div className="rounded-xl overflow-hidden" style={SURFACE.well}>
+      <table className="hidden md:table w-full text-[13px]">
+        <thead>
+          <tr>
+            <th className={`${TH} text-left px-3`}>Deal</th>
+            <th className={`${TH} text-left px-2`}>Sold</th>
+            <th className={`${TH} text-right px-2`}>Revenue</th>
+            <th className={`${TH} text-left px-2`}>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {deals.map(d => (
+            <tr key={d.id} className="border-t border-bank-line">
+              <td className="py-2 px-3 text-bank-tx truncate max-w-[240px]">{d.deal_name}</td>
+              <td className="py-2 px-2 text-bank-mu whitespace-nowrap">{d.sale_date}</td>
+              <td className="text-right py-2 px-2 tabular-nums text-bank-tx">{fmt(parseFloat(d.baseline_revenue) || 0)}</td>
+              <td className="py-2 px-2 text-bank-mu">{d.status}</td>
+            </tr>
+          ))}
+          {deals.length === 0 && (
+            <tr><td colSpan={4} className="py-3 text-center text-bank-mu">No deals in this range.</td></tr>
+          )}
+        </tbody>
+      </table>
+      <div className="md:hidden">
+        {deals.map(d => (
+          <div key={d.id} className="flex items-center justify-between gap-3 px-3 py-2.5 border-b border-bank-line last:border-0">
+            <div className="min-w-0">
+              <p className="text-[13px] text-bank-tx truncate">{d.deal_name}</p>
+              <p className="text-[13px] text-bank-mu">{d.sale_date} · {d.status}</p>
+            </div>
+            <span className="text-[13px] font-semibold text-bank-tx tabular-nums whitespace-nowrap">{fmt(parseFloat(d.baseline_revenue) || 0)}</span>
+          </div>
+        ))}
+        {deals.length === 0 && <p className="py-3 text-center text-[13px] text-bank-mu">No deals in this range.</p>}
+      </div>
+      <div className="px-3 py-2 border-t border-bank-line">
+        <a href={`/deals?scope=all&rep=${repId}`} className="text-[13px] text-bank-gold-tx hover:underline inline-flex items-center min-h-[44px] md:min-h-0">Open in Deals →</a>
+      </div>
+    </div>
   )
 }
 
@@ -76,85 +132,116 @@ function Delta({ cur, prev }) {
 // the two always line up with the same header. (Optional Set/Ran, then Revenue,
 // Deals, Avg deal, Markup, Commission — the Goal cell is rendered by the caller
 // since its percentage depends on which goal applies.)
-// One rep's deals, shown inline under the rep row in the team accordion (no
-// page shift). Mirrors the rep-scope deals table.
-function RepDealsInline({ deals, repId }) {
-  return (
-    <div className="rounded-lg overflow-hidden" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-      <table className="w-full text-[11.5px]">
-        <thead>
-          <tr className="text-[9px] uppercase tracking-widest text-white/30">
-            <th className="text-left font-semibold py-1.5 px-3">Deal</th>
-            <th className="text-left font-semibold py-1.5 px-2">Sold</th>
-            <th className="text-right font-semibold py-1.5 px-2">Revenue</th>
-            <th className="text-left font-semibold py-1.5 px-2">Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {deals.map(d => (
-            <tr key={d.id} className="border-t border-white/5">
-              <td className="py-1.5 px-3 text-white/85 truncate max-w-[240px]">{d.deal_name}</td>
-              <td className="py-1.5 px-2 text-white/40 whitespace-nowrap">{d.sale_date}</td>
-              <td className="text-right py-1.5 px-2 tabular-nums text-white/70">{fmt(parseFloat(d.baseline_revenue) || 0)}</td>
-              <td className="py-1.5 px-2 text-white/40">{d.status}</td>
-            </tr>
-          ))}
-          {deals.length === 0 && (
-            <tr><td colSpan={4} className="py-3 text-center text-white/30">No deals in this range.</td></tr>
-          )}
-        </tbody>
-      </table>
-      <div className="px-3 py-1.5 border-t border-white/5">
-        <a href={`/deals?scope=all&rep=${repId}`} className="text-[11px] text-teal hover:underline">Open in Deals →</a>
-      </div>
-    </div>
-  )
-}
-
-function StatCells({ st, prev, showActivity }) {
+function StatCells({ st, prev, showActivity, flagSet = false, bold = false }) {
+  const base = bold ? 'font-bold text-bank-tx' : 'text-bank-mu'
   return (
     <>
       {showActivity && (
         <>
-          <td className="text-right py-2 px-2 tabular-nums text-white/60">
+          <td className={`${TD} ${flagSet ? 'font-bold' : base}`} style={flagSet ? { color: NEG } : undefined}>
             {st.set ?? 0}
-            {st.showRate != null && <span className="block text-[10px] text-white/30 font-normal">{st.showRate.toFixed(0)}% ran</span>}
+            {st.showRate != null && <span className={TD_SUB}>{st.showRate.toFixed(0)}% ran</span>}
           </td>
-          <td className="text-right py-2 px-2 tabular-nums text-white/60">
+          <td className={`${TD} ${base}`}>
             {st.ran ?? 0}
-            {st.dealCloseRate != null && <span className="block text-[10px] text-teal/60 font-normal">{st.dealCloseRate.toFixed(0)}% closed</span>}
+            {st.dealCloseRate != null && <span className={TD_SUB}>{st.dealCloseRate.toFixed(0)}% closed</span>}
           </td>
         </>
       )}
-      <td className="text-right py-2 px-2 tabular-nums text-white font-semibold">{fmt(st.revenue)}<Delta cur={st.revenue} prev={prev?.revenue} /></td>
-      <td className="text-right py-2 px-2 tabular-nums text-white/60">{st.deals}<Delta cur={st.deals} prev={prev?.deals} /></td>
-      <td className="text-right py-2 px-2 tabular-nums text-white/60">{st.avgDeal != null ? fmt(st.avgDeal) : '—'}</td>
-      <td className="text-right py-2 px-2 tabular-nums text-white/60">{st.markupPct != null ? `${st.markupPct.toFixed(1)}%` : '—'}</td>
-      <td className="text-right py-2 px-2 tabular-nums text-white/60">{fmt(st.commission)}</td>
+      <td className={`${TD} text-bank-tx font-semibold`}>{fmt(st.revenue)}<Delta cur={st.revenue} prev={prev?.revenue} /></td>
+      <td className={`${TD} ${base}`}>{st.deals}<Delta cur={st.deals} prev={prev?.deals} /></td>
+      <td className={`${TD} ${base}`}>{st.avgDeal != null ? fmt(st.avgDeal) : '—'}</td>
+      <td className={`${TD} ${base}`}>{st.markupPct != null ? `${st.markupPct.toFixed(1)}%` : '—'}</td>
+      <td className={`${TD} ${base}`}>{fmt(st.commission)}</td>
     </>
   )
 }
 
-function StatCard({ label, value, sub, trend, value2, valueLabel, value2Label }) {
+function GoalCell({ pct, bold = false }) {
   return (
-    <div className="rounded-xl p-3 md:p-4 min-w-0 flex-1" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
-      <p className="text-[9px] md:text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-1.5 leading-tight">{label}</p>
-      {value2 != null ? (
-        <div className="flex flex-wrap items-start gap-x-4 md:gap-x-6 gap-y-1 min-w-0 mb-1.5">
-          <div className="min-w-0">
-            <p className="text-[16px] md:text-[20px] font-bold text-teal leading-none truncate">{value}</p>
-            {valueLabel && <p className="text-[8px] md:text-[9px] text-white/30 uppercase tracking-wider mt-1 truncate">{valueLabel}</p>}
-          </div>
-          <div className="min-w-0">
-            <p className="text-[16px] md:text-[20px] font-bold text-white/80 leading-none truncate">{value2}</p>
-            {value2Label && <p className="text-[8px] md:text-[9px] text-white/30 uppercase tracking-wider mt-1 truncate">{value2Label}</p>}
-          </div>
-        </div>
-      ) : (
-        <p className="text-[16px] md:text-[20px] font-bold text-teal leading-none mb-1.5 truncate">{value}</p>
+    <td className={`${TD} ${bold ? 'font-bold' : ''}`}>
+      {pct == null ? <span className="text-bank-fa">—</span>
+        : <span style={{ color: goalTone(pct) }} className={pct >= 100 ? 'font-semibold' : ''}>{Math.round(pct)}%</span>}
+    </td>
+  )
+}
+
+// Phone view of one table row: the remaining columns as a small grid.
+function MobileStats({ st, prev, showActivity, goalPct, flagSet }) {
+  const Item = ({ label, children, style }) => (
+    <div className="min-w-0">
+      <p className="text-[13px] text-bank-fa">{label}</p>
+      <p className="text-[13px] font-semibold text-bank-tx tabular-nums" style={style}>{children}</p>
+    </div>
+  )
+  return (
+    <div className="grid grid-cols-2 gap-x-4 gap-y-2 px-4 py-3" style={{ background: 'var(--bg)' }}>
+      {showActivity && (<>
+        <Item label="Set" style={flagSet ? { color: NEG } : undefined}>{st.set ?? 0}{st.showRate != null && <span className="text-bank-fa font-normal"> · {st.showRate.toFixed(0)}% ran</span>}</Item>
+        <Item label="Ran">{st.ran ?? 0}{st.dealCloseRate != null && <span className="text-bank-fa font-normal"> · {st.dealCloseRate.toFixed(0)}% closed</span>}</Item>
+      </>)}
+      <Item label="Revenue">{fmt(st.revenue)}<Delta cur={st.revenue} prev={prev?.revenue} /></Item>
+      <Item label="Deals">{st.deals}<Delta cur={st.deals} prev={prev?.deals} /></Item>
+      <Item label="Avg deal">{st.avgDeal != null ? fmt(st.avgDeal) : '—'}</Item>
+      <Item label="Markup">{st.markupPct != null ? `${st.markupPct.toFixed(1)}%` : '—'}</Item>
+      <Item label="Commission">{fmt(st.commission)}</Item>
+      <Item label="Goal" style={{ color: goalTone(goalPct) }}>{goalPct == null ? '—' : `${Math.round(goalPct)}%`}</Item>
+    </div>
+  )
+}
+
+// Right-hand summary on a phone row: revenue over deal count.
+function RowRight({ revenue, deals }) {
+  return (
+    <div className="text-right flex-shrink-0">
+      <p className="text-[14px] font-bold text-bank-tx tabular-nums">{fmt(revenue)}</p>
+      <p className="text-[13px] text-bank-mu">{plural(deals ?? 0, 'deal')}</p>
+    </div>
+  )
+}
+
+// Goal editor (monthly and weekly share it): the amount is a button for
+// admins, an input while editing, with ✓ / ✕ / reset.
+function GoalEditor({ editing, value, onChange, onBlur, onSave, onCancel, onReset, canEdit, startEdit, isCustom, amount, status, size = 'lg' }) {
+  const amtCls = size === 'lg' ? 'text-[18px] md:text-[20px]' : 'text-[15px] md:text-[17px]'
+  if (editing) return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <span className="text-bank-mu">$</span>
+      <input autoFocus type="number" value={value} onChange={e => onChange(e.target.value)} onBlur={onBlur}
+        onKeyDown={e => { if (e.key === 'Enter') onSave(); if (e.key === 'Escape') onCancel() }}
+        style={SURFACE.raise} aria-label="Goal amount"
+        className="w-28 rounded-lg px-2 py-1 min-h-[44px] md:min-h-0 text-[16px] font-bold text-bank-tx focus:outline-none" />
+      <button onMouseDown={e => e.preventDefault()} onClick={onSave} aria-label="Save goal"
+        className="p-2 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 md:p-1.5 rounded-lg hover:bg-bank-raise flex items-center justify-center" style={{ color: POS }}><Check size={15} /></button>
+      <button onMouseDown={e => e.preventDefault()} onClick={onCancel} aria-label="Cancel"
+        className="p-2 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 md:p-1.5 rounded-lg text-bank-mu hover:bg-bank-raise flex items-center justify-center"><X size={15} /></button>
+      {isCustom && (
+        <button onMouseDown={e => e.preventDefault()} onClick={onReset}
+          className="text-[13px] text-bank-mu hover:text-bank-tx underline ml-1 min-h-[44px] md:min-h-0">reset</button>
       )}
-      {trend}
-      {sub && <p className="hidden md:block text-[10px] text-white/25 mt-1">{sub}</p>}
+    </div>
+  )
+  return (
+    <div className="flex items-center gap-2">
+      {canEdit ? (
+        <button onClick={startEdit} title="Edit goal"
+          className={`${amtCls} font-bold text-bank-tx hover:bg-bank-raise rounded px-2 -mx-2 py-0.5 min-h-[44px] md:min-h-0 transition-colors tabular-nums`}>
+          {fmt(amount)}
+        </button>
+      ) : (
+        <p className={`${amtCls} font-bold text-bank-tx tabular-nums`}>{fmt(amount)}</p>
+      )}
+      {status === 'saved' && <span className="text-[13px] font-semibold" style={{ color: POS }}>Saved</span>}
+      {status === 'error' && <span className="text-[13px] font-semibold" style={{ color: NEG }}>Save failed</span>}
+    </div>
+  )
+}
+
+function Bar({ pct, height = 'h-3', gold = false }) {
+  return (
+    <div className={`${height} rounded-full overflow-hidden`} style={{ background: 'var(--raise)' }}>
+      <div className="h-full rounded-full transition-all duration-700"
+        style={{ width: `${pct}%`, background: pct >= 100 ? POS : gold ? 'var(--gold)' : 'var(--tx)' }} />
     </div>
   )
 }
@@ -645,17 +732,25 @@ export default function Dashboard() {
     return months
   }, [deals, scope, teamCtx])
 
-  if (loading) return <div className="flex items-center justify-center py-24 text-white/30 text-[13px]">Loading…</div>
-
+  if (loading) return <LoadingBlock text="Loading the dashboard…" />
 
   const maxWeekRevLocal  = maxWeekRev
   // The name used AWAY from the breadcrumb (card headers, the copied
   // table): office-team qualifies itself with the office, since nothing
   // else next to those is saying which one.
   const scopeName = node && node.level !== 'company' ? (node.fullTitle || node.title) : null
+  const label = 'text-[13px] font-semibold text-bank-fa uppercase tracking-wider mb-1'
+  const groupTone = { company: WARN, team: 'var(--tx)', rep: 'var(--mu)' }
+  const BOARD_COLS = [['revenue', 'Revenue'], ['totalRevenue', 'Total Revenue'], ['setForOthers', 'Set Deals'], ['selfGen', 'Self-Gen'], ['leadCloses', 'Leads Closed'], ['commission', 'Commission'], ['name', 'Rep']]
+  const isBoard = grouping === 'rep' && (node?.level === 'company' || node?.level === 'office')
+  const childGoalPct = (c) => {
+    const g = c.kind === 'rep' ? repGoalMap[c.key] : c.kind === 'office' ? officeGoals[c.label] : (teamGoalMap[c.key] ?? null)
+    return g ? (c.stats.revenue / g) * 100 : null
+  }
+  const nodeGoalPct = goalInfo.target ? (node.stats.revenue / goalInfo.target) * 100 : null
 
   return (
-    <div className="space-y-4 pb-6">
+    <div className="space-y-4 pb-6 max-w-[1400px] mx-auto" style={{ color: 'var(--tx)' }}>
 
       {/* ── Filter row ── */}
       <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-2">
@@ -670,76 +765,67 @@ export default function Dashboard() {
         {/* Scope trail — replaces the old "All Teams" dropdown. Each step is a
             button back up the drill; the last one is where you are. */}
         <div className="flex items-center gap-2 flex-wrap self-start">
-          <div className="flex items-center gap-1 flex-wrap text-[12px] md:text-[13px]">
+          <nav className="flex items-center gap-1 flex-wrap text-[13px]" aria-label="Scope">
             {trail.map((t, i) => (
               <span key={i} className="flex items-center gap-1">
-                {i > 0 && <ChevronRight size={12} className="text-white/25" />}
+                {i > 0 && <ChevronRight size={12} className="text-bank-fa" />}
                 {t.scope
                   ? <button onClick={() => setScope(t.scope)}
-                      className="text-teal hover:underline font-medium">{t.label}</button>
-                  : <span className="text-white font-bold">{t.label}</span>}
+                      className="text-bank-gold-tx hover:underline font-medium min-h-[44px] md:min-h-0 px-1">{t.label}</button>
+                  : <span className="text-bank-tx font-bold px-1">{t.label}</span>}
               </span>
             ))}
-          </div>
-          <button onClick={copyTable} title="Copy this table for a text or a slide"
-            className={`h-8 px-2.5 rounded-lg text-[11px] font-semibold inline-flex items-center gap-1.5 transition-colors ${
-              copied ? 'text-emerald-400' : 'text-white/45 hover:text-teal'}`}
-            style={{ background: '#242424', border: '1px solid #333' }}>
+          </nav>
+          <SecondaryButton onClick={copyTable} title="Copy this table for a text or a slide" active={copied}>
             {copied ? <Check size={12} /> : <Copy size={12} />}{copied ? 'Copied' : 'Copy'}
-          </button>
+          </SecondaryButton>
         </div>
       </div>
 
       {/* ── Records falling right now — every one of them, collapsible ── */}
       {recordMoments.length > 0 && (
-        <div className="rounded-xl overflow-hidden"
-          style={{ background: '#1e1e1e', border: '1px solid rgba(251,191,36,0.45)' }}>
+        <Card padded={false} style={{ borderColor: WARN_BORDER }}>
           {/* The header is the toggle, and carries the count — so a collapsed
               card still tells you something is happening. */}
           <button onClick={toggleRecs} aria-expanded={recsOpen}
-            className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:opacity-90 transition-opacity"
-            style={{ background: 'linear-gradient(90deg, rgba(251,191,36,0.12), rgba(251,191,36,0.03))',
-                     borderBottom: recsOpen ? '1px solid #2a2a2a' : 'none' }}>
-            <ChevronDown size={13} className={`flex-shrink-0 transition-transform ${recsOpen ? '' : '-rotate-90'}`}
-              style={{ color: 'rgba(251,191,36,0.7)' }} />
-            <span className="text-[13px] font-bold" style={{ color: '#fbbf24' }}>
-              🔥 {recordMoments.length} record{recordMoments.length === 1 ? '' : 's'} falling right now
+            className="w-full flex items-center gap-2 px-4 py-3 min-h-[44px] text-left hover:bg-bank-raise transition-colors"
+            style={{ borderBottom: recsOpen ? '1px solid var(--line)' : 'none' }}>
+            <ChevronDown size={14} className={`flex-shrink-0 transition-transform ${recsOpen ? '' : '-rotate-90'}`} style={{ color: WARN }} />
+            <span className="text-[13px] font-bold" style={{ color: WARN }}>
+              🔥 {plural(recordMoments.length, 'record')} falling right now
             </span>
-            <span className="ml-auto text-[11px] text-white/30 whitespace-nowrap hidden sm:block">
+            <span className="ml-auto text-[13px] text-bank-mu whitespace-nowrap hidden sm:block">
               {recordGroups.map(g => `${g.rows.length} ${g.scope}`).join(' · ')}
             </span>
           </button>
 
           {recsOpen && recordGroups.map(g => (
             <div key={g.scope}>
-              <div className="flex items-center gap-1.5 px-4 pt-2.5 pb-1 text-[9.5px] font-bold uppercase tracking-widest"
-                style={{ color: g.color }}>
-                <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: g.color }} />
+              <div className="flex items-center gap-1.5 px-4 pt-2.5 pb-1 text-[13px] font-bold uppercase tracking-wider" style={{ color: groupTone[g.scope] }}>
+                <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: groupTone[g.scope] }} />
                 {g.label}
               </div>
               {g.rows.map(m => (
-                <div key={m.id} className="px-4 pt-1.5 pb-2" style={{ borderTop: '1px solid #262626' }}>
+                <div key={m.id} className="px-4 pt-1.5 pb-2 border-t border-bank-line">
                   <div className="flex items-baseline justify-between gap-4">
-                    <p className="text-[12.5px] text-white/85 min-w-0">
+                    <p className="text-[13px] text-bank-tx min-w-0">
                       {m.who && <b className="font-bold">{m.who}</b>}
-                      <span className="text-white/55">{m.who ? ` — ${m.kind.toLowerCase()}` : m.kind}</span>
-                      {!m.live && <span className="text-white/30"> · just set</span>}
+                      <span className="text-bank-mu">{m.who ? ` — ${m.kind.toLowerCase()}` : m.kind}</span>
+                      {!m.live && <span className="text-bank-fa"> · just set</span>}
                     </p>
-                    <span className="text-[13px] font-bold tabular-nums whitespace-nowrap" style={{ color: g.color }}>
-                      {m.value}
-                    </span>
+                    <span className="text-[13px] font-bold tabular-nums whitespace-nowrap text-bank-tx">{m.value}</span>
                   </div>
-                  <p className="text-[10.5px] text-white/30 tabular-nums">{m.was}</p>
+                  <p className="text-[13px] text-bank-fa tabular-nums">{m.was}</p>
                 </div>
               ))}
             </div>
           ))}
-        </div>
+        </Card>
       )}
 
-      {/* ── KPI cards — 2-col on mobile, row on md+ ── */}
-      <div className="grid grid-cols-2 gap-2 md:flex md:gap-3">
-        <StatCard label="Revenue"
+      {/* ── KPI cards — 1-col on phones, row on md+ ── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
+        <KpiFigure label="Revenue"
           value={fmt(totals.baseline)}    valueLabel="Baseline"
           value2={fmt(totals.totalPrice)} value2Label="Job Price"
           sub="Baseline = company's cost basis"
@@ -751,90 +837,57 @@ export default function Dashboard() {
             the caption was describing a number the tile does not show. It
             also excludes overrides by design (same as the Deals tab and the
             leaderboard), which the caption now says out loud. */}
-        <StatCard label="Commissions" value={fmt(totals.commission)} sub="Setter + closer, after deductions"
+        <KpiFigure label="Commissions" value={fmt(totals.commission)} sub="Setter + closer, after deductions"
           trend={<Trend cur={totals.commission} prev={prevPeriod ? prevTotals.commission : null} />} />
-        <StatCard label="Avg Comm %" value={`${totals.avgCommPct.toFixed(1)}%`} sub="Of baseline, after deductions"
+        <KpiFigure label="Avg Comm %" value={`${totals.avgCommPct.toFixed(1)}%`} sub="Of baseline, after deductions"
           trend={<Trend cur={totals.avgCommPct} prev={prevPeriod ? prevTotals.avgCommPct : null} />} />
-        <StatCard label="Total Deals" value={totals.deals.toString()}
+        <KpiFigure label="Total Deals" value={totals.deals.toString()}
           trend={<Trend cur={totals.deals} prev={prevPeriod ? prevTotals.deals : null} />} />
-        <div className="col-span-2 md:flex-1">
-          <StatCard label="Avg Deal Size"
-            value={fmt(totals.avgDeal)} valueLabel="Baseline"
-            value2={fmt(totals.avgJob)} value2Label="Job Price"
-            trend={<Trend cur={totals.avgDeal} prev={prevPeriod ? prevTotals.avgDeal : null} suffix="baseline vs prev" />} />
-        </div>
+        <KpiFigure label="Avg Deal Size" className="sm:col-span-2 md:col-span-1"
+          value={fmt(totals.avgDeal)} valueLabel="Baseline"
+          value2={fmt(totals.avgJob)} value2Label="Job Price"
+          trend={<Trend cur={totals.avgDeal} prev={prevPeriod ? prevTotals.avgDeal : null} suffix="baseline vs prev" />} />
       </div>
 
       {/* ── Monthly Goal ── */}
-      <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
-        <div className="flex items-start justify-between mb-3">
-          <div>
-            <h3 className="text-[13px] md:text-[14px] font-semibold text-white">
+      <Card>
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div className="min-w-0">
+            <h3 className="text-[15px] font-bold text-bank-tx">
               {monthlyGoal.month} Revenue Goal
               {scopeName && ` — ${scopeName}`}
             </h3>
-            <p className="text-[10px] text-white/30 mt-0.5">
+            <p className="text-[13px] text-bank-mu mt-0.5">
               {monthlyGoal.isCustom ? 'Custom goal' : 'Auto: 3-month avg ×1.1'}
             </p>
           </div>
-          <div className={`text-[28px] md:text-[32px] font-bold leading-none ${monthlyGoal.pct >= 100 ? 'text-emerald-400' : 'text-teal'}`}>
+          <div className="text-[28px] md:text-[32px] font-bold leading-none tabular-nums" style={{ color: monthlyGoal.pct >= 100 ? POS : 'var(--tx)' }}>
             {monthlyGoal.pct.toFixed(1)}%
           </div>
         </div>
 
         <div className="flex flex-wrap items-end gap-4 md:gap-8 mb-4">
           <div>
-            <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mb-1">Month Revenue</p>
-            <p className="text-[22px] md:text-[26px] font-bold text-white">{fmt(monthlyGoal.curRevenue)}</p>
+            <p className={label}>Month Revenue</p>
+            {/* The one gold number on this page. */}
+            <p className="text-[28px] md:text-[34px] font-bold leading-none tabular-nums" style={{ color: 'var(--gold-tx)' }}>{fmt(monthlyGoal.curRevenue)}</p>
           </div>
-          <div className="text-white/20 text-xl mb-1">/</div>
+          <div className="text-bank-line text-xl mb-1" aria-hidden="true">/</div>
           <div>
-            <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mb-1">Goal</p>
-            {editingGoal ? (
-              <div className="flex items-center gap-2">
-                <span className="text-white/40">$</span>
-                <input autoFocus type="number" value={goalInput}
-                  onChange={e => setGoalInput(e.target.value)}
-                  onBlur={handleGoalBlur}
-                  onKeyDown={e => { if (e.key === 'Enter') saveGoal(); if (e.key === 'Escape') cancelGoalEdit() }}
-                  style={{ background: '#2a2a2a', border: '1px solid rgba(0,184,148,0.4)' }}
-                  className="w-28 rounded-lg px-2 py-1 text-[16px] font-bold text-teal focus:outline-none" />
-                <button onMouseDown={e => e.preventDefault()} onClick={saveGoal}
-                  className="p-1.5 rounded-lg text-emerald-400 hover:bg-emerald-400/10"><Check size={15} /></button>
-                <button onMouseDown={e => e.preventDefault()} onClick={cancelGoalEdit}
-                  className="p-1.5 rounded-lg text-white/30 hover:bg-white/5"><X size={15} /></button>
-                {monthlyGoal.isCustom && (
-                  <button onMouseDown={e => e.preventDefault()} onClick={resetGoal}
-                    className="text-[11px] text-white/30 hover:text-white/60 underline ml-1">reset</button>
-                )}
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                {canEditThisGoal ? (
-                  <button onClick={startEditGoal}
-                    className="text-[18px] md:text-[20px] font-bold text-teal hover:bg-teal/5 rounded px-2 -mx-2 py-0.5 transition-colors">
-                    {fmt(monthlyGoal.goal)}
-                  </button>
-                ) : (
-                  <p className="text-[18px] font-bold text-teal">{fmt(monthlyGoal.goal)}</p>
-                )}
-                {saveStatus === 'saved' && <span className="text-[11px] font-semibold text-teal">Saved</span>}
-                {saveStatus === 'error' && <span className="text-[11px] font-semibold text-red-400">Save failed</span>}
-              </div>
-            )}
+            <p className={label}>Goal</p>
+            <GoalEditor editing={editingGoal} value={goalInput} onChange={setGoalInput} onBlur={handleGoalBlur}
+              onSave={saveGoal} onCancel={cancelGoalEdit} onReset={resetGoal} canEdit={canEditThisGoal} startEdit={startEditGoal}
+              isCustom={monthlyGoal.isCustom} amount={monthlyGoal.goal} status={saveStatus} />
           </div>
           <div className="ml-auto text-right">
-            <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mb-1">Remaining</p>
-            <p className="text-[16px] font-bold text-white/50">
+            <p className={label}>Remaining</p>
+            <p className="text-[16px] font-bold text-bank-mu tabular-nums">
               {monthlyGoal.pct >= 100 ? 'Goal Hit! 🎉' : fmt(Math.max(0, monthlyGoal.goal - monthlyGoal.curRevenue))}
             </p>
           </div>
         </div>
 
-        <div className="h-3 rounded-full overflow-hidden" style={{ background: '#1a1a1a' }}>
-          <div className={`h-full rounded-full transition-all duration-700 ${monthlyGoal.pct >= 100 ? 'bg-emerald-400' : 'bg-teal'}`}
-            style={{ width: `${monthlyGoal.pct}%` }} />
-        </div>
+        <Bar pct={monthlyGoal.pct} gold />
 
         {/* ── Weekly Goal (always the current week, Sun–Sat) ──
             COMPANY SCOPE ONLY. `app_settings.weekly_goal` is a single
@@ -842,89 +895,57 @@ export default function Dashboard() {
             bar would be that team's while the target stayed the company's —
             a comparison that looks precise and means nothing. */}
         {isCompany(scope) && (
-        <div className="mt-4 pt-4" style={{ borderTop: '1px solid #2e2e2e' }}>
-          <div className="flex items-start justify-between mb-2">
-            <div>
-              <h4 className="text-[12px] md:text-[13px] font-semibold text-white">
+        <div className="mt-4 pt-4 border-t border-bank-line">
+          <div className="flex items-start justify-between gap-3 mb-2">
+            <div className="min-w-0">
+              <h4 className="text-[13px] md:text-[14px] font-semibold text-bank-tx">
                 This Week ({weeklyGoal.label})
                 {scopeName && ` — ${scopeName}`}
               </h4>
-              <p className="text-[10px] text-white/30 mt-0.5">
+              <p className="text-[13px] text-bank-mu mt-0.5">
                 {weeklyGoal.isCustom ? 'Custom weekly goal' : 'Auto: monthly goal ÷ weeks'}
               </p>
             </div>
-            <div className={`text-[20px] md:text-[24px] font-bold leading-none ${weeklyGoal.pct >= 100 ? 'text-emerald-400' : 'text-teal'}`}>
+            <div className="text-[20px] md:text-[24px] font-bold leading-none tabular-nums" style={{ color: weeklyGoal.pct >= 100 ? POS : 'var(--tx)' }}>
               {weeklyGoal.pct.toFixed(1)}%
             </div>
           </div>
 
           <div className="flex flex-wrap items-end gap-4 md:gap-8 mb-3">
             <div>
-              <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mb-1">Week Revenue</p>
-              <p className="text-[17px] md:text-[20px] font-bold text-white">{fmt(weeklyGoal.curRevenue)}</p>
+              <p className={label}>Week Revenue</p>
+              <p className="text-[18px] md:text-[20px] font-bold text-bank-tx tabular-nums">{fmt(weeklyGoal.curRevenue)}</p>
             </div>
-            <div className="text-white/20 text-lg mb-0.5">/</div>
+            <div className="text-bank-line text-lg mb-0.5" aria-hidden="true">/</div>
             <div>
-              <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mb-1">Goal</p>
-              {editingWeekGoal ? (
-                <div className="flex items-center gap-2">
-                  <span className="text-white/40">$</span>
-                  <input autoFocus type="number" value={weekGoalInput}
-                    onChange={e => setWeekGoalInput(e.target.value)}
-                    onBlur={handleWeekGoalBlur}
-                    onKeyDown={e => { if (e.key === 'Enter') saveWeekGoal(); if (e.key === 'Escape') cancelWeekGoalEdit() }}
-                    style={{ background: '#2a2a2a', border: '1px solid rgba(0,184,148,0.4)' }}
-                    className="w-28 rounded-lg px-2 py-1 text-[14px] font-bold text-teal focus:outline-none" />
-                  <button onMouseDown={e => e.preventDefault()} onClick={saveWeekGoal}
-                    className="p-1.5 rounded-lg text-emerald-400 hover:bg-emerald-400/10"><Check size={14} /></button>
-                  <button onMouseDown={e => e.preventDefault()} onClick={cancelWeekGoalEdit}
-                    className="p-1.5 rounded-lg text-white/30 hover:bg-white/5"><X size={14} /></button>
-                  {weeklyGoal.isCustom && (
-                    <button onMouseDown={e => e.preventDefault()} onClick={resetWeekGoal}
-                      className="text-[11px] text-white/30 hover:text-white/60 underline ml-1">reset</button>
-                  )}
-                </div>
-              ) : (
-                <div className="flex items-center gap-2">
-                  {canEditGoal ? (
-                    <button onClick={startEditWeekGoal}
-                      className="text-[15px] md:text-[17px] font-bold text-teal hover:bg-teal/5 rounded px-2 -mx-2 py-0.5 transition-colors">
-                      {fmt(weeklyGoal.goal)}
-                    </button>
-                  ) : (
-                    <p className="text-[15px] font-bold text-teal">{fmt(weeklyGoal.goal)}</p>
-                  )}
-                  {weekSaveStatus === 'saved' && <span className="text-[11px] font-semibold text-teal">Saved</span>}
-                  {weekSaveStatus === 'error' && <span className="text-[11px] font-semibold text-red-400">Save failed</span>}
-                </div>
-              )}
+              <p className={label}>Goal</p>
+              <GoalEditor size="sm" editing={editingWeekGoal} value={weekGoalInput} onChange={setWeekGoalInput} onBlur={handleWeekGoalBlur}
+                onSave={saveWeekGoal} onCancel={cancelWeekGoalEdit} onReset={resetWeekGoal} canEdit={canEditGoal} startEdit={startEditWeekGoal}
+                isCustom={weeklyGoal.isCustom} amount={weeklyGoal.goal} status={weekSaveStatus} />
             </div>
             <div className="ml-auto text-right">
-              <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mb-1">Remaining</p>
-              <p className="text-[14px] font-bold text-white/50">
+              <p className={label}>Remaining</p>
+              <p className="text-[14px] font-bold text-bank-mu tabular-nums">
                 {weeklyGoal.pct >= 100 ? 'Goal Hit! 🎉' : fmt(Math.max(0, weeklyGoal.goal - weeklyGoal.curRevenue))}
               </p>
             </div>
           </div>
 
-          <div className="h-2 rounded-full overflow-hidden" style={{ background: '#1a1a1a' }}>
-            <div className={`h-full rounded-full transition-all duration-700 ${weeklyGoal.pct >= 100 ? 'bg-emerald-400' : 'bg-teal'}`}
-              style={{ width: `${weeklyGoal.pct}%` }} />
-          </div>
+          <Bar pct={weeklyGoal.pct} height="h-2" />
         </div>
         )}
-      </div>
+      </Card>
 
       {/* ── Appointments & field ────────────────────────────────────────
           Appointment COUNTS, never deals — the label says so because "Set"
           meaning two different things across two pages is what made the old
           Dashboard and Performance page impossible to read together. */}
       {node && (
-        <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
-          <h3 className="text-[13px] md:text-[14px] font-semibold text-white mb-0.5">
+        <Card>
+          <h3 className="text-[15px] font-bold text-bank-tx mb-0.5">
             {node.level === 'rep' ? `${node.title}'s appointments` : 'Appointments'}
           </h3>
-          <p className="text-[11px] text-white/30 mb-3">Appointment counts, never deals</p>
+          <p className="text-[13px] text-bank-mu mb-3">Appointment counts, never deals</p>
           {node.showFunnel ? (
             <div className="grid grid-cols-3 gap-2">
               {[
@@ -936,21 +957,21 @@ export default function Dashboard() {
                 // above, on purpose: one number per thing.
                 ['Sold',  node.stats.deals, node.stats.setCloseRate != null ? `${node.stats.setCloseRate.toFixed(0)}% of set` : null],
               ].map(([k, v, sub]) => (
-                <div key={k} className="rounded-lg px-3 py-2.5" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
-                  <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mb-1">{k}</p>
-                  <p className="text-[18px] font-bold text-white tabular-nums">{(v ?? 0).toLocaleString()}</p>
-                  {sub && <p className="text-[10px] text-teal mt-0.5">{sub}</p>}
+                <div key={k} className="rounded-xl px-3 py-2.5 min-w-0" style={SURFACE.well}>
+                  <p className={label}>{k}</p>
+                  <p className="text-[20px] font-bold text-bank-tx tabular-nums">{(v ?? 0).toLocaleString()}</p>
+                  {sub && <p className="text-[13px] text-bank-mu mt-0.5 truncate">{sub}</p>}
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-[12px] text-white/35 leading-relaxed">{node.funnelNote}</p>
+            <p className="text-[13px] text-bank-mu leading-relaxed">{node.funnelNote}</p>
           )}
           {node.showFunnel && node.stats.pastDue > 0 && (
             <a href="/leads?missing=info"
-              className="mt-2.5 inline-flex items-center gap-1.5 text-[11.5px] text-amber-300/80 hover:text-amber-300 transition-colors">
-              <AlertCircle size={12} />
-              {node.stats.pastDue} appointment{node.stats.pastDue === 1 ? '' : 's'} past their date with no outcome logged — they count as neither ran nor cancelled. Fix in Leads →
+              className="mt-2.5 inline-flex items-start gap-1.5 text-[13px] hover:underline min-h-[44px] md:min-h-0" style={{ color: WARN }}>
+              <AlertCircle size={13} className="mt-0.5 flex-shrink-0" />
+              <span>{node.stats.pastDue} appointment{node.stats.pastDue === 1 ? '' : 's'} past their date with no outcome logged — they count as neither ran nor cancelled. Fix in Leads →</span>
             </a>
           )}
           {node.level === 'rep' && node.showFunnel && (
@@ -961,390 +982,424 @@ export default function Dashboard() {
                 ['Self-gen deals', node.stats.deals, node.stats.sgCloseRate != null ? `${node.stats.sgCloseRate.toFixed(0)}% close` : null],
                 ['Lead closes',  node.stats.leadCloses, node.stats.leadCloseRate != null ? `${node.stats.leadCloseRate.toFixed(0)}% close` : null],
               ].map(([k, v, sub]) => (
-                <div key={k} className="rounded-lg px-3 py-2" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
-                  <p className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mb-0.5">{k}</p>
-                  <p className="text-[15px] font-bold text-white tabular-nums">{v ?? 0}</p>
-                  {sub && <p className="text-[10px] text-white/35">{sub}</p>}
+                <div key={k} className="rounded-xl px-3 py-2 min-w-0" style={SURFACE.well}>
+                  <p className={label}>{k}</p>
+                  <p className="text-[16px] font-bold text-bank-tx tabular-nums">{v ?? 0}</p>
+                  {sub && <p className="text-[13px] text-bank-mu">{sub}</p>}
                 </div>
               ))}
             </div>
           )}
-        </div>
+        </Card>
       )}
 
       {/* ── The drill table ─────────────────────────────────────────────
           Company → Teams or Offices → reps, then a rep's own deals. Six
-          columns by default; the activity toggle adds four. Today's
-          Performance table is thirteen, always. */}
+          columns by default; the activity toggle adds four. Desktop keeps
+          real tables; phones get compact rows that expand. */}
       {node && (
-        <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
+        <Card>
           <div className="flex items-center justify-between gap-2 flex-wrap mb-3">
             <div className="flex items-center gap-1.5 flex-wrap">
               {node.level === 'company' || node.level === 'office' ? (
                 <>
-                  <span className="text-[9px] font-semibold text-white/30 uppercase tracking-widest mr-1">Break down by</span>
+                  <span className="text-[13px] font-semibold text-bank-fa uppercase tracking-wider mr-1">Break down by</span>
                   {/* Inside an OFFICE the choice is Teams or Reps — the two
                       axes never crossed before, so picking Tucson dropped you
                       straight into a flat rep list with no way back to teams
                       (per Keaton). */}
-                  {(node.level === 'company' ? ['team', 'office', 'rep'] : ['team', 'rep']).map(g => {
-                    const on = grouping === g
-                    const set = node.level === 'company' ? setGroupBy : setOfficeGroup
-                    return (
-                      <button key={g} onClick={() => set(g)}
-                        className={`px-2.5 py-1 rounded-full text-[11px] transition-colors ${on
-                          ? 'bg-teal text-dark font-semibold' : 'text-white/45 hover:text-white'}`}
-                        style={on ? undefined : { border: '1px solid #3a3a3a' }}>
-                        {g === 'team' ? 'Teams' : g === 'office' ? 'Offices' : 'Reps'}
-                      </button>
-                    )
-                  })}
+                  <PillGroup>
+                    {(node.level === 'company' ? ['team', 'office', 'rep'] : ['team', 'rep']).map(g => {
+                      const set = node.level === 'company' ? setGroupBy : setOfficeGroup
+                      return (
+                        <Pill key={g} onClick={() => set(g)} active={grouping === g}>
+                          {g === 'team' ? 'Teams' : g === 'office' ? 'Offices' : 'Reps'}
+                        </Pill>
+                      )
+                    })}
+                  </PillGroup>
                   {node.level === 'office' && (
-                    <span className="text-[10px] text-white/25 ml-1">in {node.title}</span>
+                    <span className="text-[13px] text-bank-fa ml-1">in {node.title}</span>
                   )}
                 </>
               ) : (
                 <div className="flex items-center gap-2 min-w-0">
                   {backScope !== undefined && (
-                    <button onClick={() => setScope(backScope)}
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-white/55 hover:text-white transition-colors flex-shrink-0"
-                      style={{ background: '#1a1a1a', border: '1px solid #333' }}
-                      title={backLabel ? `Back to ${backLabel}` : 'Back'}>
+                    <SecondaryButton onClick={() => setScope(backScope)} title={backLabel ? `Back to ${backLabel}` : 'Back'} className="flex-shrink-0">
                       <ChevronLeft size={13} /> Back{backLabel ? ` to ${backLabel}` : ''}
-                    </button>
+                    </SecondaryButton>
                   )}
-                  <h3 className="text-[13px] md:text-[14px] font-semibold text-white truncate">
+                  <h3 className="text-[15px] font-bold text-bank-tx truncate">
                     {node.childKind || `${node.title} · deals`}
                   </h3>
                 </div>
               )}
             </div>
-            {grouping === 'rep' && (node.level === 'company' || node.level === 'office') ? (
-              <button onClick={copyLeaderboard}
-                title="Copy as a table — pastes formatted into Canva, Sheets or Docs"
-                className={`px-2.5 py-1.5 rounded-lg text-[11.5px] font-semibold inline-flex items-center gap-1.5 transition-colors ${
-                  copiedBoard ? 'text-emerald-400' : 'text-white/45 hover:text-teal'}`}
-                style={{ background: '#1a1a1a', border: '1px solid #333' }}>
+            {isBoard ? (
+              <SecondaryButton onClick={copyLeaderboard} active={copiedBoard}
+                title="Copy as a table — pastes formatted into Canva, Sheets or Docs">
                 {copiedBoard ? <Check size={12} /> : <Copy size={12} />}{copiedBoard ? 'Copied' : 'Copy table'}
-              </button>
+              </SecondaryButton>
             ) : (
-              <button onClick={() => setShowActivity(v => !v)}
-                className={`px-2.5 py-1 rounded-full text-[11px] transition-colors ${showActivity
-                  ? 'bg-teal text-dark font-semibold' : 'text-white/45 hover:text-white'}`}
-                style={showActivity ? undefined : { border: '1px solid #3a3a3a' }}>
+              <Pill onClick={() => setShowActivity(v => !v)} active={showActivity} className={showActivity ? '' : 'border-bank-line'}>
                 {showActivity ? '✓' : '+'} Appointments
-              </button>
+              </Pill>
             )}
           </div>
 
-          {grouping === 'rep' && (node.level === 'company' || node.level === 'office') ? (
+          {isBoard ? (
             repBoard.length > 0 ? (
-              <div className="overflow-x-auto">
-                <p className="text-[11px] text-white/30 mb-2">
+              <>
+                <p className="text-[13px] text-bank-mu mb-2">
                   {repBoard.length} {repBoard.length === 1 ? 'rep' : 'reps'} with activity · tap a column to rank by it ·
                   Set Deals + Self-Gen are the deals they own · Leads Closed is what Total Revenue adds on top
                 </p>
-                <table className="w-full text-[12.5px]">
+
+                {/* Desktop: the sortable table */}
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-[13px]">
+                    <thead>
+                      <tr>
+                        <th className={`${TH} text-left pr-1 w-8`}>#</th>
+                        <SortTh first label="Rep" col="name" sort={boardSort} onSort={toggleBoardSort} />
+                        <SortTh label="Revenue" col="revenue" sort={boardSort} onSort={toggleBoardSort}
+                          title="Revenue on the deals they OWN — what they set, or closed with no setter recorded" />
+                        <SortTh label="Total Revenue" col="totalRevenue" sort={boardSort} onSort={toggleBoardSort}
+                          title="Every deal they were involved in: their own, plus the ones they closed for another setter. A self-gen counts once." />
+                        <SortTh label="Set Deals" col="setForOthers" sort={boardSort} onSort={toggleBoardSort}
+                          title="They set it, another rep closed it — the setter keeps the deal and its revenue" />
+                        <SortTh label="Self-Gen" col="selfGen" sort={boardSort} onSort={toggleBoardSort}
+                          title="They set AND closed it themselves" />
+                        <SortTh label="Leads Closed" col="leadCloses" sort={boardSort} onSort={toggleBoardSort}
+                          title="Another rep set it, they closed it — the setter still owns the deal" />
+                        <SortTh label="Commission" col="commission" sort={boardSort} onSort={toggleBoardSort} />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {repBoard.map((r, i) => (
+                        <tr key={r.id}
+                          onClick={onClickUnlessSelecting(() => setScope({ level: 'rep', key: r.id }))}
+                          className="border-t border-bank-line cursor-pointer hover:bg-bank-raise">
+                          <td className="py-2 pr-1 text-bank-fa tabular-nums">{i + 1}</td>
+                          <td className="py-2 pr-2">
+                            <span className="font-semibold text-bank-tx">{r.ghost && !isAdmin ? 'Hidden' : r.name} <span className="text-bank-gold-tx">›</span></span>
+                            {isCompany(scope) && r.team && <span className={TD_SUB}>{r.team}</span>}
+                          </td>
+                          <td className={`${TD} text-bank-tx font-semibold`}>
+                            {fmt(r.revenue)}<Delta cur={r.revenue} prev={r.prev?.revenue} />
+                          </td>
+                          <td className={`${TD} text-bank-mu`}>
+                            {fmt(r.totalRevenue)}
+                            {r.leadRevenue > 0 && <span className={TD_SUB}>+{fmt(r.leadRevenue)} closed</span>}
+                          </td>
+                          <td className={`${TD} text-bank-mu`}>{r.setForOthers}</td>
+                          <td className={`${TD} text-bank-mu`}>{r.selfGen}</td>
+                          <td className={`${TD} text-bank-mu`}>{r.leadCloses}</td>
+                          <td className={`${TD} text-bank-mu`}>{fmt(r.commission)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Phones: rank picker + compact rows that expand to the other columns */}
+                <div className="md:hidden">
+                  <div className="flex items-center gap-2 mb-2">
+                    <label className="text-[13px] text-bank-fa" htmlFor="board-sort">Rank by</label>
+                    <select id="board-sort" value={boardSort.key} onChange={e => toggleBoardSort(e.target.value)}
+                      className="text-[13px] px-2 py-2 min-h-[44px] rounded-lg text-bank-tx focus:outline-none flex-1" style={SURFACE.raise}>
+                      {BOARD_COLS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                    </select>
+                    <SecondaryButton onClick={() => toggleBoardSort(boardSort.key)} aria-label="Flip sort direction">
+                      {boardSort.dir === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    </SecondaryButton>
+                  </div>
+                  <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--line)' }}>
+                    {repBoard.map((r, i) => (
+                      <Expandable key={r.id}
+                        title={<><span className="text-bank-fa tabular-nums mr-1.5">{i + 1}.</span>{r.ghost && !isAdmin ? 'Hidden' : r.name}</>}
+                        meta={isCompany(scope) && r.team ? r.team : null}
+                        right={<RowRight revenue={r.revenue} deals={r.setForOthers + r.selfGen} />}>
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-2 px-4 py-3" style={{ background: 'var(--bg)' }}>
+                          {[['Revenue', fmt(r.revenue)], ['Total Revenue', fmt(r.totalRevenue) + (r.leadRevenue > 0 ? ` (+${fmt(r.leadRevenue)} closed)` : '')],
+                            ['Set Deals', r.setForOthers], ['Self-Gen', r.selfGen], ['Leads Closed', r.leadCloses], ['Commission', fmt(r.commission)]].map(([l, v]) => (
+                            <div key={l} className="min-w-0"><p className="text-[13px] text-bank-fa">{l}</p><p className="text-[13px] font-semibold text-bank-tx tabular-nums">{v}</p></div>
+                          ))}
+                          <div className="col-span-2">
+                            <SecondaryButton onClick={() => setScope({ level: 'rep', key: r.id })} className="w-full">
+                              See {r.ghost && !isAdmin ? 'this rep' : r.name.split(' ')[0]}’s dashboard ›
+                            </SecondaryButton>
+                          </div>
+                        </div>
+                      </Expandable>
+                    ))}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <EmptyBlock className="py-3 text-left px-0">No reps with activity in this range.</EmptyBlock>
+            )
+          ) : node.children.length > 0 ? (
+            <>
+              {/* Desktop: the breakdown table */}
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full text-[13px]">
                   <thead>
                     <tr>
-                      <th className="text-left font-semibold py-1.5 pr-1 w-8 text-[9px] uppercase tracking-widest text-white/30">#</th>
-                      <SortTh first label="Rep" col="name" sort={boardSort} onSort={toggleBoardSort} />
-                      <SortTh label="Revenue" col="revenue" sort={boardSort} onSort={toggleBoardSort}
-                        title="Revenue on the deals they OWN — what they set, or closed with no setter recorded" />
-                      <SortTh label="Total Revenue" col="totalRevenue" sort={boardSort} onSort={toggleBoardSort}
-                        title="Every deal they were involved in: their own, plus the ones they closed for another setter. A self-gen counts once." />
-                      <SortTh label="Set Deals" col="setForOthers" sort={boardSort} onSort={toggleBoardSort}
-                        title="They set it, another rep closed it — the setter keeps the deal and its revenue" />
-                      <SortTh label="Self-Gen" col="selfGen" sort={boardSort} onSort={toggleBoardSort}
-                        title="They set AND closed it themselves" />
-                      <SortTh label="Leads Closed" col="leadCloses" sort={boardSort} onSort={toggleBoardSort}
-                        title="Another rep set it, they closed it — the setter still owns the deal" />
-                      <SortTh label="Commission" col="commission" sort={boardSort} onSort={toggleBoardSort} />
+                      <th className={`${TH} text-left pr-2`}>{node.childKind}</th>
+                      {showActivity && ['Set','Ran'].map(h =>
+                        <th key={h} className={`${TH} text-right px-2`}>{h}</th>)}
+                      {['Revenue','Deals','Avg deal','Markup','Commission','Goal'].map(h =>
+                        <th key={h} className={`${TH} text-right px-2`}>{h}</th>)}
                     </tr>
                   </thead>
                   <tbody>
-                    {repBoard.map((r, i) => (
-                      <tr key={r.id}
-                        onClick={onClickUnlessSelecting(() => setScope({ level: 'rep', key: r.id }))}
-                        className="border-t border-white/5 cursor-pointer hover:bg-white/[0.03]">
-                        <td className="py-2 pr-1 text-white/25 tabular-nums">{i + 1}</td>
-                        <td className="py-2 pr-2">
-                          <span className="font-semibold text-teal">{r.ghost && !isAdmin ? 'Hidden' : r.name} ›</span>
-                          {isCompany(scope) && r.team && <span className="block text-[10px] text-white/30 font-normal">{r.team}</span>}
-                        </td>
-                        <td className="text-right py-2 px-2 tabular-nums text-white font-semibold">
-                          {fmt(r.revenue)}<Delta cur={r.revenue} prev={r.prev?.revenue} />
-                        </td>
-                        <td className="text-right py-2 px-2 tabular-nums text-white/75">
-                          {fmt(r.totalRevenue)}
-                          {r.leadRevenue > 0 && <span className="block text-[10px] text-white/30 font-normal">+{fmt(r.leadRevenue)} closed</span>}
-                        </td>
-                        <td className="text-right py-2 px-2 tabular-nums text-white/70">{r.setForOthers}</td>
-                        <td className="text-right py-2 px-2 tabular-nums text-white/70">{r.selfGen}</td>
-                        <td className="text-right py-2 px-2 tabular-nums text-white/70">{r.leadCloses}</td>
-                        <td className="text-right py-2 px-2 tabular-nums text-white/70">{fmt(r.commission)}</td>
+                    {node.children.map(c => {
+                      const st = c.stats
+                      const gp = childGoalPct(c)
+                      const fl = c.kind === 'rep' ? repFlags(st, flagFloors) : {}
+                      // Company-level team rows expand IN PLACE to show their reps,
+                      // instead of re-scoping the whole page (per Keaton).
+                      const isTeamAcc = node.level === 'company' && c.kind === 'team'
+                      const expanded = isTeamAcc && expandedTeams.has(c.key)
+                      const clickable = isTeamAcc || c.drillable
+                      return (
+                        <Fragment key={`${c.kind}-${c.key}`}>
+                        <tr
+                          onClick={isTeamAcc
+                            ? onClickUnlessSelecting(() => toggleTeam(c.key))
+                            : (c.drillable ? onClickUnlessSelecting(() => setScope({ level: c.kind, key: c.key })) : undefined)}
+                          className={`border-t border-bank-line ${clickable ? 'cursor-pointer hover:bg-bank-raise' : ''}`}>
+                          <td className="py-2 pr-2">
+                            <span className={`font-semibold ${clickable ? 'text-bank-tx' : 'text-bank-mu'}`}>
+                              {c.ghost && !isAdmin ? 'Hidden' : c.label}
+                              {clickable && <span className="text-bank-gold-tx">{isTeamAcc ? (expanded ? ' ⌄' : ' ›') : ' ›'}</span>}
+                            </span>
+                            {c.sub && <span className={TD_SUB}>{c.sub}</span>}
+                          </td>
+                          <StatCells st={st} prev={c.prev} showActivity={showActivity} flagSet={!!fl.set} />
+                          <GoalCell pct={gp} />
+                        </tr>
+                        {isTeamAcc && expanded && teamRepRows(c.key).map(r => {
+                          const rg = repGoalMap[r.id]
+                          const rgp = rg ? (r.revenue / rg) * 100 : null
+                          const repOpen = expandedReps.has(r.id)
+                          const drillColCount = 1 + (showActivity ? 2 : 0) + 6
+                          return (
+                            <Fragment key={`rep-${c.key}-${r.id}`}>
+                            <tr
+                              onClick={onClickUnlessSelecting(() => toggleRep(r.id))}
+                              className="border-t border-bank-line cursor-pointer hover:bg-bank-raise"
+                              style={{ background: 'var(--bg)' }}>
+                              <td className="py-2 pr-2 pl-7">
+                                <span className="text-bank-mu text-[13px]">{r.ghost && !isAdmin ? 'Hidden' : r.name}<span className="text-bank-gold-tx">{repOpen ? ' ⌄' : ' ›'}</span></span>
+                              </td>
+                              <StatCells st={r} prev={r.prev} showActivity={showActivity} />
+                              <GoalCell pct={rgp} />
+                            </tr>
+                            {repOpen && (
+                              <tr style={{ background: 'var(--bg)' }}>
+                                <td colSpan={drillColCount} className="py-2 pl-10 pr-3">
+                                  <RepDealsInline deals={repDealsFor(deals, r.id, { from: dateFrom, to: dateTo })} repId={r.id} />
+                                </td>
+                              </tr>
+                            )}
+                            </Fragment>
+                          )
+                        })}
+                        </Fragment>
+                      )
+                    })}
+                    <tr className="border-t border-bank-line" style={{ background: 'var(--raise)' }}>
+                      <td className="py-2 pr-2 font-bold text-bank-tx">{node.title}</td>
+                      <StatCells st={node.stats} prev={node.prev} showActivity={showActivity} bold />
+                      <GoalCell pct={nodeGoalPct} bold />
+                    </tr>
+                  </tbody>
+                </table>
+                <p className="text-[13px] text-bank-fa mt-2">
+                  {node.level === 'company' && grouping === 'team'
+                    ? 'Click a team to drop its reps in below; click a rep to see their deals.'
+                    : 'Click a row to scope the whole page to it.'}
+                </p>
+              </div>
+
+              {/* Phones: one compact row per team / office / rep, expanding to the rest */}
+              <div className="md:hidden rounded-xl overflow-hidden" style={{ border: '1px solid var(--line)' }}>
+                {node.children.map(c => {
+                  const st = c.stats
+                  const gp = childGoalPct(c)
+                  const fl = c.kind === 'rep' ? repFlags(st, flagFloors) : {}
+                  const isTeamAcc = node.level === 'company' && c.kind === 'team'
+                  return (
+                    <Expandable key={`m-${c.kind}-${c.key}`}
+                      title={c.ghost && !isAdmin ? 'Hidden' : c.label} meta={c.sub || null}
+                      right={<RowRight revenue={st.revenue} deals={st.deals} />}>
+                      <MobileStats st={st} prev={c.prev} showActivity={showActivity} goalPct={gp} flagSet={!!fl.set} />
+                      {isTeamAcc && (
+                        <div className="border-t border-bank-line">
+                          <p className="px-4 pt-2 pb-1 text-[13px] text-bank-fa uppercase tracking-wider font-semibold">Reps</p>
+                          {teamRepRows(c.key).length === 0 && <p className="px-4 pb-3 text-[13px] text-bank-mu">No rep activity in this range.</p>}
+                          {teamRepRows(c.key).map(r => {
+                            const rg = repGoalMap[r.id]
+                            const rgp = rg ? (r.revenue / rg) * 100 : null
+                            return (
+                              <Expandable key={`m-rep-${c.key}-${r.id}`} className="pl-3"
+                                title={r.ghost && !isAdmin ? 'Hidden' : r.name}
+                                right={<RowRight revenue={r.revenue} deals={r.deals} />}>
+                                <MobileStats st={r} prev={r.prev} showActivity={showActivity} goalPct={rgp} />
+                                <div className="px-4 pb-3" style={{ background: 'var(--bg)' }}>
+                                  <RepDealsInline deals={repDealsFor(deals, r.id, { from: dateFrom, to: dateTo })} repId={r.id} />
+                                </div>
+                              </Expandable>
+                            )
+                          })}
+                        </div>
+                      )}
+                      {!isTeamAcc && c.drillable && (
+                        <div className="px-4 pb-3" style={{ background: 'var(--bg)' }}>
+                          <SecondaryButton onClick={() => setScope({ level: c.kind, key: c.key })} className="w-full">
+                            Scope the page to {c.ghost && !isAdmin ? 'this row' : c.label} ›
+                          </SecondaryButton>
+                        </div>
+                      )}
+                    </Expandable>
+                  )
+                })}
+                <div className="px-4 py-3 flex items-center justify-between gap-3" style={{ background: 'var(--raise)' }}>
+                  <span className="text-[13px] font-bold text-bank-tx truncate">{node.title}</span>
+                  <RowRight revenue={node.stats.revenue} deals={node.stats.deals} />
+                </div>
+                <MobileStats st={node.stats} prev={node.prev} showActivity={showActivity} goalPct={nodeGoalPct} />
+              </div>
+            </>
+          ) : node.level === 'rep' ? (
+            <>
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full text-[13px]">
+                  <thead>
+                    <tr>
+                      <th className={`${TH} text-left pr-2`}>Deal</th>
+                      <th className={`${TH} text-left px-2`}>Sold</th>
+                      <th className={`${TH} text-right px-2`}>Revenue</th>
+                      <th className={`${TH} text-left px-2`}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {repDealRows.map(d => (
+                      <tr key={d.id} className="border-t border-bank-line">
+                        <td className="py-2 pr-2 text-bank-tx font-medium truncate max-w-[220px]">{d.deal_name}</td>
+                        <td className="py-2 px-2 text-bank-mu whitespace-nowrap">{d.sale_date}</td>
+                        <td className="text-right py-2 px-2 tabular-nums text-bank-tx">{fmt(parseFloat(d.baseline_revenue) || 0)}</td>
+                        <td className="py-2 px-2 text-bank-mu">{d.status}</td>
                       </tr>
                     ))}
+                    {repDealRows.length === 0 && (
+                      <tr><td colSpan={4} className="py-4 text-center text-bank-mu text-[13px]">No deals in this range.</td></tr>
+                    )}
                   </tbody>
                 </table>
               </div>
-            ) : (
-              <p className="text-[12px] text-white/30 py-3">No reps with activity in this range.</p>
-            )
-          ) : node.children.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full text-[12.5px]">
-                <thead>
-                  <tr className="text-[9px] uppercase tracking-widest text-white/30">
-                    <th className="text-left font-semibold py-1.5 pr-2">{node.childKind}</th>
-                    {showActivity && ['Set','Ran'].map(h =>
-                      <th key={h} className="text-right font-semibold py-1.5 px-2 text-teal/60">{h}</th>)}
-                    {['Revenue','Deals','Avg deal','Markup','Commission','Goal'].map(h =>
-                      <th key={h} className="text-right font-semibold py-1.5 px-2">{h}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {node.children.map(c => {
-                    const st = c.stats
-                    const g = c.kind === 'rep' ? repGoalMap[c.key]
-                            : c.kind === 'office' ? officeGoals[c.label]
-                            : (teamGoalMap[c.key] ?? null)
-                    const gp = g ? (st.revenue / g) * 100 : null
-                    const fl = c.kind === 'rep' ? repFlags(st, flagFloors) : {}
-                    // Company-level team rows expand IN PLACE to show their reps,
-                    // instead of re-scoping the whole page (per Keaton).
-                    const isTeamAcc = node.level === 'company' && c.kind === 'team'
-                    const expanded = isTeamAcc && expandedTeams.has(c.key)
-                    return (
-                      <Fragment key={`${c.kind}-${c.key}`}>
-                      <tr
-                        onClick={isTeamAcc
-                          ? onClickUnlessSelecting(() => toggleTeam(c.key))
-                          : (c.drillable ? onClickUnlessSelecting(() => setScope({ level: c.kind, key: c.key })) : undefined)}
-                        className={`border-t border-white/5 ${(isTeamAcc || c.drillable) ? 'cursor-pointer hover:bg-white/[0.03]' : ''}`}>
-                        <td className="py-2 pr-2">
-                          <span className={`font-semibold ${(isTeamAcc || c.drillable) ? 'text-teal' : 'text-white/70'}`}>
-                            {c.ghost && !isAdmin ? 'Hidden' : c.label}{isTeamAcc ? (expanded ? ' ⌄' : ' ›') : (c.drillable ? ' ›' : '')}
-                          </span>
-                          {c.sub && <span className="block text-[10px] text-white/30 font-normal">{c.sub}</span>}
-                        </td>
-                        {showActivity && (
-                          <>
-                            {/* The conversion rate rides UNDER the count it
-                                describes (per Keaton, "a little nod") rather
-                                than taking a column of its own. */}
-                            <td className={`text-right py-2 px-2 tabular-nums ${fl.set ? 'text-red-400 font-bold' : 'text-white/60'}`}>
-                              {st.set ?? 0}
-                              {st.showRate != null && <span className="block text-[10px] text-white/30 font-normal">{st.showRate.toFixed(0)}% ran</span>}
-                            </td>
-                            <td className="text-right py-2 px-2 tabular-nums text-white/60">
-                              {st.ran ?? 0}
-                              {st.dealCloseRate != null && <span className="block text-[10px] text-teal/60 font-normal">{st.dealCloseRate.toFixed(0)}% closed</span>}
-                            </td>
-                          </>
-                        )}
-                        <td className="text-right py-2 px-2 tabular-nums text-white font-semibold">
-                          {fmt(st.revenue)}
-                          <Delta cur={st.revenue} prev={c.prev?.revenue} />
-                        </td>
-                        <td className="text-right py-2 px-2 tabular-nums text-white/60">
-                          {st.deals}
-                          <Delta cur={st.deals} prev={c.prev?.deals} />
-                        </td>
-                        <td className="text-right py-2 px-2 tabular-nums text-white/60">{st.avgDeal != null ? fmt(st.avgDeal) : '—'}</td>
-                        <td className="text-right py-2 px-2 tabular-nums text-white/60">{st.markupPct != null ? `${st.markupPct.toFixed(1)}%` : '—'}</td>
-                        <td className="text-right py-2 px-2 tabular-nums text-white/60">{fmt(st.commission)}</td>
-                        <td className="text-right py-2 px-2 tabular-nums">
-                          {gp == null ? <span className="text-white/20">—</span> : (
-                            <span className={gp >= 100 ? 'text-emerald-400 font-semibold' : gp >= 80 ? 'text-white/60' : 'text-amber-400'}>
-                              {Math.round(gp)}%
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                      {isTeamAcc && expanded && teamRepRows(c.key).map(r => {
-                        const rg = repGoalMap[r.id]
-                        const rgp = rg ? (r.revenue / rg) * 100 : null
-                        const repOpen = expandedReps.has(r.id)
-                        const drillColCount = 1 + (showActivity ? 2 : 0) + 6
-                        return (
-                          <Fragment key={`rep-${c.key}-${r.id}`}>
-                          <tr
-                            onClick={onClickUnlessSelecting(() => toggleRep(r.id))}
-                            className="border-t border-white/5 cursor-pointer hover:bg-white/[0.03]"
-                            style={{ background: '#1c1c1c' }}>
-                            <td className="py-1.5 pr-2 pl-7">
-                              <span className="text-teal/80 text-[12px]">{r.ghost && !isAdmin ? 'Hidden' : r.name}{repOpen ? ' ⌄' : ' ›'}</span>
-                            </td>
-                            <StatCells st={r} prev={r.prev} showActivity={showActivity} />
-                            <td className="text-right py-2 px-2 tabular-nums">
-                              {rgp == null ? <span className="text-white/20">—</span> : (
-                                <span className={rgp >= 100 ? 'text-emerald-400 font-semibold' : rgp >= 80 ? 'text-white/60' : 'text-amber-400'}>
-                                  {Math.round(rgp)}%
-                                </span>
-                              )}
-                            </td>
-                          </tr>
-                          {repOpen && (
-                            <tr style={{ background: '#181818' }}>
-                              <td colSpan={drillColCount} className="py-2 pl-10 pr-3">
-                                <RepDealsInline deals={repDealsFor(deals, r.id, { from: dateFrom, to: dateTo })} repId={r.id} />
-                              </td>
-                            </tr>
-                          )}
-                          </Fragment>
-                        )
-                      })}
-                      </Fragment>
-                    )
-                  })}
-                  <tr className="border-t border-white/10" style={{ background: '#1f1f1f' }}>
-                    <td className="py-2 pr-2 font-bold text-white">{node.title}</td>
-                    {showActivity && (
-                      <>
-                        <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">
-                          {node.stats.set ?? 0}
-                          {node.stats.showRate != null && <span className="block text-[10px] text-white/30 font-normal">{node.stats.showRate.toFixed(0)}% ran</span>}
-                        </td>
-                        <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">
-                          {node.stats.ran ?? 0}
-                          {node.stats.dealCloseRate != null && <span className="block text-[10px] text-teal/60 font-normal">{node.stats.dealCloseRate.toFixed(0)}% closed</span>}
-                        </td>
-                      </>
-                    )}
-                    <td className="text-right py-2 px-2 tabular-nums font-bold text-white">
-                      {fmt(node.stats.revenue)}
-                      <Delta cur={node.stats.revenue} prev={node.prev?.revenue} />
-                    </td>
-                    <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">
-                      {node.stats.deals}
-                      <Delta cur={node.stats.deals} prev={node.prev?.deals} />
-                    </td>
-                    <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{node.stats.avgDeal != null ? fmt(node.stats.avgDeal) : '—'}</td>
-                    <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{node.stats.markupPct != null ? `${node.stats.markupPct.toFixed(1)}%` : '—'}</td>
-                    <td className="text-right py-2 px-2 tabular-nums font-bold text-white/80">{fmt(node.stats.commission)}</td>
-                    <td className="text-right py-2 px-2 tabular-nums font-bold text-white/60">
-                      {goalInfo.target ? `${Math.round((node.stats.revenue / goalInfo.target) * 100)}%` : '—'}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-              <p className="text-[10.5px] text-white/25 mt-2">
-                {node.level === 'company' && grouping === 'team'
-                  ? 'Click a team to drop its reps in below; click a rep to see their deals.'
-                  : 'Click a row to scope the whole page to it.'}
-              </p>
-            </div>
-          ) : node.level === 'rep' ? (
-            <div className="overflow-x-auto">
-              <table className="w-full text-[12.5px]">
-                <thead>
-                  <tr className="text-[9px] uppercase tracking-widest text-white/30">
-                    <th className="text-left font-semibold py-1.5 pr-2">Deal</th>
-                    <th className="text-left font-semibold py-1.5 px-2">Sold</th>
-                    <th className="text-right font-semibold py-1.5 px-2">Revenue</th>
-                    <th className="text-left font-semibold py-1.5 px-2">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {repDealRows.map(d => (
-                    <tr key={d.id} className="border-t border-white/5">
-                      <td className="py-2 pr-2 text-white font-medium truncate max-w-[220px]">{d.deal_name}</td>
-                      <td className="py-2 px-2 text-white/50 whitespace-nowrap">{d.sale_date}</td>
-                      <td className="text-right py-2 px-2 tabular-nums text-white/70">{fmt(parseFloat(d.baseline_revenue) || 0)}</td>
-                      <td className="py-2 px-2 text-white/50">{d.status}</td>
-                    </tr>
-                  ))}
-                  {repDealRows.length === 0 && (
-                    <tr><td colSpan={4} className="py-4 text-center text-white/30 text-[12px]">No deals in this range.</td></tr>
-                  )}
-                </tbody>
-              </table>
+              <div className="md:hidden rounded-xl overflow-hidden" style={{ border: '1px solid var(--line)' }}>
+                {repDealRows.map(d => (
+                  <div key={d.id} className="flex items-center justify-between gap-3 px-4 py-3 border-b border-bank-line last:border-0">
+                    <div className="min-w-0">
+                      <p className="text-[13px] font-medium text-bank-tx truncate">{d.deal_name}</p>
+                      <p className="text-[13px] text-bank-mu">{d.sale_date} · {d.status}</p>
+                    </div>
+                    <span className="text-[13px] font-semibold text-bank-tx tabular-nums whitespace-nowrap">{fmt(parseFloat(d.baseline_revenue) || 0)}</span>
+                  </div>
+                ))}
+                {repDealRows.length === 0 && <EmptyBlock className="py-4">No deals in this range.</EmptyBlock>}
+              </div>
               <a href={`/deals?scope=all&rep=${node.key}`}
-                className="inline-block mt-2 text-[11px] text-teal hover:underline">Open in Deals for filtering and edits →</a>
-            </div>
+                className="inline-flex items-center mt-2 text-[13px] text-bank-gold-tx hover:underline min-h-[44px] md:min-h-0">Open in Deals for filtering and edits →</a>
+            </>
           ) : (
-            <p className="text-[12px] text-white/30 py-3">Nothing to break down here.</p>
+            <EmptyBlock className="py-3 text-left px-0">Nothing to break down here.</EmptyBlock>
           )}
-        </div>
+        </Card>
       )}
-
-
 
       {/* ── Weekly + Annual — stack on mobile ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-5">
 
-        {/* Weekly Performance */}
-        <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
+        {/* Weekly Performance — ivory bars, gold only for the current week */}
+        <Card>
           <div className="mb-4">
-            <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Weekly Performance</h3>
-            <p className="text-[11px] text-white/30 mt-0.5">
+            <h3 className="text-[15px] font-bold text-bank-tx">Weekly Performance</h3>
+            <p className="text-[13px] text-bank-mu mt-0.5">
               Sun–Sat · last {weeklyData.length - 1} full weeks + this week
               {weeklyAvg && (
-                <span className="text-white/50"> · avg <span className="font-semibold text-teal/80">{fmt(weeklyAvg.revenue)}</span> & {weeklyAvg.deals.toFixed(1)} deals / week</span>
+                <span> · avg <span className="font-semibold text-bank-tx">{fmt(weeklyAvg.revenue)}</span> & {weeklyAvg.deals.toFixed(1)} deals / week</span>
               )}
             </p>
           </div>
           <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
             {weeklyData.map((w, i) => (
-              <div key={i} className="rounded-lg px-3 py-2.5 flex items-center gap-3"
-                style={{ background: '#1a1a1a', border: w.current ? '1px solid #00b89440' : '1px solid #2a2a2a' }}>
-                <div className="w-14 md:w-20 flex-shrink-0">
-                  <p className="text-[9px] font-semibold uppercase tracking-wider" style={{ color: w.current ? '#00b894' : 'rgba(255,255,255,0.4)' }}>{w.current ? 'This wk' : 'Week'}</p>
-                  <p className="text-[12px] md:text-[13px] font-bold text-white">{w.label}</p>
+              <div key={i} className="rounded-xl px-3 py-2.5 flex items-center gap-3"
+                style={{ ...SURFACE.well, border: w.current ? '1px solid rgba(191,164,108,0.45)' : SURFACE.well.border }}>
+                <div className="w-16 md:w-20 flex-shrink-0">
+                  <p className="text-[13px] font-semibold uppercase tracking-wide" style={{ color: w.current ? 'var(--gold-tx)' : 'var(--fa)' }}>{w.current ? 'This wk' : 'Week'}</p>
+                  <p className="text-[13px] font-bold text-bank-tx">{w.label}</p>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="h-1.5 rounded-full overflow-hidden" style={{ background: '#2a2a2a' }}>
-                    <div className="h-full rounded-full bg-teal" style={{ width: `${(w.revenue / maxWeekRevLocal) * 100}%` }} />
+                  <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--raise)' }}>
+                    <div className="h-full rounded-full" style={{ width: `${(w.revenue / maxWeekRevLocal) * 100}%`, background: w.current ? 'var(--gold)' : 'var(--mu)' }} />
                   </div>
                 </div>
                 <div className="text-right flex-shrink-0">
-                  <p className="text-[12px] md:text-[13px] font-bold text-teal whitespace-nowrap">{fmt(w.revenue)}</p>
-                  <p className="text-[10px] text-white/40">{w.deals} {w.deals === 1 ? 'deal' : 'deals'}</p>
+                  <p className="text-[13px] font-bold whitespace-nowrap tabular-nums" style={{ color: w.current ? 'var(--gold-tx)' : 'var(--tx)' }}>{fmt(w.revenue)}</p>
+                  <p className="text-[13px] text-bank-mu">{plural(w.deals, 'deal')}</p>
                 </div>
               </div>
             ))}
-            {weeklyData.length === 0 && <p className="text-[13px] text-white/30 text-center py-8">No data</p>}
+            {weeklyData.length === 0 && <EmptyBlock>No data</EmptyBlock>}
           </div>
-        </div>
+        </Card>
 
-        {/* Annual Chart */}
-        <div className="rounded-xl p-4 md:p-5" style={{ background: '#242424', border: '1px solid #2e2e2e' }}>
+        {/* Annual Chart — ivory line, gold dot on the current month */}
+        <Card>
           <div className="mb-4">
-            <h3 className="text-[13px] md:text-[14px] font-semibold text-white">Annual Trend</h3>
-            <p className="text-[11px] text-white/30 mt-0.5">Trailing 12 months</p>
+            <h3 className="text-[15px] font-bold text-bank-tx">Annual Trend</h3>
+            <p className="text-[13px] text-bank-mu mt-0.5">Trailing 12 months</p>
           </div>
           <ResponsiveContainer width="100%" height={240}>
             <AreaChart data={annualData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
               <defs>
                 <linearGradient id="annualGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#00b894" stopOpacity={0.4} />
-                  <stop offset="100%" stopColor="#00b894" stopOpacity={0} />
+                  <stop offset="0%" stopColor="#ede7da" stopOpacity={0.22} />
+                  <stop offset="100%" stopColor="#ede7da" stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#2e2e2e" vertical={false} />
-              <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#666' }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 10, fill: '#666' }} axisLine={false} tickLine={false}
-                tickFormatter={v => `$${(v/1000).toFixed(0)}k`} width={36} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#2c2f33" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 13, fill: '#8c8a84' }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 13, fill: '#8c8a84' }} axisLine={false} tickLine={false}
+                tickFormatter={v => `$${(v/1000).toFixed(0)}k`} width={40} />
               <Tooltip
-                cursor={{ stroke: '#00b894', strokeWidth: 1, strokeOpacity: 0.3 }}
-                content={({ active, payload, label }) => {
+                cursor={{ stroke: '#bfa46c', strokeWidth: 1, strokeOpacity: 0.5 }}
+                content={({ active, payload, label: lbl }) => {
                   if (!active || !payload?.length) return null
                   const d = payload[0]?.payload
                   return (
-                    <div style={{ background: '#2a2a2a', border: '1px solid #3a3a3a', borderRadius: 10, padding: '10px 14px' }}>
-                      <p style={{ color: '#00b894', fontWeight: 600, fontSize: 12, marginBottom: 4 }}>{label}</p>
-                      <p style={{ color: '#fff', fontSize: 12 }}>Revenue: ${d?.revenue?.toLocaleString()}</p>
-                      <p style={{ color: '#999', fontSize: 11 }}>Deals: {d?.deals ?? 0}</p>
+                    <div style={{ ...SURFACE.card, borderRadius: 12, padding: '10px 14px' }}>
+                      <p style={{ color: '#cdb684', fontWeight: 600, fontSize: 13, marginBottom: 4 }}>{lbl}</p>
+                      <p style={{ color: '#ede7da', fontSize: 13 }}>Revenue: ${d?.revenue?.toLocaleString()}</p>
+                      <p style={{ color: '#a19e97', fontSize: 13 }}>Deals: {d?.deals ?? 0}</p>
                     </div>
                   )
                 }}
               />
-              <Area type="monotone" dataKey="revenue" stroke="#00b894" strokeWidth={2}
-                fill="url(#annualGrad)" dot={{ fill: '#00b894', r: 3 }} activeDot={{ r: 5 }} />
+              <Area type="monotone" dataKey="revenue" stroke="#ede7da" strokeWidth={2}
+                fill="url(#annualGrad)" activeDot={{ r: 5, fill: '#bfa46c', stroke: '#131416' }}
+                dot={(props) => {
+                  const { cx, cy, index, key } = props
+                  const current = index === annualData.length - 1
+                  return <circle key={key ?? index} cx={cx} cy={cy} r={current ? 4.5 : 3} fill={current ? '#bfa46c' : '#a19e97'} stroke={current ? '#131416' : 'none'} strokeWidth={1.5} />
+                }} />
             </AreaChart>
           </ResponsiveContainer>
-        </div>
+        </Card>
       </div>
     </div>
   )
