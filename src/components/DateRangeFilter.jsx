@@ -98,7 +98,7 @@ export default function DateRangeFilter({
           {(from || to) && (
             <button
               onClick={() => onChange({ from: '', to: '', preset: 'all' })}
-              className="text-[13px] min-h-[44px] md:min-h-0 px-1 text-bank-mu hover:text-bank-tx underline ml-0.5"
+              className="text-[13px] min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 px-1 text-bank-mu hover:text-bank-tx underline ml-0.5"
             >
               Clear
             </button>

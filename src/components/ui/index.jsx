@@ -153,7 +153,7 @@ export function SecondaryButton({ className = '', active = false, children, styl
 export function Pill({ active, className = '', children, ...rest }) {
   return (
     <button aria-pressed={active}
-      className={`px-3 py-2 min-h-[44px] md:min-h-0 md:py-1.5 rounded-lg text-[13px] font-semibold transition-colors border ${
+      className={`px-3 py-2 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:py-1.5 rounded-lg text-[13px] font-semibold transition-colors border ${
         active ? 'text-bank-gold-tx' : 'text-bank-mu hover:text-bank-tx hover:bg-bank-raise border-transparent'} ${className}`}
       style={active ? SURFACE.raise : undefined} {...rest}>
       {children}

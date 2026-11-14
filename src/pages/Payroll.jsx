@@ -1708,7 +1708,7 @@ export default function Payroll() {
                     <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} title={d.status} />
                     <div style={COL.deal} className="min-w-0">
                       <button onClick={e => { e.stopPropagation(); openEdit(d) }}
-                        className="block w-fit max-w-full text-[13px] font-semibold text-bank-tx truncate text-left hover:text-bank-gold-tx transition-colors"
+                        className="block w-fit max-w-full text-[13px] font-semibold text-bank-tx truncate text-left hover:text-bank-gold-tx transition-colors min-h-[44px] md:min-h-0 md:leading-normal leading-[44px]"
                         title={`${d.deal_name} — click the name to edit this deal`}>
                         {d.deal_name}
                       </button>
