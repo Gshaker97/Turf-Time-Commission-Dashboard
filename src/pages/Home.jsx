@@ -46,6 +46,8 @@ function getMonths(n = 12) {
   return months;
 }
 
+// Sales role (setter / closer / both) is display-only; deal credit comes from each deal.
+const SALES_ROLE_LABEL = { setter: "Setter", closer: "Closer", both: "Setter & closer" };
 // Closing-rate tone on the tokens: strong = sage, middling = amber, weak = rose.
 // Returned as CSS values for the page and as hex for the canvas card.
 const RATE_HEX = { pos: "#a9c4b2", warn: "#d2a074", neg: "#d98c80", mu: "#a19e97" };
@@ -488,7 +490,10 @@ export default function Home() {
             <h1 className="text-lg md:text-xl font-bold text-bank-tx truncate">
               {viewUser?.name}{viewingOther && <span className="text-[13px] font-semibold ml-2" style={{ color: "var(--warn)" }}>· viewing</span>}
             </h1>
-            <p className="text-[13px] text-bank-mu truncate">{myTeam || ROLE_LABEL[viewUser?.role] || viewUser?.role}</p>
+            <p className="text-[13px] text-bank-mu truncate">
+              {myTeam || ROLE_LABEL[viewUser?.role] || viewUser?.role}
+              {viewUser?.sales_role && <> · <span className="text-bank-tx">{SALES_ROLE_LABEL[viewUser.sales_role] || viewUser.sales_role}</span></>}
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">

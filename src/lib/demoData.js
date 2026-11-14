@@ -138,6 +138,14 @@ export const DEMO_DEALS_JOINED = [
   makeDeal({ id: 'deal-aud-c', deal_name: 'Pruitt — 7 Sandstone Loop', project_id: 'TT-1092', sale_date: daysAgo(40), setter_id: 'u-stephen', closer_id: 'u-stephen', baseline_revenue: 5000, job_price: 9000, status: 'Paid', install_date: daysAgo(28), pay_date: daysAgo(16), office: 'Phoenix', setter_amount: 4000, director_amount: 250 }),
 ]
 
+// Who sets and who closes (Garrison, Nov 14 2026). Display/filter only.
+const DEMO_SALES_ROLE = {
+  'u-garrison': 'both', 'u-jared': 'closer', 'u-jordan': 'closer', 'u-conner': 'closer', 'u-ricky': 'closer',
+  'u-danny': 'both', 'u-colt': 'both', 'u-jeremy': 'both', 'u-jc': 'both', 'u-casey': 'both',
+  'u-stephen': 'setter', 'u-charlieh': 'setter', 'u-tylerm': 'setter', 'u-johnk': 'setter', 'u-bryan': 'setter',
+}
+for (const u of DEMO_USERS) u.sales_role = DEMO_SALES_ROLE[u.id] ?? null
+
 // Seed one historical correction (against the clean deal-aud-c) so the audit
 // panel's bottom "history" section isn't empty in demo mode.
 export const DEMO_AUDIT_OVERRIDES = [

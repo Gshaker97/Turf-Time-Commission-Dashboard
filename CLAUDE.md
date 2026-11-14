@@ -1338,6 +1338,14 @@ in range, a rep who left) falls back to company rather than rendering empty.
 - The **weekly goal block renders at COMPANY SCOPE ONLY**: `weekly_goal` is one
   company-wide setting, so at team scope the bar would be that team's revenue
   against the company's target — precise-looking and meaningless.
+- **`profiles.sales_role`** (migration 061, Nov 14 2026): `setter` | `closer` |
+  `both` | NULL, set in the Add/Edit person form, shown as a tag on the Admin
+  roster and after the team name on My Card, and the Dashboard leaderboard's
+  All / Setters / Closers pills filter on it (`both` shows under either; NULL
+  only under All). DISPLAY AND FILTER ONLY — deal credit, overrides, payroll
+  and permissions still come from each deal's setter_id / closer_id. Seeded
+  from Garrison's roster by display name, NULL rows only. Not stored on the
+  person before this: the site could not say what a rep's job was.
 - The **record-moments card defaults to COLLAPSED** (`tt_records_open`, 'on' to
   open). Six record types × company/team/rep means a dozen-plus can be live at
   once; expanded they filled the entire first screen before a single figure.
