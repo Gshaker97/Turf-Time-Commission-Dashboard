@@ -62,7 +62,9 @@ const SETTER_COLS = [
   { key: 'revenue',  label: 'Revenue closed', value: r => fmt(r.revenue), sub: () => 'from their sets' },
   { key: 'doors',    label: 'Doors',          value: r => (r.doors ?? 0).toLocaleString(), sub: r => r.knockDays ? `${r.knockDays} day${r.knockDays === 1 ? '' : 's'}` : null },
   { key: 'set',      label: 'Appts set',      value: r => String(r.set ?? 0) },
-  { key: 'closed',   label: 'Sets closed',    value: r => `${r.deals ?? 0}`, sub: r => r.setCloseRate != null ? `${r.setCloseRate.toFixed(0)}% of ${r.set} set` : (r.set ? 'none yet' : 'nothing set') },
+  // More deals than sets happens (a sale with no appointment logged); the rate
+  // blanks above 100% like every cross-source rate, and the line says why.
+  { key: 'closed',   label: 'Sets closed',    value: r => `${r.deals ?? 0}`, sub: r => r.setCloseRate != null ? `${r.setCloseRate.toFixed(0)}% of ${r.set} set` : (r.set ? `${r.deals} deals from ${r.set} set · over 100%, rate blanked` : 'nothing set') },
 ]
 const CLOSER_COLS = [
   { key: 'closesRevenue', label: 'Revenue closed', value: r => fmt(r.closesRevenue ?? 0), sub: () => 'deals they closed' },
