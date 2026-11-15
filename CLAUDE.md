@@ -1353,6 +1353,11 @@ in range, a rep who left) falls back to company rather than rendering empty.
   count — Keaton's note that RepCard's own door total never reconciled still
   stands, which is why the Dashboard proper does not show them. Demo mode
   carries `DEMO_FIELD_ACTIVITY` so the setter view has doors to show.
+- **Breakdown by Teams starts with EVERY team open and its reps underneath**
+  (Garrison, Nov 15 2026: "see teams stats and persons stats without having
+  to click"). State is `tt_breakdown_collapsed` (which teams are closed, per
+  browser); a "Collapse reps / Show reps" button beside the pills flips them
+  all. Phone team rows open by default the same way.
 - **Breakdown table columns are Revenue · Deals · Set · Close ratio · Markup ·
   Commission · Goal** (Garrison, Nov 14 2026). The "Appointments" box and the
   "+ Appointments" toggle are GONE; only its past-due warning line survives.
