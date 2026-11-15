@@ -1339,8 +1339,11 @@ in range, a rep who left) falls back to company rather than rendering empty.
   company-wide setting, so at team scope the bar would be that team's revenue
   against the company's target — precise-looking and meaningless.
 - **Advanced stats page (`/advanced`, `src/pages/AdvancedStats.jsx`, Garrison,
-  Nov 14 2026)**, reached from the "Advanced stats" button in the breakdown
-  header. Four doors: Setters (revenue closed from their sets · doors · appts
+  Nov 14–15 2026)**, reached from the "Advanced stats" button in the breakdown
+  header. The landing shows ONLY the four doors; each door opens its own
+  screen with a search box and a pick list (per Garrison: "rather than all on
+  one page"), and a tap opens one person — or one team, then one of its
+  people. Back always returns to the list you came from. Four doors: Setters (revenue closed from their sets · doors · appts
   set · sets closed %), Closers (revenue of deals they closed · appts ran ·
   closed · close rate = closed ÷ assigned · avg markup · commission), Teams
   (team totals, expand to people), Individual (PersonPicker). A person's page
