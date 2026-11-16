@@ -70,7 +70,7 @@ function finish(s) {
     leadRevenue: s.leadRevenue, totalRevenue: s.revenue + s.leadRevenue,
     avgDeal:   s.deals ? s.revenue / s.deals : null,
     markupPct: s.revenue > 0 ? ((s.job - s.revenue) / s.revenue) * 100 : null,
-    set: s.set, ran: s.ran, sgRan: s.sgRan, leadRan: s.leadRan, pastDue: s.pastDue,
+    set: s.set, setRan: s.setRan, ran: s.ran, sgRan: s.sgRan, leadRan: s.leadRan, pastDue: s.pastDue,
     // Conversion rates (per Keaton): set → ran is a SETTER stat — of the
     // appointments this rep set, how many ran (whoever ran them), so a
     // closer's lead volume never inflates it; self-gen ran → self-gen deals
@@ -111,6 +111,13 @@ function finish(s) {
     // setters (profiles.sales_role); groups always read as a setting unit.
     assigned: s.assigned, closes: s.closes,
     closerCloseRate: rateOrNull(s.closes, s.assigned),
+    // CLOSE RATIO OVER RAN APPOINTMENTS ONLY (Garrison, Nov 16 2026). A set
+    // that never ran — still scheduled, cancelled, no-show — is not a missed
+    // close, so it leaves the denominator. Setter: deals owned ÷ their sets
+    // that ran. Closer: deals they closed ÷ appointments they ran. These two
+    // are what the Dashboard breakdown and Advanced stats display.
+    setRanCloseRate: rateOrNull(s.deals, s.setRan),
+    ranCloseRate: rateOrNull(s.closes, s.ran),
     // Baseline and markup of the deals this person CLOSED (Advanced stats).
     closesRevenue: s.closesRevenue,
     closeMarkupPct: s.closesRevenue > 0 ? ((s.closesJob - s.closesRevenue) / s.closesRevenue) * 100 : null,

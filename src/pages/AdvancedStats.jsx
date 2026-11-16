@@ -72,13 +72,13 @@ const SETTER_COLS = [
   { key: 'set',      label: 'Appts set',      value: r => String(r.set ?? 0) },
   // More deals than sets happens (a sale with no appointment logged); the rate
   // blanks above 100% like every cross-source rate, and the line says why.
-  { key: 'closed',   label: 'Sets closed',    value: r => `${r.deals ?? 0}`, sub: r => r.setCloseRate != null ? `${r.setCloseRate.toFixed(0)}% of ${r.set} set` : (r.set ? `${r.deals} deals from ${r.set} set · over 100%, rate blanked` : 'nothing set') },
+  { key: 'closed',   label: 'Sets closed',    value: r => `${r.deals ?? 0}`, sub: r => r.setRanCloseRate != null ? `${r.setRanCloseRate.toFixed(0)}% of ${r.setRan} ran` : ((r.setRan ?? 0) > 0 ? `${r.deals} deals from ${r.setRan} ran · over 100%, rate blanked` : (r.set ? `${r.set} set, none ran yet` : 'nothing set')) },
 ]
 const CLOSER_COLS = [
   { key: 'closesRevenue', label: 'Revenue closed', value: r => fmt(r.closesRevenue ?? 0), sub: () => 'deals they closed' },
   { key: 'ran',           label: 'Appts ran',      value: r => String(r.ran ?? 0), sub: r => (r.assigned ?? 0) > 0 ? `of ${r.assigned} assigned` : null },
   { key: 'closes',        label: 'Closed',         value: r => String(r.closes ?? 0) },
-  { key: 'closeRate',     label: 'Close rate',     value: r => pct(r.closerCloseRate), sub: r => (r.assigned ?? 0) > 0 ? `${r.closes ?? 0} of ${r.assigned} assigned` : (r.closes ? `${r.closes} closed, none assigned` : 'nothing assigned') },
+  { key: 'closeRate',     label: 'Close rate',     value: r => pct(r.ranCloseRate), sub: r => (r.ran ?? 0) > 0 ? `${r.closes ?? 0} of ${r.ran} ran` : (r.closes ? `${r.closes} closed, none ran` : 'nothing ran') },
   { key: 'markup',        label: 'Avg markup',     value: r => pct1(r.closeMarkupPct) },
   { key: 'commission',    label: 'Commission',     value: r => fmt(r.commission) },
 ]
@@ -87,7 +87,7 @@ const TEAM_COLS = [
   { key: 'deals',   label: 'Deals',       value: r => String(r.deals) },
   { key: 'doors',   label: 'Doors',       value: r => (r.doors ?? 0).toLocaleString() },
   { key: 'set',     label: 'Appts set',   value: r => String(r.set ?? 0) },
-  { key: 'close',   label: 'Close ratio', value: r => pct(r.setCloseRate), sub: r => r.set ? `${r.deals} of ${r.set} set` : 'nothing set' },
+  { key: 'close',   label: 'Close ratio', value: r => pct(r.setRanCloseRate), sub: r => (r.setRan ?? 0) > 0 ? `${r.deals} of ${r.setRan} ran` : 'nothing ran' },
   { key: 'commission', label: 'Commission', value: r => fmt(r.commission) },
 ]
 
@@ -266,8 +266,8 @@ export default function AdvancedStats() {
     const role = usersById[r.id]?.sales_role
     const closerOnly = isCloser(role) && !isSetter(role)
     return closerOnly
-      ? { v: pct(r.closerCloseRate), sub: (r.assigned ?? 0) > 0 ? `${r.closes ?? 0} of ${r.assigned} assigned` : 'nothing assigned' }
-      : { v: pct(r.setCloseRate), sub: r.set ? `${r.deals} of ${r.set} set` : 'nothing set' }
+      ? { v: pct(r.ranCloseRate), sub: (r.ran ?? 0) > 0 ? `${r.closes ?? 0} of ${r.ran} ran` : 'nothing ran' }
+      : { v: pct(r.setRanCloseRate), sub: (r.setRan ?? 0) > 0 ? `${r.deals} of ${r.setRan} ran` : 'nothing ran' }
   }
   const MEMBER_COLS = [
     SETTER_COLS[0],
@@ -278,8 +278,8 @@ export default function AdvancedStats() {
   ]
 
   const SCREEN = {
-    setters: { title: 'Setters', hint: 'Revenue is the baseline of deals they set. Doors are the RepCard feed\'s count. Tap a setter for their page.' },
-    closers: { title: 'Closers', hint: 'Revenue is the baseline of deals they closed. Close rate is closed ÷ every appointment assigned to them. Tap a closer for their page.' },
+    setters: { title: 'Setters', hint: 'Revenue is the baseline of deals they set. Sets closed is out of the sets that ran. Doors are the RepCard feed\'s count. Tap a setter for their page.' },
+    closers: { title: 'Closers', hint: 'Revenue is the baseline of deals they closed. Close rate is closed ÷ appointments they ran. Tap a closer for their page.' },
     teams:   { title: 'Teams',   hint: 'Tap a team for its numbers and its people.' },
     people:  { title: 'Individual', hint: 'Everyone who sells. Tap a name for their page.' },
     team:    { title: team?.name || 'Team', hint: 'Tap a person for their page.' },
@@ -373,7 +373,7 @@ export default function AdvancedStats() {
                 className="w-full flex items-center gap-3 px-4 py-3 min-h-[44px] border-t border-bank-line text-left hover:bg-bank-raise">
                 <span className="min-w-0 flex-1">
                   <span className="block text-[13px] font-bold text-bank-tx">{t.name} <span className="font-normal text-bank-mu">· {t.rows.length} {t.rows.length === 1 ? 'person' : 'people'}</span></span>
-                  <span className="block text-[13px] text-bank-mu tabular-nums">{fmt(t.revenue)} · {t.deals} deals · {t.set ?? 0} set · {pct(t.setCloseRate)} close</span>
+                  <span className="block text-[13px] text-bank-mu tabular-nums">{fmt(t.revenue)} · {t.deals} deals · {t.set ?? 0} set · {pct(t.setRanCloseRate)} close</span>
                 </span>
                 <ChevronRight size={14} className="text-bank-fa flex-shrink-0" />
               </button>

@@ -128,15 +128,16 @@ export function RepDealsInline({ deals, repId }) {
   )
 }
 
-// Close ratio (Garrison, Nov 14 2026). A SETTER is judged on their sets: deals
-// they own ÷ appointments they set. A CLOSER (or both) is judged on what was
-// handed to them: deals they closed ÷ appointments assigned to them. Teams,
-// offices and the company read as a setting unit: deals ÷ sets. A person with
-// no sales role set gets the setter view if they set anything, else the
-// closer view. Same >100% blank rule as every other cross-source rate here.
+// Close ratio (Garrison, Nov 14–16 2026) — over appointments that RAN, never
+// over everything set or assigned: a set that never ran is not a missed
+// close. A SETTER reads deals they own ÷ their sets that ran. A CLOSER (or
+// both) reads deals they closed ÷ appointments they ran. Teams, offices and
+// the company read as a setting unit: deals ÷ sets that ran. A person with no
+// sales role set gets the setter view if they set anything, else the closer
+// view. Same >100% blank rule as every other cross-source rate here.
 function closeRatio(st, { isPerson = false, role = null } = {}) {
-  const asSetter = { pct: st.setCloseRate, sub: (st.set ?? 0) > 0 ? `${st.deals ?? 0} of ${st.set} set` : 'nothing set' }
-  const asCloser = { pct: st.closerCloseRate, sub: (st.assigned ?? 0) > 0 ? `${st.closes ?? 0} of ${st.assigned} assigned` : 'nothing assigned' }
+  const asSetter = { pct: st.setRanCloseRate, sub: (st.setRan ?? 0) > 0 ? `${st.deals ?? 0} of ${st.setRan} ran` : ((st.set ?? 0) > 0 ? `${st.set} set, none ran yet` : 'nothing set') }
+  const asCloser = { pct: st.ranCloseRate, sub: (st.ran ?? 0) > 0 ? `${st.closes ?? 0} of ${st.ran} ran` : 'nothing ran' }
   if (!isPerson) return asSetter
   if (role === 'closer' || role === 'both') return asCloser
   if (role === 'setter') return asSetter

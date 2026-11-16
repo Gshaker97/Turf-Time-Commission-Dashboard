@@ -1360,13 +1360,15 @@ in range, a rep who left) falls back to company rather than rendering empty.
   Commission · Goal** (Garrison, Nov 14 2026). The "Appointments" box and the
   "+ Appointments" toggle are GONE; only its past-due warning line survives.
   `Set` = every RepCard calendar appointment with a day and time, booked in
-  range, any outcome. `Close ratio` depends on `profiles.sales_role`: a SETTER
-  reads deals owned ÷ sets (`setCloseRate`); a CLOSER or BOTH reads deals they
-  closed ÷ appointments assigned to them (`closes` / `assigned`, new in
-  perfSummary — assigned = closer on the appointment, else the setter, any
-  status); unset falls back to the setter view if they set anything. Teams,
-  offices and the company always read deals ÷ sets. The sub-line always names
-  the denominator ("4 of 6 set", "1 of 2 assigned"). Avg deal left the table;
+  range, any outcome. `Close ratio` is OVER RAN APPOINTMENTS ONLY (Garrison,
+  Nov 16 2026: a set that never ran is not a missed close) and depends on
+  `profiles.sales_role`: a SETTER reads deals owned ÷ their sets that ran
+  (`setRanCloseRate` = deals / setRan); a CLOSER or BOTH reads deals they
+  closed ÷ appointments they ran (`ranCloseRate` = closes / ran); unset falls
+  back to the setter view if they set anything. Teams, offices and the company
+  always read deals ÷ sets that ran. The sub-line always names the denominator
+  ("4 of 6 ran"). `setCloseRate` / `closerCloseRate` (over everything set /
+  assigned) still exist in the engine but nothing displays them. Avg deal left the table;
   the Avg Deal Size KPI tile stays. Pinned by test/perf-close-ratio.test.mjs.
   Demo mode now carries 12 appointments (`DEMO_LEADS`) so the columns show.
 - **`profiles.sales_role`** (migration 061, Nov 14 2026): `setter` | `closer` |

@@ -53,6 +53,16 @@ test('the two close ratios', () => {
   assert.equal(rep('B').setCloseRate, 100)
   assert.equal(Math.round(perf.org.setCloseRate), 50, 'company: 2 deals of 4 sets')
 })
+test('close ratios shown on the site are over RAN appointments only', () => {
+  // S set L1 (sold), L2 (no-show), L3 (scheduled): only L1 ran → 1 deal of 1 ran.
+  assert.equal(rep('S').setRan, 1)
+  assert.equal(rep('S').setRanCloseRate, 100)
+  // C ran L1 and L5 (L2 was a no-show): 1 close of 2 ran.
+  assert.equal(rep('C').ran, 2)
+  assert.equal(rep('C').ranCloseRate, 50)
+  assert.equal(rep('B').ranCloseRate, 100)
+})
+
 test('revenue of the deals a person closed', () => {
   assert.equal(rep('C').closesRevenue, 1000)
   assert.equal(rep('S').closesRevenue, 0)
