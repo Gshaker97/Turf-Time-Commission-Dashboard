@@ -69,7 +69,10 @@ const isCloser = (role) => role === 'closer' || role === 'both' || !role
 const SETTER_COLS = [
   { key: 'revenue',  label: 'Revenue closed', value: r => fmt(r.revenue), sub: () => 'from their sets' },
   { key: 'doors',    label: 'Doors',          value: r => (r.doors ?? 0).toLocaleString(), sub: r => r.knockDays ? `${r.knockDays} day${r.knockDays === 1 ? '' : 's'}` : null },
+  { key: 'doorsPerSet', label: 'Doors per set', value: r => r.doorsPerSet != null ? Math.round(r.doorsPerSet).toLocaleString() : '—', sub: r => r.doorsPerSet != null ? 'doors to book one' : (r.set ? 'no doors logged' : null) },
   { key: 'set',      label: 'Appts set',      value: r => String(r.set ?? 0) },
+  // Kept apart from every rate: a full calendar is not a bad close rate.
+  { key: 'upcoming', label: 'Upcoming',       value: r => String(r.upcoming ?? 0), sub: () => 'booked, not run yet' },
   // More deals than sets happens (a sale with no appointment logged); the rate
   // blanks above 100% like every cross-source rate, and the line says why.
   { key: 'closed',   label: 'Sets closed',    value: r => `${r.deals ?? 0}`, sub: r => r.setRanCloseRate != null ? `${r.setRanCloseRate.toFixed(0)}% of ${r.setRan} ran` : ((r.setRan ?? 0) > 0 ? `${r.deals} deals from ${r.setRan} ran · over 100%, rate blanked` : (r.set ? `${r.set} set, none ran yet` : 'nothing set')) },
@@ -81,7 +84,44 @@ const CLOSER_COLS = [
   { key: 'closeRate',     label: 'Close rate',     value: r => pct(r.ranCloseRate), sub: r => (r.ran ?? 0) > 0 ? `${r.closes ?? 0} of ${r.ran} ran` : (r.closes ? `${r.closes} closed, none ran` : 'nothing ran') },
   { key: 'markup',        label: 'Avg markup',     value: r => pct1(r.closeMarkupPct) },
   { key: 'commission',    label: 'Commission',     value: r => fmt(r.commission) },
+  { key: 'upcoming',      label: 'Upcoming',       value: r => String(r.upcomingAssigned ?? 0), sub: () => 'assigned, not run yet' },
 ]
+
+// Count appointments by what RepCard says happened. Disposition text first,
+// the status word when there is none, so "Follow up" and "Canceled" each get
+// their own line instead of all reading "Ran".
+function dispositionCounts(appts) {
+  const m = new Map()
+  for (const a of appts) {
+    const key = (a.disposition || a.lead?.disposition || OUTCOME[a.status]?.label || a.status || 'Unknown').trim()
+    m.set(key, (m.get(key) || 0) + 1)
+  }
+  return [...m.entries()].sort((x, y) => y[1] - x[1])
+}
+function DispositionList({ title, appts }) {
+  const rows = dispositionCounts(appts)
+  const total = appts.length
+  return (
+    <Card>
+      <div className="flex items-baseline justify-between gap-3 mb-3">
+        <h3 className="text-[15px] font-bold text-bank-tx">{title}</h3>
+        <span className="text-[13px] text-bank-mu">{total} in range</span>
+      </div>
+      {rows.length === 0 && <p className="text-[13px] text-bank-mu">Nothing in this range.</p>}
+      {rows.map(([label, n]) => (
+        <div key={label} className="mb-2 last:mb-0">
+          <div className="flex items-baseline justify-between gap-3 text-[13px]">
+            <span className="text-bank-tx min-w-0 truncate">{label}</span>
+            <span className="text-bank-mu tabular-nums whitespace-nowrap">{n} · {Math.round((n / total) * 100)}%</span>
+          </div>
+          <div className="h-1.5 rounded-full overflow-hidden mt-1" style={{ background: 'var(--raise)' }}>
+            <div className="h-full rounded-full" style={{ width: `${(n / total) * 100}%`, background: 'var(--tx)' }} />
+          </div>
+        </div>
+      ))}
+    </Card>
+  )
+}
 const TEAM_COLS = [
   { key: 'revenue', label: 'Revenue',     value: r => fmt(r.revenue) },
   { key: 'deals',   label: 'Deals',       value: r => String(r.deals) },
@@ -415,20 +455,22 @@ export default function AdvancedStats() {
               {isSetter(me.sales_role) && (
                 <Card>
                   <Eyebrow className="mb-3">As a setter</Eyebrow>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
                     {SETTER_COLS.map(c => <KpiFigure key={c.key} label={c.label} value={c.value(meRow)} sub={c.sub ? c.sub(meRow) : undefined} />)}
                     <KpiFigure label="Commission" value={fmt(meRow.commission)} />
                   </div>
                 </Card>
               )}
+              {isSetter(me.sales_role) && <DispositionList title="What happened to their sets" appts={myAppts.filter(a => a.role === 'set' || a.role === 'self')} />}
               {isCloser(me.sales_role) && (
                 <Card>
                   <Eyebrow className="mb-3">As a closer</Eyebrow>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
                     {CLOSER_COLS.map(c => <KpiFigure key={c.key} label={c.label} value={c.value(meRow)} sub={c.sub ? c.sub(meRow) : undefined} />)}
                   </div>
                 </Card>
               )}
+              {isCloser(me.sales_role) && <DispositionList title="What happened to the appointments they ran" appts={myAppts.filter(a => a.role === 'closer' || a.role === 'self')} />}
 
               <Card padded={false}>
                 <div className="px-4 py-3 border-b border-bank-line flex items-baseline justify-between gap-3">

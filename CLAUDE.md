@@ -1356,6 +1356,14 @@ in range, a rep who left) falls back to company rather than rendering empty.
   count — Keaton's note that RepCard's own door total never reconciled still
   stands, which is why the Dashboard proper does not show them. Demo mode
   carries `DEMO_FIELD_ACTIVITY` so the setter view has doors to show.
+  Nov 16 additions: **Upcoming** (booked in range, still scheduled, dated today
+  or later — `upcoming` for the setter, `upcomingAssigned` for whoever sits
+  it) is its own column/tile and never enters a rate, so a full calendar does
+  not read as a bad close rate; **Doors per set** = feed doors ÷ sets; and a
+  person's page carries a "What happened to…" dispositions list (counts by
+  RepCard disposition, status word when none) for their sets and/or the
+  appointments they ran. The appointment list's right column is the
+  disposition, not the status word.
 - **Breakdown table columns are Revenue · Deals · Set · Close ratio · Markup ·
   Commission · Goal** (Garrison, Nov 14 2026). The "Appointments" box and the
   "+ Appointments" toggle are GONE; only its past-due warning line survives.
