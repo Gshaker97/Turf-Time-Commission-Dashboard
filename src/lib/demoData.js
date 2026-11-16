@@ -275,7 +275,8 @@ const atHour = (daysBack, hour) => { const d = new Date(); d.setDate(d.getDate()
 const who = (id) => { const u = DEMO_USERS.find(x => x.id === id); return u ? { id: u.id, name: u.name } : null }
 const lead = (n, daysBack, hour, setter, closer, status, customer, address) => ({
   id: `lead-demo-${n}`, source: 'repcard', external_id: `demo-${n}`, customer_name: customer, address,
-  appointment_at: atHour(daysBack, hour), set_at: atHour(daysBack + 2, 9), status, disposition: null,
+  appointment_at: atHour(daysBack, hour), set_at: atHour(daysBack + 2, 9), status,
+  disposition: { sold: 'Sold — signed on site', completed: 'Ran — thinking it over', no_show: 'No show — not home', canceled: 'Canceled by customer', scheduled: null }[status] ?? null,
   setter_id: setter, closer_id: closer, setter_name: who(setter)?.name ?? null, closer_name: who(closer)?.name ?? null,
   setter: who(setter), closer: who(closer), office: 'Tucson', notes: null, deal_id: null, pinned: false, ignored: false,
 })

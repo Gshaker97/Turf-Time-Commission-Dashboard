@@ -433,7 +433,7 @@ export default function AdvancedStats() {
               <Card padded={false}>
                 <div className="px-4 py-3 border-b border-bank-line flex items-baseline justify-between gap-3">
                   <h3 className="text-[15px] font-bold text-bank-tx">Appointments</h3>
-                  <span className="text-[13px] text-bank-mu">{myAppts.length} in range · tap one for its disposition and notes</span>
+                  <span className="text-[13px] text-bank-mu">{myAppts.length} in range · tap one for its notes</span>
                 </div>
                 {myAppts.length === 0 && <EmptyBlock>No appointments involving {me.name.split(' ')[0]} in this range.</EmptyBlock>}
                 {myAppts.map(a => {
@@ -448,14 +448,19 @@ export default function AdvancedStats() {
                           <p className="text-[13px] text-bank-tx truncate">{a.customer}{l?.address ? <span className="text-bank-mu"> · {l.address}</span> : null}</p>
                           <p className="text-[13px] text-bank-mu">{whenLabel(a.at)} · {PART[a.role] || a.role}{a.role === 'set' && a.closerName ? ` · ran by ${a.closerName}` : ''}{a.role === 'closer' && a.setterName ? ` · set by ${a.setterName}` : ''}</p>
                         </div>
-                        <span className="text-[13px] font-semibold whitespace-nowrap" style={{ color: o.color }}>{o.label}</span>
+                        {/* The right column is the DISPOSITION — what RepCard says
+                            happened — not the status word (Garrison, Nov 16 2026:
+                            "it just shows Ran"). Status only when there is none. */}
+                        <span className="text-[13px] font-semibold text-right max-w-[45%] md:max-w-[260px] truncate" style={{ color: o.color }} title={a.disposition || l?.disposition || o.label}>
+                          {a.disposition || l?.disposition || o.label}
+                        </span>
                         <ChevronDown size={14} className={`text-bank-fa flex-shrink-0 transition-transform ${isOpen ? '' : '-rotate-90'}`} />
                       </button>
                       {isOpen && (
                         <div className="px-4 pb-3 grid grid-cols-1 md:grid-cols-2 gap-3" style={{ background: 'var(--bg)' }}>
                           <div className="pt-3">
-                            <p className="text-[13px] text-bank-fa uppercase tracking-wider font-semibold">Disposition</p>
-                            <p className="text-[13px] text-bank-tx mt-0.5">{a.disposition || l?.disposition || <span className="text-bank-fa">none recorded</span>}</p>
+                            <p className="text-[13px] text-bank-fa uppercase tracking-wider font-semibold">Status · disposition</p>
+                            <p className="text-[13px] text-bank-tx mt-0.5">{o.label}{(a.disposition || l?.disposition) ? ` · ${a.disposition || l?.disposition}` : <span className="text-bank-fa"> · no disposition recorded</span>}</p>
                           </div>
                           <div className="pt-3">
                             <p className="text-[13px] text-bank-fa uppercase tracking-wider font-semibold">Notes</p>
