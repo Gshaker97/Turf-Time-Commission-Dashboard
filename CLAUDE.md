@@ -2205,6 +2205,32 @@ laid out anymore - kinda crammed in"). All three were measured, not eyeballed:
   an empty install/pay date STAYS — that signal is deliberate, and both states
   were already the same 112px wide.
 
+**Three more, from Keaton looking at the live page** (same session, all
+measured):
+- **CHECKED AND UNCHECKED MUST NOT BE THE SAME CONTROL IN TWO SHADES.** The
+  seal was `--fa #8c8a84` unchecked against `--pos #a9c4b2` checked — a
+  contrast ratio of **1.8:1** at 16px, which is no signal at all ("the
+  checkmark is still barely visibly different when checked"). Checked now
+  reads as a FILLED badge (tinted disc + ring + full-strength sage), unchecked
+  as a faint outline at 0.38 opacity: **4.97:1** composited, and the
+  difference is FILL AND SHAPE, not just hue, so it survives a glance down
+  twenty rows. Measure the COMPOSITED colour — `getComputedStyle().color`
+  ignores `opacity` and reported no change at all.
+- **`base $X` must never wrap.** A six-figure baseline broke
+  "base $115,614.55" over two lines, so some rows read "base" above the
+  number while shorter ones stayed inline — the column stopped lining up at
+  exactly the job sizes that matter most. Both Revenue spans are
+  `whitespace-nowrap`.
+- **The deal's second line (id · office · payment) is ONE height and does not
+  wrap.** The office badge was a full-size 30px capsule beside 20px of plain
+  text, and `flex-wrap` dropped the payment onto a line of its own (measured:
+  id y668, office y663, payment y701) — three ragged heights reading as
+  "the office and payment are centered when the rest of the fields arent".
+  `StatusBadge` gained a **`compact`** variant (`px-2 py-0`) used ONLY here —
+  the Status COLUMN keeps the full size — and the line dropped `flex-wrap`
+  with `min-w-0` so the project id truncates instead. Now 22px, all three
+  items on one top edge.
+
 **A PAID, GOLD-CHECKED DEAL CAN COME BACK INTO NEEDS REVIEW — by design, and
 the sheet is what does it.** `dealNeedsReview` is an OR: not gold-checked, OR
 carrying a `change_alert`, OR missing a required field. The sync's JOBS pass

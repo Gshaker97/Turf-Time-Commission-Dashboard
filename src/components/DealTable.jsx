@@ -307,8 +307,12 @@ function PeopleCell({ deal }) {
 function RevenueCell({ baseline, jobPrice }) {
   return (
     <div className="flex flex-col items-end leading-tight">
-      <span className="text-[13px] font-semibold text-bank-tx tabular-nums">{fmt(jobPrice)}</span>
-      <span className="text-[13px] text-bank-mu tabular-nums">base {fmt(baseline)}</span>
+      {/* whitespace-nowrap: a six-figure baseline broke "base $115,614.55"
+          across two lines, so some rows read "base" over "$15,614.55" while
+          shorter ones stayed inline — the column stopped lining up at exactly
+          the job sizes that matter most. */}
+      <span className="text-[13px] font-semibold text-bank-tx tabular-nums whitespace-nowrap">{fmt(jobPrice)}</span>
+      <span className="text-[13px] text-bank-mu tabular-nums whitespace-nowrap">base {fmt(baseline)}</span>
     </div>
   )
 }
@@ -501,11 +505,23 @@ function ChangeAlertTag({ deal, canEdit, onUpdate, onSplit }) {
 function VerifySeal({ verified, canVerify, onToggle }) {
   if (!verified && !canVerify) return null
   if (!canVerify) return <BadgeCheck size={15} className="flex-shrink-0" style={{ color: 'var(--pos)' }} title="Commission checked" />
+  // CHECKED AND UNCHECKED MUST NOT BE THE SAME CONTROL IN TWO SHADES. They
+  // were --fa #8c8a84 against --pos #a9c4b2: a contrast ratio of 1.8:1 at
+  // 16px, which is no signal at all (per Keaton: "the checkmark is still
+  // barely visibly different when checked"). Checked now reads as a FILLED
+  // badge — tinted disc, ring, full-strength sage — and unchecked as a faint
+  // empty outline. The difference is fill and shape, not just hue, so it
+  // survives a glance down a column of twenty rows.
   return (
-    <button type="button" onClick={onToggle} className="flex-shrink-0 hover:opacity-80 transition-opacity min-w-[28px] min-h-[28px] flex items-center justify-center"
+    <button type="button" onClick={onToggle} className="flex-shrink-0 hover:opacity-100 transition-all min-w-[28px] min-h-[28px] flex items-center justify-center"
       aria-pressed={verified}
       title={verified ? 'Commission checked — click to unmark' : 'Mark commission as checked'}>
-      <BadgeCheck size={16} className={verified ? '' : 'text-bank-fa hover:text-bank-mu'} style={verified ? { color: 'var(--pos)' } : undefined} />
+      <span className="w-[22px] h-[22px] rounded-full flex items-center justify-center transition-all"
+        style={verified
+          ? { background: 'rgba(169,196,178,0.18)', border: '1px solid rgba(169,196,178,0.7)' }
+          : { background: 'transparent', border: '1px solid transparent' }}>
+        <BadgeCheck size={15} style={verified ? { color: 'var(--pos)' } : { color: 'var(--fa)', opacity: 0.38 }} />
+      </span>
     </button>
   )
 }
@@ -560,11 +576,16 @@ function CommissionCell({ deal, canVerify, onUpdate }) {
   )
 }
 
-export function StatusBadge({ status, color = '#94a3b8' }) {
+// `compact` is for the office tag sitting inline with the project id under a
+// deal name: at full size the capsule is 30px against 20px of plain text, so
+// `items-center` floated the id against it and the line read as two different
+// alignments (per Keaton: "the office and payment are now centered when the
+// rest of the fields arent"). The Status COLUMN keeps the full size.
+export function StatusBadge({ status, color = '#94a3b8', compact = false }) {
   if (!status) return <span className="text-bank-fa text-[13px]">—</span>
   return (
     <span
-      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[13px] font-medium whitespace-nowrap"
+      className={`inline-flex items-center gap-1.5 rounded-full text-[13px] font-medium whitespace-nowrap ${compact ? 'px-2 py-0' : 'px-2.5 py-1'}`}
       style={{ color, border: `1px solid ${color}55`, background: 'transparent' }}
     >
       <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: color }} />
@@ -587,11 +608,11 @@ const officeColor = (name) => OFFICE_COLORS[name] || '#a19e97'
 // reliably on change — mirroring the DateField pattern. The visible value is
 // driven by the `value` prop, which refreshes after the row reloads. Pass
 // `colorFor` to render the value as a colored badge instead of plain text.
-function InlineSelectCell({ value, options, field, canEdit, dealId, onUpdate, colorFor, deriveExtra, missingLabel }) {
+function InlineSelectCell({ value, options, field, canEdit, dealId, onUpdate, colorFor, deriveExtra, missingLabel, compact = false }) {
   // An empty value is flagged amber so a missing office/payment is obvious.
   const display = colorFor
     ? (value
-        ? <StatusBadge status={value} color={colorFor(value)} />
+        ? <StatusBadge status={value} color={colorFor(value)} compact={compact} />
         : <span className="text-[13px] text-bank-fa">—</span>)
     : value
       ? <span className={`text-[13px] whitespace-nowrap transition-colors text-bank-mu ${canEdit ? 'hover:text-bank-tx cursor-pointer' : ''}`}>{value}</span>
@@ -1067,9 +1088,14 @@ export default function DealTable({
                     </button>
                     <NameFlags deal={deal} canEdit={canEdit} onUpdate={onUpdate} onSplit={onSplit} dupeIds={dupeIds} />
                   </div>
-                  <div className="flex items-center gap-2 flex-wrap mt-1">
+                  {/* NO flex-wrap: at laptop width the payment dropped onto a
+                      line of its own (measured: id at y668, office y663,
+                      payment y701), so the block was three ragged heights.
+                      The id truncates instead — it is the one piece here that
+                      can afford to lose characters. */}
+                  <div className="flex items-center gap-2 mt-1 min-w-0">
                     {deal.project_id && <span className="text-[13px] text-bank-fa truncate max-w-[160px] tabular-nums">{deal.project_id}</span>}
-                    <InlineSelectCell value={deal.office} options={offices} colorFor={officeColor}
+                    <InlineSelectCell value={deal.office} options={offices} colorFor={officeColor} compact
                       field="office" canEdit={canEdit} dealId={deal.id} onUpdate={onUpdate} missingLabel="office"
                       deriveExtra={v => officeChangePatch(deal, v)} />
                     <InlineSelectCell value={deal.payment_method} options={paymentMethods}
