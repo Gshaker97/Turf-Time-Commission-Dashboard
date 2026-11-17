@@ -2179,6 +2179,32 @@ cover the WHOLE filtered set, never just the visible page. Page resets to 1
 on any filter/sort/scope/tab change, clamps when the list shrinks, and the
 bell deep-link jumps to the page holding the deal.
 
+**Deals table alignment — three faults the bank-token redesign left behind**
+(per Keaton: "the layout on the deals page got messed up… isnt symmetrically
+laid out anymore - kinda crammed in"). All three were measured, not eyeballed:
+- **`uppercase` on a header BUTTON is not redundant with `TH`.** Tailwind's
+  preflight carries normalize's `button, select { text-transform: none }`, so
+  the six SORTABLE headers (rendered as buttons by `HeaderMenu`) silently
+  dropped `TH`'s uppercase while the non-sortable Notes span and the plain
+  Actions cell kept it — six title-case headers beside two shouting ones.
+  Any new header rendered as a button needs the class spelled out.
+- **The gold seal must land in the same place on every row.** `CommissionCell`
+  laid it out `flex items-center justify-end` against an AUTO-width money
+  block, so a SPLIT deal — which adds a 14px initial bubble per line — shoved
+  it 20px left (measured: x alternated 1215/1195 down the page), and
+  `items-center` floated it vertically against a block that is two lines, three
+  lines, or four with a deduction tag. The money block is now a FIXED
+  `w-[116px]` (pins x) and the row is `items-start` (pins y to the first figure
+  it signs off). Asserted aligned at 1920/1600/1440/1280/1024 with nothing
+  clipped.
+- **A control that appears only when its field is filled makes the column
+  jitter.** The clear-× rendered only for a filled date, so the Dates block's
+  right edge moved row to row (measured: 1, 3, 3, 3, 3, 1 buttons per row) —
+  most of why that column read as crammed. The × now sits in an always-present
+  `w-5` slot; all 33 date lines end flush on one x. The amber "missing" box on
+  an empty install/pay date STAYS — that signal is deliberate, and both states
+  were already the same 112px wide.
+
 **A PAID, GOLD-CHECKED DEAL CAN COME BACK INTO NEEDS REVIEW — by design, and
 the sheet is what does it.** `dealNeedsReview` is an OR: not gold-checked, OR
 carrying a `change_alert`, OR missing a required field. The sync's JOBS pass

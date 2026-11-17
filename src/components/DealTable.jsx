@@ -173,8 +173,13 @@ function HeaderMenu({ col, sortKey, sortDir, onSort, active, renderFilter }) {
 
   return (
     <>
+      {/* `uppercase` is NOT redundant with TH: Tailwind's preflight sets
+          `button, select { text-transform: none }`, so a header rendered as a
+          BUTTON silently dropped TH's uppercase while the non-sortable Notes
+          span and the plain Actions cell kept it — six title-case headers
+          beside two shouting ones. */}
       <button ref={btnRef} type="button" onClick={openMenu} aria-expanded={open}
-        className={`flex items-center hover:text-bank-tx transition-colors ${col.align === 'right' ? 'justify-end w-full' : ''}`}>
+        className={`flex items-center uppercase hover:text-bank-tx transition-colors ${col.align === 'right' ? 'justify-end w-full' : ''}`}>
         {col.label}
         <SortIcon col={col.key} sortKey={sortKey} sortDir={sortDir} />
         {active && <span className="w-1.5 h-1.5 rounded-full ml-1 flex-shrink-0" style={{ background: 'var(--gold)' }} />}
@@ -271,11 +276,17 @@ function DateField({ label, value, field, dealId, canEdit, onUpdate, deriveExtra
             className={`text-[13px] border-0 outline-none cursor-pointer hover:text-bank-tx focus:text-bank-tx transition-colors w-[112px] min-h-[44px] lg:min-h-0 rounded px-1 ${missing ? '' : 'bg-transparent text-bank-mu'}`}
             style={missing ? { colorScheme: 'dark', color: 'var(--warn)', background: 'rgba(210,160,116,0.12)' } : { colorScheme: 'dark' }}
           />
-          {value && (
-            <button type="button" title={`Clear ${label.toLowerCase()} date`} aria-label={`Clear ${label.toLowerCase()} date`}
-              onClick={() => onUpdate(dealId, { [field]: null, ...(deriveExtra ? deriveExtra(null) : null) })}
-              className="text-bank-fa hover:text-bank-neg transition-colors leading-none px-1 min-w-[28px] min-h-[44px] lg:min-h-0 lg:min-w-0">×</button>
-          )}
+          {/* The slot is ALWAYS there, empty or not. Rendering the × only for a
+              filled date made the Dates block's right edge jump row to row
+              (measured: 1, 3, 3, 3, 3, 1 buttons per row), which is most of
+              why this column read as crammed. */}
+          <span className="w-5 flex-shrink-0 flex items-center justify-center">
+            {value && (
+              <button type="button" title={`Clear ${label.toLowerCase()} date`} aria-label={`Clear ${label.toLowerCase()} date`}
+                onClick={() => onUpdate(dealId, { [field]: null, ...(deriveExtra ? deriveExtra(null) : null) })}
+                className="text-bank-fa hover:text-bank-neg transition-colors leading-none px-1 min-w-[28px] min-h-[44px] lg:min-w-0 lg:min-h-0">×</button>
+            )}
+          </span>
         </span>
       ) : (
         <span className={`text-[13px] ${missing ? '' : 'text-bank-mu'}`} style={{ color: tone }}>{value ?? '— missing'}</span>
@@ -514,10 +525,17 @@ function CommissionCell({ deal, canVerify, onUpdate }) {
   )
 
   return (
-    <div className="flex items-center justify-end gap-2">
+    // THE SEAL MUST LAND IN THE SAME PLACE ON EVERY ROW. It used to sit in a
+    // `justify-end` row against an auto-width money block, so a SPLIT deal —
+    // which adds a 14px initial bubble to each line — shoved it 20px left
+    // (measured: x alternated 1215/1195 down the page). `items-center` then
+    // floated it vertically too, landing on line 1 of a two-line cell and
+    // line 2 of a three-line one. A FIXED-width money block pins the x;
+    // `items-start` pins the y to the first figure it signs off.
+    <div className="flex items-start justify-end gap-2">
       <VerifySeal verified={deal.commission_verified === true} canVerify={canVerify}
         onToggle={() => onUpdate?.(deal.id, { commission_verified: !deal.commission_verified })} />
-      <div className="flex flex-col items-end gap-1 leading-tight">
+      <div className="flex flex-col items-end gap-1 leading-tight w-[116px]">
       {!split ? (
         <div className="flex flex-col items-end">
           <span className="text-[13px] font-bold tabular-nums" style={amt(repCommission)}>{fmt(repCommission)}</span>
