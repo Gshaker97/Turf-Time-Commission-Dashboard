@@ -178,3 +178,30 @@ test('a calendar job with no contract file is now high severity', () => {
   const hit = buildEodReport(p).issues.find(i => i.kind === 'contract')
   assert.equal(hit.severity, 'high')
 })
+
+test('add-ons: the audit value (summed) is what GHL and the calendar are held to, not the one Sheet row', () => {
+  const p = base()
+  p.ghl.opportunities[0].value = 20681.77; p.calendarJobs[0].value = 20681.77   // job + an $800 add-on
+  p.contractAudit = { values: { P1: { total: 20681.77, rule: '$20,681.77 = $19,881.77 + add-on $800.00' } }, gaps: [], sheet_gaps: [] }
+  const r = buildEodReport(p)
+  assert.deepEqual(r.issues.filter(i => i.kind === 'price'), [])
+  p.calendarJobs[0].value = 19881.77
+  const r2 = buildEodReport(p)
+  assert.equal(r2.issues.filter(i => i.kind === 'price').length, 1)
+  assert.match(r2.issues.find(i => i.kind === 'price').detail, /ArcSite \$20,681\.77 .*vs calendar \$19,881\.77/)
+})
+
+test('sheet-vs-ArcSite disputes and held duplicate Project IDs reach the report and the text', () => {
+  const p = base()
+  p.contractAudit = { gaps: [], values: {}, sheet_gaps: [
+    { project_id: 'P9', customer: 'Angel Ocampo', install: '2026-09-08', reason: 'AI sheet differs from ArcSite — value NOT changed, needs a human', sheet_price: 9728.83, arcsite_total: 10505.57 },
+    { project_id: 'P8', customer: 'Nobody', reason: 'missing from AI sheet', arcsite_total: 100 },
+  ] }
+  p.heldDuplicates = [{ project_id: 'P7', customer: 'Jenny Carr', opp: 'o7' }, { project_id: 'P1', customer: 'Camron & Bobbie Johnson', opp: 'o1' }]
+  const r = buildEodReport(p)
+  const kinds = r.issues.map(i => i.kind).sort()
+  assert.deepEqual(kinds, ['duplicate_opportunity', 'duplicate_opportunity', 'sheet_dispute'])
+  const text = eodSmsText(r)
+  assert.match(text, /AI SHEET DISAGREES WITH ARCSITE \(1\)/); assert.match(text, /Angel Ocampo: Sheet \$9,728\.83 vs ArcSite signed \$10,505\.57/)
+  assert.match(text, /DUPLICATE GHL OPPORTUNITIES \(2\)/); assert.match(text, /Jenny Carr/)
+})

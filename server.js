@@ -27,6 +27,7 @@ import { validatePrivatePolicy } from './lib/verified-sheet-policy.mjs'
 import * as arcViews from './lib/analyst-arcsite-views.mjs'
 import { readBackAndRepair } from './lib/ghl-opp-readback.mjs'
 import { buildEodReport, eodSmsText } from './lib/eod-check.mjs'
+import { arcJobValue, sheetTotalFor, describeJobValue } from './lib/arcsite-job-value.mjs'
 import { parseSignedPdfText } from './lib/parse-signed-pdf.mjs'
 import { readVerifiedSheetSnapshot } from './lib/verified-sheet-snapshot.mjs'
 import {
@@ -1972,6 +1973,22 @@ async function jobRowForProject(projectId, { fresh = false } = {}) {
     commission: commH  ? num(row[commH])  : null,
   }
 }
+// Every APPROVED Jobs-tab row for a project, newest first, with its Proposal ID
+// — one row per signing, which is what the add-on rule needs (see arcSheetTotal).
+async function jobRowsForProject(projectId) {
+  let data
+  try { data = await readInstallSheet() } catch { return [] }
+  const jobs = data && data.jobs
+  if (!jobs || !jobs.headers || !jobs.headers.length) return []
+  const h = (re) => jobs.headers.find(x => re.test(String(x).toLowerCase()))
+  const pidH = h(/project\s*id/), propH = h(/proposal\s*id/), statusH = h(/^status$/), priceH = h(/approved\s*total/) || h(/pre.?tax\s*sale/)
+  if (!pidH || !propH || !priceH) return []
+  const want = String(projectId).trim()
+  const num = (v) => { if (v == null || String(v).trim() === '') return null; const n = Number(String(v).replace(/[^0-9.]/g, '')); return isNaN(n) ? null : n }
+  return jobs.rows
+    .filter(r => String(r[pidH] || '').trim() === want && (!statusH || /approved/i.test(String(r[statusH] || ''))))
+    .map(r => ({ proposalId: String(r[propH] || '').trim(), jobPrice: num(r[priceH]) }))
+}
 
 // The LATE-arriving field values for an opp, re-pulled from their live sources:
 // baseline/markup/commission from the Jobs sheet (lands seconds after the sale)
@@ -2286,10 +2303,27 @@ async function arcSignedContracts(projectId) {
   for (const pr of (Array.isArray(refs) ? refs : [])) {
     const full = pr.proposal_options ? pr : await arcGet(`/proposals/${pr.proposal_id}`).catch(() => null)
     if (full && arcCommitted(full.status) && full.pdf_url) {
-      out.push({ proposal_id: String(full.proposal_id || ''), document_number: full.document_number || null, pdf_url: full.pdf_url, total: Number(full.total) || null })
+      out.push({ proposal_id: String(full.proposal_id || ''), document_number: full.document_number || null, pdf_url: full.pdf_url, total: Number(full.total) || null,
+        drawing_id: (full.approved_option && full.approved_option.drawing_id) || (((full.proposal_options || [])[0] || {}).drawing_id) || null })
     }
   }
   return out.reverse()
+}
+// The job's value from those contracts (lib/arcsite-job-value): same drawing
+// re-signed → newest wins; a small extra drawing → an ADD-ON, summed in (per
+// Garrison, Nov 19 2026). ARC_ADDON_MAX_SHARE = the share of the main contract
+// below which another drawing counts as an add-on (default 0.5).
+const ARC_ADDON_MAX_SHARE = Number(process.env.ARC_ADDON_MAX_SHARE || 0.5)
+const arcJobTotal = signed => arcJobValue(signed, { addonMaxShare: ARC_ADDON_MAX_SHARE })
+// The sheet's figure for that same value: its rows for exactly the counted
+// proposals (null = a row is still missing, i.e. not final). A job with no
+// add-ons keeps the old single-row read when the rows carry no Proposal ID.
+async function arcSheetTotal(projectId, value, singleRow) {
+  const rows = await jobRowsForProject(projectId).catch(() => [])
+  const sum = sheetTotalFor(value, rows)
+  if (sum != null) return sum
+  if (value && value.addons && value.addons.length) return null
+  return singleRow && singleRow.jobPrice != null ? Math.round(singleRow.jobPrice * 100) / 100 : null
 }
 
 async function ghlContactSetFields(contactId, fields) {
@@ -2348,8 +2382,11 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
   // signed DOCUMENTS — the sheet has none. `sheet_lag` = the sheet doesn't
   // (yet) agree with ArcSite, so callers must not mark the project settled.
   const job = await jobRowForProject(projectId).catch(() => null)
-  const arcTotal = newTotal != null ? Math.round(newTotal * 100) / 100 : null
-  const sheetPrice = job && job.jobPrice != null ? Math.round(job.jobPrice * 100) / 100 : null
+  const value = arcJobTotal(signed)
+  const arcTotal = newTotal != null ? Math.round(newTotal * 100) / 100 : value.total
+  // Add-ons: the sheet is compared on the SAME set of proposals the value counts
+  // (one row per signing), so a $800 add-on row never "disputes" the $9,346 job.
+  const sheetPrice = await arcSheetTotal(projectId, value, job)
   // CONSENSUS RULE. The sheet is the truth for the money, but the first GHL
   // reconcile (Oct 28) showed the sheet does NOT always carry a change order:
   // Patrick Vogel's row still said $16,947.83 against a signed $16,012.92, and
@@ -2368,7 +2405,7 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
   const r = {
     ok: true, via, action: 'change_order', project_id: projectId, customer: customer.name, opportunity_id: opp.id,
     was: cur, now: want, value_source: disputed ? 'DISPUTED — sheet ≠ ArcSite, value left unchanged' : (sheetPrice != null ? 'ai_sheet' : 'arcsite'),
-    sheet_price: sheetPrice, sheet_pretax: job ? job.pretax : null, arcsite_total: arcTotal, disputed,
+    sheet_price: sheetPrice, sheet_pretax: job ? job.pretax : null, arcsite_total: arcTotal, disputed, value_rule: describeJobValue(value, arcUsd),
     sheet_lag: sheetPrice == null,
     stage_moved: false, contracts: `${attached.length} attached / ${signed.length} signed`, pdf: 'kept',
   }
@@ -2475,7 +2512,7 @@ async function arcChangeOrderForProject(projectId, via, { dry = false } = {}) {
   const opp = await arcOppForProposal({ project_id: projectId, customer_name: customer.name, customer_email: customer.email })
   if (!opp) return { ok: false, via, project_id: projectId, customer: customer.name, error: 'no GHL opportunity for this project — /api/arcsite/reprocess creates one' }
   const newest = signed[signed.length - 1]
-  return arcApplyChangeOrder(projectId, { opp, contactId: opp.contactId || null, customer, signed, newTotal: newest.total, via, dry })
+  return arcApplyChangeOrder(projectId, { opp, contactId: opp.contactId || null, customer, signed, newTotal: arcJobTotal(signed).total, via, dry })
 }
 
 // ── Daily contract audit ─────────────────────────────────────────────────────
@@ -2512,7 +2549,7 @@ function phoenixNow(dt = new Date()) {
 }
 
 async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, maxFix = ARC_AUDIT_MAX_FIX } = {}) {
-  const out = { at: new Date().toISOString(), day: phoenixNow().day, fix, days_back: daysBack, scanned: 0, candidates: 0, checked: 0, ok: 0, gaps: [], fixed: [], failed: [], sheet_gaps: [], skipped: null }
+  const out = { at: new Date().toISOString(), day: phoenixNow().day, fix, days_back: daysBack, scanned: 0, candidates: 0, checked: 0, ok: 0, gaps: [], fixed: [], failed: [], sheet_gaps: [], values: {}, skipped: null }
   if (!ARCSITE_API_TOKEN || !GHL_WRITE_TOKEN) { out.skipped = 'not configured'; return out }
   const floor = new Date(Date.now() - daysBack * 864e5).toISOString().slice(0, 10)
   const pause = ms => new Promise(res => setTimeout(res, ms))
@@ -2567,14 +2604,16 @@ async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, ma
       const signed = await arcSignedContracts(pid)
       if (!signed.length) continue
       const newest = signed[signed.length - 1]
-      const want = newest.total != null ? Math.round(newest.total * 100) / 100 : null
+      const value = arcJobTotal(signed)
+      const want = value.total
+      out.values[pid] = { total: want, rule: describeJobValue(value, arcUsd) }
       // The AI sheet is the truth for the value; ArcSite only when there is no
       // row. And the sheet itself gets checked: a signed proposal with no row,
       // or a row whose sale price disagrees with ArcSite, is a commission being
       // computed on the wrong number — listed, never written (the sheet is
       // read-only, always).
       const job = await jobRowForProject(pid).catch(() => null)
-      const sheet = job && job.jobPrice != null ? Math.round(job.jobPrice * 100) / 100 : null
+      const sheet = job ? await arcSheetTotal(pid, value, job) : null
       const disputed = sheet != null && want != null && !arcSame(sheet, want)
       if (!job) out.sheet_gaps.push({ project_id: pid, customer: op.name, install: inst, reason: 'missing from AI sheet', arcsite_total: want })
       else if (disputed) out.sheet_gaps.push({ project_id: pid, customer: op.name, install: inst, reason: 'AI sheet differs from ArcSite — value NOT changed, needs a human', sheet_price: sheet, arcsite_total: want, ghl_value: op.monetaryValue })
@@ -2677,7 +2716,7 @@ async function arcValueSweep() {
   let changed = false
   for (const [pid, info] of latest) {
     if (out.verified >= ARC_VALUE_MAX_PROJECTS) break
-    const want = Math.round(info.total * 100) / 100
+    let want = Math.round(info.total * 100) / 100
     const s = seen[pid]
     // Confirmed at this total AND this newest proposal → nothing to do. (Entries
     // written before the proposal id was tracked are a bare number, so they get
@@ -2697,6 +2736,9 @@ async function arcValueSweep() {
       }
       const cur = opp.monetaryValue != null ? Math.round(Number(opp.monetaryValue) * 100) / 100 : null
       const signed = await arcSignedContracts(pid)
+      // The whole job, add-ons summed — not just the newest signing.
+      const value = arcJobTotal(signed)
+      if (value.total != null) { want = value.total; mark.t = want }
       const attached = oppContractEntries(opp).length
       // Always enqueue the guarded field-aware check before legacy total/count short-circuit.
       verifiedSheetQueue(pid)
@@ -2919,6 +2961,18 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
       if (pdfUrl && sellTotal != null) break
     }
     if (!pdfUrl) pdfUrl = fallbackOptPdf   // keep a document if no signed pdf exists yet
+  }
+  // Add-ons (per Garrison, Nov 19 2026): the opportunity carries the WHOLE job —
+  // every signed proposal on the project, summed by lib/arcsite-job-value — so a
+  // second small signing (an $800 prep add-on) is ADDED to the value, never
+  // substituted for it. Only once the signing is visible in ArcSite's list; a
+  // webhook that beats the list keeps the event's own total for this pass (the
+  // value sweep re-sums it minutes later).
+  let saleValue = null
+  if (projectId) {
+    const signedAll = await arcSignedContracts(projectId).catch(() => [])
+    saleValue = arcJobTotal(signedAll)
+    if (saleValue.total != null && (!proposalId || signedAll.some(x => x.proposal_id === String(proposalId)))) sellTotal = saleValue.total
   }
 
   // ── Money from the SHEET (Jobs tab), the source of truth for ALL reps —
@@ -5224,10 +5278,13 @@ async function eodCollect(day) {
   for (const pid of todayPids) { const v = await eodRead(`arcsite_sale_alert_${pid}`); if (v && v.state) alertStates[pid] = v.state }
   // Previous report for repeat-tracking: the last stored one from an EARLIER day
   // (a same-day re-run must not make yesterday's open items look new or old).
-  const [worker, contractAudit, last] = await Promise.all([eodRead(DAILY_WORKER_KEY), eodRead(ARC_AUDIT_KEY), eodRead(EOD_LAST_KEY)])
+  const [worker, contractAudit, last, installSync] = await Promise.all([eodRead(DAILY_WORKER_KEY), eodRead(ARC_AUDIT_KEY), eodRead(EOD_LAST_KEY), eodRead(ARC_IDS_KEY)])
+  // Jobs the install-date sync HOLDS because two open opportunities share the
+  // Project ID — released by hand only (per Garrison), so they stay on the list.
+  const heldDuplicates = ((installSync && installSync.holds) || []).filter(h => /share this Project ID/i.test(String(h.hold || h.reason || ''))).map(h => ({ project_id: h.project_id, customer: h.customer, opp: h.opportunity_id }))
   let previous = last && last.day && last.day < day ? last : null
   if (!previous && last && last.day === day && last.previous_day) previous = await eodRead(EOD_KEY(last.previous_day))
-  return { day, sheetJobs, sheetSchedule, ghl: { opportunities: g.opportunities || [], contacts: g.contacts || {} }, calendarJobs, siteDeals, events: _eodEvents.filter(e => String(e.at).slice(0, 10) === day), alertStates, worker, contractAudit, previous, sourceErrors, ignore: eodIgnoreList(), bundle_built_at: d.built_at }
+  return { day, sheetJobs, sheetSchedule, ghl: { opportunities: g.opportunities || [], contacts: g.contacts || {} }, calendarJobs, siteDeals, heldDuplicates, events: _eodEvents.filter(e => String(e.at).slice(0, 10) === day), alertStates, worker, contractAudit, previous, sourceErrors, ignore: eodIgnoreList(), bundle_built_at: d.built_at }
 }
 let _eodRunning = false
 async function eodRun({ dry = false } = {}) {
