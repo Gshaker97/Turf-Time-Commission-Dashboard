@@ -139,3 +139,42 @@ test('a calendar job linked to a LOST opportunity is flagged like a website lead
   p.calendarJobs.push({ jobNumber: 'J-9', ghlOpportunityId: 'dead', ghlContactId: 'c9', customer: { name: 'Jonathan Kim' }, installDate: '2026-11-27', value: 6200, contracts: [] })
   assert.ok(buildEodReport(p).issues.some(i => i.kind === 'calendar_lead_opp' && i.job === 'J-9'))
 })
+
+test('PM calendar holding an older change order is flagged high', () => {
+  // Two signed revisions on the Sheet and in GHL, but the calendar only has the first.
+  const p = base()
+  p.sheetJobs.rows.unshift({ ...p.sheetJobs.rows[0], 'Proposal ID': '624900', 'Approved Date': '2026-11-12' })
+  p.ghl.opportunities[0].contracts = 2
+  p.ghl.opportunities[0].contract_files = [{ url: 'https://files.example/a.pdf' }, { url: 'https://files.example/b.pdf' }]
+  p.calendarJobs[0].contracts = [{ url: 'https://files.example/a.pdf' }]
+  const r = buildEodReport(p)
+  const hit = r.issues.find(i => i.kind === 'contract' && /older change order/.test(i.detail))
+  assert.ok(hit, JSON.stringify(r.issues)); assert.equal(hit.severity, 'high'); assert.equal(hit.job, 'J-1')
+})
+
+test('same count but the calendar holds a different file than the newest GHL contract', () => {
+  const p = base()
+  p.sheetJobs.rows.unshift({ ...p.sheetJobs.rows[0], 'Proposal ID': '624900', 'Approved Date': '2026-11-12' })
+  p.ghl.opportunities[0].contracts = 2
+  p.ghl.opportunities[0].contract_files = [{ url: 'https://files.example/a.pdf' }, { url: 'https://files.example/b.pdf?x=1' }]
+  p.calendarJobs[0].contracts = [{ url: 'https://files.example/a.pdf' }, { url: 'https://files.example/a-copy.pdf' }]
+  const r = buildEodReport(p)
+  assert.ok(r.issues.some(i => i.kind === 'contract' && i.severity === 'high' && /newest signed contract/.test(i.detail)), JSON.stringify(r.issues))
+})
+
+test('calendar with every revision passes; different hosting is not flagged by URL', () => {
+  const p = base()
+  p.sheetJobs.rows.unshift({ ...p.sheetJobs.rows[0], 'Proposal ID': '624900', 'Approved Date': '2026-11-12' })
+  p.ghl.opportunities[0].contracts = 2
+  p.ghl.opportunities[0].contract_files = [{ url: 'https://ghl.example/a.pdf' }, { url: 'https://ghl.example/b.pdf' }]
+  p.calendarJobs[0].contracts = [{ url: 'https://calendar.example/1.pdf' }, { url: 'https://calendar.example/2.pdf' }]
+  assert.deepEqual(buildEodReport(p).issues, [])
+  p.calendarJobs[0].contracts = [{ url: 'https://ghl.example/a.pdf' }, { meta: { url: 'https://ghl.example/b.pdf' } }]
+  assert.deepEqual(buildEodReport(p).issues, [])
+})
+
+test('a calendar job with no contract file is now high severity', () => {
+  const p = base(); p.calendarJobs[0].contracts = []
+  const hit = buildEodReport(p).issues.find(i => i.kind === 'contract')
+  assert.equal(hit.severity, 'high')
+})
