@@ -2529,6 +2529,10 @@ async function arcChangeOrderForProject(projectId, via, { dry = false } = {}) {
 const ARC_AUDIT_KEY = 'arcsite_contract_audit'
 const ARC_AUDIT_HOUR = Number(process.env.ARC_AUDIT_HOUR || 6)
 const ARC_AUDIT_DAYS_BACK = Number(process.env.ARC_AUDIT_DAYS_BACK || 14)
+// A fixed start instead of a rolling window (per Garrison, Nov 19 2026: "just
+// since the beginning of October"): ARC_AUDIT_SINCE=2026-10-01 audits every
+// job installing (or created) on/after that day, whatever the date today.
+const ARC_AUDIT_SINCE = /^\d{4}-\d{2}-\d{2}$/.test(String(process.env.ARC_AUDIT_SINCE || '')) ? String(process.env.ARC_AUDIT_SINCE) : null
 const ARC_AUDIT_MAX_FIX = Number(process.env.ARC_AUDIT_MAX_FIX || 60)   // fixes per run; the rest are listed as gaps for tomorrow
 
 // The opp's Install Date as yyyy-mm-dd. The search endpoint returns DATE fields
@@ -2548,10 +2552,11 @@ function phoenixNow(dt = new Date()) {
   return { day: `${g('year')}-${g('month')}-${g('day')}`, hour: Number(g('hour')) % 24 }   // en-CA can report midnight as "24"
 }
 
-async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, maxFix = ARC_AUDIT_MAX_FIX } = {}) {
-  const out = { at: new Date().toISOString(), day: phoenixNow().day, fix, days_back: daysBack, scanned: 0, candidates: 0, checked: 0, ok: 0, gaps: [], fixed: [], failed: [], sheet_gaps: [], values: {}, skipped: null }
+async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, since = ARC_AUDIT_SINCE, maxFix = ARC_AUDIT_MAX_FIX } = {}) {
+  const out = { at: new Date().toISOString(), day: phoenixNow().day, fix, days_back: daysBack, since: since || null, scanned: 0, candidates: 0, checked: 0, ok: 0, gaps: [], fixed: [], failed: [], sheet_gaps: [], values: {}, skipped: null }
   if (!ARCSITE_API_TOKEN || !GHL_WRITE_TOKEN) { out.skipped = 'not configured'; return out }
-  const floor = new Date(Date.now() - daysBack * 864e5).toISOString().slice(0, 10)
+  const floor = since || new Date(Date.now() - daysBack * 864e5).toISOString().slice(0, 10)
+  out.floor = floor
   const pause = ms => new Promise(res => setTimeout(res, ms))
   // The same location-wide Project ID scan the sale path uses, before any
   // update. A full page with no next-page proof is not the end. A Project ID
@@ -5147,7 +5152,8 @@ app.post('/api/arcsite/contract-audit', async (req, res) => {
   try { body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {}) } catch {}
   const fix = body.fix !== false && body.fix !== 'false'
   const daysBack = Number(body.days_back) > 0 ? Number(body.days_back) : undefined
-  try { res.json(await arcContractAudit({ fix, daysBack })) }
+  const since = /^\d{4}-\d{2}-\d{2}$/.test(String(body.since || '')) ? String(body.since) : (daysBack ? null : undefined)   // an explicit days_back overrides the fixed start
+  try { res.json(await arcContractAudit({ fix, daysBack, since })) }
   catch (e) { res.status(200).json({ ok: false, error: e.message || 'audit failed' }) }
 })
 
