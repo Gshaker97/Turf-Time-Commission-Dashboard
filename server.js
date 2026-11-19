@@ -2570,6 +2570,8 @@ async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, si
     for (const light of scan.opportunities || []) {
       const op = light.raw
       const pid = light.projectId
+      // A lost/abandoned deal is history: no contract to file, no value to hold.
+      if (['lost', 'abandoned'].includes(String(op.status || '').toLowerCase())) continue
       const inst = oppInstallDay(op)
       // No Install Date on the opp (common — Ron Little, Rocio Encinas…) used to
       // mean "never audited"; such opps now qualify by their created date.
