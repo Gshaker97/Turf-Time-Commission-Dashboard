@@ -2537,6 +2537,26 @@ async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, ma
   }
   out.candidates = cands.length
   if (lookupBlocked) out.skipped = 'opportunity lookup did not finish'
+  // The PM calendar too (per Garrison: crews order material from the calendar
+  // job's contract, so a calendar still holding the old design is the costly
+  // miss). GHL being right is not enough: the calendar push in a change order
+  // is best-effort, so a failed push used to leave GHL correct and the calendar
+  // stale with this audit reporting "ok". One calendar read per run; if it
+  // fails, the GHL checks still run and the reason is kept on the result.
+  let calByOpp = null
+  out.calendar = null
+  if (!lookupBlocked && CALENDAR_SYNC_URL && CALENDAR_EXPORT_KEY) {
+    try {
+      const cf = await calendarExport('/api/export/analyst?months=6&ahead=120')
+      calByOpp = new Map()
+      for (const j of (cf && cf.jobs) || []) if (j && j.ghlOpportunityId && !j.canceledAt) calByOpp.set(j.ghlOpportunityId, j)
+      out.calendar = { jobs: calByOpp.size, behind: 0 }
+    } catch (e) { out.calendar = { error: String(e.message || e).slice(0, 160) } }
+  } else if (!lookupBlocked) out.calendar = { error: 'calendar export not configured' }
+  const calBehind = (o, signedCount) => {
+    const j = calByOpp && calByOpp.get(o.id)
+    return j && Array.isArray(j.contracts) && j.contracts.length < signedCount ? j : null
+  }
   // 2. Compare each against ArcSite. A gap is re-read by id before acting — the
   //    search index lags writes by minutes, so a fix from an hour ago can still
   //    look missing there. More than one opportunity for a Project ID, anywhere
@@ -2566,7 +2586,32 @@ async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, ma
         return signed.length > oppContractEntries(o).length || (wantValue != null && cur != null && !arcSame(cur, wantValue))
       }
       out.checked++
-      if (!stale(op)) { out.ok++; continue }
+      if (!stale(op)) {
+        const calJob = calBehind(op, signed.length)
+        if (!calJob) { out.ok++; continue }
+        // GHL holds every signed contract but the PM calendar job does not.
+        out.calendar.behind++
+        const gap = { project_id: pid, customer: op.name, install: inst, contracts: `${oppContractEntries(op).length} attached / ${signed.length} signed`, calendar: `${calJob.contracts.length} on calendar job ${calJob.jobNumber || '?'}`, reason: 'PM calendar is missing the newest signed contract', value: op.monetaryValue, signed_total: want, sheet_price: sheet }
+        out.gaps.push(gap)
+        // A disputed value is never pushed anywhere (consensus rule above), so
+        // the calendar is listed for a human instead of re-sent.
+        if (!fix || wantValue == null || out.fixed.length + out.failed.length >= maxFix) continue
+        const project = await arcGet(`/projects/${pid}`).catch(() => null)
+        const c = (project && project.customer) || {}, a = c.address || {}
+        const customer = { name: c.name || op.name || 'Customer', phone: c.phone || null, email: c.email || null, address1: a.street || null, city: a.city || null, state: a.state || null, postalCode: a.zip_code || null }
+        // The same push a change order makes, with the contracts GHL already
+        // hosts (oldest → newest) and the value unchanged.
+        const r = await arcPropagateChangeOrder({
+          oppId: op.id, contactId: op.contactId || null, projectId: pid, customer,
+          newTotal: wantValue, previousTotal: wantValue, contracts: oppContractEntries(op),
+          newestContract: `Proposal ${newest.document_number || newest.proposal_id}${newest.total ? ` (${arcUsd(newest.total)})` : ''}`,
+        })
+        const calOk = !!(r.calendar && typeof r.calendar === 'object' && !r.calendar.error)
+        const cal = r.calendar && typeof r.calendar === 'object' ? (r.calendar.job ? r.calendar.job.jobNumber : r.calendar.error || null) : r.calendar
+        ;(calOk ? out.fixed : out.failed).push({ ...gap, action: 'calendar_resend', calendar: cal, error: calOk ? undefined : (cal || 'calendar push failed') })
+        await pause(500)
+        continue
+      }
       const fresh = (await ghlGet(`/opportunities/${op.id}`).catch(() => null)) || {}
       const opp = fresh.opportunity || fresh
       if (!opp.id || !stale(opp)) { out.ok++; continue }
