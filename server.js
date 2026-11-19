@@ -2314,6 +2314,12 @@ async function arcSignedContracts(projectId) {
 // Garrison, Nov 19 2026). ARC_ADDON_MAX_SHARE = the share of the main contract
 // below which another drawing counts as an add-on (default 0.5).
 const ARC_ADDON_MAX_SHARE = Number(process.env.ARC_ADDON_MAX_SHARE || 0.5)
+// Opportunities on a manual hold (Garrison, Nov 19 2026: Anna Lee). No path
+// here may change their value, stage, contracts, contact price or calendar
+// job: not the sale path, the change-order path, the daily audit or the value
+// sweep. Released by editing ARC_VALUE_HOLD_OPPS (comma-separated opp ids).
+const ARC_VALUE_HOLD = new Set(String(process.env.ARC_VALUE_HOLD_OPPS || '').split(',').map(x => x.trim()).filter(Boolean))
+const arcHeld = opp => !!(opp && opp.id && ARC_VALUE_HOLD.has(opp.id))
 const arcJobTotal = signed => arcJobValue(signed, { addonMaxShare: ARC_ADDON_MAX_SHARE })
 // The sheet's figure for that same value: its rows for exactly the counted
 // proposals (null = a row is still missing, i.e. not final). A job with no
@@ -2374,6 +2380,7 @@ async function arcPropagateChangeOrder({ oppId, contactId, projectId, customer, 
 }
 
 async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed, newTotal, via, dry = false }) {
+  if (arcHeld(opp)) return { ok: false, held: true, via, project_id: projectId, customer: customer && customer.name, opportunity_id: opp.id, error: 'opportunity is on a manual hold (ARC_VALUE_HOLD_OPPS) — nothing written' }
   const pipe = opp.pipelineId === GHL_PIPELINES.estimator.id ? GHL_PIPELINES.estimator : GHL_PIPELINES.outside
   const cur = opp.monetaryValue != null ? Math.round(Number(opp.monetaryValue) * 100) / 100 : null
   // THE AI SHEET IS THE SOURCE OF TRUTH FOR THE MONEY (per Garrison): the value
@@ -2553,7 +2560,7 @@ function phoenixNow(dt = new Date()) {
 }
 
 async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, since = ARC_AUDIT_SINCE, maxFix = ARC_AUDIT_MAX_FIX } = {}) {
-  const out = { at: new Date().toISOString(), day: phoenixNow().day, fix, days_back: daysBack, since: since || null, scanned: 0, candidates: 0, checked: 0, ok: 0, gaps: [], fixed: [], failed: [], sheet_gaps: [], values: {}, skipped: null }
+  const out = { at: new Date().toISOString(), day: phoenixNow().day, fix, days_back: daysBack, since: since || null, scanned: 0, candidates: 0, checked: 0, ok: 0, gaps: [], fixed: [], failed: [], sheet_gaps: [], values: {}, held: [], skipped: null }
   if (!ARCSITE_API_TOKEN || !GHL_WRITE_TOKEN) { out.skipped = 'not configured'; return out }
   const floor = since || new Date(Date.now() - daysBack * 864e5).toISOString().slice(0, 10)
   out.floor = floor
@@ -2572,6 +2579,7 @@ async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, si
       const pid = light.projectId
       // A lost/abandoned deal is history: no contract to file, no value to hold.
       if (['lost', 'abandoned'].includes(String(op.status || '').toLowerCase())) continue
+      if (arcHeld(op)) { out.held.push({ opportunity_id: op.id, customer: op.name, project_id: pid }); continue }
       const inst = oppInstallDay(op)
       // No Install Date on the opp (common — Ron Little, Rocio Encinas…) used to
       // mean "never audited"; such opps now qualify by their created date.
@@ -2741,6 +2749,7 @@ async function arcValueSweep() {
         if (r && r.ok && !r.ignored && r.fields_ok !== false) { seen[pid] = mark; changed = true }
         continue
       }
+      if (arcHeld(opp)) { out.held = (out.held || 0) + 1; continue }   // manual hold: never verified, never stamped
       const cur = opp.monetaryValue != null ? Math.round(Number(opp.monetaryValue) * 100) / 100 : null
       const signed = await arcSignedContracts(pid)
       // The whole job, add-ons summed — not just the newest signing.
@@ -3094,6 +3103,7 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
   // Contact upsert happens after the Project ID decision. An invalid phone is
   // omitted; a failed upsert must not turn into a second opportunity.
   let contactId = existing?.contactId || existing?.contact_id || null
+  if (arcHeld(existing)) return arcSaleBlocked(projectId, 'held', { state: 'manual_hold', reason: 'ARC_VALUE_HOLD_OPPS', opportunity_id: existing.id })
   try {
     const upserted = await ghlUpsertContact(person)
     if (upserted) contactId = upserted
