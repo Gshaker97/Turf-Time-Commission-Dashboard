@@ -249,3 +249,37 @@ test('Closed means won: a Closed-stage opp alone is still compared; beside a liv
   p.ghl.opportunities[1].stage = 'Ready for Install'
   assert.equal(buildEodReport(p).issues.filter(i => i.kind === 'duplicate_opportunity').length, 1)
 })
+
+test('SOLD, NO CONTRACT IN GHL: a sold opp (Closed stage included) with no contract PDF is named, on the Sheet or not', () => {
+  const p = base()
+  p.ghl.opportunities[0].stage = 'Closed'; p.ghl.opportunities[0].contracts = 0
+  let r = buildEodReport(p)
+  const c = r.issues.filter(i => i.kind === 'sold_no_contract')
+  assert.equal(c.length, 1, JSON.stringify(r.issues)); assert.match(c[0].detail, /sold \(GHL stage Closed\) but no contract PDF/)
+  assert.match(eodSmsText(r), /SOLD, NO CONTRACT IN GHL \(1\)[^\n]*\n- Camron & Bobbie Johnson \(J-1\): sold \(GHL stage Closed\) but no contract PDF/)
+  // not on the Sheet at all (the Sheet row belongs to another project): still named
+  p.sheetJobs.rows[0]['Project ID'] = 'P2'
+  p.ghl.opportunities[0].created = '2026-11-10'
+  r = buildEodReport(p)
+  assert.equal(r.issues.filter(i => i.kind === 'sold_no_contract').length, 1)
+  // with a contract attached: nothing
+  p.ghl.opportunities[0].contracts = 1
+  assert.deepEqual(buildEodReport(p).issues.filter(i => i.kind === 'sold_no_contract'), [])
+})
+
+test('SOLD, NOT SCHEDULED: a sold opp with no install date in GHL, on the Schedule tab or on the calendar', () => {
+  const p = base()
+  p.ghl.opportunities[0].created = '2026-11-10'; p.ghl.opportunities[0].install_date = null
+  p.sheetSchedule.rows = []; p.calendarJobs = []
+  let r = buildEodReport(p)
+  const n = r.issues.filter(i => i.kind === 'sold_not_scheduled')
+  assert.equal(n.length, 1, JSON.stringify(r.issues)); assert.match(n[0].detail, /sold 2026-11-10 for \$19,881\.77 \(GHL stage Deal Reviewed\) — no install date/)
+  assert.match(eodSmsText(r), /SOLD, NOT SCHEDULED \(1\)/)
+  // a date on the PM calendar alone is enough
+  p.calendarJobs = base().calendarJobs
+  assert.deepEqual(buildEodReport(p).issues.filter(i => i.kind === 'sold_not_scheduled'), [])
+  // a Closed-stage copy beside the live opp is never reported on its own
+  p.ghl.opportunities.push({ ...p.ghl.opportunities[0], id: 'o1b', stage: 'Closed', contracts: 0 })
+  const r2 = buildEodReport(p)
+  assert.deepEqual(r2.issues.filter(i => i.kind === 'sold_not_scheduled' || i.kind === 'sold_no_contract' || i.kind === 'duplicate_opportunity'), [])
+})

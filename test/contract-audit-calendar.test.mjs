@@ -336,11 +336,12 @@ test('Closed means won: a Closed-stage opp alone on its Project ID is audited; b
   const CLOSED = '72a74bdf-a2ab-4412-89b0-52142a1e8c0b'   // the estimator pipeline's Closed stage
   const twin = stageId => ({ id: 'opp-twin', name: 'Fixture Calendar (inside copy)', contactId: 'contact-cal', status: 'open', pipelineId: 'jfhZWICxnmISGllte9Rv', pipelineStageId: stageId, monetaryValue: 2000,
     customFields: [{ id: PROJECT_FIELD, fieldValueString: PID }, { id: INSTALL_FIELD, fieldValueString: future }, { id: PDF_FIELD, fieldValueFiles: [] }] })
-  // 1. the only opp, in Closed: audited and fixed like any other
-  reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests()
+  // 1. the only opp, in Closed, with NO contract on it: audited, both signed PDFs attached from ArcSite
+  reset({ ghl: [], cal: ['new'] }); resetArcSaleMemoryForTests()
   world.opp.pipelineStageId = CLOSED
   const alone = await run({ fix: true })
-  assert.equal(alone.fixed.length, 1, JSON.stringify(alone)); assert.equal(alone.checked, 1); assert.equal(alone.skipped_jobs.length, 0)
+  assert.equal(alone.fixed.length, 1, JSON.stringify(alone)); assert.equal(alone.fixed[0].pdf, 'rebuilt 2'); assert.equal(alone.fixed[0].verified_after, true)
+  assert.equal(world.uploads.length, 2); assert.equal(alone.checked, 1); assert.equal(alone.skipped_jobs.length, 0)
   // 2. a Closed-stage copy beside the live opp: the live one is audited, the copy is noted, nothing is called a duplicate
   reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests()
   world.extraOpps = [twin(CLOSED)]

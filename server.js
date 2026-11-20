@@ -5564,7 +5564,7 @@ export function resetArcSaleMemoryForTests() {
   _sheetCache = { at: 0, data: null }
   _arcEnrich.clear()
 }
-export { arcsiteToGhl, arcValueSweep, arcContractAudit, sendSaleAlert, resetArcCalendarLedgerForTests }
+export { arcsiteToGhl, arcValueSweep, arcContractAudit, sendSaleAlert, resetArcCalendarLedgerForTests, eodRun }
 
 const port = process.env.PORT || 3000
 if (process.env.ARC_NO_LISTEN !== '1') {
