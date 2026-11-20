@@ -209,11 +209,18 @@ test('sheet-vs-ArcSite disputes and held duplicate Project IDs reach the report 
 test('the calendar is judged by WHICH contract it holds (byte size), not how many — it keeps only the newest by design', () => {
   const p = base()
   p.ghl.opportunities[0].contracts = 2
-  p.ghl.opportunities[0].contract_files = [{ url: 'https://ghl/old.pdf', name: 'old.pdf', size: 3598475 }, { url: 'https://ghl/new.pdf', name: 'new.pdf', size: 2051785 }]
+  // GHL lists the NEWEST file first here — its order is not chronological, so the audit's size is what counts
+  p.ghl.opportunities[0].contract_files = [{ url: 'https://ghl/new.pdf', name: 'new.pdf', size: 2051785 }, { url: 'https://ghl/old.pdf', name: 'old.pdf', size: 3598475 }]
+  p.contractAudit = { gaps: [], sheet_gaps: [], values: { P1: { total: 19881.77, rule: '$19,881.77', newest: 'Proposal 638077', newest_size: 2051785, size_unique: true } } }
   p.calendarJobs[0].contracts = [{ filename: 'isaac-rosas-contract-3.pdf', sizeBytes: 3598475 }]
   const r = buildEodReport(p)
   const c = r.issues.filter(i => i.kind === 'contract')
-  assert.equal(c.length, 1); assert.match(c[0].detail, /J-1 does not hold the newest signed contract GHL holds \(2051785 bytes\)/)
+  assert.equal(c.length, 1); assert.match(c[0].detail, /J-1 does not hold the newest signed ArcSite contract \(Proposal 638077, 2051785 bytes\)/)
+  // without the audit's size (or a non-unique one) no size verdict is given — never a guess from GHL's file order
+  const q = { ...p, contractAudit: null }
+  assert.deepEqual(buildEodReport(q).issues.filter(i => i.kind === 'contract'), [])
+  const q2 = { ...p, contractAudit: { values: { P1: { newest_size: 2051785, size_unique: false } } } }
+  assert.deepEqual(buildEodReport(q2).issues.filter(i => i.kind === 'contract'), [])
   p.calendarJobs[0].contracts = [{ filename: 'isaac-rosas-contract-3.pdf', sizeBytes: 2051785 }]   // one file, the newest → fine
   assert.deepEqual(buildEodReport(p).issues.filter(i => i.kind === 'contract'), [])
 })
@@ -236,4 +243,59 @@ test('jobs the contract audit skipped or failed to fix reach the report and the 
   assert.match(text, /CONTRACT FIX FAILED \(1\)/); assert.match(text, /Jared Morris \(J-1647\): ghl behind ArcSite \(Proposal 628481\): the fix failed: medias upload 500/)
   // the same skipped job on a later day is carried, not re-announced
   assert.equal(buildEodReport({ ...p, previous: r, day: '2026-11-14' }).new_count, 0)
+})
+
+test('Closed means won: a Closed-stage opp alone is still compared; beside a live one it is not a duplicate; two live ones are', () => {
+  const p = base()
+  p.ghl.opportunities[0].stage = 'Closed'
+  let r = buildEodReport(p)
+  assert.equal(r.checked, 1); assert.deepEqual(r.issues, [], 'alone in Closed: compared like any other, nothing missing')
+  p.ghl.opportunities[0].stage = 'Ready For Install'
+  p.ghl.opportunities.push({ ...p.ghl.opportunities[0], id: 'o1b', pipeline: 'Inside Sales (Estimators)', stage: 'Closed' })
+  assert.deepEqual(buildEodReport(p).issues.filter(i => i.kind === 'duplicate_opportunity'), [])
+  p.ghl.opportunities[1].stage = 'Ready for Install'
+  assert.equal(buildEodReport(p).issues.filter(i => i.kind === 'duplicate_opportunity').length, 1)
+})
+
+test('SOLD, NO CONTRACT IN GHL: a sold opp (Closed stage included) with no contract PDF is named, on the Sheet or not', () => {
+  const p = base()
+  p.ghl.opportunities[0].stage = 'Closed'; p.ghl.opportunities[0].contracts = 0
+  let r = buildEodReport(p)
+  const c = r.issues.filter(i => i.kind === 'sold_no_contract')
+  assert.equal(c.length, 1, JSON.stringify(r.issues)); assert.match(c[0].detail, /sold \(GHL stage Closed\) but no contract PDF/)
+  assert.match(eodSmsText(r), /SOLD, NO CONTRACT IN GHL \(1\)[^\n]*\n- Camron & Bobbie Johnson \(J-1\): sold \(GHL stage Closed\) but no contract PDF/)
+  // not on the Sheet at all (the Sheet row belongs to another project): still named
+  p.sheetJobs.rows[0]['Project ID'] = 'P2'
+  p.ghl.opportunities[0].created = '2026-11-10'
+  r = buildEodReport(p)
+  assert.equal(r.issues.filter(i => i.kind === 'sold_no_contract').length, 1)
+  // with a contract attached: nothing
+  p.ghl.opportunities[0].contracts = 1
+  assert.deepEqual(buildEodReport(p).issues.filter(i => i.kind === 'sold_no_contract'), [])
+})
+
+test('SOLD, NOT SCHEDULED: a sold opp with no install date in GHL, on the Schedule tab or on the calendar', () => {
+  const p = base()
+  p.ghl.opportunities[0].created = '2026-11-10'; p.ghl.opportunities[0].install_date = null
+  p.sheetSchedule.rows = []; p.calendarJobs = []
+  let r = buildEodReport(p)
+  const n = r.issues.filter(i => i.kind === 'sold_not_scheduled')
+  assert.equal(n.length, 1, JSON.stringify(r.issues)); assert.match(n[0].detail, /sold 2026-11-10 for \$19,881\.77 \(GHL stage Deal Reviewed\) — no install date/)
+  assert.match(eodSmsText(r), /SOLD, NOT SCHEDULED \(1\)/)
+  // a date on the PM calendar alone is enough
+  p.calendarJobs = base().calendarJobs
+  assert.deepEqual(buildEodReport(p).issues.filter(i => i.kind === 'sold_not_scheduled'), [])
+  // a Closed-stage copy beside the live opp is never reported on its own
+  p.ghl.opportunities.push({ ...p.ghl.opportunities[0], id: 'o1b', stage: 'Closed', contracts: 0 })
+  const r2 = buildEodReport(p)
+  assert.deepEqual(r2.issues.filter(i => i.kind === 'sold_not_scheduled' || i.kind === 'sold_no_contract' || i.kind === 'duplicate_opportunity'), [])
+})
+
+test('an audit that could not read ArcSite is reported as a source problem, once', () => {
+  const p = base()
+  p.contractAudit = { gaps: [], sheet_gaps: [], values: {}, arcsite_errors: 354, candidates: 368, arcsite_error_sample: 'ArcSite 429: Too Many Requests' }
+  const r = buildEodReport(p)
+  const s = r.issues.filter(i => i.kind === 'source_unavailable')
+  assert.equal(s.length, 1); assert.match(s[0].detail, /could not read 354 of 368 jobs from ArcSite \(ArcSite 429/)
+  assert.match(eodSmsText(r), /A SOURCE DID NOT LOAD \(1\)/)
 })

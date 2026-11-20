@@ -63,6 +63,7 @@ test('size is only an identity when no older revision shares it', () => {
 test('GHL second identity: the proposal id in a file name this server wrote', () => {
   const newest = signed[1]
   assert.equal(entryNamesProposal({ name: 'Isaac Rosas - contract 638077.pdf' }, newest), true)
+  assert.equal(entryNamesProposal({ name: 'isaac-rosas-contract-638077.pdf' }, newest), true)   // GHL's slugged spelling
   assert.equal(entryNamesProposal({ name: 'Isaac Rosas - contract 603517.pdf' }, newest), false)
   assert.equal(entryNamesProposal({ name: 'isaac-rosas-contract-3.pdf' }, newest), false)
   // two revisions of the same size: the name proves the newest is there, or it is unverified (never passed, never behind)

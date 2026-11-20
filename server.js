@@ -2298,11 +2298,14 @@ function oppContractEntries(opp) {
 
 // Every SIGNED contract ArcSite holds for a project — committed proposals with
 // a proposal-level (signed) pdf — oldest first, so the newest contract is last.
-async function arcSignedContracts(projectId) {
-  const refs = (await arcGet(`/proposals?project_id=${projectId}&per_page=20`).catch(() => [])) || []
+async function arcSignedContracts(projectId, { strict = false } = {}) {
+  // strict: an ArcSite failure (429 rate limit, 5xx) is thrown, never read as
+  // "no signed proposals" — the daily audit of Nov 20 2026 checked 14 of 368
+  // jobs during a rate limit and reported itself clean.
+  const refs = strict ? (await arcGet(`/proposals?project_id=${projectId}&per_page=20`)) || [] : (await arcGet(`/proposals?project_id=${projectId}&per_page=20`).catch(() => [])) || []
   const out = []
   for (const pr of (Array.isArray(refs) ? refs : [])) {
-    const full = pr.proposal_options ? pr : await arcGet(`/proposals/${pr.proposal_id}`).catch(() => null)
+    const full = pr.proposal_options ? pr : (strict ? await arcGet(`/proposals/${pr.proposal_id}`) : await arcGet(`/proposals/${pr.proposal_id}`).catch(() => null))
     if (full && arcCommitted(full.status) && full.pdf_url) {
       out.push({ proposal_id: String(full.proposal_id || ''), document_number: full.document_number || null, pdf_url: full.pdf_url, total: Number(full.total) || null,
         drawing_id: (full.approved_option && full.approved_option.drawing_id) || (((full.proposal_options || [])[0] || {}).drawing_id) || null })
@@ -2319,6 +2322,14 @@ const ARC_ADDON_MAX_SHARE = Number(process.env.ARC_ADDON_MAX_SHARE || 0.5)
 // here may change their value, stage, contracts, contact price or calendar
 // job: not the sale path, the change-order path, the daily audit or the value
 // sweep. Released by editing ARC_VALUE_HOLD_OPPS (comma-separated opp ids).
+// "Closed" in GHL means the deal was WON, not that the job is done (Garrison,
+// Nov 20 2026), so a Closed-stage opportunity is still audited when it is the
+// only one on its Project ID. Only when a LIVE opportunity shares the Project
+// ID is the Closed-stage one treated as the handed-off copy: it is not counted
+// as a duplicate and the live one is audited instead (Doug & Melissa Brown,
+// David Yeskin: an Inside Sales copy in Closed beside the Outside Sales job).
+const ARC_CLOSED_STAGES = new Set([GHL_PIPELINES.outside.closed, GHL_PIPELINES.estimator.closed].filter(Boolean))
+const arcClosedStage = opp => !!(opp && ARC_CLOSED_STAGES.has(String(opp.pipelineStageId || '')))
 const arcHoldSet = () => new Set(String(process.env.ARC_VALUE_HOLD_OPPS || '').split(',').map(x => x.trim()).filter(Boolean))
 const arcHeld = opp => !!(opp && opp.id && arcHoldSet().has(opp.id))
 const arcJobTotal = signed => arcJobValue(signed, { addonMaxShare: ARC_ADDON_MAX_SHARE })
@@ -2638,6 +2649,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
     gaps: [], fixed: [], failed: [], skipped_jobs: [], would_fix: [], sheet_gaps: [], values: {}, held: [], skipped: null }
   const log = (kind, item) => console.log(`[contract-audit] ${auditItemLine(kind, item)}`)
   const finish = async () => {
+    if (out.arcsite_errors) out.skipped = `ArcSite did not answer for ${out.arcsite_errors} of ${out.candidates} jobs (${out.arcsite_error_sample || 'error'}) — those were not checked`
     console.log(`[contract-audit] ${auditSummaryLine(out)}`)
     if (SUPABASE_URL && SERVICE_KEY) {
       await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`,
@@ -2699,16 +2711,37 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
   //    in the finished scan, is left for review.
   for (const { op, pid, inst } of cands) {
     if (lookupBlocked) continue
-    if (scanProjectMatches(scan, pid).length !== 1) { out.skipped_jobs.push({ project_id: pid, customer: op.name, opportunity_id: op.id, target: 'ghl+calendar', reason: 'more than one open opportunity carries this Project ID — left for review' }); continue }
+    // Duplicates: the other LIVE opportunities on the Project ID (lost/abandoned
+    // never count; a Closed-stage one counts only when nothing live shares the id).
+    const live = scanProjectMatches(scan, pid).map(m => m.raw || m).filter(o => o.id !== op.id && !['lost', 'abandoned'].includes(String(o.status || '').toLowerCase()))
+    const liveOpen = live.filter(o => !arcClosedStage(o))
+    if (arcClosedStage(op) && liveOpen.length) {
+      // The Closed-stage copy beside a live opportunity: the live one is audited.
+      out.closed_copies = out.closed_copies || []
+      out.closed_copies.push({ project_id: pid, customer: op.name, opportunity_id: op.id, live_opportunity: liveOpen.map(o => o.name || o.id).join(', ') })
+      continue
+    }
+    // For a live opp, a Closed-stage twin is its handed-off copy, not a duplicate;
+    // for a Closed-stage opp alone, another Closed-stage one on the id still is.
+    const others = arcClosedStage(op) ? live : liveOpen
+    if (others.length) { out.skipped_jobs.push({ project_id: pid, customer: op.name, opportunity_id: op.id, target: 'ghl+calendar', reason: `more than one open opportunity carries this Project ID (also ${others.map(o => o.name || o.id).join(', ')}) — left for review` }); continue }
     const held = arcHeld(op)
     if (held) out.held.push({ opportunity_id: op.id, customer: op.name, project_id: pid })
     try {
-      const signed = await arcSignedContracts(pid)
+      let signed
+      try { signed = await arcSignedContracts(pid, { strict: true }) }
+      catch (e) {
+        // ArcSite did not answer (rate limit / outage): this job was NOT checked.
+        // Counted and named once per run — never read as "nothing signed".
+        out.arcsite_errors = (out.arcsite_errors || 0) + 1
+        if (!out.arcsite_error_sample) out.arcsite_error_sample = String(e.message || e).slice(0, 120)
+        continue
+      }
       if (!signed.length) continue
       const newest = newestSigned(signed)
       const value = arcJobTotal(signed)
       const want = value.total
-      out.values[pid] = { total: want, rule: describeJobValue(value, arcUsd) }
+      out.values[pid] = { total: want, rule: describeJobValue(value, arcUsd), newest: `Proposal ${newest.document_number || newest.proposal_id}` }
       // The AI sheet is the truth for the value; ArcSite only when there is no
       // row. And the sheet itself gets checked: a signed proposal with no row,
       // or a row whose sale price disagrees with ArcSite, is a commission being
@@ -2729,6 +2762,8 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
       for (const sgn of signed) sizes.push(await arcPdfSize(sgn.pdf_url))
       const newestSize = sizes[sizes.length - 1]
       const sizeUnique = newestSizeUnique(sizes)
+      // The EOD check compares the calendar against THIS size (not GHL's last file, whose order is not chronological).
+      out.values[pid].newest_size = newestSize; out.values[pid].size_unique = sizeUnique
       let ghlUnverified = null, ghlContractsBehind = null
       const stale = o => {
         const cur = o.monetaryValue != null ? Math.round(Number(o.monetaryValue) * 100) / 100 : null
@@ -5543,7 +5578,7 @@ export function resetArcSaleMemoryForTests() {
   _sheetCache = { at: 0, data: null }
   _arcEnrich.clear()
 }
-export { arcsiteToGhl, arcValueSweep, arcContractAudit, sendSaleAlert, resetArcCalendarLedgerForTests }
+export { arcsiteToGhl, arcValueSweep, arcContractAudit, sendSaleAlert, resetArcCalendarLedgerForTests, eodRun }
 
 const port = process.env.PORT || 3000
 if (process.env.ARC_NO_LISTEN !== '1') {

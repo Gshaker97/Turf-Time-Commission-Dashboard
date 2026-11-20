@@ -45,10 +45,10 @@ const future = new Date(Date.now() + 10 * 864e5).toISOString().slice(0, 10)
 const ghlFile = (which, i) => ({ url: `https://ghl.example/${which}-${i}.pdf`, meta: { name: `${which}-${i}.pdf`, mimetype: 'application/pdf', size: which === 'new' ? NEW_SIZE : OLD_SIZE } })
 const calFile = (which) => ({ filename: `fixture-contract.pdf`, sizeBytes: which === 'new' ? NEW_SIZE : which === 'reencoded' ? NEW_SIZE + 77 : OLD_SIZE, mimeType: 'application/pdf', url: `${CAL}/api/export/attachments/${which}` })
 let world
-function reset({ ghl = ['old', 'new'], cal = ['new'], sheetTotal = '2000', calendarDown = false, arcPdfOk = true, value = 2000, sameSize = false, ingestImported = 1, keepSettings = false } = {}) {
+function reset({ ghl = ['old', 'new'], cal = ['new'], sheetTotal = '2000', calendarDown = false, arcPdfOk = true, value = 2000, sameSize = false, ingestImported = 1, keepSettings = false, arcsiteStatus = 200 } = {}) {
   const settings = keepSettings && world ? world.settings : new Map()
   world = {
-    calendarDown, arcPdfOk, sameSize, ingestImported,
+    calendarDown, arcPdfOk, sameSize, ingestImported, arcsiteStatus,
     opp: { id: OPP, name: 'Fixture Calendar', contactId: 'contact-cal', status: 'open', pipelineId: 'pipe-outside', monetaryValue: value,
       customFields: [{ id: PROJECT_FIELD, fieldValueString: PID }, { id: INSTALL_FIELD, fieldValueString: future }, { id: PDF_FIELD, fieldValueFiles: ghl.map(ghlFile) }] },
     proposals: [
@@ -83,6 +83,7 @@ globalThis.fetch = async (url, opts = {}) => {
     return send(404, {})
   }
   if (parsed.hostname === 'api.arcsite.com') {
+    if (world.arcsiteStatus !== 200) return send(world.arcsiteStatus, { error: 'Too Many Requests' })
     if (parsed.pathname === '/v1/proposals') return send(200, parsed.searchParams.get('project_id') === PID ? world.proposals : [])
     if (parsed.pathname.startsWith('/v1/projects/')) return send(200, { name: 'Fixture Calendar', customer: { name: 'Fixture Calendar', phone: '5550100100', address: { street: '1 Example St', city: 'Phoenix', state: 'AZ', zip_code: '85001' } } })
     return send(404, {})
@@ -93,7 +94,7 @@ globalThis.fetch = async (url, opts = {}) => {
     return send(200, [])
   }
   if (parsed.origin !== GHL) return send(404, {})
-  if (parsed.pathname.startsWith('/opportunities/search')) return send(200, { opportunities: [world.opp], meta: { total: 1 } })
+  if (parsed.pathname.startsWith('/opportunities/search')) return send(200, { opportunities: [world.opp, ...(world.extraOpps || [])], meta: { total: 1 + (world.extraOpps || []).length } })
   if (method === 'GET' && parsed.pathname === `/opportunities/${OPP}`) return send(200, { opportunity: world.opp })
   if (method === 'PUT' && parsed.pathname === `/opportunities/${OPP}`) {
     world.oppPuts.push(body)
@@ -330,4 +331,35 @@ test('a rebuild GHL silently ignores is reported as FAILED, never as fixed', asy
     assert.equal(audit.fixed.length, 0); assert.equal(audit.failed.length, 1, JSON.stringify(audit))
     assert.match(audit.failed[0].error, /attached files unchanged after the rebuild \(rebuilt 2\)/)
   } finally { globalThis.fetch = orig }
+})
+
+test('Closed means won: a Closed-stage opp alone on its Project ID is audited; beside a live one it is the handed-off copy, not a duplicate', async () => {
+  const CLOSED = '72a74bdf-a2ab-4412-89b0-52142a1e8c0b'   // the estimator pipeline's Closed stage
+  const twin = stageId => ({ id: 'opp-twin', name: 'Fixture Calendar (inside copy)', contactId: 'contact-cal', status: 'open', pipelineId: 'jfhZWICxnmISGllte9Rv', pipelineStageId: stageId, monetaryValue: 2000,
+    customFields: [{ id: PROJECT_FIELD, fieldValueString: PID }, { id: INSTALL_FIELD, fieldValueString: future }, { id: PDF_FIELD, fieldValueFiles: [] }] })
+  // 1. the only opp, in Closed, with NO contract on it: audited, both signed PDFs attached from ArcSite
+  reset({ ghl: [], cal: ['new'] }); resetArcSaleMemoryForTests()
+  world.opp.pipelineStageId = CLOSED
+  const alone = await run({ fix: true })
+  assert.equal(alone.fixed.length, 1, JSON.stringify(alone)); assert.equal(alone.fixed[0].pdf, 'rebuilt 2'); assert.equal(alone.fixed[0].verified_after, true)
+  assert.equal(world.uploads.length, 2); assert.equal(alone.checked, 1); assert.equal(alone.skipped_jobs.length, 0)
+  // 2. a Closed-stage copy beside the live opp: the live one is audited, the copy is noted, nothing is called a duplicate
+  reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests()
+  world.extraOpps = [twin(CLOSED)]
+  const pair = await run({ fix: true })
+  assert.equal(pair.fixed.length, 1); assert.equal(pair.skipped_jobs.length, 0, JSON.stringify(pair.skipped_jobs))
+  assert.deepEqual(pair.closed_copies.map(c => [c.opportunity_id, c.live_opportunity]), [['opp-twin', 'Fixture Calendar']])
+  // 3. two live opps: still a duplicate, the other one named
+  reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests()
+  world.extraOpps = [twin('some-open-stage')]
+  const dup = await run({ fix: true })
+  assert.equal(dup.fixed.length, 0); assert.equal(dup.skipped_jobs.length, 2)
+  assert.match(dup.skipped_jobs[0].reason, /more than one open opportunity carries this Project ID \(also /)
+})
+
+test('ArcSite rate-limited (429): the job is counted as NOT checked and the run says so — never "nothing signed, ok"', async () => {
+  reset({ ghl: ['old'], cal: ['old'], arcsiteStatus: 429 }); resetArcSaleMemoryForTests()
+  const audit = await run({ fix: true })
+  assert.equal(audit.checked, 0); assert.equal(audit.ok, 0); assert.equal(audit.arcsite_errors, 1)
+  assert.match(audit.skipped, /ArcSite did not answer for 1 of 1 jobs \(ArcSite 429/); assert.equal(world.ingests.length, 0); assert.equal(world.uploads.length, 0)
 })
