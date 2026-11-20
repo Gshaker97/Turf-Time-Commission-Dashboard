@@ -209,11 +209,18 @@ test('sheet-vs-ArcSite disputes and held duplicate Project IDs reach the report 
 test('the calendar is judged by WHICH contract it holds (byte size), not how many — it keeps only the newest by design', () => {
   const p = base()
   p.ghl.opportunities[0].contracts = 2
-  p.ghl.opportunities[0].contract_files = [{ url: 'https://ghl/old.pdf', name: 'old.pdf', size: 3598475 }, { url: 'https://ghl/new.pdf', name: 'new.pdf', size: 2051785 }]
+  // GHL lists the NEWEST file first here — its order is not chronological, so the audit's size is what counts
+  p.ghl.opportunities[0].contract_files = [{ url: 'https://ghl/new.pdf', name: 'new.pdf', size: 2051785 }, { url: 'https://ghl/old.pdf', name: 'old.pdf', size: 3598475 }]
+  p.contractAudit = { gaps: [], sheet_gaps: [], values: { P1: { total: 19881.77, rule: '$19,881.77', newest: 'Proposal 638077', newest_size: 2051785, size_unique: true } } }
   p.calendarJobs[0].contracts = [{ filename: 'isaac-rosas-contract-3.pdf', sizeBytes: 3598475 }]
   const r = buildEodReport(p)
   const c = r.issues.filter(i => i.kind === 'contract')
-  assert.equal(c.length, 1); assert.match(c[0].detail, /J-1 does not hold the newest signed contract GHL holds \(2051785 bytes\)/)
+  assert.equal(c.length, 1); assert.match(c[0].detail, /J-1 does not hold the newest signed ArcSite contract \(Proposal 638077, 2051785 bytes\)/)
+  // without the audit's size (or a non-unique one) no size verdict is given — never a guess from GHL's file order
+  const q = { ...p, contractAudit: null }
+  assert.deepEqual(buildEodReport(q).issues.filter(i => i.kind === 'contract'), [])
+  const q2 = { ...p, contractAudit: { values: { P1: { newest_size: 2051785, size_unique: false } } } }
+  assert.deepEqual(buildEodReport(q2).issues.filter(i => i.kind === 'contract'), [])
   p.calendarJobs[0].contracts = [{ filename: 'isaac-rosas-contract-3.pdf', sizeBytes: 2051785 }]   // one file, the newest → fine
   assert.deepEqual(buildEodReport(p).issues.filter(i => i.kind === 'contract'), [])
 })
@@ -282,4 +289,13 @@ test('SOLD, NOT SCHEDULED: a sold opp with no install date in GHL, on the Schedu
   p.ghl.opportunities.push({ ...p.ghl.opportunities[0], id: 'o1b', stage: 'Closed', contracts: 0 })
   const r2 = buildEodReport(p)
   assert.deepEqual(r2.issues.filter(i => i.kind === 'sold_not_scheduled' || i.kind === 'sold_no_contract' || i.kind === 'duplicate_opportunity'), [])
+})
+
+test('an audit that could not read ArcSite is reported as a source problem, once', () => {
+  const p = base()
+  p.contractAudit = { gaps: [], sheet_gaps: [], values: {}, arcsite_errors: 354, candidates: 368, arcsite_error_sample: 'ArcSite 429: Too Many Requests' }
+  const r = buildEodReport(p)
+  const s = r.issues.filter(i => i.kind === 'source_unavailable')
+  assert.equal(s.length, 1); assert.match(s[0].detail, /could not read 354 of 368 jobs from ArcSite \(ArcSite 429/)
+  assert.match(eodSmsText(r), /A SOURCE DID NOT LOAD \(1\)/)
 })

@@ -45,10 +45,10 @@ const future = new Date(Date.now() + 10 * 864e5).toISOString().slice(0, 10)
 const ghlFile = (which, i) => ({ url: `https://ghl.example/${which}-${i}.pdf`, meta: { name: `${which}-${i}.pdf`, mimetype: 'application/pdf', size: which === 'new' ? NEW_SIZE : OLD_SIZE } })
 const calFile = (which) => ({ filename: `fixture-contract.pdf`, sizeBytes: which === 'new' ? NEW_SIZE : which === 'reencoded' ? NEW_SIZE + 77 : OLD_SIZE, mimeType: 'application/pdf', url: `${CAL}/api/export/attachments/${which}` })
 let world
-function reset({ ghl = ['old', 'new'], cal = ['new'], sheetTotal = '2000', calendarDown = false, arcPdfOk = true, value = 2000, sameSize = false, ingestImported = 1, keepSettings = false } = {}) {
+function reset({ ghl = ['old', 'new'], cal = ['new'], sheetTotal = '2000', calendarDown = false, arcPdfOk = true, value = 2000, sameSize = false, ingestImported = 1, keepSettings = false, arcsiteStatus = 200 } = {}) {
   const settings = keepSettings && world ? world.settings : new Map()
   world = {
-    calendarDown, arcPdfOk, sameSize, ingestImported,
+    calendarDown, arcPdfOk, sameSize, ingestImported, arcsiteStatus,
     opp: { id: OPP, name: 'Fixture Calendar', contactId: 'contact-cal', status: 'open', pipelineId: 'pipe-outside', monetaryValue: value,
       customFields: [{ id: PROJECT_FIELD, fieldValueString: PID }, { id: INSTALL_FIELD, fieldValueString: future }, { id: PDF_FIELD, fieldValueFiles: ghl.map(ghlFile) }] },
     proposals: [
@@ -83,6 +83,7 @@ globalThis.fetch = async (url, opts = {}) => {
     return send(404, {})
   }
   if (parsed.hostname === 'api.arcsite.com') {
+    if (world.arcsiteStatus !== 200) return send(world.arcsiteStatus, { error: 'Too Many Requests' })
     if (parsed.pathname === '/v1/proposals') return send(200, parsed.searchParams.get('project_id') === PID ? world.proposals : [])
     if (parsed.pathname.startsWith('/v1/projects/')) return send(200, { name: 'Fixture Calendar', customer: { name: 'Fixture Calendar', phone: '5550100100', address: { street: '1 Example St', city: 'Phoenix', state: 'AZ', zip_code: '85001' } } })
     return send(404, {})
@@ -354,4 +355,11 @@ test('Closed means won: a Closed-stage opp alone on its Project ID is audited; b
   const dup = await run({ fix: true })
   assert.equal(dup.fixed.length, 0); assert.equal(dup.skipped_jobs.length, 2)
   assert.match(dup.skipped_jobs[0].reason, /more than one open opportunity carries this Project ID \(also /)
+})
+
+test('ArcSite rate-limited (429): the job is counted as NOT checked and the run says so — never "nothing signed, ok"', async () => {
+  reset({ ghl: ['old'], cal: ['old'], arcsiteStatus: 429 }); resetArcSaleMemoryForTests()
+  const audit = await run({ fix: true })
+  assert.equal(audit.checked, 0); assert.equal(audit.ok, 0); assert.equal(audit.arcsite_errors, 1)
+  assert.match(audit.skipped, /ArcSite did not answer for 1 of 1 jobs \(ArcSite 429/); assert.equal(world.ingests.length, 0); assert.equal(world.uploads.length, 0)
 })
