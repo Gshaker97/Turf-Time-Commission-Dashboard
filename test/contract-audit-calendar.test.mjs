@@ -93,7 +93,7 @@ globalThis.fetch = async (url, opts = {}) => {
     return send(200, [])
   }
   if (parsed.origin !== GHL) return send(404, {})
-  if (parsed.pathname.startsWith('/opportunities/search')) return send(200, { opportunities: [world.opp], meta: { total: 1 } })
+  if (parsed.pathname.startsWith('/opportunities/search')) return send(200, { opportunities: [world.opp, ...(world.extraOpps || [])], meta: { total: 1 + (world.extraOpps || []).length } })
   if (method === 'GET' && parsed.pathname === `/opportunities/${OPP}`) return send(200, { opportunity: world.opp })
   if (method === 'PUT' && parsed.pathname === `/opportunities/${OPP}`) {
     world.oppPuts.push(body)
@@ -330,4 +330,18 @@ test('a rebuild GHL silently ignores is reported as FAILED, never as fixed', asy
     assert.equal(audit.fixed.length, 0); assert.equal(audit.failed.length, 1, JSON.stringify(audit))
     assert.match(audit.failed[0].error, /attached files unchanged after the rebuild \(rebuilt 2\)/)
   } finally { globalThis.fetch = orig }
+})
+
+test('a second opportunity on the same Project ID parked in a Closed stage is neither audited nor counted as a duplicate; an open one still is', async () => {
+  const twin = stageId => ({ id: 'opp-twin', name: 'Fixture Calendar (inside copy)', contactId: 'contact-cal', status: 'open', pipelineId: 'jfhZWICxnmISGllte9Rv', pipelineStageId: stageId, monetaryValue: 2000,
+    customFields: [{ id: PROJECT_FIELD, fieldValueString: PID }, { id: INSTALL_FIELD, fieldValueString: future }, { id: PDF_FIELD, fieldValueFiles: [] }] })
+  reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests()
+  world.extraOpps = [twin('72a74bdf-a2ab-4412-89b0-52142a1e8c0b')]   // the estimator pipeline's Closed stage
+  const a = await run({ fix: true })
+  assert.equal(a.closed_stage, 1); assert.equal(a.skipped_jobs.length, 0, JSON.stringify(a.skipped_jobs)); assert.equal(a.fixed.length, 1)
+  reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests()
+  world.extraOpps = [twin('some-open-stage')]
+  const b = await run({ fix: true })
+  assert.equal(b.fixed.length, 0); assert.equal(b.skipped_jobs.length, 2)
+  assert.match(b.skipped_jobs[0].reason, /more than one open opportunity carries this Project ID \(also /)
 })

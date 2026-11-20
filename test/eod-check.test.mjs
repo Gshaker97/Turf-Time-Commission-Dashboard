@@ -237,3 +237,11 @@ test('jobs the contract audit skipped or failed to fix reach the report and the 
   // the same skipped job on a later day is carried, not re-announced
   assert.equal(buildEodReport({ ...p, previous: r, day: '2026-11-14' }).new_count, 0)
 })
+
+test('a Closed-stage opportunity on the same Project ID is not a duplicate; an open one is', () => {
+  const p = base()
+  p.ghl.opportunities.push({ ...p.ghl.opportunities[0], id: 'o1b', pipeline: 'Inside Sales (Estimators)', stage: 'Closed' })
+  assert.deepEqual(buildEodReport(p).issues.filter(i => i.kind === 'duplicate_opportunity'), [])
+  p.ghl.opportunities[1].stage = 'Ready for Install'
+  assert.equal(buildEodReport(p).issues.filter(i => i.kind === 'duplicate_opportunity').length, 1)
+})

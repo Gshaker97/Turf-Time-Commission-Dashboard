@@ -2319,6 +2319,12 @@ const ARC_ADDON_MAX_SHARE = Number(process.env.ARC_ADDON_MAX_SHARE || 0.5)
 // here may change their value, stage, contracts, contact price or calendar
 // job: not the sale path, the change-order path, the daily audit or the value
 // sweep. Released by editing ARC_VALUE_HOLD_OPPS (comma-separated opp ids).
+// An opportunity parked in a pipeline's Closed stage is finished business — it
+// is not audited and it is not a "duplicate" of the live opportunity on the
+// same Project ID (Doug & Melissa Brown, David Yeskin, Nov 20 2026: an Inside
+// Sales copy in Closed beside the Outside Sales job in Ready For Install).
+const ARC_CLOSED_STAGES = new Set([GHL_PIPELINES.outside.closed, GHL_PIPELINES.estimator.closed].filter(Boolean))
+const arcClosedStage = opp => !!(opp && ARC_CLOSED_STAGES.has(String(opp.pipelineStageId || '')))
 const arcHoldSet = () => new Set(String(process.env.ARC_VALUE_HOLD_OPPS || '').split(',').map(x => x.trim()).filter(Boolean))
 const arcHeld = opp => !!(opp && opp.id && arcHoldSet().has(opp.id))
 const arcJobTotal = signed => arcJobValue(signed, { addonMaxShare: ARC_ADDON_MAX_SHARE })
@@ -2664,6 +2670,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
       const pid = light.projectId
       // A lost/abandoned deal is history: no contract to file, no value to hold.
       if (['lost', 'abandoned'].includes(String(op.status || '').toLowerCase())) continue
+      if (arcClosedStage(op)) { out.closed_stage = (out.closed_stage || 0) + 1; continue }
       const inst = oppInstallDay(op)
       // No Install Date on the opp (common — Ron Little, Rocio Encinas…) used to
       // mean "never audited"; such opps now qualify by their created date.
@@ -2699,7 +2706,10 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
   //    in the finished scan, is left for review.
   for (const { op, pid, inst } of cands) {
     if (lookupBlocked) continue
-    if (scanProjectMatches(scan, pid).length !== 1) { out.skipped_jobs.push({ project_id: pid, customer: op.name, opportunity_id: op.id, target: 'ghl+calendar', reason: 'more than one open opportunity carries this Project ID — left for review' }); continue }
+    // Duplicates: other OPEN opportunities on the Project ID, lost/abandoned
+    // and Closed-stage ones not counted.
+    const others = scanProjectMatches(scan, pid).filter(m => { const o = m.raw || m; return o.id !== op.id && !['lost', 'abandoned'].includes(String(o.status || '').toLowerCase()) && !arcClosedStage(o) })
+    if (others.length) { out.skipped_jobs.push({ project_id: pid, customer: op.name, opportunity_id: op.id, target: 'ghl+calendar', reason: `more than one open opportunity carries this Project ID (also ${others.map(m => (m.raw || m).name || (m.raw || m).id).join(', ')}) — left for review` }); continue }
     const held = arcHeld(op)
     if (held) out.held.push({ opportunity_id: op.id, customer: op.name, project_id: pid })
     try {
