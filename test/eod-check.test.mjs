@@ -205,3 +205,35 @@ test('sheet-vs-ArcSite disputes and held duplicate Project IDs reach the report 
   assert.match(text, /AI SHEET DISAGREES WITH ARCSITE \(1\)/); assert.match(text, /Angel Ocampo: Sheet \$9,728\.83 vs ArcSite signed \$10,505\.57/)
   assert.match(text, /DUPLICATE GHL OPPORTUNITIES \(2\)/); assert.match(text, /Jenny Carr/)
 })
+
+test('the calendar is judged by WHICH contract it holds (byte size), not how many — it keeps only the newest by design', () => {
+  const p = base()
+  p.ghl.opportunities[0].contracts = 2
+  p.ghl.opportunities[0].contract_files = [{ url: 'https://ghl/old.pdf', name: 'old.pdf', size: 3598475 }, { url: 'https://ghl/new.pdf', name: 'new.pdf', size: 2051785 }]
+  p.calendarJobs[0].contracts = [{ filename: 'isaac-rosas-contract-3.pdf', sizeBytes: 3598475 }]
+  const r = buildEodReport(p)
+  const c = r.issues.filter(i => i.kind === 'contract')
+  assert.equal(c.length, 1); assert.match(c[0].detail, /J-1 does not hold the newest signed contract GHL holds \(2051785 bytes\)/)
+  p.calendarJobs[0].contracts = [{ filename: 'isaac-rosas-contract-3.pdf', sizeBytes: 2051785 }]   // one file, the newest → fine
+  assert.deepEqual(buildEodReport(p).issues.filter(i => i.kind === 'contract'), [])
+})
+
+test('jobs the contract audit skipped or failed to fix reach the report and the text with their reason, on the Sheet or not', () => {
+  const p = base()
+  p.contractAudit = { gaps: [], values: {}, sheet_gaps: [],
+    skipped_jobs: [
+      { project_id: 'P1', customer: 'Camron & Bobbie Johnson', opportunity_id: 'o1', calendar_job: 'J-1', target: 'calendar', newest: 'Proposal 638077 ($19,104.90)', reason: 'manual hold (ARC_VALUE_HOLD_OPPS) — nothing written' },
+      { project_id: 'P55', customer: 'Tyler Sibold', opportunity_id: 'o55', calendar_job: 'J-1696', target: 'calendar', newest: 'Proposal 638805 ($12,214.35)', reason: 'daily fix cap (60) reached — tomorrow\'s run continues' },
+    ],
+    failed: [{ project_id: 'P56', customer: 'Jared Morris', opportunity_id: 'o56', calendar_job: 'J-1647', target: 'ghl', newest: 'Proposal 628481', error: 'medias upload 500' }] }
+  const r = buildEodReport(p)
+  const kinds = r.issues.map(i => i.kind).sort()
+  assert.deepEqual(kinds, ['contract_fix_failed', 'contract_fix_skipped', 'contract_fix_skipped'])
+  const text = eodSmsText(r)
+  assert.match(text, /CONTRACT BEHIND ARCSITE, NOT FIXED \(2\)/)
+  assert.match(text, /Tyler Sibold \(J-1696\): calendar behind ArcSite \(Proposal 638805 \(\$12,214\.35\)\): not fixed: daily fix cap \(60\) reached/)
+  assert.match(text, /Camron & Bobbie Johnson \(J-1\): calendar behind ArcSite .*manual hold/)
+  assert.match(text, /CONTRACT FIX FAILED \(1\)/); assert.match(text, /Jared Morris \(J-1647\): ghl behind ArcSite \(Proposal 628481\): the fix failed: medias upload 500/)
+  // the same skipped job on a later day is carried, not re-announced
+  assert.equal(buildEodReport({ ...p, previous: r, day: '2026-11-14' }).new_count, 0)
+})
