@@ -50,3 +50,45 @@ test('log lines name the run and each job with its reason', () => {
   assert.equal(auditItemLine('SKIPPED', { customer: 'Isaac Rosas', calendar_job: 'J-1575', project_id: '1', target: 'calendar', reason: 'manual hold' }), 'SKIPPED Isaac Rosas (J-1575) project 1: calendar behind — manual hold')
   assert.equal(auditItemLine('FIXED', { customer: 'A', project_id: '2', target: 'calendar', source: 'arcsite' }), 'FIXED A project 2: calendar behind [pushed from arcsite]')
 })
+
+import { newestSizeUnique, entryNamesProposal } from '../lib/contract-audit.mjs'
+
+test('size is only an identity when no older revision shares it', () => {
+  assert.equal(newestSizeUnique([OLD, NEW]), true)
+  assert.equal(newestSizeUnique([NEW, NEW]), false)
+  assert.equal(newestSizeUnique([NEW]), true)
+  assert.equal(newestSizeUnique([OLD, null]), false)
+})
+
+test('GHL second identity: the proposal id in a file name this server wrote', () => {
+  const newest = signed[1]
+  assert.equal(entryNamesProposal({ name: 'Isaac Rosas - contract 638077.pdf' }, newest), true)
+  assert.equal(entryNamesProposal({ name: 'Isaac Rosas - contract 603517.pdf' }, newest), false)
+  assert.equal(entryNamesProposal({ name: 'isaac-rosas-contract-3.pdf' }, newest), false)
+  // two revisions of the same size: the name proves the newest is there, or it is unverified (never passed, never behind)
+  const sameSize = [{ size: NEW }, { size: NEW }]
+  const named = ghlContractState({ signed, entries: [{ size: NEW, name: 'Isaac Rosas - contract 603517.pdf' }, { size: NEW, name: 'Isaac Rosas - contract 638077.pdf' }], newestSize: NEW, sizeUnique: false, newest })
+  assert.deepEqual([named.behind, named.verified], [false, true])
+  const unnamed = ghlContractState({ signed, entries: sameSize, newestSize: NEW, sizeUnique: false, newest })
+  assert.deepEqual([unnamed.behind, unnamed.verified], [false, false]); assert.match(unnamed.reason, /older revision has the same size/)
+  // a file of a different size, with the count complete: the name still proves it (a re-encoded copy)
+  const reenc = ghlContractState({ signed, entries: [{ size: OLD }, { size: OLD + 7, name: 'Isaac Rosas - contract 638077.pdf' }], newestSize: NEW, sizeUnique: true, newest })
+  assert.deepEqual([reenc.behind, reenc.verified], [false, true])
+})
+
+test('calendar second identity: the push ledger', () => {
+  const newest = signed[1]
+  const job = n => ({ jobNumber: 'J-1575', contracts: [{ filename: 'isaac-rosas-contract-3.pdf', sizeBytes: n }] })
+  // a re-encoded copy (size matches nothing) with the ledger saying the newest was pushed → current, not pushed again
+  const led = calendarContractState({ signed, newestSize: NEW, sizeUnique: true, job: job(NEW + 999), ledger: { proposal_id: '638077', job: 'J-1575', at: '2026-11-21T13:00:00Z' }, newest })
+  assert.equal(led.state, 'current_by_ledger'); assert.match(led.reason, /proposal 638077 was pushed to calendar job J-1575 on 2026-11-21/)
+  // the ledger is for an OLDER proposal → it does not count
+  assert.equal(calendarContractState({ signed, newestSize: NEW, sizeUnique: true, job: job(NEW + 999), ledger: { proposal_id: '603517', job: 'J-1575' }, newest }).state, 'behind')
+  // the ledger is for another calendar job → it does not count
+  assert.equal(calendarContractState({ signed, newestSize: NEW, sizeUnique: true, job: job(NEW + 999), ledger: { proposal_id: '638077', job: 'J-9' }, newest }).state, 'behind')
+  // a job with no contract at all is behind even with a ledger entry (someone removed the file)
+  assert.equal(calendarContractState({ signed, newestSize: NEW, sizeUnique: true, job: { jobNumber: 'J-1575', contracts: [] }, ledger: { proposal_id: '638077', job: 'J-1575' }, newest }).state, 'no_contract')
+  // two revisions share a size and the calendar holds one of them: ambiguous without the ledger, current with it
+  assert.equal(calendarContractState({ signed, newestSize: NEW, sizeUnique: false, job: job(NEW), ledger: null, newest }).state, 'ambiguous')
+  assert.equal(calendarContractState({ signed, newestSize: NEW, sizeUnique: false, job: job(NEW), ledger: { proposal_id: '638077', job: 'J-1575' }, newest }).state, 'current_by_ledger')
+})

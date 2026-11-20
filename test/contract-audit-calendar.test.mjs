@@ -43,11 +43,12 @@ delete process.env.ARC_VALUE_HOLD_OPPS
 const future = new Date(Date.now() + 10 * 864e5).toISOString().slice(0, 10)
 // GHL file entries: 'old' = the pre-change-order PDF, 'new' = the newest signed one.
 const ghlFile = (which, i) => ({ url: `https://ghl.example/${which}-${i}.pdf`, meta: { name: `${which}-${i}.pdf`, mimetype: 'application/pdf', size: which === 'new' ? NEW_SIZE : OLD_SIZE } })
-const calFile = (which) => ({ filename: `fixture-contract.pdf`, sizeBytes: which === 'new' ? NEW_SIZE : OLD_SIZE, mimeType: 'application/pdf', url: `${CAL}/api/export/attachments/${which}` })
+const calFile = (which) => ({ filename: `fixture-contract.pdf`, sizeBytes: which === 'new' ? NEW_SIZE : which === 'reencoded' ? NEW_SIZE + 77 : OLD_SIZE, mimeType: 'application/pdf', url: `${CAL}/api/export/attachments/${which}` })
 let world
-function reset({ ghl = ['old', 'new'], cal = ['new'], sheetTotal = '2000', calendarDown = false, arcPdfOk = true, value = 2000 } = {}) {
+function reset({ ghl = ['old', 'new'], cal = ['new'], sheetTotal = '2000', calendarDown = false, arcPdfOk = true, value = 2000, sameSize = false, ingestImported = 1, keepSettings = false } = {}) {
+  const settings = keepSettings && world ? world.settings : new Map()
   world = {
-    calendarDown, arcPdfOk,
+    calendarDown, arcPdfOk, sameSize, ingestImported,
     opp: { id: OPP, name: 'Fixture Calendar', contactId: 'contact-cal', status: 'open', pipelineId: 'pipe-outside', monetaryValue: value,
       customFields: [{ id: PROJECT_FIELD, fieldValueString: PID }, { id: INSTALL_FIELD, fieldValueString: future }, { id: PDF_FIELD, fieldValueFiles: ghl.map(ghlFile) }] },
     proposals: [
@@ -55,7 +56,7 @@ function reset({ ghl = ['old', 'new'], cal = ['new'], sheetTotal = '2000', calen
       { proposal_id: 'p1', project_id: PID, status: 'APPROVED', total: 1500, pdf_url: 'https://cdn.example/old.pdf', proposal_options: [], document_number: '1001' },
     ],
     calendarJobs: cal === null ? [] : [{ jobNumber: 'J-77', ghlOpportunityId: OPP, canceledAt: null, value, contracts: cal.map(calFile) }],
-    sheetTotal, ingests: [], uploads: [], oppPuts: [], settings: new Map(),
+    sheetTotal, ingests: [], uploads: [], oppPuts: [], settings,
   }
 }
 
@@ -72,13 +73,13 @@ globalThis.fetch = async (url, opts = {}) => {
     // ArcSite's signed render: HEAD answers the size, GET the bytes (or, when
     // arcPdfOk is off, a login page — an expired link — which cannot be hosted).
     const isNew = parsed.pathname === '/new.pdf'
-    const bytes = world.arcPdfOk || !isNew ? (isNew ? SIGNED_PDF : Buffer.concat([SIGNED_PDF, Buffer.alloc(1000)])) : Buffer.from('<html>login</html>')
+    const bytes = world.arcPdfOk || !isNew ? (isNew || world.sameSize ? SIGNED_PDF : Buffer.concat([SIGNED_PDF, Buffer.alloc(1000)])) : Buffer.from('<html>login</html>')
     if (method === 'HEAD') return new Response(null, { status: 200, headers: { 'content-length': String(bytes.length) } })
     return new Response(bytes, { status: 200, headers: { 'content-type': 'application/pdf' } })
   }
   if (parsed.origin === CAL) {
     if (parsed.pathname === '/api/export/jobs') return world.calendarDown ? send(503, { error: 'calendar down' }) : send(200, { jobs: world.calendarJobs })
-    if (parsed.pathname === '/api/change-orders/ingest' && method === 'POST') { world.ingests.push(body); return send(200, { ok: true, matched: true, job: { jobNumber: 'J-77', filesImported: 1, valueChanged: false } }) }
+    if (parsed.pathname === '/api/change-orders/ingest' && method === 'POST') { world.ingests.push(body); return send(200, { ok: true, matched: true, job: { jobNumber: 'J-77', filesImported: world.ingestImported, valueChanged: false } }) }
     return send(404, {})
   }
   if (parsed.hostname === 'api.arcsite.com') {
@@ -112,9 +113,9 @@ globalThis.fetch = async (url, opts = {}) => {
   return send(404, {})
 }
 
-const { arcContractAudit, resetArcSaleMemoryForTests } = await import('../server.js')
+const { arcContractAudit, resetArcSaleMemoryForTests, resetArcCalendarLedgerForTests } = await import('../server.js')
 const quiet = async fn => { const orig = console.log; console.log = () => {}; try { return await fn() } finally { console.log = orig } }
-const run = opts => quiet(() => arcContractAudit(opts))
+const run = opts => { resetArcCalendarLedgerForTests(); return quiet(() => arcContractAudit(opts)) }
 
 test('calendar behind, GHL current: the newest PDF is pushed to the calendar from GHL\'s copy, nothing else touched', async () => {
   reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests()
@@ -219,4 +220,63 @@ test('calendar export down: GHL checks still run and the unchecked calendar is r
   const audit = await run({ fix: true })
   assert.match(audit.calendar.error, /503|calendar down/); assert.equal(audit.ok, 1); assert.equal(world.ingests.length, 0)
   assert.equal(audit.skipped_jobs.length, 1); assert.equal(audit.skipped_jobs[0].target, 'calendar'); assert.match(audit.skipped_jobs[0].reason, /calendar not checked/)
+})
+
+test('a re-encoded calendar copy (size matches nothing): pushed once, the calendar reports it already had it, and later runs leave it alone', async () => {
+  reset({ ghl: ['old', 'new'], cal: ['reencoded'], ingestImported: 0 }); resetArcSaleMemoryForTests()
+  const first = await run({ fix: true })
+  assert.equal(first.calendar.behind, 1); assert.equal(world.ingests.length, 1)
+  assert.equal(first.fixed.length, 1); assert.equal(first.fixed[0].already_had_it, true); assert.match(first.fixed[0].reason, /already held it/)
+  const ledger = world.settings.get('arcsite_calendar_contract_ledger')
+  assert.equal(ledger[OPP].proposal_id, 'p2'); assert.equal(ledger[OPP].job, 'J-77')
+  // next night: same calendar, same ledger → current by ledger, nothing sent
+  reset({ ghl: ['old', 'new'], cal: ['reencoded'], ingestImported: 0, keepSettings: true }); resetArcSaleMemoryForTests()
+  const second = await run({ fix: true })
+  assert.equal(world.ingests.length, 0, JSON.stringify(second))
+  assert.equal(second.calendar.by_ledger, 1); assert.equal(second.ok, 1); assert.equal(second.gaps.length, 0)
+  // a NEWER signing (p3) makes the ledger stale again → behind
+  reset({ ghl: ['old', 'new'], cal: ['reencoded'], keepSettings: true }); resetArcSaleMemoryForTests()
+  world.proposals.unshift({ proposal_id: 'p3', project_id: PID, status: 'APPROVED', total: 2000, pdf_url: 'https://cdn.example/new.pdf', proposal_options: [], document_number: '1003' })
+  const third = await run({ fix: true })
+  // GHL is short one contract now, so the change-order path rebuilds GHL and
+  // re-files the calendar — the stale ledger (p2) did not stop the push, and
+  // the ledger now names p3.
+  assert.equal(world.ingests.length, 1, JSON.stringify(third)); assert.equal(third.fixed[0].pdf, 'rebuilt 3')
+  assert.equal(world.settings.get('arcsite_calendar_contract_ledger')[OPP].proposal_id, 'p3')
+})
+
+test('two revisions share a byte size: the calendar is never passed on size alone — a push settles it (filesImported 0 = it already had it; 1 = it was behind)', async () => {
+  reset({ ghl: ['old', 'new'], cal: ['new'], sameSize: true, ingestImported: 1 }); resetArcSaleMemoryForTests()
+  const a = await run({ fix: true })
+  assert.equal(a.calendar.ambiguous, 1, JSON.stringify(a.calendar)); assert.equal(a.gaps.length, 1); assert.equal(a.gaps[0].ambiguous, true)
+  assert.equal(world.ingests.length, 1); assert.equal(a.fixed.length, 1); assert.equal(a.fixed[0].already_had_it, undefined, 'the calendar imported it, so it WAS behind')
+  reset({ ghl: ['old', 'new'], cal: ['new'], sameSize: true, ingestImported: 0 }); resetArcSaleMemoryForTests()
+  const b = await run({ fix: true })
+  assert.equal(world.ingests.length, 1); assert.equal(b.fixed[0].already_had_it, true)
+  // and in dry mode the ambiguity is listed, nothing sent
+  reset({ ghl: ['old', 'new'], cal: ['new'], sameSize: true }); resetArcSaleMemoryForTests()
+  const c = await run({ fix: true, dry: true })
+  assert.equal(world.ingests.length, 0); assert.equal(c.would_fix.length, 1); assert.match(c.would_fix[0].reason, /older revision has the same size/)
+})
+
+test('two revisions share a byte size on the GHL side: the count is complete but nothing proves the newest is attached → skipped and flagged, never passed', async () => {
+  reset({ ghl: ['new', 'new'], cal: ['new'], sameSize: true }); resetArcSaleMemoryForTests()   // two GHL files of the shared size, neither named for a proposal
+  const audit = await run({ fix: true })
+  assert.equal(world.uploads.length, 0, 'nothing rebuilt on a guess')
+  const sk = audit.skipped_jobs.find(s => s.target === 'ghl'); assert.ok(sk, JSON.stringify(audit)); assert.match(sk.reason, /could not verify the newest contract is attached/)
+  // a hosted file named for the newest proposal proves it, with the same sizes
+  reset({ ghl: ['new', 'new'], cal: ['new'], sameSize: true }); resetArcSaleMemoryForTests()
+  world.opp.customFields.find(c => c.id === PDF_FIELD).fieldValueFiles[1].meta.name = 'Fixture Calendar - contract 1002.pdf'
+  const ok = await run({ fix: true })
+  assert.ok(!ok.skipped_jobs.some(s => s.target === 'ghl'), JSON.stringify(ok.skipped_jobs)); assert.equal(world.uploads.length, 0)
+  // (the calendar side of this same-size job is ambiguous too and is settled by its own push — see the test above)
+})
+
+test('the change-order push records the ledger too, so a job fixed through GHL is not re-pushed the next night', async () => {
+  reset({ ghl: ['old'], cal: ['reencoded'] }); resetArcSaleMemoryForTests()
+  await run({ fix: true })
+  assert.equal(world.settings.get('arcsite_calendar_contract_ledger')[OPP].source, 'change_order')
+  reset({ ghl: ['old', 'new'], cal: ['reencoded'], keepSettings: true }); resetArcSaleMemoryForTests()
+  const next = await run({ fix: true })
+  assert.equal(world.ingests.length, 0); assert.equal(next.calendar.by_ledger, 1)
 })
