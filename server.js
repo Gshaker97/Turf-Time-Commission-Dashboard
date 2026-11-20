@@ -2437,7 +2437,7 @@ async function arcCalendarPushContract({ oppId, contactId, projectId, customerNa
   } catch (e) { return { ok: false, error: e.message || 'calendar push failed' } }
 }
 
-async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed, newTotal, via, dry = false }) {
+async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed, newTotal, via, dry = false, contractsBehind = null }) {
   if (arcHeld(opp)) return { ok: false, held: true, via, project_id: projectId, customer: customer && customer.name, opportunity_id: opp.id, error: 'opportunity is on a manual hold (ARC_VALUE_HOLD_OPPS) — nothing written' }
   const pipe = opp.pipelineId === GHL_PIPELINES.estimator.id ? GHL_PIPELINES.estimator : GHL_PIPELINES.outside
   const cur = opp.monetaryValue != null ? Math.round(Number(opp.monetaryValue) * 100) / 100 : null
@@ -2485,7 +2485,7 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
   const moneyChanged = !!money && !disputed && !totalChanged && ['baseline', 'markup', 'commission'].some(k => money[k] != null && !arcSame(money[k], numOf(ghlFld(opp.customFields || [], k === 'markup' ? 'Mark Up' : k === 'baseline' ? 'Baseline Price' : 'Commission'))))
   if (dry) {
     return { ...r, dry: true, plan: {
-      contracts: signed.length > attached.length ? `rebuild ${signed.length} (currently ${attached.length})` : 'kept',
+      contracts: (signed.length > attached.length || contractsBehind) ? `rebuild ${signed.length} (currently ${attached.length}${contractsBehind ? `; ${contractsBehind}` : ''})` : 'kept',
       stage: totalChanged ? 'move to Change Order' : 'unchanged',
       value: totalChanged ? `${arcUsd(cur)} → ${arcUsd(want)}` : 'unchanged', price_field: totalChanged ? arcUsd(want) : 'unchanged',
       sheet_money: (totalChanged || moneyChanged) ? money : 'unchanged',
@@ -2493,11 +2493,15 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
     } }
   }
   let contracts = attached
-  // 1. Contracts: ArcSite has more signed proposals than the opp carries → rebuild
-  //    the FULL set (host every signed pdf fresh, then clear + set each), so the
-  //    opp ends with exactly today's contracts, oldest → newest. Host everything
-  //    BEFORE clearing: a failed download must never cost the existing document.
-  if (signed.length > attached.length) {
+  // 1. Contracts: ArcSite has more signed proposals than the opp carries — or the
+  //    daily audit found the right COUNT but not the newest PDF among them
+  //    (`contractsBehind`, by byte size: Derick Jones / Alfonso Vasquez / Jalyn
+  //    Robbins, Nov 20 2026, were logged "fixed" with the files untouched) →
+  //    rebuild the FULL set (host every signed pdf fresh, then clear + set each),
+  //    so the opp ends with exactly today's contracts, oldest → newest. Host
+  //    everything BEFORE clearing: a failed download must never cost the
+  //    existing document.
+  if (signed.length > attached.length || contractsBehind) {
     try {
       const hosted = []
       for (const s of signed) {
@@ -2725,11 +2729,12 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
       for (const sgn of signed) sizes.push(await arcPdfSize(sgn.pdf_url))
       const newestSize = sizes[sizes.length - 1]
       const sizeUnique = newestSizeUnique(sizes)
-      let ghlUnverified = null
+      let ghlUnverified = null, ghlContractsBehind = null
       const stale = o => {
         const cur = o.monetaryValue != null ? Math.round(Number(o.monetaryValue) * 100) / 100 : null
         const c = ghlContractState({ signed, entries: oppContractEntries(o), newestSize, sizeUnique, newest })
         if (!c.behind && !c.verified) ghlUnverified = c.reason
+        ghlContractsBehind = c.behind ? c.reason : null
         return c.behind ? c.reason : (wantValue != null && cur != null && !arcSame(cur, wantValue) ? `value ${arcUsd(cur)} vs ${arcUsd(wantValue)}` : null)
       }
       out.checked++
@@ -2757,11 +2762,18 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
           const project = await arcGet(`/projects/${pid}`).catch(() => null)
           const c = (project && project.customer) || {}, a = c.address || {}
           const customer = { name: c.name || opp.name || 'Customer', phone: c.phone || null, email: c.email || null, address1: a.street || null, city: a.city || null, state: a.state || null, postalCode: a.zip_code || null }
-          const r = await arcApplyChangeOrder(pid, { opp, contactId: opp.contactId || null, customer, signed, newTotal: want, via: 'daily_audit' })
+          const r = await arcApplyChangeOrder(pid, { opp, contactId: opp.contactId || null, customer, signed, newTotal: want, via: 'daily_audit', contractsBehind: ghlContractsBehind })
           await arcLog(r)
           const cal = r.calendar && typeof r.calendar === 'object' ? (r.calendar.job ? r.calendar.job.jobNumber : r.calendar.error || null) : r.calendar
+          // "Fixed" means the files really changed: read the opp back and judge it again.
+          if (r.ok && ghlContractsBehind) {
+            const back = (await ghlGet(`/opportunities/${op.id}`).catch(() => null)) || {}
+            const after = ghlContractState({ signed, entries: oppContractEntries(back.opportunity || back), newestSize, sizeUnique, newest })
+            if (after.behind) { r.ok = false; r.error = `attached files unchanged after the rebuild (${r.pdf}): ${after.reason}` }
+            else r.verified_after = true
+          }
           ghlPushedCalendar = !!(r.ok && r.calendar && typeof r.calendar === 'object' && r.calendar.job)
-          const item = { ...gap, action: 'change_order', pdf: r.pdf, stage_moved: r.stage_moved, calendar: cal, error: r.error || (r.ok ? undefined : r.pdf) }
+          const item = { ...gap, action: 'change_order', pdf: r.pdf, stage_moved: r.stage_moved, calendar: cal, verified_after: r.verified_after, error: r.error || (r.ok ? undefined : r.pdf) }
           ;(r.ok ? out.fixed : out.failed).push(item); log(r.ok ? 'FIXED' : 'FAILED', item)
           await pause(500)
         }

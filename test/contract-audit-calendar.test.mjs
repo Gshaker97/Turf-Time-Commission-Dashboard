@@ -304,3 +304,30 @@ test('"nothing imported" from a GHL-sourced push does not confirm a job the size
   const audit = await run({ fix: true })
   assert.equal(world.ingests.length, 2); assert.equal(audit.fixed[0].already_had_it, true); assert.match(audit.fixed[0].reason, /from GHL and from ArcSite/)
 })
+
+test('GHL has the right COUNT but not the newest PDF: the change order rebuilds the files (not "kept"), and "fixed" is only said after the read-back proves it', async () => {
+  reset({ ghl: ['old', 'old'], cal: ['new'] }); resetArcSaleMemoryForTests()   // two files, neither the newest
+  const audit = await run({ fix: true })
+  assert.equal(audit.gaps.length, 1); assert.match(audit.gaps[0].reason, /newest signed PDF .* is not among them/)
+  assert.equal(audit.fixed.length, 1, JSON.stringify(audit)); assert.equal(audit.fixed[0].pdf, 'rebuilt 2'); assert.equal(audit.fixed[0].verified_after, true)
+  assert.equal(world.uploads.length, 2)
+  // dry mode says what it would do
+  reset({ ghl: ['old', 'old'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  const d = await run({ fix: true, dry: true })
+  assert.equal(d.would_fix.length, 1); assert.equal(world.uploads.length, 0)
+})
+
+test('a rebuild GHL silently ignores is reported as FAILED, never as fixed', async () => {
+  reset({ ghl: ['old', 'old'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  const orig = globalThis.fetch
+  globalThis.fetch = async (url, opts = {}) => {
+    const parsed = new URL(String(url))
+    if ((opts.method || 'GET').toUpperCase() === 'PUT' && parsed.pathname === `/opportunities/${OPP}`) { world.oppPuts.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ opportunity: world.opp }), { status: 200, headers: { 'content-type': 'application/json' } }) }   // accepted, nothing changes
+    return orig(url, opts)
+  }
+  try {
+    const audit = await run({ fix: true })
+    assert.equal(audit.fixed.length, 0); assert.equal(audit.failed.length, 1, JSON.stringify(audit))
+    assert.match(audit.failed[0].error, /attached files unchanged after the rebuild \(rebuilt 2\)/)
+  } finally { globalThis.fetch = orig }
+})
