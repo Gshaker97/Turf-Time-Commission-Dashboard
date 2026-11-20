@@ -2797,10 +2797,24 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
       const c = (project && project.customer) || {}
       // A disputed (or unknown) value leaves the calendar's value exactly as it
       // is: the ingest only changes a value that differs from what it is sent.
-      const r = await arcCalendarPushContract({ oppId: op.id, contactId: op.contactId || null, projectId: pid, customerName: c.name || op.name, job: calJob, source: src,
+      const push = source => arcCalendarPushContract({ oppId: op.id, contactId: op.contactId || null, projectId: pid, customerName: c.name || op.name, job: calJob, source,
         newTotal: wantValue != null ? wantValue : calJob.value, previousTotal: calJob.value, newestLabel: base.newest })
-      const item = { ...gap, action: 'calendar_push', source: src.source, calendar: r.ok ? (r.job && r.job.jobNumber) || calJob.jobNumber : null, imported: r.imported, error: r.ok ? undefined : r.error }
-      if (r.ok && r.imported === 0) { item.already_had_it = true; item.reason = `${cs.reason} — the calendar already held it (nothing imported); recorded so it is not pushed again` }
+      let used = src
+      let r = await push(src)
+      // "Nothing imported" from a GHL-hosted copy does not prove the calendar
+      // has the file: the calendar keys a GHL file by the last part of its URL,
+      // and GHL files named like the calendar's own ("isaac-rosas-contract-3.pdf")
+      // collide with what it already stores (Nov 20 2026: nine jobs "confirmed"
+      // while still holding the old design). When the sizes said BEHIND, the
+      // same PDF is pushed again straight from ArcSite, whose URL cannot
+      // collide; only a second "nothing imported" counts as already there.
+      if (r.ok && r.imported === 0 && cs.state === 'behind' && src.source === 'ghl' && newest.pdf_url) {
+        used = { source: 'arcsite', url: newest.pdf_url, name: `${c.name || op.name || 'Customer'} - contract ${newest.document_number || newest.proposal_id}.pdf`.replace(/[\/\\]/g, '-'), proposal_id: src.proposal_id }
+        const r2 = await push(used)
+        if (r2.ok) { r = r2; r.retried_from_ghl = true } else used = src
+      }
+      const item = { ...gap, action: 'calendar_push', source: used.source, retried: r.retried_from_ghl || undefined, calendar: r.ok ? (r.job && r.job.jobNumber) || calJob.jobNumber : null, imported: r.imported, error: r.ok ? undefined : r.error }
+      if (r.ok && r.imported === 0) { item.already_had_it = true; item.reason = `${cs.reason} — the calendar already held it (nothing imported${r.retried_from_ghl ? ', from GHL and from ArcSite' : ''}); recorded so it is not pushed again` }
       ;(r.ok ? out.fixed : out.failed).push(item); log(r.ok ? (item.already_had_it ? 'CONFIRMED' : 'FIXED') : 'FAILED', item)
       await pause(500)
     } catch (e) { const item = { project_id: pid, customer: op.name, install: inst, error: e.message || 'audit failed' }; out.failed.push(item); log('FAILED', item) }

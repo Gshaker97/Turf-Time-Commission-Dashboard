@@ -225,7 +225,8 @@ test('calendar export down: GHL checks still run and the unchecked calendar is r
 test('a re-encoded calendar copy (size matches nothing): pushed once, the calendar reports it already had it, and later runs leave it alone', async () => {
   reset({ ghl: ['old', 'new'], cal: ['reencoded'], ingestImported: 0 }); resetArcSaleMemoryForTests()
   const first = await run({ fix: true })
-  assert.equal(first.calendar.behind, 1); assert.equal(world.ingests.length, 1)
+  // pushed from GHL's copy, "nothing imported", then once more from ArcSite to be sure: still nothing → it really has it
+  assert.equal(first.calendar.behind, 1); assert.equal(world.ingests.length, 2)
   assert.equal(first.fixed.length, 1); assert.equal(first.fixed[0].already_had_it, true); assert.match(first.fixed[0].reason, /already held it/)
   const ledger = world.settings.get('arcsite_calendar_contract_ledger')
   assert.equal(ledger[OPP].proposal_id, 'p2'); assert.equal(ledger[OPP].job, 'J-77')
@@ -279,4 +280,27 @@ test('the change-order push records the ledger too, so a job fixed through GHL i
   reset({ ghl: ['old', 'new'], cal: ['reencoded'], keepSettings: true }); resetArcSaleMemoryForTests()
   const next = await run({ fix: true })
   assert.equal(world.ingests.length, 0); assert.equal(next.calendar.by_ledger, 1)
+})
+
+test('"nothing imported" from a GHL-sourced push does not confirm a job the sizes say is behind: the PDF is pushed again from ArcSite (calendar dedupe-key collision, Nov 20)', async () => {
+  // Calendar still holds the old file; its dedupe wrongly answers "already have it" for GHL's copy, then imports ArcSite's.
+  reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests()
+  world.ingestImported = 0
+  const orig = globalThis.fetch
+  globalThis.fetch = async (url, opts = {}) => {
+    if (String(url).endsWith('/api/change-orders/ingest')) { const b = JSON.parse(opts.body); world.ingestImported = b.contracts[0].url.startsWith('https://cdn.example/') ? 1 : 0 }
+    return orig(url, opts)
+  }
+  try {
+    const audit = await run({ fix: true })
+    assert.equal(world.ingests.length, 2, JSON.stringify(audit))
+    assert.equal(world.ingests[0].contracts[0].url, 'https://ghl.example/new-1.pdf')
+    assert.equal(world.ingests[1].contracts[0].url, 'https://cdn.example/new.pdf'); assert.equal(world.ingests[1].contracts[0].meta.name, 'Fixture Calendar - contract 1002.pdf')
+    assert.equal(audit.fixed.length, 1); assert.equal(audit.fixed[0].source, 'arcsite'); assert.equal(audit.fixed[0].retried, true); assert.equal(audit.fixed[0].already_had_it, undefined)
+    assert.equal(world.settings.get('arcsite_calendar_contract_ledger')[OPP].source, 'arcsite')
+  } finally { globalThis.fetch = orig }
+  // a second "nothing imported", now from ArcSite, is the real confirmation
+  reset({ ghl: ['old', 'new'], cal: ['reencoded'], ingestImported: 0 }); resetArcSaleMemoryForTests()
+  const audit = await run({ fix: true })
+  assert.equal(world.ingests.length, 2); assert.equal(audit.fixed[0].already_had_it, true); assert.match(audit.fixed[0].reason, /from GHL and from ArcSite/)
 })
