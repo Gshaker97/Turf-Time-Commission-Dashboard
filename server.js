@@ -28,6 +28,7 @@ import * as arcViews from './lib/analyst-arcsite-views.mjs'
 import { readBackAndRepair } from './lib/ghl-opp-readback.mjs'
 import { buildEodReport, eodSmsText } from './lib/eod-check.mjs'
 import { arcJobValue, sheetTotalFor, describeJobValue } from './lib/arcsite-job-value.mjs'
+import { ghlContractState, calendarContractState, calendarPushSource, newestSigned, newestSizeUnique, auditSummaryLine, auditItemLine } from './lib/contract-audit.mjs'
 import { parseSignedPdfText } from './lib/parse-signed-pdf.mjs'
 import { readVerifiedSheetSnapshot } from './lib/verified-sheet-snapshot.mjs'
 import {
@@ -2290,7 +2291,7 @@ function oppContractEntries(opp) {
     if (v && !Array.isArray(v) && typeof v === 'object') v = Object.values(v)
     return (Array.isArray(v) ? v : [])
       .filter(x => x && !x.deleted && (x.url || (x.meta && x.meta.url)))
-      .map(x => ({ url: x.url || x.meta.url, name: (x.meta && (x.meta.originalname || x.meta.name)) || 'contract.pdf' }))
+      .map(x => ({ url: x.url || x.meta.url, name: (x.meta && (x.meta.originalname || x.meta.name)) || 'contract.pdf', size: (x.meta && Number(x.meta.size) > 0) ? Number(x.meta.size) : null }))
   }
   return []
 }
@@ -2318,8 +2319,8 @@ const ARC_ADDON_MAX_SHARE = Number(process.env.ARC_ADDON_MAX_SHARE || 0.5)
 // here may change their value, stage, contracts, contact price or calendar
 // job: not the sale path, the change-order path, the daily audit or the value
 // sweep. Released by editing ARC_VALUE_HOLD_OPPS (comma-separated opp ids).
-const ARC_VALUE_HOLD = new Set(String(process.env.ARC_VALUE_HOLD_OPPS || '').split(',').map(x => x.trim()).filter(Boolean))
-const arcHeld = opp => !!(opp && opp.id && ARC_VALUE_HOLD.has(opp.id))
+const arcHoldSet = () => new Set(String(process.env.ARC_VALUE_HOLD_OPPS || '').split(',').map(x => x.trim()).filter(Boolean))
+const arcHeld = opp => !!(opp && opp.id && arcHoldSet().has(opp.id))
 const arcJobTotal = signed => arcJobValue(signed, { addonMaxShare: ARC_ADDON_MAX_SHARE })
 // The sheet's figure for that same value: its rows for exactly the counted
 // proposals (null = a row is still missing, i.e. not final). A job with no
@@ -2348,7 +2349,7 @@ async function ghlContactSetFields(contactId, fields) {
 // delta. Best-effort — the GHL opp is already right either way. ArcSite exposes
 // no signing timestamp, so the signed date is the day we caught it (same day
 // for the live webhook, minutes for the safety net).
-async function arcPropagateChangeOrder({ oppId, contactId, projectId, customer, newTotal, previousTotal, contracts, newestContract }) {
+async function arcPropagateChangeOrder({ oppId, contactId, projectId, customer, newTotal, previousTotal, contracts, newestContract, newestProposalId = null }) {
   const out = { contact_new_price: null, calendar: null }
   if (contactId && newTotal != null) {
     // Both contact price fields follow the change order: New Price (what the
@@ -2375,8 +2376,65 @@ async function arcPropagateChangeOrder({ oppId, contactId, projectId, customer, 
     })
     const j = await resp.json().catch(() => ({}))
     out.calendar = resp.ok ? j : { error: `calendar ${resp.status}`, ...j }
+    if (resp.ok && j && j.job && newestProposalId) await arcCalendarLedgerRecord(oppId, { proposal_id: String(newestProposalId), job: j.job.jobNumber || null, imported: j.job.filesImported, source: 'change_order' })
   } catch (e) { out.calendar = { error: e.message || 'calendar push failed' } }
   return out
+}
+
+// The byte size of a hosted PDF (HEAD, no download) — how the daily audit
+// recognises the newest signed contract wherever it is filed. null = unknown.
+async function arcPdfSize(url) {
+  if (!url) return null
+  try {
+    const r = await fetch(url, { method: 'HEAD' })
+    const n = Number(r.headers.get('content-length'))
+    return r.ok && Number.isFinite(n) && n > 0 ? n : null
+  } catch { return null }
+}
+
+// What this server last pushed to each PM calendar job: opp id → { proposal_id,
+// job, at, imported }. The calendar names files by order and may hold a
+// re-encoded copy, so byte size alone cannot always say whether the newest
+// contract is there; this record is the second identity (lib/contract-audit).
+// One app_settings row, read once per audit run, written after every push.
+const ARC_CAL_LEDGER_KEY = 'arcsite_calendar_contract_ledger'
+let _arcCalLedger = null
+async function arcCalendarLedger() {
+  if (_arcCalLedger) return _arcCalLedger
+  const r = await arcSetting(ARC_CAL_LEDGER_KEY).catch(() => null)
+  _arcCalLedger = (r && r.value && typeof r.value === 'object') ? r.value : {}
+  return _arcCalLedger
+}
+async function arcCalendarLedgerRecord(oppId, rec) {
+  if (!oppId) return
+  const l = await arcCalendarLedger()
+  l[oppId] = { ...rec, at: new Date().toISOString() }
+  if (SUPABASE_URL && SERVICE_KEY) await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`, { key: ARC_CAL_LEDGER_KEY, value: l }, 'resolution=merge-duplicates').catch(() => {})
+}
+function resetArcCalendarLedgerForTests() { _arcCalLedger = null }
+
+// Push ONE contract (the newest signed PDF) to a PM calendar job, and nothing
+// else: no GHL write, no contact price. Used by the daily audit when the
+// calendar is behind ArcSite regardless of GHL's state. The value sent is the
+// consensus value when there is one, otherwise the job's own current value, so
+// the ingest changes a value only when it genuinely moved.
+async function arcCalendarPushContract({ oppId, contactId, projectId, customerName, job, source, newTotal, previousTotal, newestLabel }) {
+  if (!CALENDAR_SYNC_URL || !CALENDAR_SYNC_SECRET) return { ok: false, error: 'calendar not configured' }
+  try {
+    const resp = await fetch(`${CALENDAR_SYNC_URL}/api/change-orders/ingest`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-sync-secret': CALENDAR_SYNC_SECRET },
+      body: JSON.stringify({
+        ghlOpportunityId: oppId, ghlContactId: contactId, projectId, customerName: customerName || null,
+        newTotal, previousTotal, newestContract: newestLabel,
+        contracts: [{ url: source.url, meta: { mimetype: 'application/pdf', name: source.name || 'contract.pdf' } }],
+      }),
+    })
+    const j = await resp.json().catch(() => ({}))
+    if (!resp.ok) return { ok: false, error: `calendar ${resp.status}${j && j.error ? `: ${j.error}` : ''}`, job: job ? { jobNumber: job.jobNumber } : null }
+    const imported = j.job ? j.job.filesImported : undefined
+    if (source.proposal_id) await arcCalendarLedgerRecord(oppId, { proposal_id: source.proposal_id, job: (j.job && j.job.jobNumber) || (job && job.jobNumber) || null, imported, source: source.source })
+    return { ok: true, job: j.job || (job ? { jobNumber: job.jobNumber } : null), imported, raw: j }
+  } catch (e) { return { ok: false, error: e.message || 'calendar push failed' } }
 }
 
 async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed, newTotal, via, dry = false }) {
@@ -2503,6 +2561,10 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
   Object.assign(r, await arcPropagateChangeOrder({
     oppId: opp.id, contactId, projectId, customer, newTotal: want, previousTotal: cur, contracts,
     newestContract: newest ? `Proposal ${newest.document_number || newest.proposal_id}${newest.total ? ` (${arcUsd(newest.total)})` : ''}` : null,
+    // The ledger (what the calendar now holds) is written only when the pushed
+    // set really contains the newest contract — not after a failed rebuild that
+    // could only re-send the old files.
+    newestProposalId: newest && contracts.length >= signed.length ? newest.proposal_id : null,
   }))
   return r
 }
@@ -2540,7 +2602,11 @@ const ARC_AUDIT_DAYS_BACK = Number(process.env.ARC_AUDIT_DAYS_BACK || 14)
 // since the beginning of October"): ARC_AUDIT_SINCE=2026-10-01 audits every
 // job installing (or created) on/after that day, whatever the date today.
 const ARC_AUDIT_SINCE = /^\d{4}-\d{2}-\d{2}$/.test(String(process.env.ARC_AUDIT_SINCE || '')) ? String(process.env.ARC_AUDIT_SINCE) : null
-const ARC_AUDIT_MAX_FIX = Number(process.env.ARC_AUDIT_MAX_FIX || 60)   // fixes per run; the rest are listed as gaps for tomorrow
+const ARC_AUDIT_MAX_FIX = Number(process.env.ARC_AUDIT_MAX_FIX || 60)
+// ARC_AUDIT_DRY=1: the scheduled run decides but sends nothing (its result is
+// stored under its own key so a real run the same day is not blocked).
+const ARC_AUDIT_DRY = process.env.ARC_AUDIT_DRY === '1'
+const ARC_AUDIT_DRY_KEY = ARC_AUDIT_KEY + '_dry'   // fixes per run; the rest are listed as gaps for tomorrow
 
 // The opp's Install Date as yyyy-mm-dd. The search endpoint returns DATE fields
 // as fieldValueDate (epoch ms); GET-by-id returns the string.
@@ -2559,9 +2625,23 @@ function phoenixNow(dt = new Date()) {
   return { day: `${g('year')}-${g('month')}-${g('day')}`, hour: Number(g('hour')) % 24 }   // en-CA can report midnight as "24"
 }
 
-async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, since = ARC_AUDIT_SINCE, maxFix = ARC_AUDIT_MAX_FIX } = {}) {
-  const out = { at: new Date().toISOString(), day: phoenixNow().day, fix, days_back: daysBack, since: since || null, scanned: 0, candidates: 0, checked: 0, ok: 0, gaps: [], fixed: [], failed: [], sheet_gaps: [], values: {}, held: [], skipped: null }
-  if (!ARCSITE_API_TOKEN || !GHL_WRITE_TOKEN) { out.skipped = 'not configured'; return out }
+async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_DAYS_BACK, since = ARC_AUDIT_SINCE, maxFix = ARC_AUDIT_MAX_FIX } = {}) {
+  // dry (or fix:false) = decide everything, send nothing: every planned push is
+  // listed in `would_fix` with its target and source. ARC_AUDIT_DRY=1 makes the
+  // scheduled 6 AM run behave the same way.
+  dry = !!dry || !fix
+  const out = { at: new Date().toISOString(), day: phoenixNow().day, fix: !dry, dry, days_back: daysBack, since: since || null, scanned: 0, candidates: 0, checked: 0, ok: 0,
+    gaps: [], fixed: [], failed: [], skipped_jobs: [], would_fix: [], sheet_gaps: [], values: {}, held: [], skipped: null }
+  const log = (kind, item) => console.log(`[contract-audit] ${auditItemLine(kind, item)}`)
+  const finish = async () => {
+    console.log(`[contract-audit] ${auditSummaryLine(out)}`)
+    if (SUPABASE_URL && SERVICE_KEY) {
+      await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`,
+        { key: dry ? ARC_AUDIT_DRY_KEY : ARC_AUDIT_KEY, value: { ...out, gaps: out.gaps.slice(0, 100), sheet_gaps: out.sheet_gaps.slice(0, 100), would_fix: out.would_fix.slice(0, 200) } }, 'resolution=merge-duplicates').catch(() => {})
+    }
+    return out
+  }
+  if (!ARCSITE_API_TOKEN || !GHL_WRITE_TOKEN) { out.skipped = 'not configured'; return finish() }
   const floor = since || new Date(Date.now() - daysBack * 864e5).toISOString().slice(0, 10)
   out.floor = floor
   const pause = ms => new Promise(res => setTimeout(res, ms))
@@ -2569,6 +2649,7 @@ async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, si
   // update. A full page with no next-page proof is not the end. A Project ID
   // on an opportunity outside this date window still counts.
   _arcOppScanCache = { at: 0, scan: null }
+  _arcCalLedger = null   // one fresh read of the calendar ledger per run
   const scan = await arcScanLocation()
   const lookupBlocked = !scan.complete || scan.status === 'incomplete' || scan.status === 'uncertain' || scan.status === 'failed'
   out.scanned = (scan.opportunities || []).length
@@ -2579,7 +2660,6 @@ async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, si
       const pid = light.projectId
       // A lost/abandoned deal is history: no contract to file, no value to hold.
       if (['lost', 'abandoned'].includes(String(op.status || '').toLowerCase())) continue
-      if (arcHeld(op)) { out.held.push({ opportunity_id: op.id, customer: op.name, project_id: pid }); continue }
       const inst = oppInstallDay(op)
       // No Install Date on the opp (common — Ron Little, Rocio Encinas…) used to
       // mean "never audited"; such opps now qualify by their created date.
@@ -2591,34 +2671,37 @@ async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, si
   if (lookupBlocked) out.skipped = 'opportunity lookup did not finish'
   // The PM calendar too (per Garrison: crews order material from the calendar
   // job's contract, so a calendar still holding the old design is the costly
-  // miss). GHL being right is not enough: the calendar push in a change order
-  // is best-effort, so a failed push used to leave GHL correct and the calendar
-  // stale with this audit reporting "ok". One calendar read per run; if it
-  // fails, the GHL checks still run and the reason is kept on the result.
+  // miss). Read from the calendar's JOBS export — the only feed that lists each
+  // job's contract files with their byte sizes (the analyst export has none,
+  // which is why this check used to find nothing). One read per run; if it
+  // fails, the GHL checks still run and every calendar check is recorded as
+  // skipped for that reason, never passed as ok.
   let calByOpp = null
   out.calendar = null
   if (!lookupBlocked && CALENDAR_SYNC_URL && CALENDAR_EXPORT_KEY) {
     try {
-      const cf = await calendarExport('/api/export/analyst?months=6&ahead=120')
+      const cf = await calendarExport('/api/export/jobs')
       calByOpp = new Map()
-      for (const j of (cf && cf.jobs) || []) if (j && j.ghlOpportunityId && !j.canceledAt) calByOpp.set(j.ghlOpportunityId, j)
-      out.calendar = { jobs: calByOpp.size, behind: 0 }
+      for (const j of listOf(cf)) if (j && j.ghlOpportunityId && !j.canceledAt) calByOpp.set(j.ghlOpportunityId, j)
+      out.calendar = { jobs: calByOpp.size, behind: 0, no_contract: 0, unverified: 0, no_job: 0, current: 0 }
     } catch (e) { out.calendar = { error: String(e.message || e).slice(0, 160) } }
   } else if (!lookupBlocked) out.calendar = { error: 'calendar export not configured' }
-  const calBehind = (o, signedCount) => {
-    const j = calByOpp && calByOpp.get(o.id)
-    return j && Array.isArray(j.contracts) && j.contracts.length < signedCount ? j : null
-  }
+  const skip = (gap, target, reason) => { const item = { ...gap, target, reason }; out.skipped_jobs.push(item); log('SKIPPED', item) }
+  const plan = (gap, target, detail) => { const item = { ...gap, target, ...detail }; out.would_fix.push(item); log('WOULD FIX', item) }
+  const capReached = () => out.fixed.length + out.failed.length >= maxFix
   // 2. Compare each against ArcSite. A gap is re-read by id before acting — the
   //    search index lags writes by minutes, so a fix from an hour ago can still
   //    look missing there. More than one opportunity for a Project ID, anywhere
   //    in the finished scan, is left for review.
   for (const { op, pid, inst } of cands) {
-    if (lookupBlocked || scanProjectMatches(scan, pid).length !== 1) continue
+    if (lookupBlocked) continue
+    if (scanProjectMatches(scan, pid).length !== 1) { out.skipped_jobs.push({ project_id: pid, customer: op.name, opportunity_id: op.id, target: 'ghl+calendar', reason: 'more than one open opportunity carries this Project ID — left for review' }); continue }
+    const held = arcHeld(op)
+    if (held) out.held.push({ opportunity_id: op.id, customer: op.name, project_id: pid })
     try {
       const signed = await arcSignedContracts(pid)
       if (!signed.length) continue
-      const newest = signed[signed.length - 1]
+      const newest = newestSigned(signed)
       const value = arcJobTotal(signed)
       const want = value.total
       out.values[pid] = { total: want, rule: describeJobValue(value, arcUsd) }
@@ -2635,58 +2718,94 @@ async function arcContractAudit({ fix = true, daysBack = ARC_AUDIT_DAYS_BACK, si
       // Consensus rule (see arcApplyChangeOrder): a disputed value is never
       // "fixed" to either side — only contracts are checked for that job.
       const wantValue = disputed ? null : (sheet != null ? sheet : want)
+      // The newest signed PDF, identified by its byte size — a size match only
+      // proves identity when no older revision shares that size, so every
+      // signed PDF's size is read (HEAD, no download). See lib/contract-audit.
+      const sizes = []
+      for (const sgn of signed) sizes.push(await arcPdfSize(sgn.pdf_url))
+      const newestSize = sizes[sizes.length - 1]
+      const sizeUnique = newestSizeUnique(sizes)
+      let ghlUnverified = null
       const stale = o => {
         const cur = o.monetaryValue != null ? Math.round(Number(o.monetaryValue) * 100) / 100 : null
-        return signed.length > oppContractEntries(o).length || (wantValue != null && cur != null && !arcSame(cur, wantValue))
+        const c = ghlContractState({ signed, entries: oppContractEntries(o), newestSize, sizeUnique, newest })
+        if (!c.behind && !c.verified) ghlUnverified = c.reason
+        return c.behind ? c.reason : (wantValue != null && cur != null && !arcSame(cur, wantValue) ? `value ${arcUsd(cur)} vs ${arcUsd(wantValue)}` : null)
       }
       out.checked++
-      if (!stale(op)) {
-        const calJob = calBehind(op, signed.length)
-        if (!calJob) { out.ok++; continue }
-        // GHL holds every signed contract but the PM calendar job does not.
-        out.calendar.behind++
-        const gap = { project_id: pid, customer: op.name, install: inst, contracts: `${oppContractEntries(op).length} attached / ${signed.length} signed`, calendar: `${calJob.contracts.length} on calendar job ${calJob.jobNumber || '?'}`, reason: 'PM calendar is missing the newest signed contract', value: op.monetaryValue, signed_total: want, sheet_price: sheet }
+      const calJob = calByOpp ? calByOpp.get(op.id) || null : null
+      const base = { project_id: pid, customer: op.name, opportunity_id: op.id, install: inst, calendar_job: calJob ? calJob.jobNumber : null, value: op.monetaryValue, signed_total: want, sheet_price: sheet, newest: `Proposal ${newest.document_number || newest.proposal_id}${newest.total ? ` (${arcUsd(newest.total)})` : ''}` }
+      // ── GHL ─────────────────────────────────────────────────────────────
+      let ghlPushedCalendar = false
+      let ghlReason = stale(op)
+      let opp = op
+      if (ghlReason) {
+        const fresh = (await ghlGet(`/opportunities/${op.id}`).catch(() => null)) || {}
+        opp = fresh.opportunity || fresh
+        ghlReason = opp.id ? stale(opp) : null
+      }
+      // GHL files the count says are complete, but which neither size nor file
+      // name can prove hold the newest revision: not fixed, not passed — listed.
+      if (!ghlReason && ghlUnverified) skip({ ...base, target: 'ghl', contracts: `${oppContractEntries(opp).length} attached / ${signed.length} signed` }, 'ghl', `could not verify the newest contract is attached: ${ghlUnverified}`)
+      if (ghlReason) {
+        const gap = { ...base, target: 'ghl', contracts: `${oppContractEntries(opp).length} attached / ${signed.length} signed`, reason: ghlReason }
         out.gaps.push(gap)
-        // A disputed value is never pushed anywhere (consensus rule above), so
-        // the calendar is listed for a human instead of re-sent.
-        if (!fix || wantValue == null || out.fixed.length + out.failed.length >= maxFix) continue
-        const project = await arcGet(`/projects/${pid}`).catch(() => null)
-        const c = (project && project.customer) || {}, a = c.address || {}
-        const customer = { name: c.name || op.name || 'Customer', phone: c.phone || null, email: c.email || null, address1: a.street || null, city: a.city || null, state: a.state || null, postalCode: a.zip_code || null }
-        // The same push a change order makes, with the contracts GHL already
-        // hosts (oldest → newest) and the value unchanged.
-        const r = await arcPropagateChangeOrder({
-          oppId: op.id, contactId: op.contactId || null, projectId: pid, customer,
-          newTotal: wantValue, previousTotal: wantValue, contracts: oppContractEntries(op),
-          newestContract: `Proposal ${newest.document_number || newest.proposal_id}${newest.total ? ` (${arcUsd(newest.total)})` : ''}`,
-        })
-        const calOk = !!(r.calendar && typeof r.calendar === 'object' && !r.calendar.error)
-        const cal = r.calendar && typeof r.calendar === 'object' ? (r.calendar.job ? r.calendar.job.jobNumber : r.calendar.error || null) : r.calendar
-        ;(calOk ? out.fixed : out.failed).push({ ...gap, action: 'calendar_resend', calendar: cal, error: calOk ? undefined : (cal || 'calendar push failed') })
-        await pause(500)
+        if (held) skip(gap, 'ghl', 'manual hold (ARC_VALUE_HOLD_OPPS) — nothing written')
+        else if (dry) plan(gap, 'ghl', { action: 'change_order', source: 'arcsite', note: `rebuild contracts from ArcSite${wantValue != null && !arcSame(wantValue, opp.monetaryValue) ? `, value → ${arcUsd(wantValue)}` : disputed ? ', value left (sheet ≠ ArcSite)' : ''}` })
+        else if (capReached()) skip(gap, 'ghl', `daily fix cap (${maxFix}) reached — tomorrow's run continues`)
+        else {
+          const project = await arcGet(`/projects/${pid}`).catch(() => null)
+          const c = (project && project.customer) || {}, a = c.address || {}
+          const customer = { name: c.name || opp.name || 'Customer', phone: c.phone || null, email: c.email || null, address1: a.street || null, city: a.city || null, state: a.state || null, postalCode: a.zip_code || null }
+          const r = await arcApplyChangeOrder(pid, { opp, contactId: opp.contactId || null, customer, signed, newTotal: want, via: 'daily_audit' })
+          await arcLog(r)
+          const cal = r.calendar && typeof r.calendar === 'object' ? (r.calendar.job ? r.calendar.job.jobNumber : r.calendar.error || null) : r.calendar
+          ghlPushedCalendar = !!(r.ok && r.calendar && typeof r.calendar === 'object' && r.calendar.job)
+          const item = { ...gap, action: 'change_order', pdf: r.pdf, stage_moved: r.stage_moved, calendar: cal, error: r.error || (r.ok ? undefined : r.pdf) }
+          ;(r.ok ? out.fixed : out.failed).push(item); log(r.ok ? 'FIXED' : 'FAILED', item)
+          await pause(500)
+        }
+      }
+      // ── PM calendar, on its own ───────────────────────────────────────────
+      // Judged against ArcSite's newest signed PDF directly: a GHL rebuild that
+      // failed, a held or disputed value, or GHL simply being right already
+      // never decides whether the calendar gets the newest contract.
+      if (!out.calendar || out.calendar.error) {
+        if (!ghlReason) out.ok++
+        if (out.calendar && out.calendar.error && (signed.length > 1 || ghlReason)) skip({ ...base, target: 'calendar' }, 'calendar', `calendar not checked: ${out.calendar.error}`)
         continue
       }
-      const fresh = (await ghlGet(`/opportunities/${op.id}`).catch(() => null)) || {}
-      const opp = fresh.opportunity || fresh
-      if (!opp.id || !stale(opp)) { out.ok++; continue }
-      const gap = { project_id: pid, customer: opp.name, install: inst, contracts: `${oppContractEntries(opp).length} attached / ${signed.length} signed`, value: opp.monetaryValue, signed_total: want, sheet_price: sheet }
+      if (ghlPushedCalendar) { out.calendar.current++; continue }   // the change order just re-filed every contract there
+      const ledger = (await arcCalendarLedger())[op.id] || null
+      const cs = calendarContractState({ signed, newestSize, sizeUnique, job: calJob, ledger, newest })
+      if (cs.state === 'no_job') { out.calendar.no_job++; if (!ghlReason) out.ok++; continue }
+      if (cs.state === 'current' || cs.state === 'current_by_ledger') { out.calendar.current++; if (cs.state === 'current_by_ledger') out.calendar.by_ledger = (out.calendar.by_ledger || 0) + 1; if (!ghlReason) out.ok++; continue }
+      if (cs.state === 'unverified') { out.calendar.unverified++; skip({ ...base, target: 'calendar' }, 'calendar', cs.reason); continue }
+      // 'ambiguous' (an older revision shares the newest size): a push settles it —
+      // the calendar ignores a file it already holds (filesImported 0), so this
+      // writes nothing when the job is current, and the ledger then remembers.
+      out.calendar[cs.state === 'no_contract' ? 'no_contract' : cs.state === 'ambiguous' ? 'ambiguous' : 'behind'] = (out.calendar[cs.state === 'no_contract' ? 'no_contract' : cs.state === 'ambiguous' ? 'ambiguous' : 'behind'] || 0) + 1
+      const gap = { ...base, target: 'calendar', calendar: `${(calJob.contracts || []).length} on calendar job ${calJob.jobNumber || '?'}`, reason: cs.reason, ambiguous: cs.state === 'ambiguous' || undefined }
       out.gaps.push(gap)
-      if (!fix || out.fixed.length + out.failed.length >= maxFix) continue
+      const src = calendarPushSource({ entries: oppContractEntries(opp), newestSize, newest, customerName: op.name })
+      if (src) src.proposal_id = String(newest.proposal_id || '')
+      if (held) { skip(gap, 'calendar', 'manual hold (ARC_VALUE_HOLD_OPPS) — nothing written'); continue }
+      if (!src) { skip(gap, 'calendar', 'no downloadable copy of the newest signed PDF'); continue }
+      if (dry) { plan(gap, 'calendar', { action: 'calendar_push', source: src.source, file: src.name, value: wantValue != null ? arcUsd(wantValue) : `${arcUsd(calJob.value)} (left as is${disputed ? ' — sheet ≠ ArcSite' : ''})` }); continue }
+      if (capReached()) { skip(gap, 'calendar', `daily fix cap (${maxFix}) reached — tomorrow's run continues`); continue }
       const project = await arcGet(`/projects/${pid}`).catch(() => null)
-      const c = (project && project.customer) || {}, a = c.address || {}
-      const customer = { name: c.name || opp.name || 'Customer', phone: c.phone || null, email: c.email || null, address1: a.street || null, city: a.city || null, state: a.state || null, postalCode: a.zip_code || null }
-      const r = await arcApplyChangeOrder(pid, { opp, contactId: opp.contactId || null, customer, signed, newTotal: want, via: 'daily_audit' })
-      await arcLog(r)
-      const cal = r.calendar && typeof r.calendar === 'object' ? (r.calendar.job ? r.calendar.job.jobNumber : r.calendar.error || null) : r.calendar
-      ;(r.ok ? out.fixed : out.failed).push({ ...gap, pdf: r.pdf, stage_moved: r.stage_moved, calendar: cal, error: r.error })
+      const c = (project && project.customer) || {}
+      // A disputed (or unknown) value leaves the calendar's value exactly as it
+      // is: the ingest only changes a value that differs from what it is sent.
+      const r = await arcCalendarPushContract({ oppId: op.id, contactId: op.contactId || null, projectId: pid, customerName: c.name || op.name, job: calJob, source: src,
+        newTotal: wantValue != null ? wantValue : calJob.value, previousTotal: calJob.value, newestLabel: base.newest })
+      const item = { ...gap, action: 'calendar_push', source: src.source, calendar: r.ok ? (r.job && r.job.jobNumber) || calJob.jobNumber : null, imported: r.imported, error: r.ok ? undefined : r.error }
+      if (r.ok && r.imported === 0) { item.already_had_it = true; item.reason = `${cs.reason} — the calendar already held it (nothing imported); recorded so it is not pushed again` }
+      ;(r.ok ? out.fixed : out.failed).push(item); log(r.ok ? (item.already_had_it ? 'CONFIRMED' : 'FIXED') : 'FAILED', item)
       await pause(500)
-    } catch (e) { out.failed.push({ project_id: pid, install: inst, error: e.message || 'audit failed' }) }
+    } catch (e) { const item = { project_id: pid, customer: op.name, install: inst, error: e.message || 'audit failed' }; out.failed.push(item); log('FAILED', item) }
   }
-  if (SUPABASE_URL && SERVICE_KEY) {
-    await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`,
-      { key: ARC_AUDIT_KEY, value: { ...out, gaps: out.gaps.slice(0, 100), sheet_gaps: out.sheet_gaps.slice(0, 100) } }, 'resolution=merge-duplicates').catch(() => {})
-  }
-  return out
+  return finish()
 }
 async function arcContractAuditLast() {
   if (!SUPABASE_URL || !SERVICE_KEY) return null
@@ -2698,10 +2817,10 @@ async function arcContractAuditTick() {
   if (_arcAuditRunning) return
   const { day, hour } = phoenixNow()
   if (hour !== ARC_AUDIT_HOUR) return
-  const last = await arcContractAuditLast()
+  const last = ARC_AUDIT_DRY ? (await arcSetting(ARC_AUDIT_DRY_KEY).catch(() => null) || {}).value : await arcContractAuditLast()
   if (last && last.day === day) return   // already ran today (survives a redeploy)
   _arcAuditRunning = true
-  try { await arcContractAudit({ fix: true }) } finally { _arcAuditRunning = false }
+  try { await arcContractAudit({ fix: true, dry: ARC_AUDIT_DRY }) } finally { _arcAuditRunning = false }
 }
 
 async function arcValueSweep() {
@@ -5163,9 +5282,10 @@ app.post('/api/arcsite/contract-audit', async (req, res) => {
   let body = {}
   try { body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {}) } catch {}
   const fix = body.fix !== false && body.fix !== 'false'
+  const dry = body.dry === true || body.dry === 'true' || String(req.query.dry || '') === '1'
   const daysBack = Number(body.days_back) > 0 ? Number(body.days_back) : undefined
   const since = /^\d{4}-\d{2}-\d{2}$/.test(String(body.since || '')) ? String(body.since) : (daysBack ? null : undefined)   // an explicit days_back overrides the fixed start
-  try { res.json(await arcContractAudit({ fix, daysBack, since })) }
+  try { res.json(await arcContractAudit({ fix, dry, daysBack, since })) }
   catch (e) { res.status(200).json({ ok: false, error: e.message || 'audit failed' }) }
 })
 
@@ -5287,7 +5407,11 @@ async function eodCollect(day) {
     try { sheet = await readInstallSheet(); sourceErrors.sheet = null } catch (e) { sourceErrors.sheet = `${sourceErrors.sheet}; retry failed: ${String(e.message || e).slice(0, 80)}` }
   }
   const sheetJobs = (sheet && sheet.jobs) || { headers: [], rows: [] }, sheetSchedule = (sheet && sheet.schedule) || { headers: [], rows: [] }
+  // The analyst export carries no contract files; the jobs export does (with
+  // byte sizes). Merge them so the contract checks below see every job's files.
   const calendarJobs = (d.calendar_full && d.calendar_full.jobs) || listOf(d.calendar_jobs)
+  const filesByJob = new Map(listOf(d.calendar_jobs).filter(j => j && j.jobNumber && Array.isArray(j.contracts)).map(j => [j.jobNumber, j.contracts]))
+  for (const j of calendarJobs) if (j && !Array.isArray(j.contracts) && filesByJob.has(j.jobNumber)) j.contracts = filesByJob.get(j.jobNumber)
   const siteDeals = (d.site && d.site.deals) || []
   // alert states for today's approved projects (exact-key reads only)
   const apprH = sheetJobs.headers.find(h => /approved\s*date/i.test(h)), pidH = sheetJobs.headers.find(h => /project\s*id/i.test(h))
@@ -5316,6 +5440,7 @@ async function eodRun({ dry = false } = {}) {
     report.previous_day = input.previous ? input.previous.day : null
     const text = eodSmsText(report)
     report.sms = { enabled: EOD_CHECK_SMS, would_send: !!text, text, sent: false, dry }
+    const logLine = () => console.log(`[eod] day=${report.day} ${dry ? 'mode=DRY-RUN' : 'mode=live'} checked=${report.checked} skipped_completed=${report.skipped_completed} issues=${report.issue_count} new=${report.new_count} carried=${report.carried_count} kinds=${JSON.stringify(report.counts || {})} sms=${dry ? 'not sent (dry)' : report.sms.sent ? 'sent' : (text ? (report.sms.error ? `failed: ${report.sms.error}` : 'not sent') : 'nothing to say')}`)
     if (!dry) {
       if (text && EOD_CHECK_SMS && GHL_SMS_TOKEN && EOD_CHECK_CONTACT_ID) {
         try { const body = await ghlSendSms(EOD_CHECK_CONTACT_ID, text); report.sms.sent = messageIdentifiers(body).length > 0; report.sms.message_ids = messageIdentifiers(body) }
@@ -5325,6 +5450,8 @@ async function eodRun({ dry = false } = {}) {
       await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`, { key: EOD_KEY(day), value: stored }, 'resolution=merge-duplicates').catch(() => {})
       await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`, { key: EOD_LAST_KEY, value: stored }, 'resolution=merge-duplicates').catch(() => {})
     }
+    logLine()
+    for (const i of (report.issues || []).filter(i => i.new !== false)) console.log(`[eod] NEW ${i.kind} ${i.customer || i.job || i.project_id || ''}${i.job && i.customer ? ` (${i.job})` : ''}: ${String(i.detail || '').slice(0, 200)}`)
     return report
   } finally { _eodRunning = false }
 }
@@ -5390,7 +5517,7 @@ export function resetArcSaleMemoryForTests() {
   _sheetCache = { at: 0, data: null }
   _arcEnrich.clear()
 }
-export { arcsiteToGhl, arcValueSweep, arcContractAudit, sendSaleAlert }
+export { arcsiteToGhl, arcValueSweep, arcContractAudit, sendSaleAlert, resetArcCalendarLedgerForTests }
 
 const port = process.env.PORT || 3000
 if (process.env.ARC_NO_LISTEN !== '1') {
