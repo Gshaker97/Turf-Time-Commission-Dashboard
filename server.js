@@ -5487,7 +5487,11 @@ async function eodCollect(day) {
   const heldDuplicates = ((installSync && installSync.holds) || []).filter(h => /share this Project ID/i.test(String(h.hold || h.reason || ''))).map(h => ({ project_id: h.project_id, customer: h.customer, opp: h.opportunity_id }))
   let previous = last && last.day && last.day < day ? last : null
   if (!previous && last && last.day === day && last.previous_day) previous = await eodRead(EOD_KEY(last.previous_day))
-  return { day, sheetJobs, sheetSchedule, ghl: { opportunities: g.opportunities || [], contacts: g.contacts || {} }, calendarJobs, siteDeals, heldDuplicates, events: _eodEvents.filter(e => String(e.at).slice(0, 10) === day), alertStates, worker, contractAudit, previous, sourceErrors, ignore: eodIgnoreList(), bundle_built_at: d.built_at }
+  // The end-of-day check covers the same jobs the daily contract audit does:
+  // ARC_AUDIT_SINCE (2026-10-01, per Garrison) when set, else the lib's own
+  // default. Before Nov 20 2026 the check had its own start (Oct 13, the day the
+  // sync/backfill work began), so Oct 1–12 sales were audited but never texted.
+  return { day, scopeSince: ARC_AUDIT_SINCE || undefined, sheetJobs, sheetSchedule, ghl: { opportunities: g.opportunities || [], contacts: g.contacts || {} }, calendarJobs, siteDeals, heldDuplicates, events: _eodEvents.filter(e => String(e.at).slice(0, 10) === day), alertStates, worker, contractAudit, previous, sourceErrors, ignore: eodIgnoreList(), bundle_built_at: d.built_at }
 }
 let _eodRunning = false
 async function eodRun({ dry = false } = {}) {

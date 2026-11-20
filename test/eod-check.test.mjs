@@ -299,3 +299,12 @@ test('an audit that could not read ArcSite is reported as a source problem, once
   assert.equal(s.length, 1); assert.match(s[0].detail, /could not read 354 of 368 jobs from ArcSite \(ArcSite 429/)
   assert.match(eodSmsText(r), /A SOURCE DID NOT LOAD \(1\)/)
 })
+
+test('the scope start is whatever the server passes (ARC_AUDIT_SINCE): Oct 1 covers an Oct 5 sale that an Oct 13 start would miss', () => {
+  const p = base()
+  p.sheetJobs.rows[0]['Approved Date'] = '2026-10-05'; p.sheetSchedule.rows[0]['Install Date'] = '2026-11-27'
+  p.ghl.opportunities[0].value = 1   // a price mismatch, so the job shows up when in scope
+  assert.equal(buildEodReport({ ...p, scopeSince: '2026-10-13' }).checked, 0)
+  const r = buildEodReport({ ...p, scopeSince: '2026-10-01' })
+  assert.equal(r.checked, 1); assert.equal(r.scope_since, '2026-10-01'); assert.ok(r.issues.some(i => i.kind === 'price'))
+})
