@@ -1339,8 +1339,11 @@ in range, a rep who left) falls back to company rather than rendering empty.
   company-wide setting, so at team scope the bar would be that team's revenue
   against the company's target — precise-looking and meaningless.
 - **Advanced stats page (`/advanced`, `src/pages/AdvancedStats.jsx`, Garrison,
-  Nov 14 2026)**, reached from the "Advanced stats" button in the breakdown
-  header. Four doors: Setters (revenue closed from their sets · doors · appts
+  Nov 14–15 2026)**, reached from the "Advanced stats" button in the breakdown
+  header. The landing shows ONLY the four doors; each door opens its own
+  screen with a search box and a pick list (per Garrison: "rather than all on
+  one page"), and a tap opens one person — or one team, then one of its
+  people. Back always returns to the list you came from. Four doors: Setters (revenue closed from their sets · doors · appts
   set · sets closed %), Closers (revenue of deals they closed · appts ran ·
   closed · close rate = closed ÷ assigned · avg markup · commission), Teams
   (team totals, expand to people), Individual (PersonPicker). A person's page
@@ -1353,17 +1356,27 @@ in range, a rep who left) falls back to company rather than rendering empty.
   count — Keaton's note that RepCard's own door total never reconciled still
   stands, which is why the Dashboard proper does not show them. Demo mode
   carries `DEMO_FIELD_ACTIVITY` so the setter view has doors to show.
+  Nov 16 additions: **Upcoming** (booked in range, still scheduled, dated today
+  or later — `upcoming` for the setter, `upcomingAssigned` for whoever sits
+  it) is its own column/tile and never enters a rate, so a full calendar does
+  not read as a bad close rate; **Doors per set** = feed doors ÷ sets; and a
+  person's page carries a "What happened to…" dispositions list (counts by
+  RepCard disposition, status word when none) for their sets and/or the
+  appointments they ran. The appointment list's right column is the
+  disposition, not the status word.
 - **Breakdown table columns are Revenue · Deals · Set · Close ratio · Markup ·
   Commission · Goal** (Garrison, Nov 14 2026). The "Appointments" box and the
   "+ Appointments" toggle are GONE; only its past-due warning line survives.
   `Set` = every RepCard calendar appointment with a day and time, booked in
-  range, any outcome. `Close ratio` depends on `profiles.sales_role`: a SETTER
-  reads deals owned ÷ sets (`setCloseRate`); a CLOSER or BOTH reads deals they
-  closed ÷ appointments assigned to them (`closes` / `assigned`, new in
-  perfSummary — assigned = closer on the appointment, else the setter, any
-  status); unset falls back to the setter view if they set anything. Teams,
-  offices and the company always read deals ÷ sets. The sub-line always names
-  the denominator ("4 of 6 set", "1 of 2 assigned"). Avg deal left the table;
+  range, any outcome. `Close ratio` is OVER RAN APPOINTMENTS ONLY (Garrison,
+  Nov 16 2026: a set that never ran is not a missed close) and depends on
+  `profiles.sales_role`: a SETTER reads deals owned ÷ their sets that ran
+  (`setRanCloseRate` = deals / setRan); a CLOSER or BOTH reads deals they
+  closed ÷ appointments they ran (`ranCloseRate` = closes / ran); unset falls
+  back to the setter view if they set anything. Teams, offices and the company
+  always read deals ÷ sets that ran. The sub-line always names the denominator
+  ("4 of 6 ran"). `setCloseRate` / `closerCloseRate` (over everything set /
+  assigned) still exist in the engine but nothing displays them. Avg deal left the table;
   the Avg Deal Size KPI tile stays. Pinned by test/perf-close-ratio.test.mjs.
   Demo mode now carries 12 appointments (`DEMO_LEADS`) so the columns show.
 - **`profiles.sales_role`** (migration 061, Nov 14 2026): `setter` | `closer` |

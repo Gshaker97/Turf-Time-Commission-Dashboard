@@ -46,7 +46,7 @@ const localToday = () => {
 }
 
 function newStats() {
-  return { revenue: 0, job: 0, deals: 0, selfGen: 0, leadCloses: 0, leadRevenue: 0, commission: 0, set: 0, setRan: 0, ran: 0, sgRan: 0, leadRan: 0, pastDue: 0, assigned: 0, closes: 0, closesRevenue: 0, closesJob: 0, activityRows: [] }
+  return { revenue: 0, job: 0, deals: 0, selfGen: 0, leadCloses: 0, leadRevenue: 0, commission: 0, set: 0, setRan: 0, ran: 0, sgRan: 0, leadRan: 0, pastDue: 0, assigned: 0, closes: 0, closesRevenue: 0, closesJob: 0, upcoming: 0, upcomingAssigned: 0, activityRows: [] }
 }
 
 // A deal-over-appointment rate, or null when it can't be read as a rate:
@@ -70,7 +70,7 @@ function finish(s) {
     leadRevenue: s.leadRevenue, totalRevenue: s.revenue + s.leadRevenue,
     avgDeal:   s.deals ? s.revenue / s.deals : null,
     markupPct: s.revenue > 0 ? ((s.job - s.revenue) / s.revenue) * 100 : null,
-    set: s.set, ran: s.ran, sgRan: s.sgRan, leadRan: s.leadRan, pastDue: s.pastDue,
+    set: s.set, setRan: s.setRan, ran: s.ran, sgRan: s.sgRan, leadRan: s.leadRan, pastDue: s.pastDue,
     // Conversion rates (per Keaton): set → ran is a SETTER stat — of the
     // appointments this rep set, how many ran (whoever ran them), so a
     // closer's lead volume never inflates it; self-gen ran → self-gen deals
@@ -111,6 +111,20 @@ function finish(s) {
     // setters (profiles.sales_role); groups always read as a setting unit.
     assigned: s.assigned, closes: s.closes,
     closerCloseRate: rateOrNull(s.closes, s.assigned),
+    // CLOSE RATIO OVER RAN APPOINTMENTS ONLY (Garrison, Nov 16 2026). A set
+    // that never ran — still scheduled, cancelled, no-show — is not a missed
+    // close, so it leaves the denominator. Setter: deals owned ÷ their sets
+    // that ran. Closer: deals they closed ÷ appointments they ran. These two
+    // are what the Dashboard breakdown and Advanced stats display.
+    setRanCloseRate: rateOrNull(s.deals, s.setRan),
+    ranCloseRate: rateOrNull(s.closes, s.ran),
+    // UPCOMING: booked in range, still scheduled, dated today or later. Shown
+    // on its own so a full calendar never reads as a bad close rate (Garrison,
+    // Nov 16 2026). `upcoming` is the setter's; `upcomingAssigned` is whoever
+    // will sit it. Not part of any rate.
+    upcoming: s.upcoming, upcomingAssigned: s.upcomingAssigned,
+    // How many doors it took to book one appointment (feed doors ÷ sets).
+    doorsPerSet: s.set > 0 && act.doors > 0 ? act.doors / s.set : null,
     // Baseline and markup of the deals this person CLOSED (Advanced stats).
     closesRevenue: s.closesRevenue,
     closeMarkupPct: s.closesRevenue > 0 ? ((s.closesJob - s.closesRevenue) / s.closesRevenue) * 100 : null,
@@ -141,6 +155,7 @@ function makeTeamOf(teamCtx, defaultTeamId) {
 function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId = null, excluded = new Set(), nonReps = new Set(), nowISO = new Date().toISOString() }) {
   const teamOf = makeTeamOf(teamCtx, defaultTeamId)
   const out = (pid) => !!pid && excluded.has(pid)
+  const todayDay = localToday()
 
   const org = newStats()
   const offices = new Map()          // office key (lc) → stats; '' = no office
@@ -295,9 +310,16 @@ function accumulate({ deals, leads, activity, teamCtx, from, to, defaultTeamId =
       org.pastDue += 1
       if (setter) { const k = teamOf(setter, day); team(k).totals.pastDue += 1; rep(k, setter).pastDue += 1 }
     }
+    // Still on the calendar: scheduled, dated today or later, booked in range.
+    const future = l.status === 'scheduled' && !!day && day >= todayDay
+    if (setIn && future) {
+      const rb = l.closer_id || l.setter_id
+      if (rb && !out(rb)) { const k = teamOf(rb, day); org.upcomingAssigned += 1; team(k).totals.upcomingAssigned += 1; rep(k, rb).upcomingAssigned += 1 }
+    }
     if (setIn && setter) {
       const k = teamOf(setter, setDay)
       org.set += 1; team(k).totals.set += 1; rep(k, setter).set += 1
+      if (future) { org.upcoming += 1; team(k).totals.upcoming += 1; rep(k, setter).upcoming += 1 }
       // Of what they booked in this window, how much has run — a COHORT rate,
       // counted whenever it ran. `sgRan / set` would mix two date bases now
       // that the two columns key off different days.
