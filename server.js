@@ -2319,10 +2319,12 @@ const ARC_ADDON_MAX_SHARE = Number(process.env.ARC_ADDON_MAX_SHARE || 0.5)
 // here may change their value, stage, contracts, contact price or calendar
 // job: not the sale path, the change-order path, the daily audit or the value
 // sweep. Released by editing ARC_VALUE_HOLD_OPPS (comma-separated opp ids).
-// An opportunity parked in a pipeline's Closed stage is finished business — it
-// is not audited and it is not a "duplicate" of the live opportunity on the
-// same Project ID (Doug & Melissa Brown, David Yeskin, Nov 20 2026: an Inside
-// Sales copy in Closed beside the Outside Sales job in Ready For Install).
+// "Closed" in GHL means the deal was WON, not that the job is done (Garrison,
+// Nov 20 2026), so a Closed-stage opportunity is still audited when it is the
+// only one on its Project ID. Only when a LIVE opportunity shares the Project
+// ID is the Closed-stage one treated as the handed-off copy: it is not counted
+// as a duplicate and the live one is audited instead (Doug & Melissa Brown,
+// David Yeskin: an Inside Sales copy in Closed beside the Outside Sales job).
 const ARC_CLOSED_STAGES = new Set([GHL_PIPELINES.outside.closed, GHL_PIPELINES.estimator.closed].filter(Boolean))
 const arcClosedStage = opp => !!(opp && ARC_CLOSED_STAGES.has(String(opp.pipelineStageId || '')))
 const arcHoldSet = () => new Set(String(process.env.ARC_VALUE_HOLD_OPPS || '').split(',').map(x => x.trim()).filter(Boolean))
@@ -2670,7 +2672,6 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
       const pid = light.projectId
       // A lost/abandoned deal is history: no contract to file, no value to hold.
       if (['lost', 'abandoned'].includes(String(op.status || '').toLowerCase())) continue
-      if (arcClosedStage(op)) { out.closed_stage = (out.closed_stage || 0) + 1; continue }
       const inst = oppInstallDay(op)
       // No Install Date on the opp (common — Ron Little, Rocio Encinas…) used to
       // mean "never audited"; such opps now qualify by their created date.
@@ -2706,10 +2707,20 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
   //    in the finished scan, is left for review.
   for (const { op, pid, inst } of cands) {
     if (lookupBlocked) continue
-    // Duplicates: other OPEN opportunities on the Project ID, lost/abandoned
-    // and Closed-stage ones not counted.
-    const others = scanProjectMatches(scan, pid).filter(m => { const o = m.raw || m; return o.id !== op.id && !['lost', 'abandoned'].includes(String(o.status || '').toLowerCase()) && !arcClosedStage(o) })
-    if (others.length) { out.skipped_jobs.push({ project_id: pid, customer: op.name, opportunity_id: op.id, target: 'ghl+calendar', reason: `more than one open opportunity carries this Project ID (also ${others.map(m => (m.raw || m).name || (m.raw || m).id).join(', ')}) — left for review` }); continue }
+    // Duplicates: the other LIVE opportunities on the Project ID (lost/abandoned
+    // never count; a Closed-stage one counts only when nothing live shares the id).
+    const live = scanProjectMatches(scan, pid).map(m => m.raw || m).filter(o => o.id !== op.id && !['lost', 'abandoned'].includes(String(o.status || '').toLowerCase()))
+    const liveOpen = live.filter(o => !arcClosedStage(o))
+    if (arcClosedStage(op) && liveOpen.length) {
+      // The Closed-stage copy beside a live opportunity: the live one is audited.
+      out.closed_copies = out.closed_copies || []
+      out.closed_copies.push({ project_id: pid, customer: op.name, opportunity_id: op.id, live_opportunity: liveOpen.map(o => o.name || o.id).join(', ') })
+      continue
+    }
+    // For a live opp, a Closed-stage twin is its handed-off copy, not a duplicate;
+    // for a Closed-stage opp alone, another Closed-stage one on the id still is.
+    const others = arcClosedStage(op) ? live : liveOpen
+    if (others.length) { out.skipped_jobs.push({ project_id: pid, customer: op.name, opportunity_id: op.id, target: 'ghl+calendar', reason: `more than one open opportunity carries this Project ID (also ${others.map(o => o.name || o.id).join(', ')}) — left for review` }); continue }
     const held = arcHeld(op)
     if (held) out.held.push({ opportunity_id: op.id, customer: op.name, project_id: pid })
     try {

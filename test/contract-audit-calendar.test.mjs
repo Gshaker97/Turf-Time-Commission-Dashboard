@@ -332,16 +332,25 @@ test('a rebuild GHL silently ignores is reported as FAILED, never as fixed', asy
   } finally { globalThis.fetch = orig }
 })
 
-test('a second opportunity on the same Project ID parked in a Closed stage is neither audited nor counted as a duplicate; an open one still is', async () => {
+test('Closed means won: a Closed-stage opp alone on its Project ID is audited; beside a live one it is the handed-off copy, not a duplicate', async () => {
+  const CLOSED = '72a74bdf-a2ab-4412-89b0-52142a1e8c0b'   // the estimator pipeline's Closed stage
   const twin = stageId => ({ id: 'opp-twin', name: 'Fixture Calendar (inside copy)', contactId: 'contact-cal', status: 'open', pipelineId: 'jfhZWICxnmISGllte9Rv', pipelineStageId: stageId, monetaryValue: 2000,
     customFields: [{ id: PROJECT_FIELD, fieldValueString: PID }, { id: INSTALL_FIELD, fieldValueString: future }, { id: PDF_FIELD, fieldValueFiles: [] }] })
+  // 1. the only opp, in Closed: audited and fixed like any other
   reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests()
-  world.extraOpps = [twin('72a74bdf-a2ab-4412-89b0-52142a1e8c0b')]   // the estimator pipeline's Closed stage
-  const a = await run({ fix: true })
-  assert.equal(a.closed_stage, 1); assert.equal(a.skipped_jobs.length, 0, JSON.stringify(a.skipped_jobs)); assert.equal(a.fixed.length, 1)
+  world.opp.pipelineStageId = CLOSED
+  const alone = await run({ fix: true })
+  assert.equal(alone.fixed.length, 1, JSON.stringify(alone)); assert.equal(alone.checked, 1); assert.equal(alone.skipped_jobs.length, 0)
+  // 2. a Closed-stage copy beside the live opp: the live one is audited, the copy is noted, nothing is called a duplicate
+  reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests()
+  world.extraOpps = [twin(CLOSED)]
+  const pair = await run({ fix: true })
+  assert.equal(pair.fixed.length, 1); assert.equal(pair.skipped_jobs.length, 0, JSON.stringify(pair.skipped_jobs))
+  assert.deepEqual(pair.closed_copies.map(c => [c.opportunity_id, c.live_opportunity]), [['opp-twin', 'Fixture Calendar']])
+  // 3. two live opps: still a duplicate, the other one named
   reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests()
   world.extraOpps = [twin('some-open-stage')]
-  const b = await run({ fix: true })
-  assert.equal(b.fixed.length, 0); assert.equal(b.skipped_jobs.length, 2)
-  assert.match(b.skipped_jobs[0].reason, /more than one open opportunity carries this Project ID \(also /)
+  const dup = await run({ fix: true })
+  assert.equal(dup.fixed.length, 0); assert.equal(dup.skipped_jobs.length, 2)
+  assert.match(dup.skipped_jobs[0].reason, /more than one open opportunity carries this Project ID \(also /)
 })
