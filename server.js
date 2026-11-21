@@ -29,7 +29,7 @@ import { readBackAndRepair } from './lib/ghl-opp-readback.mjs'
 import { buildEodReport, eodSmsText } from './lib/eod-check.mjs'
 import { arcJobValue, sheetTotalFor, describeJobValue } from './lib/arcsite-job-value.mjs'
 import { ghlContractState, calendarContractState, calendarPushSource, newestSigned, newestSizeUnique, auditSummaryLine, auditItemLine } from './lib/contract-audit.mjs'
-import { pickLiveOpp, projectBelongsToOpp, scheduleState, statusPlan, fieldPlan, carryoverPlan, unsignedClosed } from './lib/job-sync.mjs'
+import { pickLiveOpp, projectBelongsToOpp, scheduleState, statusPlan, fieldPlan, carryoverPlan, unsignedClosed, samePerson } from './lib/job-sync.mjs'
 import { parseSignedPdfText } from './lib/parse-signed-pdf.mjs'
 import { readVerifiedSheetSnapshot } from './lib/verified-sheet-snapshot.mjs'
 import {
@@ -2376,6 +2376,13 @@ const arcClosedStage = opp => !!(opp && ARC_CLOSED_STAGES.has(String(opp.pipelin
 // GHL has no cancelled STAGE in either pipeline (Nov 21 2026): a booking cancelled on
 // the Schedule tab sets the opp STATUS to abandoned, unless a stage id is configured.
 const ARC_CANCELLED_STAGE_ID = (process.env.ARC_CANCELLED_STAGE_ID || '').trim() || null
+const ARC_DEAL_REVIEWED_STAGES = { outside: (process.env.GHL_OUTSIDE_DEAL_REVIEWED_STAGE || '72691282-63f0-451b-9e38-a244dc9d3678').trim(), estimator: (process.env.GHL_ESTIMATOR_DEAL_REVIEWED_STAGE || 'c3f66652-edf5-49bf-8c24-1c10a2860da7').trim() }
+// Status ledger: what stage an opp had when the sync cancelled it, so a
+// rebooking restores it. app_settings arcsite_status_ledger, opp id → {...}.
+const ARC_STATUS_LEDGER_KEY = 'arcsite_status_ledger'
+let _arcStatusLedger = null
+async function arcStatusLedger() { if (_arcStatusLedger) return _arcStatusLedger; const r = await arcSetting(ARC_STATUS_LEDGER_KEY).catch(() => null); _arcStatusLedger = (r && r.value && typeof r.value === 'object') ? r.value : {}; return _arcStatusLedger }
+async function arcStatusLedgerRecord(oppId, rec) { const l = await arcStatusLedger(); l[oppId] = { ...(l[oppId] || {}), ...rec }; if (SUPABASE_URL && SERVICE_KEY) await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`, { key: ARC_STATUS_LEDGER_KEY, value: l }, 'resolution=merge-duplicates').catch(() => {}) }
 const GHL_CONTACT_PM_FIELD = (process.env.GHL_CONTACT_PM_FIELD || 'TaIA7I6tkXzCmOGnfxHV').trim()   // contact "Project Manager"
 const arcHoldSet = () => new Set(String(process.env.ARC_VALUE_HOLD_OPPS || '').split(',').map(x => x.trim()).filter(Boolean))
 const arcHeld = opp => !!(opp && opp.id && arcHoldSet().has(opp.id))
@@ -2757,6 +2764,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
   // on an opportunity outside this date window still counts.
   _arcOppScanCache = { at: 0, scan: null }
   _arcCalLedger = null   // one fresh read of the calendar ledger per run
+  _arcStatusLedger = null
   const scan = await arcScanLocation()
   const lookupBlocked = !scan.complete || scan.status === 'incomplete' || scan.status === 'uncertain' || scan.status === 'failed'
   out.scanned = (scan.opportunities || []).length
@@ -2836,6 +2844,16 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
     if (pick && !pick.live) { out.skipped_jobs.push({ project_id: pid, customer: op.name, opportunity_id: op.id, target: 'ghl+calendar', reason: `more than one open opportunity carries this Project ID (also ${pick.copies.filter(o => o.id !== op.id).map(o => o.name || o.id).join(', ')}) — ${pick.reason}` }); continue }
     if (pick && pick.live && pick.live.id !== op.id) {
       const item = { project_id: pid, customer: op.name, opportunity_id: op.id, pipeline: op.pipelineId === GHL_PIPELINES.outside.id ? 'Outside Sales' : 'Inside Sales', live_opportunity: pick.live.name || pick.live.id, live_opportunity_id: pick.live.id, reason: `${pick.reason} — this copy should be closed by hand; nothing written to it` }
+      // A $0 copy with no calendar job is not a sale at all (Todd Vietzen "Turf
+      // Replacement", a survey-made repair request): its Project ID is removed so
+      // it stops shadowing the real job. Anything with a value is only reported.
+      if (!(Number(op.monetaryValue) > 0) && !calendarOppIds.includes(op.id)) {
+        const ci = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'ghl', action: 'clear_project_id', before: { project_id: pid, value: op.monetaryValue }, after: { project_id: null }, reason: `$0 copy with no calendar job beside the live ${pick.live.name || pick.live.id} — not a sale; Project ID removed` }
+        if (dry) { out.would_fix.push(ci); log('WOULD FIX', ci) }
+        else if (capReached()) skip(ci, 'ghl', `daily fix cap (${maxFix}) reached — tomorrow's run continues`)
+        else { try { await ghlUpdateOpp(op.id, { customFields: [{ id: GHL_OPP_FIELD_IDS.project_id, field_value: '' }] }); out.fixed.push(ci); log('FIXED', ci) } catch (e) { ci.error = e.message; out.failed.push(ci); log('FAILED', ci) } }
+        item.reason = ci.reason
+      }
       out.duplicate_copies.push(item); log('DUPLICATE COPY', item)
       continue
     }
@@ -2846,13 +2864,19 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
     if (held) out.held.push({ opportunity_id: op.id, customer: op.name, project_id: pid })
     // ── Schedule tab: cancelled → abandoned (or the configured stage); rebooked → open + Closed.
     const schedule = scheduleOk ? scheduleState(schedByPid[pid]) : { state: 'unknown', date: null }
-    const sp = scheduleOk ? statusPlan({ schedule, opp: op, closedStageId: (op.pipelineId === GHL_PIPELINES.estimator.id ? GHL_PIPELINES.estimator : GHL_PIPELINES.outside).closed, cancelledStageId: ARC_CANCELLED_STAGE_ID }) : { action: null }
+    // Rebooking goes back to the stage the opp had when it was cancelled (kept in
+    // the status ledger), else Deal Reviewed — never Closed: the published
+    // "Welcome Email Video Workflow" texts and emails the customer on a move to Closed.
+    const statusLedger = await arcStatusLedger()
+    const isEst = op.pipelineId === GHL_PIPELINES.estimator.id
+    const rebookStage = (statusLedger[op.id] && statusLedger[op.id].stage_before) || (isEst ? ARC_DEAL_REVIEWED_STAGES.estimator : ARC_DEAL_REVIEWED_STAGES.outside)
+    const sp = scheduleOk ? statusPlan({ schedule, opp: op, closedStageId: rebookStage, cancelledStageId: ARC_CANCELLED_STAGE_ID }) : { action: null }
     if (sp.action) {
       const item = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'ghl', action: sp.action, before: { status: op.status, stage: op.pipelineStageId }, after: sp.write, reason: sp.reason }
       if (dry) { out.would_fix.push(item); log('WOULD FIX', item) }
       else if (capReached()) skip(item, 'ghl', `daily fix cap (${maxFix}) reached — tomorrow's run continues`)
       else {
-        try { await ghlUpdateOpp(op.id, sp.write); const back = (await ghlGet(`/opportunities/${op.id}`).catch(() => null)) || {}; const b = back.opportunity || back; item.read_back = { status: b.status, stage: b.pipelineStageId }; out.fixed.push(item); out.status_changes.push(item); log('FIXED', item); Object.assign(op, sp.write) }
+        try { await ghlUpdateOpp(op.id, sp.write); const back = (await ghlGet(`/opportunities/${op.id}`).catch(() => null)) || {}; const b = back.opportunity || back; item.read_back = { status: b.status, stage: b.pipelineStageId }; out.fixed.push(item); out.status_changes.push(item); log('FIXED', item); Object.assign(op, sp.write); await arcStatusLedgerRecord(op.id, sp.action === 'cancel' ? { stage_before: item.before.stage, cancelled_at: new Date().toISOString() } : { rebooked_at: new Date().toISOString() }) }
         catch (e) { item.error = e.message || 'status update failed'; out.failed.push(item); log('FAILED', item) }
       }
       if (sp.action === 'cancel') continue   // a cancelled booking gets nothing else written
@@ -3129,6 +3153,67 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
       ;(r.ok ? out.fixed : out.failed).push(item); log(r.ok ? (item.already_had_it ? 'CONFIRMED' : 'FIXED') : 'FAILED', item)
       await pause(500)
     } catch (e) { const item = { project_id: pid, customer: op.name, install: inst, error: e.message || 'audit failed' }; out.failed.push(item); log('FAILED', item) }
+  }
+  // ── Identity pass over EVERY non-lost opp with a Project ID, whatever its date
+  //    (the Oct 14 2026 backfill adopted opps by contact/phone and stamped Project
+  //    IDs on the wrong customer; those opps predate the audit window):
+  //    • a $0 opp whose Project ID's customer (Sheet / ArcSite) is not this person
+  //      → Project ID removed, carried-over contact prices cleared (Courtney Spillers);
+  //    • a $0 opp with a Project ID while the same contact has a WON deal without
+  //      one → the Project ID moves to the won deal (Cassandra Bojarski).
+  //    An opp with a real value and a name that does not match is only reported.
+  out.identity = { checked: 0, mismatches: [] }
+  if (!lookupBlocked) {
+    try {
+      const sheetAll = await readInstallSheet().catch(() => null)
+      const custByPid = new Map()
+      for (const r of ((sheetAll && sheetAll.jobs && sheetAll.jobs.rows) || [])) { const p = String(r['Project ID'] || '').trim(); if (p && !custByPid.has(p)) custByPid.set(p, String(r['Customer'] || '').trim()) }
+      const all = (scan.opportunities || []).map(l => l.raw).filter(o => o && String(o.status || '').toLowerCase() !== 'lost')
+      const byContact = new Map(); for (const o of all) { if (!o.contactId) continue; if (!byContact.has(o.contactId)) byContact.set(o.contactId, []); byContact.get(o.contactId).push(o) }
+      for (const o of all) {
+        const pid = oppProjectId(o); if (!pid) continue
+        out.identity.checked++
+        const zero = !(Number(o.monetaryValue) > 0)
+        const sheetCust = custByPid.get(pid) || null
+        let ident = sheetCust ? projectBelongsToOpp({ arcCustomer: sheetCust, oppName: o.name, contactName: null }) : { ok: true }
+        if (!ident.ok) { const pr = await arcProject(pid); if (pr) ident = projectBelongsToOpp({ arcCustomer: pr.customer && pr.customer.name, arcProject: pr.name, oppName: o.name, contactName: null }) }
+        if (!ident.ok) {
+          const rec = { project_id: pid, customer: o.name, opportunity_id: o.id, value: o.monetaryValue, sheet_customer: sheetCust, reason: ident.reason }
+          out.identity.mismatches.push(rec)
+          if (!zero) { out.project_mismatch.push({ ...rec, reason: `${ident.reason} — opportunity has a value, left for a human` }); continue }
+          const ci = { ...rec, target: 'ghl', action: 'clear_project_id', before: { project_id: pid }, after: { project_id: null }, reason: `${ident.reason} — $0 opportunity, Project ID removed` }
+          const got = o.contactId ? await ghlGet(`/contacts/${o.contactId}`).catch(() => null) : null; const contact = (got && got.contact) || null
+          const cp = contact ? carryoverPlan({ contactJobPrice: contactFieldNumber(contact, GHL_CONTACT_JOB_PRICE_FIELD), contactNewPrice: contactFieldNumber(contact, GHL_CONTACT_NEW_PRICE_FIELD), hasSignedContract: false, otherDealValues: [] }) : { action: null }
+          if (cp.action === 'clear') { ci.contact_before = { job_price: contactFieldNumber(contact, GHL_CONTACT_JOB_PRICE_FIELD), new_price: contactFieldNumber(contact, GHL_CONTACT_NEW_PRICE_FIELD) }; ci.contact_after = { job_price: null, new_price: null }; ci.reason += `; ${cp.reason}` }
+          if (dry) { out.would_fix.push(ci); log('WOULD FIX', ci); continue }
+          if (capReached()) { skip(ci, 'ghl', `daily fix cap (${maxFix}) reached — tomorrow's run continues`); continue }
+          try {
+            await ghlUpdateOpp(o.id, { customFields: [{ id: GHL_OPP_FIELD_IDS.project_id, field_value: '' }] })
+            if (cp.action === 'clear') await ghlContactSetFields(o.contactId, [{ id: GHL_CONTACT_JOB_PRICE_FIELD, value: '' }, { id: GHL_CONTACT_NEW_PRICE_FIELD, value: '' }])
+            out.fixed.push(ci); log('FIXED', ci)
+          } catch (e) { ci.error = e.message; out.failed.push(ci); log('FAILED', ci) }
+          await pause(300)
+          continue
+        }
+        if (zero) {
+          const won = (byContact.get(o.contactId) || []).filter(x => x.id !== o.id && String(x.status || '').toLowerCase() === 'won' && !oppProjectId(x))
+          if (won.length === 1) {
+            const w = won[0]
+            const mi = { project_id: pid, customer: o.name, opportunity_id: o.id, target: 'ghl', action: 'move_project_id', before: { from: o.id, from_value: o.monetaryValue, to: w.id, to_project_id: null }, after: { from_project_id: null, to: w.id, to_project_id: pid }, reason: `$0 opportunity carries the Project ID while the same contact's won deal (${w.name}, ${arcUsd(w.monetaryValue)}) has none — Project ID moved to the won deal` }
+            if (dry) { out.would_fix.push(mi); log('WOULD FIX', mi); continue }
+            if (capReached()) { skip(mi, 'ghl', `daily fix cap (${maxFix}) reached — tomorrow's run continues`); continue }
+            try {
+              await ghlUpdateOpp(w.id, { customFields: [{ id: GHL_OPP_FIELD_IDS.project_id, field_value: pid }] })
+              await ghlUpdateOpp(o.id, { customFields: [{ id: GHL_OPP_FIELD_IDS.project_id, field_value: '' }] })
+              const back = (await ghlGet(`/opportunities/${w.id}`).catch(() => null)) || {}
+              mi.read_back = { to_project_id: oppProjectId(back.opportunity || back) }
+              out.fixed.push(mi); log('FIXED', mi)
+            } catch (e) { mi.error = e.message; out.failed.push(mi); log('FAILED', mi) }
+            await pause(300)
+          }
+        }
+      }
+    } catch (e) { out.identity.error = String(e.message || e).slice(0, 160) }
   }
   // ── Missing records (Garrison, Nov 21 2026): a Sheet-approved project with a
   //    signed ArcSite contract and NO GHL opportunity (JJ Patchin) → created
@@ -3542,6 +3627,7 @@ async function arcsiteToGhl(rawBody, { dryRun = false, quiet = false } = {}) {
   // Opportunity owner = the closer/rep, matched to a GHL user.
   const ownerId = await ghlUserIdByName(closerName).catch(() => null)
 
+  let adoptRefused = null
   const plan = {
     project_id: projectId, pipeline: estimator ? 'estimator' : 'outside', rep, estimator,
     customer: custName, sell: sellTotal, hasDeal: !!deal, fields: customFields.length,
@@ -3577,7 +3663,17 @@ async function arcsiteToGhl(rawBody, { dryRun = false, quiet = false } = {}) {
       if (!held.ok) return arcSaleBlocked(projectId, 'create_blocked', { state: 'uncertain' })
       return arcSaleBlocked(projectId, decision.action === 'ambiguous' ? 'ambiguous' : 'held', { state: held.record?.state || 'uncertain', reason: decision.reason })
     }
-    if (decision.action === 'adopt' && decision.opportunity?.raw?.id) existing = decision.opportunity.raw
+    if (decision.action === 'adopt' && decision.opportunity?.raw?.id) {
+      // Adoption matched by contact (phone / email). The opp must still be THIS
+      // person: a spouse's lead opp on a shared phone (Courtney Spillers took
+      // Aaron Spillers' project, Oct 14 2026) is never adopted — a new opp is made.
+      const adoptee = decision.opportunity.raw
+      const adopteeName = String(adoptee.name || '').replace(/·.*$/, '').trim()
+      if (adopteeName && custName && !samePerson(custName, adopteeName)) {
+        adoptRefused = `contact-matched opportunity "${adopteeName}" is not ${custName} — not adopted, a new opportunity is created`
+        plan.adopt_refused = adoptRefused
+      } else existing = adoptee
+    }
   }
   if (!existing) {
     try { createClaim = await arcSaleLedger.claimCreate({ projectId, eventId: saleEvent }) }

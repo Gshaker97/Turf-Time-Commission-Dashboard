@@ -69,7 +69,7 @@ globalThis.fetch = async (url, opts = {}) => {
   const send = (status, payload) => new Response(JSON.stringify(payload ?? {}), { status, headers: { 'content-type': 'application/json' } })
   if (parsed.origin === 'https://oauth2.googleapis.com') return send(200, { access_token: 't', expires_in: 3600 })
   if (parsed.hostname === 'sheets.googleapis.com') return send(200, { valueRanges: [
-    { range: 'Jobs!A1:F2', values: [['Project ID', 'Baseline Cost', 'Approved Total', 'Pre-Tax Sale', 'Commission', 'Proposal ID'], [PID, '1000', world.sheetTotal, world.sheetTotal, '200', 'p2']] },
+    { range: 'Jobs!A1:G2', values: [['Project ID', 'Baseline Cost', 'Approved Total', 'Pre-Tax Sale', 'Commission', 'Proposal ID', 'Customer'], [PID, '1000', world.sheetTotal, world.sheetTotal, '200', 'p2', world.sheetCustomer || 'Fixture Calendar']] },
     { range: 'Schedule!A1:E9', values: [['Booked At', 'Install Date', 'Customer', 'Status', 'Proposal ID'], ...((world.scheduleRows && world.scheduleRows.length) ? world.scheduleRows : [['', '', '', '', '']])] },   // parseTab needs a data row to keep the headers
   ] })
   if (parsed.hostname === 'cdn.example') {
@@ -115,6 +115,11 @@ globalThis.fetch = async (url, opts = {}) => {
     if (body && body.monetaryValue != null) world.opp.monetaryValue = body.monetaryValue
     return send(200, { opportunity: world.opp })
   }
+  if (method === 'PUT' && /^\/opportunities\/[^/]+$/.test(parsed.pathname)) {
+    const id = parsed.pathname.split('/').pop(); const extra = (world.extraOpps || []).find(o => o.id === id)
+    if (extra) { world.oppPuts.push({ id, ...body }); for (const f of (body && body.customFields) || []) { const cf = extra.customFields.find(c => c.id === f.id); if (cf) cf.fieldValueString = f.field_value; else extra.customFields.push({ id: f.id, fieldValueString: f.field_value }) } if (body && body.status) extra.status = body.status; return send(200, { opportunity: extra }) }
+  }
+  if (method === 'GET' && /^\/opportunities\/[^/]+$/.test(parsed.pathname)) { const extra = (world.extraOpps || []).find(o => o.id === parsed.pathname.split('/').pop()); if (extra) return send(200, { opportunity: extra }) }
   if (method === 'POST' && parsed.pathname === '/medias/upload-file') { const n = world.uploads.push(opts.body); return send(200, { url: `https://ghl.example/hosted-${n}.pdf` }) }
   if (method === 'GET' && parsed.pathname === '/contacts/contact-cal') return send(200, { contact: world.contact })
   if (method === 'PUT' && parsed.pathname.startsWith('/contacts/')) { world.contactPuts.push(body); return send(200, { contact: { id: 'contact-cal' } }) }
@@ -453,7 +458,8 @@ test('Schedule tab cancelled → the opp goes to status abandoned and nothing el
   world.opp.status = 'abandoned'
   world.scheduleRows = [['2026-11-10', '2026-11-27', 'Fixture Calendar', 'CANCELLED', 'p2'], ['2026-11-15', '2026-12-05', 'Fixture Calendar', 'BOOKED', 'p2']]
   const r = await run({ fix: true })
-  const rb = r.fixed.find(f => f.action === 'rebook'); assert.ok(rb, JSON.stringify(r)); assert.deepEqual(rb.after, { status: 'open', pipelineStageId: '7f686159-9e37-4ffb-9311-3f10106cf250' })
+  // rebooked → open + the stage it had before (none recorded here) → Deal Reviewed, never Closed (the Welcome Email workflow fires on Closed)
+  const rb = r.fixed.find(f => f.action === 'rebook'); assert.ok(rb, JSON.stringify(r)); assert.deepEqual(rb.after, { status: 'open', pipelineStageId: '72691282-63f0-451b-9e38-a244dc9d3678' })
   const fs = r.fixed.find(f => f.action === 'sync_fields'); assert.ok(fs, JSON.stringify(r.fixed)); assert.equal(fs.after.opp.install, '2026-12-05'); assert.equal(fs.after.contact.install, '2026-12-05')
   assert.equal(world.installRows.length, 1); assert.equal(world.installRows[0].rows[0].installDate, '2026-12-05')
 })
@@ -467,4 +473,48 @@ test('a one-day cap override applies on its day only and falls back to the norma
   reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
   const audit = await run({ fix: true, maxFix: 7 })
   assert.equal(audit.max_fix, 7)
+})
+
+test('rebooking restores the stage the opp had when the sync cancelled it (status ledger), else Deal Reviewed', async () => {
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  world.opp.pipelineStageId = 'stage-ready-for-install'
+  world.scheduleRows = [['2026-11-10', '2026-11-27', 'Fixture Calendar', 'CANCELLED', 'p2']]
+  const c = await run({ fix: true }); assert.ok(c.fixed.some(f => f.action === 'cancel'))
+  assert.equal(world.settings.get('arcsite_status_ledger')[OPP].stage_before, 'stage-ready-for-install')
+  reset({ ghl: ['old', 'new'], cal: ['new'], keepSettings: true }); resetArcSaleMemoryForTests()
+  world.opp.status = 'abandoned'; world.opp.pipelineStageId = 'stage-ready-for-install'
+  world.scheduleRows = [['2026-11-10', '2026-11-27', 'Fixture Calendar', 'CANCELLED', 'p2'], ['2026-11-15', '2026-12-05', 'Fixture Calendar', 'BOOKED', 'p2']]
+  const r = await run({ fix: true })
+  assert.deepEqual(r.fixed.find(f => f.action === 'rebook').after, { status: 'open', pipelineStageId: 'stage-ready-for-install' })
+})
+
+test('identity pass, any date: a $0 opp whose Project ID belongs to another customer loses the Project ID and its carried-over prices (Courtney Spillers)', async () => {
+  reset({ ghl: [], cal: null, value: 0 }); resetArcSaleMemoryForTests()
+  world.opp.name = 'Courtney Spillers'; world.opp.createdAt = '2026-08-13T00:00:00.000Z'; world.opp.customFields = world.opp.customFields.filter(c => c.id !== INSTALL_FIELD)
+  world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 9164.27 }]
+  world.sheetCustomer = 'Aaron Spillers'
+  const d = await run({ fix: true, dry: true })
+  const w = d.would_fix.find(x => x.action === 'clear_project_id'); assert.ok(w, JSON.stringify(d.would_fix)); assert.match(w.reason, /is not this customer/); assert.match(w.reason, /cleared/)
+  assert.equal(world.oppPuts.length, 0)
+  const live = await run({ fix: true })
+  assert.ok(live.fixed.some(x => x.action === 'clear_project_id'))
+  assert.ok(world.oppPuts.some(p => p.customFields && p.customFields.some(f => f.id === PROJECT_FIELD && f.field_value === '')))
+  assert.ok(world.contactPuts.some(p => p.customFields.some(f => f.id === 'gz5Xoix8Sd37hUbrvQuQ' && f.field_value === '')))
+})
+
+test('identity pass: a $0 opp carrying the Project ID while the same contact has a won deal without one → the Project ID moves to the won deal (Cassandra Bojarski)', async () => {
+  reset({ ghl: [], cal: null, value: 0 }); resetArcSaleMemoryForTests()
+  world.opp.createdAt = '2026-05-15T00:00:00.000Z'; world.opp.customFields = world.opp.customFields.filter(c => c.id !== INSTALL_FIELD)
+  world.extraOpps = [{ id: 'opp-won', name: 'Fixture Calendar', contactId: 'contact-cal', status: 'won', pipelineId: 'jfhZWICxnmISGllte9Rv', pipelineStageId: 'x', monetaryValue: 7281, customFields: [] }]
+  const live = await run({ fix: true })
+  const mv = live.fixed.find(x => x.action === 'move_project_id'); assert.ok(mv, JSON.stringify(live))
+  assert.equal(mv.after.to, 'opp-won'); assert.equal(mv.after.to_project_id, PID)
+})
+
+test('a $0 duplicate copy with no calendar job loses its Project ID (Todd Vietzen Turf Replacement); a copy with a value is only reported', async () => {
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  world.extraOpps = [{ id: 'opp-repair', name: 'Fixture Calendar Turf Replacement', contactId: 'contact-cal', status: 'open', pipelineId: 'jfhZWICxnmISGllte9Rv', pipelineStageId: 'x', monetaryValue: 0, createdAt: '2026-10-05T00:00:00.000Z', customFields: [{ id: PROJECT_FIELD, fieldValueString: PID }, { id: INSTALL_FIELD, fieldValueString: future }] }]
+  const r = await run({ fix: true })
+  const cl = r.fixed.find(x => x.action === 'clear_project_id' && x.opportunity_id === 'opp-repair'); assert.ok(cl, JSON.stringify(r.fixed)); assert.match(cl.reason, /not a sale/)
+  assert.equal(r.duplicate_copies.length, 1)
 })

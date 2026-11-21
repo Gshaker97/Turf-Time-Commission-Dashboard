@@ -5,8 +5,12 @@ import { pickLiveOpp, projectBelongsToOpp, scheduleState, statusPlan, fieldPlan,
 const OUT = 'pipe-outside', IN = 'pipe-inside'
 
 test('shared Project ID: Inside/Outside pair → Outside live, Inside reported; otherwise the calendar-linked opp; lost never counted', () => {
+  // the PM calendar job decides first: Dhan Harnanan / Samer Darraj / Pamela Thompson keep their Inside copy
   const r = pickLiveOpp([{ id: 'i', pipelineId: IN, status: 'open' }, { id: 'o', pipelineId: OUT, status: 'open' }], { outsidePipelineId: OUT, calendarOppIds: ['i'] })
-  assert.equal(r.live.id, 'o'); assert.deepEqual(r.copies.map(c => c.id), ['i']); assert.match(r.reason, /Inside Sales copy should be closed/)
+  assert.equal(r.live.id, 'i'); assert.deepEqual(r.copies.map(c => c.id), ['o']); assert.match(r.reason, /calendar job points to it; the other-pipeline copy should be closed/)
+  // no calendar job on either → Outside is live
+  const nocal = pickLiveOpp([{ id: 'i', pipelineId: IN, status: 'open' }, { id: 'o', pipelineId: OUT, status: 'open' }], { outsidePipelineId: OUT, calendarOppIds: [] })
+  assert.equal(nocal.live.id, 'o'); assert.match(nocal.reason, /Inside Sales copy should be closed/)
   const two = pickLiveOpp([{ id: 'a', pipelineId: OUT, status: 'open', createdAt: '2026-08-24' }, { id: 'b', pipelineId: OUT, status: 'open', createdAt: '2026-10-17' }], { outsidePipelineId: OUT, calendarOppIds: ['b'] })
   assert.equal(two.live.id, 'b'); assert.match(two.reason, /calendar job points to it/)
   const lost = pickLiveOpp([{ id: 'x', status: 'lost' }, { id: 'y', status: 'open' }], { outsidePipelineId: OUT })
@@ -21,6 +25,8 @@ test('a Project ID stamped on the wrong customer is detected (Courtney Spillers 
   assert.equal(projectBelongsToOpp({ arcCustomer: 'Jonathan Kim', oppName: 'Jonathan Kim' }).ok, true)
   assert.equal(projectBelongsToOpp({ arcCustomer: 'Pamela Thompsan', arcProject: 'Pamela', oppName: 'Pamela Thompson' }).ok, true, 'one typo is the same person')
   assert.equal(projectBelongsToOpp({ arcCustomer: 'Rene Sanchez', arcProject: 'Arvonda', oppName: 'Arvonda Ganaway ' }).ok, true, 'project name names the other customer on a shared project')
+  for (const [a, b] of [['Conner Coffey', 'Connor Coffey'], ['Brendan Becker', 'Brenden Becker'], ['Mayra Valadez', 'Maira Valadez'], ['Manny Jimenez', 'Emanuel Jiminez'], ['Troy Moretti', 'Tory Moretti'], ['Perla Niebla', 'Perla Niebal'], ['Robert Durwood', 'Robert Durward #2']]) assert.equal(projectBelongsToOpp({ arcCustomer: a, oppName: b }).ok, true, a + ' vs ' + b)
+  assert.equal(projectBelongsToOpp({ arcCustomer: 'Jeanie', oppName: 'Larry Ryder' }).ok, false)
 })
 
 test('Schedule tab → status: cancelled → abandoned (or a configured stage); rebooked → open + Closed; lost untouched', () => {
