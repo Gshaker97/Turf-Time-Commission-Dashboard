@@ -373,12 +373,14 @@ test('the contact is checked on its own: a stale Job Price / New Price is set to
   world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 6200 }, { id: 'BxSAZYBEeT5iBI67CfVW', value: { 'doc-old': { meta: { name: 'old.pdf', size: OLD_SIZE }, url: 'https://ghl.example/documents/doc-old' } } }]
   const audit = await run({ fix: true })
   const fx = audit.fixed.find(f => f.target === 'contact'); assert.ok(fx, JSON.stringify(audit))
-  assert.match(fx.reason, /contact Job Price \$6,200\.00 \/ New Price empty vs \$2,000\.00; contact holds 1 contract .* but not the newest signed PDF/)
-  assert.equal(fx.contract, 'appended'); assert.equal(audit.contact.price_behind, 1); assert.equal(audit.contact.contract_behind, 1)
+  assert.match(fx.reason, /contact Job Price \$6,200\.00 \/ New Price empty vs \$2,000\.00/)
+  assert.equal(audit.contact.price_behind, 1)
+  // the contract on the contact is REPORTED, never written (GHL stores an API-written URL as a bare string)
+  assert.equal(audit.contact.contract.behind, 1); assert.equal(fx.contract, 'unchanged')
   const put = world.contactPuts.find(p => p.customFields.some(f => f.id === 'gz5Xoix8Sd37hUbrvQuQ'))
   const by = Object.fromEntries(put.customFields.map(f => [f.id, f.field_value]))
   assert.equal(by.gz5Xoix8Sd37hUbrvQuQ, 2000); assert.equal(by.X6s8Kc6QVEVyzSIISktA, 2000)
-  assert.deepEqual(by.BxSAZYBEeT5iBI67CfVW, ['https://ghl.example/documents/doc-old', 'https://ghl.example/new-1.pdf'])
+  assert.equal(by.BxSAZYBEeT5iBI67CfVW, undefined, 'contract field never written')
   assert.equal(world.oppPuts.length, 0, 'the opp itself was already right')
   // in step → nothing written; dry → planned only; held → skipped
   reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
@@ -391,14 +393,20 @@ test('the contact is checked on its own: a stale Job Price / New Price is set to
   finally { delete process.env.ARC_VALUE_HOLD_OPPS }
 })
 
-test('a change order through the audit appends the newest contract to the CONTACT too', async () => {
+test('a change order never writes the CONTACT contract field (GHL stores an API-written URL as a bare string; the Nov 21 run turned documents into strings)', async () => {
   reset({ ghl: ['old'], cal: ['new'] }); resetArcSaleMemoryForTests()
   world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 2000 }, { id: 'X6s8Kc6QVEVyzSIISktA', value: 2000 }, { id: 'BxSAZYBEeT5iBI67CfVW', value: { 'doc-old': { meta: { name: 'old.pdf', size: OLD_SIZE }, url: 'https://ghl.example/documents/doc-old' } } }]
   const audit = await run({ fix: true })
   assert.equal(audit.fixed[0].pdf, 'rebuilt 2')
-  const put = world.contactPuts.find(p => p.customFields.some(f => f.id === 'BxSAZYBEeT5iBI67CfVW'))
-  assert.ok(put, JSON.stringify(world.contactPuts))
-  assert.deepEqual(put.customFields.find(f => f.id === 'BxSAZYBEeT5iBI67CfVW').field_value, ['https://ghl.example/documents/doc-old', 'https://ghl.example/hosted-2.pdf'])
+  assert.ok(!world.contactPuts.some(p => p.customFields.some(f => f.id === 'BxSAZYBEeT5iBI67CfVW')), JSON.stringify(world.contactPuts))
+})
+
+test('a contact whose contract field holds bare URL strings (as GHL stores API writes) is unverified — never "no contract", never pushed again', async () => {
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 2000 }, { id: 'X6s8Kc6QVEVyzSIISktA', value: 2000 }, { id: 'BxSAZYBEeT5iBI67CfVW', value: ['https://ghl.example/documents/doc-old', 'https://ghl.example/new-1.pdf'] }]
+  const audit = await run({ fix: true })
+  assert.equal(audit.contact.contract.unverified, 1); assert.equal(audit.contact.contract.no_contract, 0)
+  assert.equal(audit.fixed.length, 0); assert.equal(world.contactPuts.length, 0); assert.equal(audit.ok, 1)
 })
 
 test('a Lost opportunity is never revived: the audit does not audit it and the change-order path refuses it', async () => {
