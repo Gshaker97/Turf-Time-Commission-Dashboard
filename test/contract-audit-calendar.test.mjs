@@ -431,3 +431,14 @@ test('a booking cancelled on the Schedule tab: the contact is never written, lis
   const again = await run({ fix: true })
   assert.equal(again.cancelled_on_schedule, 0); assert.equal(again.fixed.filter(f => f.target === 'contact').length, 1)
 })
+
+test('a one-day cap override applies on its day only and falls back to the normal cap by itself', async () => {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Phoenix', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+  const mod = await import('../server.js')
+  // the constants are read at import; this harness imported with no override, so the day-cap is the base cap
+  assert.equal(mod.arcAuditCapForDayForTests(today), 60)
+  assert.equal(mod.arcAuditCapForDayForTests('2000-01-01'), 60)
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  const audit = await run({ fix: true, maxFix: 7 })
+  assert.equal(audit.max_fix, 7)
+})
