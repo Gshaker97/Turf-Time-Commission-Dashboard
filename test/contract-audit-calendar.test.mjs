@@ -50,13 +50,13 @@ function reset({ ghl = ['old', 'new'], cal = ['new'], sheetTotal = '2000', calen
   world = {
     calendarDown, arcPdfOk, sameSize, ingestImported, arcsiteStatus,
     opp: { id: OPP, name: 'Fixture Calendar', contactId: 'contact-cal', status: 'open', pipelineId: 'pipe-outside', monetaryValue: value,
-      customFields: [{ id: PROJECT_FIELD, fieldValueString: PID }, { id: INSTALL_FIELD, fieldValueString: future }, { id: PDF_FIELD, fieldValueFiles: ghl.map(ghlFile) }] },
+      customFields: [{ id: PROJECT_FIELD, fieldValueString: PID }, { id: INSTALL_FIELD, fieldValueString: future }, { id: 'dScpoYWZbeghBsAMBR4o', fieldValueNumber: value }, { id: PDF_FIELD, fieldValueFiles: ghl.map(ghlFile) }] },
     proposals: [
       { proposal_id: 'p2', project_id: PID, status: 'APPROVED', total: 2000, pdf_url: 'https://cdn.example/new.pdf', proposal_options: [], document_number: '1002' },
       { proposal_id: 'p1', project_id: PID, status: 'APPROVED', total: 1500, pdf_url: 'https://cdn.example/old.pdf', proposal_options: [], document_number: '1001' },
     ],
     calendarJobs: cal === null ? [] : [{ jobNumber: 'J-77', ghlOpportunityId: OPP, canceledAt: null, value, contracts: cal.map(calFile) }],
-    sheetTotal, ingests: [], uploads: [], oppPuts: [], contactPuts: [], settings,
+    sheetTotal, ingests: [], uploads: [], oppPuts: [], contactPuts: [], settings, deals: [{ id: 'deal-1', project_id: PID }], dealPosts: [], installRows: [],
     // the contact behind the opp: in step with the opp by default (Job Price = value, newest contract held)
     contact: { id: 'contact-cal', customFields: [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value }, { id: 'X6s8Kc6QVEVyzSIISktA', value },
       { id: 'BxSAZYBEeT5iBI67CfVW', value: { 'doc-1': { meta: { name: 'contract.pdf', size: NEW_SIZE }, url: 'https://ghl.example/documents/doc-1' } } }] },
@@ -69,7 +69,7 @@ globalThis.fetch = async (url, opts = {}) => {
   const send = (status, payload) => new Response(JSON.stringify(payload ?? {}), { status, headers: { 'content-type': 'application/json' } })
   if (parsed.origin === 'https://oauth2.googleapis.com') return send(200, { access_token: 't', expires_in: 3600 })
   if (parsed.hostname === 'sheets.googleapis.com') return send(200, { valueRanges: [
-    { range: 'Jobs!A1:E2', values: [['Project ID', 'Baseline Cost', 'Approved Total', 'Pre-Tax Sale', 'Commission'], [PID, '1000', world.sheetTotal, world.sheetTotal, '200']] },
+    { range: 'Jobs!A1:F2', values: [['Project ID', 'Baseline Cost', 'Approved Total', 'Pre-Tax Sale', 'Commission', 'Proposal ID'], [PID, '1000', world.sheetTotal, world.sheetTotal, '200', 'p2']] },
     world.scheduleRows && world.scheduleRows.length ? { range: 'Schedule!A1:E9', values: [['Booked At', 'Install Date', 'Customer', 'Status', 'Proposal ID'], ...world.scheduleRows] } : { range: 'Schedule!A1:A1', values: [['Project ID']] },
   ] })
   if (parsed.hostname === 'cdn.example') {
@@ -82,6 +82,7 @@ globalThis.fetch = async (url, opts = {}) => {
   }
   if (parsed.origin === CAL) {
     if (parsed.pathname === '/api/export/jobs') return world.calendarDown ? send(503, { error: 'calendar down' }) : send(200, { jobs: world.calendarJobs })
+    if (parsed.pathname === '/api/install-dates/ingest' && method === 'POST') { world.installRows.push(body); return send(200, { results: (body.rows || []).map(r => ({ ghlOpportunityId: r.ghlOpportunityId, outcome: body.dry ? 'dry' : 'moved', after: r.installDate })) }) }
     if (parsed.pathname === '/api/change-orders/ingest' && method === 'POST') { world.ingests.push(body); return send(200, { ok: true, matched: true, job: { jobNumber: 'J-77', filesImported: world.ingestImported, valueChanged: false } }) }
     return send(404, {})
   }
@@ -94,6 +95,9 @@ globalThis.fetch = async (url, opts = {}) => {
   if (parsed.origin === SB) {
     if (parsed.pathname === '/rest/v1/app_settings' && method === 'POST') { if (body && body.key) world.settings.set(body.key, body.value); return send(201, {}) }
     if (parsed.pathname === '/rest/v1/app_settings') { const k = decodeURIComponent(parsed.searchParams.get('key') || '').replace(/^eq\./, ''); const v = world.settings.get(k); return send(200, v === undefined ? [] : [{ key: k, value: v }]) }
+    if (parsed.pathname === '/rest/v1/deals' && method === 'POST') { world.dealPosts.push(body); world.deals.push({ id: 'deal-' + (world.deals.length + 1), ...body }); return send(201, {}) }
+    if (parsed.pathname === '/rest/v1/deals') { const pid = decodeURIComponent(parsed.searchParams.get('project_id') || '').replace(/^eq\./, ''); return send(200, world.deals.filter(d => !pid || d.project_id === pid)) }
+    if (parsed.pathname === '/rest/v1/profiles') return send(200, [{ id: 'prof-1', name: 'Fixture Rep', email: 'rep@example.com' }])
     return send(200, [])
   }
   if (parsed.origin !== GHL) return send(404, {})
@@ -167,16 +171,20 @@ test('both behind but GHL cannot be rebuilt (ArcSite link expired): the calendar
   assert.ok(!world.ingests.slice(0, -1).some(i => i.contracts.some(c => c.url === 'https://cdn.example/new.pdf')), 'only the audit push carried the newest PDF')
 })
 
-test('a held opportunity that is behind is skipped with the reason — never fixed, never silent', async () => {
-  reset({ ghl: ['old'], cal: ['old'] }); resetArcSaleMemoryForTests()
+test('a manual hold freezes the VALUE only: contracts are still rebuilt and pushed, fields still flow, the frozen value is reported', async () => {
+  reset({ ghl: ['old'], cal: ['old'], value: 1500 }); resetArcSaleMemoryForTests()   // value $1,500 vs signed $2,000, files behind
+  world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 1500 }, { id: 'X6s8Kc6QVEVyzSIISktA', value: 1500 }]
   process.env.ARC_VALUE_HOLD_OPPS = OPP
   try {
     const audit = await run({ fix: true })
     assert.equal(audit.held.length, 1)
-    assert.equal(audit.fixed.length, 0); assert.equal(world.ingests.length, 0); assert.equal(world.uploads.length, 0); assert.equal(world.oppPuts.length, 0)
-    const targets = audit.skipped_jobs.map(s => s.target).sort()
-    assert.deepEqual(targets, ['calendar', 'ghl'])
-    for (const s of audit.skipped_jobs) { assert.match(s.reason, /manual hold/); assert.equal(s.customer, 'Fixture Calendar'); assert.equal(s.calendar_job, 'J-77') }
+    const co = audit.fixed.find(f => f.action === 'change_order'); assert.ok(co, JSON.stringify(audit)); assert.equal(co.pdf, 'rebuilt 2')
+    assert.equal(world.uploads.length, 2, 'contracts rebuilt despite the hold')
+    assert.ok(!world.oppPuts.some(p => p.monetaryValue != null || p.pipelineStageId), 'value and stage never written: ' + JSON.stringify(world.oppPuts))
+    assert.ok(!world.contactPuts.some(p => p.customFields.some(f => f.id === 'gz5Xoix8Sd37hUbrvQuQ')), 'contact prices frozen')
+    assert.ok(audit.skipped_jobs.some(s => /manual hold: value stays \$1,500\.00/.test(s.reason)), JSON.stringify(audit.skipped_jobs))
+    assert.ok(audit.skipped_jobs.some(s => s.target === 'fields' && /manual hold/.test(s.reason)))
+    assert.equal(world.ingests.length, 1); assert.equal(world.ingests[0].newTotal, 1500, 'calendar gets the contract, value unchanged')
   } finally { delete process.env.ARC_VALUE_HOLD_OPPS }
 })
 
@@ -346,19 +354,25 @@ test('Closed means won: a Closed-stage opp alone on its Project ID is audited; b
   world.opp.pipelineStageId = CLOSED
   const alone = await run({ fix: true })
   assert.equal(alone.fixed.length, 1, JSON.stringify(alone)); assert.equal(alone.fixed[0].pdf, 'rebuilt 2'); assert.equal(alone.fixed[0].verified_after, true)
-  assert.equal(world.uploads.length, 2); assert.equal(alone.checked, 1); assert.equal(alone.skipped_jobs.length, 0)
+  assert.equal(world.uploads.length, 2); assert.equal(alone.checked, 1); assert.equal(alone.skipped_jobs.length, 0, JSON.stringify(alone.skipped_jobs))
   // 2. a Closed-stage copy beside the live opp: the live one is audited, the copy is noted, nothing is called a duplicate
   reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests()
   world.extraOpps = [twin(CLOSED)]
   const pair = await run({ fix: true })
   assert.equal(pair.fixed.length, 1); assert.equal(pair.skipped_jobs.length, 0, JSON.stringify(pair.skipped_jobs))
   assert.deepEqual(pair.closed_copies.map(c => [c.opportunity_id, c.live_opportunity]), [['opp-twin', 'Fixture Calendar']])
-  // 3. two live opps: still a duplicate, the other one named
+  // 3. two live opps: the one the PM calendar job points to is live and is fixed; the other is reported as a copy to close, nothing written to it
   reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests()
   world.extraOpps = [twin('some-open-stage')]
   const dup = await run({ fix: true })
-  assert.equal(dup.fixed.length, 0); assert.equal(dup.skipped_jobs.length, 2)
-  assert.match(dup.skipped_jobs[0].reason, /more than one open opportunity carries this Project ID \(also /)
+  assert.equal(dup.fixed.length, 1); assert.equal(dup.fixed[0].opportunity_id, OPP); assert.equal(dup.skipped_jobs.length, 0, JSON.stringify(dup.skipped_jobs))
+  assert.equal(dup.duplicate_copies.length, 1); assert.equal(dup.duplicate_copies[0].opportunity_id, 'opp-twin'); assert.match(dup.duplicate_copies[0].reason, /calendar job points to it/)
+  assert.ok(dup.fixed[0].shared_project_id, 'the live opp carries a note about the copy')
+  // 4. two live opps, neither on the calendar, same pipeline: unresolved — nothing written, both reported
+  reset({ ghl: ['old', 'new'], cal: null }); resetArcSaleMemoryForTests()
+  world.extraOpps = [{ ...twin('some-open-stage'), pipelineId: world.opp.pipelineId }]
+  const un = await run({ fix: true })
+  assert.equal(un.fixed.length, 0); assert.equal(un.skipped_jobs.length, 2); assert.match(un.skipped_jobs[0].reason, /left for review/)
 })
 
 test('ArcSite rate-limited (429): the job is counted as NOT checked and the run says so — never "nothing signed, ok"', async () => {
@@ -372,24 +386,23 @@ test('the contact is checked on its own: a stale Job Price / New Price is set to
   reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
   world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 6200 }, { id: 'BxSAZYBEeT5iBI67CfVW', value: { 'doc-old': { meta: { name: 'old.pdf', size: OLD_SIZE }, url: 'https://ghl.example/documents/doc-old' } } }]
   const audit = await run({ fix: true })
-  const fx = audit.fixed.find(f => f.target === 'contact'); assert.ok(fx, JSON.stringify(audit))
-  assert.match(fx.reason, /contact Job Price \$6,200\.00 \/ New Price empty vs \$2,000\.00/)
-  assert.equal(audit.contact.price_behind, 1)
+  const fx = audit.fixed.find(f => f.action === 'sync_fields'); assert.ok(fx, JSON.stringify(audit))
+  assert.match(fx.reason, /contact Job\/New Price 6200 \/ empty → 2000/)
   // the contract on the contact is REPORTED, never written (GHL stores an API-written URL as a bare string)
-  assert.equal(audit.contact.contract.behind, 1); assert.equal(fx.contract, 'unchanged')
+  assert.equal(audit.contact.contract.behind, 1)
   const put = world.contactPuts.find(p => p.customFields.some(f => f.id === 'gz5Xoix8Sd37hUbrvQuQ'))
   const by = Object.fromEntries(put.customFields.map(f => [f.id, f.field_value]))
   assert.equal(by.gz5Xoix8Sd37hUbrvQuQ, 2000); assert.equal(by.X6s8Kc6QVEVyzSIISktA, 2000)
   assert.equal(by.BxSAZYBEeT5iBI67CfVW, undefined, 'contract field never written')
   assert.equal(world.oppPuts.length, 0, 'the opp itself was already right')
-  // in step → nothing written; dry → planned only; held → skipped
+  // in step → nothing written; dry → planned only; held → frozen and reported
   reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
-  const ok = await run({ fix: true }); assert.equal(ok.contact.current, 1); assert.equal(world.contactPuts.length, 0)
+  const ok = await run({ fix: true }); assert.equal(world.contactPuts.length, 0); assert.equal(ok.fixed.length, 0)
   reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
   world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 6200 }]
-  const d = await run({ fix: true, dry: true }); assert.equal(d.would_fix.filter(w => w.target === 'contact').length, 1); assert.equal(world.contactPuts.length, 0)
+  const d = await run({ fix: true, dry: true }); assert.equal(d.would_fix.filter(w => w.target === 'fields').length, 1); assert.equal(world.contactPuts.length, 0)
   process.env.ARC_VALUE_HOLD_OPPS = OPP
-  try { reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 6200 }]; const h = await run({ fix: true }); assert.ok(h.skipped_jobs.some(x => x.target === 'contact' && /manual hold/.test(x.reason))); assert.equal(world.contactPuts.length, 0) }
+  try { reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 6200 }]; const h = await run({ fix: true }); assert.ok(h.skipped_jobs.some(x => x.target === 'fields' && /manual hold/.test(x.reason))); assert.equal(world.contactPuts.length, 0) }
   finally { delete process.env.ARC_VALUE_HOLD_OPPS }
 })
 
@@ -424,20 +437,25 @@ test('a Lost opportunity is never revived: the audit does not audit it and the c
   assert.equal(world.oppPuts.length, 0); assert.equal(world.ingests.length, 0)
 })
 
-test('a booking cancelled on the Schedule tab: the contact is never written, listed with the reason (Renee Hallack, Kyle Moreo)', async () => {
-  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+test('Schedule tab cancelled → the opp goes to status abandoned and nothing else is written; rebooked → open + Closed and the fields flow again', async () => {
+  reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests()
   world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 6200 }]
   world.scheduleRows = [['2026-11-10', '2026-11-27', 'Fixture Calendar', 'CANCELLED', 'p2']]
   const audit = await run({ fix: true })
-  assert.equal(audit.cancelled_on_schedule, 1)
-  const sk = audit.skipped_jobs.find(x => x.target === 'contact'); assert.ok(sk, JSON.stringify(audit)); assert.match(sk.reason, /cancelled on the Schedule tab/)
-  assert.equal(world.contactPuts.length, 0)
-  // a later LIVE booking for the same project means it is not cancelled any more
+  const c = audit.fixed.find(f => f.action === 'cancel'); assert.ok(c, JSON.stringify(audit)); assert.deepEqual(c.after, { status: 'abandoned' }); assert.deepEqual(c.before, { status: 'open', stage: undefined })
+  assert.ok(world.oppPuts.some(p => p.status === 'abandoned')); assert.equal(world.contactPuts.length, 0); assert.equal(world.ingests.length, 0); assert.equal(world.uploads.length, 0)
+  assert.equal(audit.status_changes.length, 1)
+  // dry mode plans it
+  reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests(); world.scheduleRows = [['2026-11-10', '2026-11-27', 'Fixture Calendar', 'CANCELLED', 'p2']]
+  const d = await run({ fix: true, dry: true }); assert.ok(d.would_fix.some(w => w.action === 'cancel')); assert.equal(world.oppPuts.length, 0)
+  // rebooked: a live row after the cancelled one, opp abandoned → open + Closed, then fields and contracts
   reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
-  world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 6200 }]
+  world.opp.status = 'abandoned'
   world.scheduleRows = [['2026-11-10', '2026-11-27', 'Fixture Calendar', 'CANCELLED', 'p2'], ['2026-11-15', '2026-12-05', 'Fixture Calendar', 'BOOKED', 'p2']]
-  const again = await run({ fix: true })
-  assert.equal(again.cancelled_on_schedule, 0); assert.equal(again.fixed.filter(f => f.target === 'contact').length, 1)
+  const r = await run({ fix: true })
+  const rb = r.fixed.find(f => f.action === 'rebook'); assert.ok(rb, JSON.stringify(r)); assert.deepEqual(rb.after, { status: 'open', pipelineStageId: '7f686159-9e37-4ffb-9311-3f10106cf250' })
+  const fs = r.fixed.find(f => f.action === 'sync_fields'); assert.ok(fs, JSON.stringify(r.fixed)); assert.equal(fs.after.opp.install, '2026-12-05'); assert.equal(fs.after.contact.install, '2026-12-05')
+  assert.equal(world.installRows.length, 1); assert.equal(world.installRows[0].rows[0].installDate, '2026-12-05')
 })
 
 test('a one-day cap override applies on its day only and falls back to the normal cap by itself', async () => {
