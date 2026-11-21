@@ -27,7 +27,7 @@ import { validatePrivatePolicy } from './lib/verified-sheet-policy.mjs'
 import * as arcViews from './lib/analyst-arcsite-views.mjs'
 import { readBackAndRepair } from './lib/ghl-opp-readback.mjs'
 import { buildEodReport, eodSmsText } from './lib/eod-check.mjs'
-import { arcJobValue, sheetTotalFor, describeJobValue } from './lib/arcsite-job-value.mjs'
+import { arcJobValue, sheetTotalFor, describeJobValue, sheetRollupFor } from './lib/arcsite-job-value.mjs'
 import { ghlContractState, calendarContractState, calendarPushSource, newestSigned, newestSizeUnique, auditSummaryLine, auditItemLine } from './lib/contract-audit.mjs'
 import { pickLiveOpp, projectBelongsToOpp, scheduleState, statusPlan, fieldPlan, carryoverPlan, unsignedClosed, samePerson } from './lib/job-sync.mjs'
 import { parseSignedPdfText } from './lib/parse-signed-pdf.mjs'
@@ -3014,7 +3014,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
       const newest = newestSigned(signed)
       const value = arcJobTotal(signed)
       const want = value.total
-      out.values[pid] = { total: want, rule: describeJobValue(value, arcUsd), newest: `Proposal ${newest.document_number || newest.proposal_id}`, newest_id: String(newest.proposal_id || ''), signed: signed.length }
+      out.values[pid] = { total: want, rule: describeJobValue(value, arcUsd), newest: `Proposal ${newest.document_number || newest.proposal_id}`, newest_id: String(newest.proposal_id || ''), signed: signed.length, counted_ids: (value.counted || []).map(c => String(c.proposal_id || '')) }
       // The AI sheet is the truth for the value; ArcSite only when there is no
       // row. And the sheet itself gets checked: a signed proposal with no row,
       // or a row whose sale price disagrees with ArcSite, is a commission being
@@ -3372,15 +3372,15 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
           // deal is never rewritten: it is listed with old and new numbers.
           const deal = have[0]
           if (!(out.values[pid].signed >= 2) || deal.job_price == null) continue
-          const money = v => { if (v == null || String(v).trim() === '') return null; const str = String(v).trim(); const n = Number(str.replace(/[^0-9.]/g, '')); return isNaN(n) ? null : (/^\(.*\)$|^-/.test(str) ? -n : Math.round(n * 100) / 100) }
-          const byProposal = pidRows.find(r => String(r['Proposal ID'] || '').trim() === out.values[pid].newest_id)
-          const newestRow = byProposal || pidRows.slice().sort((a, b) => String(toYMD(b['Approved Date']) || '').localeCompare(String(toYMD(a['Approved Date']) || '')))[0]
-          if (!newestRow) continue
-          const newJob = money(newestRow['Approved Total']) ?? money(newestRow['Pre-Tax Sale']), newBase = money(newestRow['Baseline Cost']), newComm = money(newestRow['Commission'])
-          if (newJob == null || newBase == null) continue
+          // The Sheet rows for exactly the proposals the value counts (newest redraw +
+          // add-ons), summed: an add-on's row holds only the add-on (Amanda
+          // Pogorzelski 2: $15,895.75 + $1,802.60), never the whole job.
+          const roll = sheetRollupFor(out.values[pid].counted_ids, pidRows)
+          if (!roll) continue   // the Sheet lags a signing: not final, never $0
+          const newJob = roll.jobPrice, newBase = roll.baseline, newComm = roll.commission
           const differs = (a, b) => a == null || b == null ? a !== b : Math.abs(Number(a) - Number(b)) > 1
           if (!differs(deal.job_price, newJob) && !differs(deal.baseline_revenue, newBase)) continue
-          const coDate = toYMD(newestRow['Approved Date']) || null
+          const coDate = roll.changeOrder || null
           const upd = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'site', action: 'update_deal', deal_id: deal.id, deal_status: deal.status, change_order: coDate, newest: out.values[pid].newest,
             before: { job_price: deal.job_price, baseline_revenue: deal.baseline_revenue, commission: null }, after: { job_price: newJob, baseline_revenue: newBase, commission: newComm },
             reason: `change order signed ${coDate || '?'} (${out.values[pid].newest}): job price ${arcUsd(deal.job_price)} → ${arcUsd(newJob)}, baseline ${arcUsd(deal.baseline_revenue)} → ${arcUsd(newBase)}; the site recomputes commission (Sheet says ${newComm == null ? '?' : arcUsd(newComm)})` }

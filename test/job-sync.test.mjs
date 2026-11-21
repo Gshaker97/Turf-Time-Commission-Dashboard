@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { sheetRollupFor } from '../lib/arcsite-job-value.mjs'
 import { pickLiveOpp, projectBelongsToOpp, scheduleState, statusPlan, fieldPlan, carryoverPlan, unsignedClosed } from '../lib/job-sync.mjs'
 
 const OUT = 'pipe-outside', IN = 'pipe-inside'
@@ -64,4 +65,19 @@ test('VOID / unsigned Closed deals are named', () => {
   assert.match(unsignedClosed({ isClosedStage: true, signedCount: 0, proposalsCount: 2, voidOnly: false, installDate: null }), /no signed ArcSite contract and no install date \(2 proposals, none approved\)/)
   assert.equal(unsignedClosed({ isClosedStage: true, signedCount: 1 }), null)
   assert.equal(unsignedClosed({ isClosedStage: false, signedCount: 0 }), null)
+})
+
+test('change order → deal numbers: the Sheet rows for the counted proposals are summed (add-on rows hold only the add-on), newest signing day kept', () => {
+  const amanda = [
+    { 'Approved Date': '2026-11-08', 'Proposal ID': '615315', 'Approved Total': '$1,802.60', 'Baseline Cost': '$1,302.60', 'Commission': '$500.00' },
+    { 'Approved Date': '2026-07-08', 'Proposal ID': '462238', 'Approved Total': '$15,895.75', 'Baseline Cost': '$12,227.50', 'Commission': '$3,668.25' },
+  ]
+  assert.deepEqual(sheetRollupFor(['462238', '615315'], amanda), { jobPrice: 17698.35, baseline: 13530.1, commission: 4168.25, changeOrder: '2026-11-08', proposals: ['462238', '615315'] })
+  const julie = [
+    { 'Approved Date': '2026-11-20', 'Proposal ID': '640172', 'Approved Total': '$4,085.92', 'Baseline Cost': '$2,413.92', 'Commission': '$1,672.00' },
+    { 'Approved Date': '2026-10-20', 'Proposal ID': '597168', 'Approved Total': '$4,085.34', 'Baseline Cost': '$2,324.34', 'Commission': '$1,761.00' },
+  ]
+  assert.deepEqual(sheetRollupFor(['640172'], julie), { jobPrice: 4085.92, baseline: 2413.92, commission: 1672, changeOrder: '2026-11-20', proposals: ['640172'] })
+  assert.equal(sheetRollupFor(['640172', 'missing'], julie), null, 'a counted proposal with no row yet → not final')
+  assert.equal(sheetRollupFor([], julie), null)
 })
