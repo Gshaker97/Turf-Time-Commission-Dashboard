@@ -2667,6 +2667,12 @@ const ARC_AUDIT_DAYS_BACK = Number(process.env.ARC_AUDIT_DAYS_BACK || 14)
 // job installing (or created) on/after that day, whatever the date today.
 const ARC_AUDIT_SINCE = /^\d{4}-\d{2}-\d{2}$/.test(String(process.env.ARC_AUDIT_SINCE || '')) ? String(process.env.ARC_AUDIT_SINCE) : null
 const ARC_AUDIT_MAX_FIX = Number(process.env.ARC_AUDIT_MAX_FIX || 60)
+// A one-day cap override that needs no one to put it back (Garrison, Nov 20
+// 2026: 300 for the Nov 21 run, then 60 again): ARC_AUDIT_MAX_FIX_ONCE applies
+// only on ARC_AUDIT_MAX_FIX_ONCE_DAY (Phoenix); every other day uses the normal cap.
+const ARC_AUDIT_MAX_FIX_ONCE = Number(process.env.ARC_AUDIT_MAX_FIX_ONCE || 0)
+const ARC_AUDIT_MAX_FIX_ONCE_DAY = /^\d{4}-\d{2}-\d{2}$/.test(String(process.env.ARC_AUDIT_MAX_FIX_ONCE_DAY || '')) ? String(process.env.ARC_AUDIT_MAX_FIX_ONCE_DAY) : null
+const arcAuditCapForDay = (day, base = ARC_AUDIT_MAX_FIX) => (ARC_AUDIT_MAX_FIX_ONCE > 0 && ARC_AUDIT_MAX_FIX_ONCE_DAY === day) ? ARC_AUDIT_MAX_FIX_ONCE : base
 // ARC_AUDIT_DRY=1: the scheduled run decides but sends nothing (its result is
 // stored under its own key so a real run the same day is not blocked).
 const ARC_AUDIT_DRY = process.env.ARC_AUDIT_DRY === '1'
@@ -2712,13 +2718,14 @@ function arcCancelledProjects(sheet) {
 }
 const arcIsCancelled = (set, pid, signed) => set.has(pid) || (signed || []).some(s => set.proposals && set.proposals.has(String(s.proposal_id || '')))
 
-async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_DAYS_BACK, since = ARC_AUDIT_SINCE, maxFix = ARC_AUDIT_MAX_FIX } = {}) {
+async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_DAYS_BACK, since = ARC_AUDIT_SINCE, maxFix = null } = {}) {
+  if (maxFix == null) maxFix = arcAuditCapForDay(phoenixNow().day)
   // dry (or fix:false) = decide everything, send nothing: every planned push is
   // listed in `would_fix` with its target and source. ARC_AUDIT_DRY=1 makes the
   // scheduled 6 AM run behave the same way.
   dry = !!dry || !fix
   const out = { at: new Date().toISOString(), day: phoenixNow().day, fix: !dry, dry, days_back: daysBack, since: since || null, scanned: 0, candidates: 0, checked: 0, ok: 0,
-    gaps: [], fixed: [], failed: [], skipped_jobs: [], would_fix: [], sheet_gaps: [], values: {}, held: [], skipped: null }
+    max_fix: maxFix, gaps: [], fixed: [], failed: [], skipped_jobs: [], would_fix: [], sheet_gaps: [], values: {}, held: [], skipped: null }
   const log = (kind, item) => console.log(`[contract-audit] ${auditItemLine(kind, item)}`)
   const finish = async () => {
     if (out.arcsite_errors) out.skipped = `ArcSite did not answer for ${out.arcsite_errors} of ${out.candidates} jobs (${out.arcsite_error_sample || 'error'}) — those were not checked`
@@ -5703,7 +5710,8 @@ export function resetArcSaleMemoryForTests() {
   _arcEnrich.clear()
 }
 const arcApplyChangeOrderForTests = ({ projectId, opp, customer, signed, newTotal }) => arcApplyChangeOrder(projectId, { opp, contactId: opp.contactId || null, customer, signed, newTotal, via: 'test' })
-export { arcsiteToGhl, arcValueSweep, arcContractAudit, sendSaleAlert, resetArcCalendarLedgerForTests, eodRun, arcApplyChangeOrderForTests }
+const arcAuditCapForDayForTests = day => arcAuditCapForDay(day, Number(process.env.ARC_AUDIT_MAX_FIX || 60))
+export { arcsiteToGhl, arcValueSweep, arcContractAudit, sendSaleAlert, resetArcCalendarLedgerForTests, eodRun, arcApplyChangeOrderForTests, arcAuditCapForDayForTests }
 
 const port = process.env.PORT || 3000
 if (process.env.ARC_NO_LISTEN !== '1') {
