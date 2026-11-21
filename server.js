@@ -1741,6 +1741,7 @@ async function ghlCreateOpp(body) {
   const j = await resp.json(); return (j.opportunity && j.opportunity.id) || j.id || null
 }
 async function ghlUpdateOpp(id, body) {
+  if (arcSkippedOpp(id)) throw new Error(`opportunity ${id} is excluded by ARC_AUDIT_SKIP_OPPS — nothing written`)
   const resp = await fetch(`${GHL_BASE}/opportunities/${id}`, {
     method: 'PUT', headers: { ...ghlHeaders(GHL_WRITE_TOKEN), 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   })
@@ -2301,6 +2302,7 @@ const contactFieldNumber = (contact, id) => { const f = ((contact && contact.cus
 // written whenever a sale or change order lands on a contact. Best-effort.
 async function arcRefreshContactSale({ contactId, total = null, installDate = null, contractUrl = null }) {
   if (!contactId) return { ok: false, error: 'no contact' }
+  if (arcSkippedContact(contactId)) return { ok: false, error: 'excluded by ARC_AUDIT_SKIP_CONTACTS' }
   const fields = []
   if (total != null) fields.push({ id: GHL_CONTACT_NEW_PRICE_FIELD, value: total }, { id: GHL_CONTACT_JOB_PRICE_FIELD, value: total })
   if (installDate && /^\d{4}-\d{2}-\d{2}$/.test(String(installDate))) fields.push({ id: GHL_CONTACT_INSTALL_DATE_FIELD, value: String(installDate) })
@@ -2393,6 +2395,14 @@ async function arcStatusLedgerRecord(oppId, rec) { const l = await arcStatusLedg
 const GHL_CONTACT_PM_FIELD = (process.env.GHL_CONTACT_PM_FIELD || 'TaIA7I6tkXzCmOGnfxHV').trim()   // contact "Project Manager"
 const arcHoldSet = () => new Set(String(process.env.ARC_VALUE_HOLD_OPPS || '').split(',').map(x => x.trim()).filter(Boolean))
 const arcHeld = opp => !!(opp && opp.id && arcHoldSet().has(opp.id))
+// ARC_AUDIT_SKIP_OPPS / ARC_AUDIT_SKIP_CONTACTS (Garrison, Nov 21 2026): opportunities
+// and contacts the daily audit, the sale path and the calendar push must never
+// touch — not audited, not written, listed once per run as excluded. Unlike the
+// hold list (a watch list), this is a hard exclusion enforced at every write.
+const arcSkipOpps = () => new Set(String(process.env.ARC_AUDIT_SKIP_OPPS || '').split(',').map(x => x.trim()).filter(Boolean))
+const arcSkipContacts = () => new Set(String(process.env.ARC_AUDIT_SKIP_CONTACTS || '').split(',').map(x => x.trim()).filter(Boolean))
+const arcSkippedOpp = id => !!(id && arcSkipOpps().has(String(id)))
+const arcSkippedContact = id => !!(id && arcSkipContacts().has(String(id)))
 const arcJobTotal = signed => arcJobValue(signed, { addonMaxShare: ARC_ADDON_MAX_SHARE })
 // The sheet's figure for that same value: its rows for exactly the counted
 // proposals (null = a row is still missing, i.e. not final). A job with no
@@ -2406,6 +2416,7 @@ async function arcSheetTotal(projectId, value, singleRow) {
 }
 
 async function ghlContactSetFields(contactId, fields) {
+  if (arcSkippedContact(contactId)) throw new Error(`contact ${contactId} is excluded by ARC_AUDIT_SKIP_CONTACTS — nothing written`)
   const resp = await fetch(`${GHL_BASE}/contacts/${contactId}`, {
     method: 'PUT', headers: { ...ghlHeaders(GHL_WRITE_TOKEN), 'Content-Type': 'application/json' },
     body: JSON.stringify({ customFields: fields.map(f => ({ id: f.id, field_value: f.value })) }),
@@ -2499,6 +2510,7 @@ function resetArcCalendarLedgerForTests() { _arcCalLedger = null }
 // the ingest changes a value only when it genuinely moved.
 async function arcCalendarPushContract({ oppId, contactId, projectId, customerName, job, source, newTotal, previousTotal, newestLabel }) {
   if (!CALENDAR_SYNC_URL || !CALENDAR_SYNC_SECRET) return { ok: false, error: 'calendar not configured' }
+  if (arcSkippedOpp(oppId) || arcSkippedContact(contactId)) return { ok: false, error: 'excluded by ARC_AUDIT_SKIP_OPPS' }
   try {
     const resp = await fetch(`${CALENDAR_SYNC_URL}/api/change-orders/ingest`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'x-sync-secret': CALENDAR_SYNC_SECRET },
@@ -2808,6 +2820,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
       // A LOST deal is history and is never touched. An ABANDONED one is a
       // cancelled booking that may be rebooked on the Schedule tab, so it stays.
       if (String(op.status || '').toLowerCase() === 'lost') continue
+      if (arcSkippedOpp(op.id)) { const it = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'ghl', reason: 'excluded by ARC_AUDIT_SKIP_OPPS — not audited, nothing written' }; out.skipped_jobs.push(it); log('SKIPPED', it); continue }
       const inst = oppInstallDay(op)
       const cj = calByOpp ? calByOpp.get(op.id) : null
       const calInst = cj && cj.installDate ? String(cj.installDate).slice(0, 10) : null
@@ -3799,6 +3812,7 @@ async function arcsiteToGhl(rawBody, { dryRun = false, quiet = false } = {}) {
     }
   }
 
+  if (existing && arcSkippedOpp(existing.id)) return arcSaleBlocked(projectId, 'excluded', { reason: 'ARC_AUDIT_SKIP_OPPS', opportunity_id: existing.id })
   // Contact upsert happens after the Project ID decision. An invalid phone is
   // omitted; a failed upsert must not turn into a second opportunity.
   let contactId = existing?.contactId || existing?.contact_id || null
@@ -6110,7 +6124,7 @@ export function resetArcSaleMemoryForTests() {
 }
 const arcApplyChangeOrderForTests = ({ projectId, opp, customer, signed, newTotal }) => arcApplyChangeOrder(projectId, { opp, contactId: opp.contactId || null, customer, signed, newTotal, via: 'test' })
 const arcAuditCapForDayForTests = day => arcAuditCapForDay(day, Number(process.env.ARC_AUDIT_MAX_FIX || 60))
-export { arcsiteToGhl, arcValueSweep, arcContractAudit, sendSaleAlert, resetArcCalendarLedgerForTests, eodRun, arcApplyChangeOrderForTests, arcAuditCapForDayForTests }
+export { arcsiteToGhl, arcValueSweep, arcContractAudit, sendSaleAlert, resetArcCalendarLedgerForTests, eodRun, arcApplyChangeOrderForTests, arcAuditCapForDayForTests, ghlUpdateOpp as ghlUpdateOppForTests }
 
 const port = process.env.PORT || 3000
 if (process.env.ARC_NO_LISTEN !== '1') {

@@ -39,6 +39,7 @@ process.env.GOOGLE_SERVICE_ACCOUNT_JSON = JSON.stringify({ client_email: 'fixtur
 delete process.env.ARCSITE_WEBHOOK_SECRET
 delete process.env.ANALYST_API_KEY
 delete process.env.ARC_VALUE_HOLD_OPPS
+delete process.env.ARC_AUDIT_SKIP_OPPS; delete process.env.ARC_AUDIT_SKIP_CONTACTS
 
 const future = new Date(Date.now() + 10 * 864e5).toISOString().slice(0, 10)
 // GHL file entries: 'old' = the pre-change-order PDF, 'new' = the newest signed one.
@@ -628,4 +629,25 @@ test('commission-site deals: Outside Sales only, and never for a job sold before
   // live mode writes nothing to the site in either skipped case
   reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.deals = []; world.opp.pipelineId = 'jfhZWICxnmISGllte9Rv'
   await run({ fix: true }); assert.equal(world.dealPosts.length, 0)
+})
+
+test('ARC_AUDIT_SKIP_OPPS: an excluded opp is not audited and nothing is written to it, its contact, the calendar or the commission site (Anna Lee)', async () => {
+  // value $1,500 vs signed $2,000, files behind on GHL and the calendar, contact prices stale, no deal — everything would be fixed
+  reset({ ghl: ['old'], cal: ['old'], value: 1500 }); resetArcSaleMemoryForTests(); world.deals = []; world.opp.pipelineId = 'EWGmXwXP63Da5eBMNiDU'
+  world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 1500 }, { id: 'X6s8Kc6QVEVyzSIISktA', value: 1500 }]
+  process.env.ARC_AUDIT_SKIP_OPPS = OPP; process.env.ARC_AUDIT_SKIP_CONTACTS = 'contact-cal'
+  try {
+    const audit = await run({ fix: true })
+    assert.equal(audit.checked, 0); assert.equal(audit.fixed.length, 0); assert.equal(audit.failed.length, 0); assert.deepEqual(audit.not_checked, [])
+    assert.ok(audit.skipped_jobs.some(s => s.opportunity_id === OPP && /excluded by ARC_AUDIT_SKIP_OPPS/.test(s.reason)), JSON.stringify(audit.skipped_jobs))
+    assert.equal(world.oppPuts.length, 0); assert.equal(world.contactPuts.length, 0); assert.equal(world.ingests.length, 0); assert.equal(world.uploads.length, 0); assert.equal(world.dealPosts.length, 0)
+    assert.equal(world.opp.monetaryValue, 1500)
+    // the write guards hold on their own too (any other path that reaches them)
+    const mod = await import('../server.js')
+    await assert.rejects(() => mod.ghlUpdateOppForTests(OPP, { monetaryValue: 2000 }), /excluded by ARC_AUDIT_SKIP_OPPS/)
+    assert.equal(world.oppPuts.length, 0)
+  } finally { delete process.env.ARC_AUDIT_SKIP_OPPS; delete process.env.ARC_AUDIT_SKIP_CONTACTS }
+  // without the setting the same job is fixed as usual
+  reset({ ghl: ['old'], cal: ['old'], value: 1500 }); resetArcSaleMemoryForTests(); world.opp.pipelineId = 'EWGmXwXP63Da5eBMNiDU'
+  const again = await run({ fix: true }); assert.ok(again.fixed.some(f => f.action === 'change_order')); assert.equal(world.opp.monetaryValue, 2000)
 })
