@@ -525,14 +525,25 @@ test('coverage: a duplicate copy\'s live twin is audited in its place even outsi
   reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
   world.extraOpps = [{ id: 'opp-twin', name: 'Fixture Calendar', contactId: 'contact-cal', status: 'open', pipelineId: 'jfhZWICxnmISGllte9Rv', pipelineStageId: 'some-open-stage', monetaryValue: 2000, createdAt: '2026-09-01T00:00:00.000Z',
     customFields: [{ id: PROJECT_FIELD, fieldValueString: PID }, { id: PDF_FIELD, fieldValueFiles: ['old', 'new'].map(ghlFile) }] }]
-  world.calendarJobs[0].ghlOpportunityId = 'opp-twin'
+  world.calendarJobs[0].ghlOpportunityId = 'opp-twin'; world.calendarJobs[0].installDate = future
   world.scheduleRows = [['2026-11-10', future, 'Fixture Calendar', 'BOOKED', 'p2']]
+  world.deals = []
   const a = await run({ fix: true, dry: true })
-  assert.equal(a.candidates, 1, JSON.stringify(a)); assert.equal(a.checked, 1)
-  assert.equal(a.duplicate_copies.length, 1); assert.equal(a.duplicate_copies[0].opportunity_id, OPP); assert.equal(a.duplicate_copies[0].live_opportunity_id, 'opp-twin'); assert.equal(a.duplicate_copies[0].live_audited, true)
+  assert.equal(a.candidates, 2, JSON.stringify(a)); assert.equal(a.checked, 1); assert.deepEqual(a.not_checked, [])
+  assert.equal(a.duplicate_copies.length, 1); assert.equal(a.duplicate_copies[0].opportunity_id, OPP); assert.equal(a.duplicate_copies[0].live_opportunity_id, 'opp-twin'); assert.equal(a.duplicate_copies[0].live_listed, undefined)
   const sf = a.would_fix.find(w => w.opportunity_id === 'opp-twin' && w.action === 'sync_fields'); assert.ok(sf, JSON.stringify(a.would_fix))
   assert.equal(sf.after.opp.install, future); assert.match(sf.reason, /Install Date empty → .* \(Schedule tab\)/)
   assert.ok(!a.would_fix.some(w => w.opportunity_id === OPP && w.action === 'sync_fields'), 'nothing planned for the copy itself')
+  // one commission-site deal, for the live twin only — never for the copy
+  assert.deepEqual(a.would_fix.filter(w => w.action === 'create_deal').map(w => w.opportunity_id), ['opp-twin'])
+  // 1b. the live twin does not qualify on its own (no Install Date, no calendar install date, created in September — Todd Vietzen's
+  //     July job behind an October $0 copy): it is listed for review in the copy's place, nothing written, no deal, no hole
+  delete world.calendarJobs[0].installDate
+  const a2 = await run({ fix: true, dry: true })
+  assert.equal(a2.candidates, 2); assert.equal(a2.checked, 0); assert.deepEqual(a2.not_checked, [])
+  assert.equal(a2.duplicate_copies[0].live_listed, true)
+  const rv = a2.skipped_jobs.find(s => s.opportunity_id === 'opp-twin'); assert.ok(rv, JSON.stringify(a2.skipped_jobs)); assert.match(rv.reason, /outside the audit window on its own/)
+  assert.ok(!a2.would_fix.some(w => w.opportunity_id === 'opp-twin')); assert.ok(!a2.would_fix.some(w => w.action === 'create_deal'))
   // 2. an opp with no Install Date and an old created date qualifies through its calendar job's install date — and not without one
   reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
   world.opp.customFields = world.opp.customFields.filter(c => c.id !== INSTALL_FIELD); world.opp.createdAt = '2026-09-01T00:00:00.000Z'
@@ -543,8 +554,10 @@ test('coverage: a duplicate copy\'s live twin is audited in its place even outsi
   // 3. a cancelled booking is a checked job, listed under its own heading
   reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests()
   world.scheduleRows = [['2026-11-10', '2026-11-27', 'Fixture Calendar', 'CANCELLED', 'p2']]
+  world.deals = []
   const d = await run({ fix: true, dry: true })
-  assert.equal(d.candidates, 1); assert.equal(d.checked, 1); assert.equal(d.ok, 1)
+  assert.equal(d.candidates, 1); assert.equal(d.checked, 1); assert.equal(d.ok, 1); assert.deepEqual(d.not_checked, [])
+  assert.ok(!d.would_fix.some(w => w.action === 'create_deal'), 'a cancelled booking never gets a commission-site deal')
   assert.deepEqual(d.cancelled_bookings.map(x => [x.opportunity_id, x.outcome]), [[OPP, 'would move to abandoned']])
   world.opp.status = 'abandoned'
   const e = await run({ fix: true, dry: true })

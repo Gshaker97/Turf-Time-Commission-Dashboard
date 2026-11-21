@@ -2830,9 +2830,21 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
   //    look missing there. More than one opportunity for a Project ID, anywhere
   //    in the finished scan, is left for review.
   out.cancelled_bookings = []
+  const audited = new Set()   // opps that went through the contract/value check — the only ones that may get a commission-site deal
+  const arcErrored = new Set()
   for (let ci = 0; ci < cands.length; ci++) {
     const { op, pid, inst } = cands[ci]
     if (lookupBlocked) continue
+    // The live copy of a duplicate that does not qualify for the window on its own
+    // (Todd Vietzen: installed and paid in July, dragged in by an October $0 copy;
+    // ArcSite holds three approved proposals on that one Project ID and the
+    // commission site two Paid deals) is REPORTED, never written: it is old
+    // business, and the value rule cannot tell one job from two on a shared ID.
+    if (cands[ci].via) {
+      const item = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'ghl', reason: `live copy of ${cands[ci].via} — outside the audit window on its own (Install Date ${inst || 'none'}, created ${String(op.createdAt || '').slice(0, 10) || '?'}); listed for review, nothing written` }
+      out.skipped_jobs.push(item); log('SKIPPED', item)
+      continue
+    }
     // Duplicates (Garrison, Nov 21 2026): several non-lost opps on one Project ID
     // → ONE is live (an Inside/Outside pair: Outside; else the one the PM calendar
     // job points to; else the newest). The live one is audited and gets the
@@ -2861,10 +2873,10 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
         item.reason = ci.reason
       }
       out.duplicate_copies.push(item); log('DUPLICATE COPY', item)
-      // The live copy is audited in this copy's place, even when it falls outside
-      // the date window on its own (an Inside opp created in September with no
-      // Install Date): it is the one that must hold the contract, dates and price.
-      if (!queued.has(pick.live.id)) { queued.add(pick.live.id); cands.push({ op: pick.live, pid, inst: oppInstallDay(pick.live), via: op.id }); item.live_audited = true }
+      // A live copy that did not qualify on its own (no Install Date, no calendar
+      // install date, created before the window) is still accounted for: queued,
+      // and listed for review in this copy's place — see the `via` rule above.
+      if (!queued.has(pick.live.id)) { queued.add(pick.live.id); cands.push({ op: pick.live, pid, inst: oppInstallDay(pick.live), via: op.id }); item.live_listed = true }
       continue
     }
     const dupNote = pick && pick.copies.length ? `shares its Project ID with ${pick.copies.map(o => `${o.name || o.id} (${o.pipelineId === GHL_PIPELINES.outside.id ? 'Outside' : 'Inside'})`).join(', ')} — ${pick.reason}` : null
@@ -2906,6 +2918,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
         // Counted and named once per run — never read as "nothing signed".
         out.arcsite_errors = (out.arcsite_errors || 0) + 1
         if (!out.arcsite_error_sample) out.arcsite_error_sample = String(e.message || e).slice(0, 120)
+        arcErrored.add(op.id)
         continue
       }
       if (!signed.length) {
@@ -2985,7 +2998,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
         ghlContractsBehind = c.behind ? c.reason : null
         return c.behind ? c.reason : (wantValue != null && cur != null && !arcSame(cur, wantValue) ? `value ${arcUsd(cur)} vs ${arcUsd(wantValue)}` : null)
       }
-      out.checked++
+      out.checked++; audited.add(op.id)
       const calJob = calByOpp ? calByOpp.get(op.id) || null : null
       const base = { project_id: pid, customer: op.name, opportunity_id: op.id, install: inst, calendar_job: calJob ? calJob.jobNumber : null, value: op.monetaryValue, signed_total: want, sheet_price: sheet, newest: `Proposal ${newest.document_number || newest.proposal_id}${newest.total ? ` (${arcUsd(newest.total)})` : ''}`, shared_project_id: dupNote || undefined }
       // ── GHL ─────────────────────────────────────────────────────────────
@@ -3231,6 +3244,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
       }
     } catch (e) { out.identity.error = String(e.message || e).slice(0, 160) }
   }
+  out.candidates = cands.length   // includes live copies queued in a duplicate's place
   // ── Missing records (Garrison, Nov 21 2026): a Sheet-approved project with a
   //    signed ArcSite contract and NO GHL opportunity (JJ Patchin) → created
   //    through the normal sale path, quietly (no team text for an old sale); an
@@ -3262,7 +3276,11 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
     } catch (e) { out.created.error = String(e.message || e).slice(0, 160) }
     // Commission-site deals: every candidate with a Sheet row and a value, no deal with its Project ID.
     try {
+      const dealPlanned = new Set()   // one deal per Project ID per run
       for (const { op, pid } of cands) {
+        // Only the opp that was audited for this Project ID: a duplicate copy (Todd
+        // Vietzen "Turf Replacement"), an unresolved pair or a cancelled booking never gets a deal.
+        if (!audited.has(op.id) || dealPlanned.has(pid)) continue
         if (String(op.status || '').toLowerCase() !== 'open' && String(op.status || '').toLowerCase() !== 'won') continue
         if (!out.values[pid] || out.values[pid].total == null) continue
         const have = await restGet(`/rest/v1/deals?project_id=eq.${encodeURIComponent(pid)}&select=id&limit=1`).catch(() => null)
@@ -3274,6 +3292,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
         const approvedDate = toYMD(raw['Approved Date']) || null, rep = String(raw['Sales Rep'] || '').replace(/\(you\)/i, '').trim() || null
         // Estimators (salaried) never have commission-site deals — the site does not import them.
         if (rep && isEstimatorRep(rep)) continue
+        dealPlanned.add(pid)
         const item = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'site', action: 'create_deal', reason: `on the Sheet (approved ${approvedDate || '?'}, ${rep || 'rep unknown'}) and in GHL, no commission-site deal with this Project ID`, after: { deal_name: op.name, job_price: out.values[pid].total, baseline_revenue: row.baseline ?? null, sale_date: approvedDate, status: 'Pending Install', closer: rep } }
         if (dry) { out.would_fix.push(item); log('WOULD FIX', item); continue }
         if (capReached()) { skip(item, 'site', `daily fix cap (${maxFix}) reached — tomorrow's run continues`); continue }
@@ -3288,6 +3307,16 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
         await pause(300)
       }
     } catch (e) { out.created.deal_error = String(e.message || e).slice(0, 160) }
+  }
+  // Coverage: every candidate ends in exactly one place — checked (contracts /
+  // value / fields), a cancelled booking, a duplicate copy, a Closed-stage copy,
+  // listed for review, unsigned, a Project ID mismatch, or an ArcSite read
+  // error. Anything else is a hole in the audit and is named here.
+  if (!lookupBlocked) {
+    const listed = new Set([...audited, ...arcErrored])
+    for (const l of [out.cancelled_bookings, out.duplicate_copies, out.closed_copies || [], out.skipped_jobs, out.unsigned_closed, out.project_mismatch]) for (const it of l) if (it && it.opportunity_id) listed.add(it.opportunity_id)
+    out.not_checked = cands.filter(c => !listed.has(c.op.id)).map(c => ({ project_id: c.pid, customer: c.op.name, opportunity_id: c.op.id, status: c.op.status, reason: 'left no trace — a hole in the audit, needs a look' }))
+    for (const it of out.not_checked) log('NOT CHECKED', it)
   }
   return finish()
 }
