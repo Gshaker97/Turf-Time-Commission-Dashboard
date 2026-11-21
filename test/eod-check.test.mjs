@@ -42,8 +42,8 @@ test('every mismatch kind is detected and commission is ignored', () => {
   for (const k of ['price', 'install_date', 'closer', 'phone', 'address', 'calendar_zero_value', 'name', 'contract']) assert.ok(kinds.has(k), k)
   assert.ok(!r.issues.some(i => i.kind === 'commission' || /commission field/i.test(i.detail)), 'commission never compared')
   assert.equal(r.issues[0].severity, 'high', 'worst first')
-  const sms = eodSmsText(r)
-  assert.ok(sms.startsWith('Turf Time end-of-day check, Nov 13.')); assert.match(sms, /PRICE DOES NOT MATCH \(\d\)/); assert.match(sms, /- Camron & Bobbie Johnson \(J-1\): Sheet \$19,881\.77 vs GHL value \$19,000\.00/)
+  const sms = eodSmsText(r, { maxChars: 4000 })   // room for every detail line (the real text shrinks to names when it must)
+  assert.ok(sms.startsWith('Turf Time end-of-day check, Nov 13.')); assert.match(sms, /PRICE DOES NOT MATCH \((\d|\d findings on \d jobs?)\)/); assert.match(sms, /- Camron & Bobbie Johnson \(J-1\): Sheet \$19,881\.77 vs GHL value \$19,000\.00/)
   assert.match(sms, /INSTALL DATE DOES NOT MATCH[^\n]*\n- Camron & Bobbie Johnson \(J-1\): schedule Nov 27 vs GHL Nov 28/); assert.match(sms, /Full list with every job: \/api\/analyst\/eod\?day=2026-11-13/)
 })
 
@@ -307,4 +307,18 @@ test('the scope start is whatever the server passes (ARC_AUDIT_SINCE): Oct 1 cov
   assert.equal(buildEodReport({ ...p, scopeSince: '2026-10-13' }).checked, 0)
   const r = buildEodReport({ ...p, scopeSince: '2026-10-01' })
   assert.equal(r.checked, 1); assert.equal(r.scope_since, '2026-10-01'); assert.ok(r.issues.some(i => i.kind === 'price'))
+})
+
+test('a group count distinguishes findings from jobs, and the names line lists every job or says how many more', () => {
+  const p = base()
+  p.ghl.opportunities[0].value = 6200; p.calendarJobs[0].value = 6200   // two price findings on one job
+  const r = buildEodReport(p)
+  assert.equal(r.issues.filter(i => i.kind === 'price').length, 2)
+  assert.match(eodSmsText(r), /PRICE DOES NOT MATCH \(2 findings on 1 job\)/)
+  // compact mode (tiny budget): every job named, or "and N more"
+  assert.match(eodSmsText(r, { maxChars: 10 }), /PRICE DOES NOT MATCH \(2 findings on 1 job\)[^\n]*\n- Camron & Bobbie Johnson/)
+  const many = base(); many.sheetJobs.rows = []; many.ghl.opportunities = []; many.calendarJobs = []; many.siteDeals = []
+  many.sheetJobs.rows = Array.from({ length: 7 }, (_, i) => ({ ...base().sheetJobs.rows[0], Customer: `Job ${i}`, 'Project ID': `P${i}`, 'Proposal ID': `${i}` }))
+  const text = eodSmsText(buildEodReport(many), { maxChars: 10 })
+  assert.match(text, /OLDER SALES NOT IN GHL \(7\)[^\n]*\n- Job 0, Job 1, Job 2, Job 3, Job 4 and 2 more/)
 })
