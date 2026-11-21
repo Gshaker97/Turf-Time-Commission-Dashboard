@@ -56,6 +56,7 @@ function makeWorld(opportunities, proposals, extra = {}) {
     settings: new Map(extra.settings || []),
     calls: [],
     upserts: [],
+    contactPuts: [],
     creates: [],
     sms: [],
     puts: [],
@@ -184,7 +185,8 @@ globalThis.fetch = async (url, opts = {}) => {
     if (world.upsertStatus !== 200) return send(world.upsertStatus, { message: 'upsert failed' })
     return send(200, { contact: { id: world.upsertContactId || 'upserted-contact' } })
   }
-  if (method === 'PUT' && parsed.pathname.startsWith('/contacts/')) return send(200, { contact: { id: parsed.pathname.split('/').at(-1) } })
+  if (method === 'PUT' && parsed.pathname.startsWith('/contacts/')) { world.contactPuts.push({ id: parsed.pathname.split('/').at(-1), body }); return send(200, { contact: { id: parsed.pathname.split('/').at(-1) } }) }
+  if (method === 'GET' && /^\/contacts\/[^/]+$/.test(parsed.pathname) && !parsed.search) return send(200, { contact: { id: parsed.pathname.split('/').at(-1), customFields: [] } })
   if (parsed.pathname === '/conversations/messages' && method === 'POST') {
     world.smsAttempts = world.smsAttempts || []
     world.smsAttempts.push(body.contactId)
@@ -303,6 +305,12 @@ test('a later signed proposal updates the opportunity that already has the Proje
   assert.equal(texts(), 0)
   assert.equal(world.upserts[0].phone, '+15550100188')
   assert.equal(putIds().includes(KRISTINE_OPP), true)
+  // the CONTACT follows the sale: New Price and Job Price = the new total (Jonathan Kim, Nov 20 2026)
+  const contactPut = world.contactPuts.find(p => p.id === 'contact-b' && p.body.customFields.some(f => f.id === 'gz5Xoix8Sd37hUbrvQuQ'))
+  assert.ok(contactPut, JSON.stringify(world.contactPuts))
+  const cf = Object.fromEntries(contactPut.body.customFields.map(f => [f.id, f.field_value]))
+  assert.equal(cf.gz5Xoix8Sd37hUbrvQuQ, 4200); assert.equal(cf.X6s8Kc6QVEVyzSIISktA, 4200)
+  assert.equal(webhook.contact_refresh.ok, true)
 
   const putsAfterWebhook = world.puts.length
   resetArcSaleMemoryForTests()
