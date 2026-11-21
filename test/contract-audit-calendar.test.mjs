@@ -70,7 +70,7 @@ globalThis.fetch = async (url, opts = {}) => {
   if (parsed.origin === 'https://oauth2.googleapis.com') return send(200, { access_token: 't', expires_in: 3600 })
   if (parsed.hostname === 'sheets.googleapis.com') return send(200, { valueRanges: [
     { range: 'Jobs!A1:E2', values: [['Project ID', 'Baseline Cost', 'Approved Total', 'Pre-Tax Sale', 'Commission'], [PID, '1000', world.sheetTotal, world.sheetTotal, '200']] },
-    { range: 'Schedule!A1:A1', values: [['Project ID']] },
+    world.scheduleRows && world.scheduleRows.length ? { range: 'Schedule!A1:E9', values: [['Booked At', 'Install Date', 'Customer', 'Status', 'Proposal ID'], ...world.scheduleRows] } : { range: 'Schedule!A1:A1', values: [['Project ID']] },
   ] })
   if (parsed.hostname === 'cdn.example') {
     // ArcSite's signed render: HEAD answers the size, GET the bytes (or, when
@@ -414,4 +414,20 @@ test('a Lost opportunity is never revived: the audit does not audit it and the c
   const r = await mod.arcApplyChangeOrderForTests({ projectId: PID, opp: world.opp, customer: { name: 'Fixture Calendar' }, signed: [{ proposal_id: 'p2', total: 2000, pdf_url: 'https://cdn.example/new.pdf' }], newTotal: 13896.13 })
   assert.equal(r.ok, false); assert.equal(r.lost, true); assert.match(r.error, /lost — a dead deal is never changed/)
   assert.equal(world.oppPuts.length, 0); assert.equal(world.ingests.length, 0)
+})
+
+test('a booking cancelled on the Schedule tab: the contact is never written, listed with the reason (Renee Hallack, Kyle Moreo)', async () => {
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 6200 }]
+  world.scheduleRows = [['2026-11-10', '2026-11-27', 'Fixture Calendar', 'CANCELLED', 'p2']]
+  const audit = await run({ fix: true })
+  assert.equal(audit.cancelled_on_schedule, 1)
+  const sk = audit.skipped_jobs.find(x => x.target === 'contact'); assert.ok(sk, JSON.stringify(audit)); assert.match(sk.reason, /cancelled on the Schedule tab/)
+  assert.equal(world.contactPuts.length, 0)
+  // a later LIVE booking for the same project means it is not cancelled any more
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 6200 }]
+  world.scheduleRows = [['2026-11-10', '2026-11-27', 'Fixture Calendar', 'CANCELLED', 'p2'], ['2026-11-15', '2026-12-05', 'Fixture Calendar', 'BOOKED', 'p2']]
+  const again = await run({ fix: true })
+  assert.equal(again.cancelled_on_schedule, 0); assert.equal(again.fixed.filter(f => f.target === 'contact').length, 1)
 })
