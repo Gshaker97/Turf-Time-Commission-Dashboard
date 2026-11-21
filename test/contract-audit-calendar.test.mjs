@@ -70,7 +70,7 @@ globalThis.fetch = async (url, opts = {}) => {
   if (parsed.origin === 'https://oauth2.googleapis.com') return send(200, { access_token: 't', expires_in: 3600 })
   if (parsed.hostname === 'sheets.googleapis.com') return send(200, { valueRanges: [
     { range: 'Jobs!A1:F2', values: [['Project ID', 'Baseline Cost', 'Approved Total', 'Pre-Tax Sale', 'Commission', 'Proposal ID'], [PID, '1000', world.sheetTotal, world.sheetTotal, '200', 'p2']] },
-    world.scheduleRows && world.scheduleRows.length ? { range: 'Schedule!A1:E9', values: [['Booked At', 'Install Date', 'Customer', 'Status', 'Proposal ID'], ...world.scheduleRows] } : { range: 'Schedule!A1:A1', values: [['Project ID']] },
+    { range: 'Schedule!A1:E9', values: [['Booked At', 'Install Date', 'Customer', 'Status', 'Proposal ID'], ...((world.scheduleRows && world.scheduleRows.length) ? world.scheduleRows : [['', '', '', '', '']])] },   // parseTab needs a data row to keep the headers
   ] })
   if (parsed.hostname === 'cdn.example') {
     // ArcSite's signed render: HEAD answers the size, GET the bytes (or, when
