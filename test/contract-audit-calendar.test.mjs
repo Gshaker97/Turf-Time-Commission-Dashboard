@@ -176,20 +176,19 @@ test('both behind but GHL cannot be rebuilt (ArcSite link expired): the calendar
   assert.ok(!world.ingests.slice(0, -1).some(i => i.contracts.some(c => c.url === 'https://cdn.example/new.pdf')), 'only the audit push carried the newest PDF')
 })
 
-test('a manual hold freezes the VALUE only: contracts are still rebuilt and pushed, fields still flow, the frozen value is reported', async () => {
+test('a manual hold freezes nothing: value, contact prices, contracts and fields all flow; the hold is only reported', async () => {
   reset({ ghl: ['old'], cal: ['old'], value: 1500 }); resetArcSaleMemoryForTests()   // value $1,500 vs signed $2,000, files behind
   world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 1500 }, { id: 'X6s8Kc6QVEVyzSIISktA', value: 1500 }]
   process.env.ARC_VALUE_HOLD_OPPS = OPP
   try {
     const audit = await run({ fix: true })
-    assert.equal(audit.held.length, 1)
+    assert.equal(audit.held.length, 1, 'still listed as on hold')
     const co = audit.fixed.find(f => f.action === 'change_order'); assert.ok(co, JSON.stringify(audit)); assert.equal(co.pdf, 'rebuilt 2')
-    assert.equal(world.uploads.length, 2, 'contracts rebuilt despite the hold')
-    assert.ok(!world.oppPuts.some(p => p.monetaryValue != null || p.pipelineStageId), 'value and stage never written: ' + JSON.stringify(world.oppPuts))
-    assert.ok(!world.contactPuts.some(p => p.customFields.some(f => f.id === 'gz5Xoix8Sd37hUbrvQuQ')), 'contact prices frozen')
-    assert.ok(audit.skipped_jobs.some(s => /manual hold: value stays \$1,500\.00/.test(s.reason)), JSON.stringify(audit.skipped_jobs))
-    assert.ok(audit.skipped_jobs.some(s => s.target === 'fields' && /manual hold/.test(s.reason)))
-    assert.equal(world.ingests.length, 1); assert.equal(world.ingests[0].newTotal, 1500, 'calendar gets the contract, value unchanged')
+    assert.equal(world.uploads.length, 2)
+    assert.ok(world.oppPuts.some(p => p.monetaryValue === 2000), 'value written despite the hold: ' + JSON.stringify(world.oppPuts))
+    assert.ok(world.contactPuts.some(p => p.customFields.some(f => f.id === 'gz5Xoix8Sd37hUbrvQuQ' && Number(f.value ?? f.field_value) === 2000)), 'contact prices written')
+    assert.ok(!audit.skipped_jobs.some(s => /manual hold/.test(s.reason)), JSON.stringify(audit.skipped_jobs))
+    assert.equal(world.ingests.length, 1); assert.equal(world.ingests[0].newTotal, 2000, 'calendar gets the contract and the value')
   } finally { delete process.env.ARC_VALUE_HOLD_OPPS }
 })
 
@@ -400,14 +399,14 @@ test('the contact is checked on its own: a stale Job Price / New Price is set to
   assert.equal(by.gz5Xoix8Sd37hUbrvQuQ, 2000); assert.equal(by.X6s8Kc6QVEVyzSIISktA, 2000)
   assert.equal(by.BxSAZYBEeT5iBI67CfVW, undefined, 'contract field never written')
   assert.equal(world.oppPuts.length, 0, 'the opp itself was already right')
-  // in step → nothing written; dry → planned only; held → frozen and reported
+  // in step → nothing written; dry → planned only; held → written all the same
   reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
   const ok = await run({ fix: true }); assert.equal(world.contactPuts.length, 0); assert.equal(ok.fixed.length, 0)
   reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
   world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 6200 }]
   const d = await run({ fix: true, dry: true }); assert.equal(d.would_fix.filter(w => w.target === 'fields').length, 1); assert.equal(world.contactPuts.length, 0)
   process.env.ARC_VALUE_HOLD_OPPS = OPP
-  try { reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 6200 }]; const h = await run({ fix: true }); assert.ok(h.skipped_jobs.some(x => x.target === 'fields' && /manual hold/.test(x.reason))); assert.equal(world.contactPuts.length, 0) }
+  try { reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 6200 }]; const h = await run({ fix: true }); assert.ok(!h.skipped_jobs.some(x => /manual hold/.test(x.reason))); assert.equal(world.contactPuts.length, 1, 'a hold freezes nothing: the contact prices are written') }
   finally { delete process.env.ARC_VALUE_HOLD_OPPS }
 })
 
@@ -442,17 +441,23 @@ test('a Lost opportunity is never revived: the audit does not audit it and the c
   assert.equal(world.oppPuts.length, 0); assert.equal(world.ingests.length, 0)
 })
 
-test('Schedule tab cancelled → the opp goes to status abandoned and nothing else is written; rebooked → open + Closed and the fields flow again', async () => {
+test('Schedule tab cancelled → status abandoned and the Install Date comes off the opp and the contact; rebooked → open + prior stage and the dates flow again', async () => {
   reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests()
   world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 6200 }]
   world.scheduleRows = [['2026-11-10', '2026-11-27', 'Fixture Calendar', 'CANCELLED', 'p2']]
+  world.contact.customFields.push({ id: 'IMYajaM4Jv4eOG65exQZ', value: future })
   const audit = await run({ fix: true })
   const c = audit.fixed.find(f => f.action === 'cancel'); assert.ok(c, JSON.stringify(audit)); assert.deepEqual(c.after, { status: 'abandoned' }); assert.deepEqual(c.before, { status: 'open', stage: undefined })
-  assert.ok(world.oppPuts.some(p => p.status === 'abandoned')); assert.equal(world.contactPuts.length, 0); assert.equal(world.ingests.length, 0); assert.equal(world.uploads.length, 0)
+  assert.ok(world.oppPuts.some(p => p.status === 'abandoned')); assert.equal(world.ingests.length, 0); assert.equal(world.uploads.length, 0)
   assert.equal(audit.status_changes.length, 1)
+  // the Install Date comes off the opp and the contact until the job is rebooked; nothing else is written to the contact
+  const ci = audit.fixed.find(f => f.action === 'clear_install_date'); assert.ok(ci, JSON.stringify(audit.fixed)); assert.deepEqual(ci.before, { oppInstall: future, contactInstall: future })
+  assert.ok(world.oppPuts.some(p => (p.customFields || []).some(f => f.id === INSTALL_FIELD && f.field_value === '')), JSON.stringify(world.oppPuts))
+  assert.deepEqual(world.contactPuts.map(p => p.customFields.map(f => [f.id, f.value ?? f.field_value])), [[['IMYajaM4Jv4eOG65exQZ', '']]])
+  assert.equal(audit.cancelled_bookings[0].install_date, 'removed from opp and contact')
   // dry mode plans it
   reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests(); world.scheduleRows = [['2026-11-10', '2026-11-27', 'Fixture Calendar', 'CANCELLED', 'p2']]
-  const d = await run({ fix: true, dry: true }); assert.ok(d.would_fix.some(w => w.action === 'cancel')); assert.equal(world.oppPuts.length, 0)
+  const d = await run({ fix: true, dry: true }); assert.ok(d.would_fix.some(w => w.action === 'cancel')); assert.ok(d.would_fix.some(w => w.action === 'clear_install_date')); assert.equal(world.oppPuts.length, 0); assert.equal(world.contactPuts.length, 0)
   // rebooked: a live row after the cancelled one, opp abandoned → open + Closed, then fields and contracts
   reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
   world.opp.status = 'abandoned'
@@ -561,5 +566,5 @@ test('coverage: a duplicate copy\'s live twin is audited in its place even outsi
   assert.deepEqual(d.cancelled_bookings.map(x => [x.opportunity_id, x.outcome]), [[OPP, 'would move to abandoned']])
   world.opp.status = 'abandoned'
   const e = await run({ fix: true, dry: true })
-  assert.equal(e.checked, 1); assert.equal(e.cancelled_bookings[0].outcome, 'already abandoned, nothing written'); assert.equal(e.would_fix.length, 0)
+  assert.equal(e.checked, 1); assert.equal(e.cancelled_bookings[0].outcome, 'already abandoned'); assert.deepEqual(e.would_fix.map(w => w.action), ['clear_install_date'], 'only the Install Date comes off')
 })

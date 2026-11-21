@@ -2516,7 +2516,10 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
   if (['lost', 'abandoned'].includes(String(opp && opp.status || '').toLowerCase())) return { ok: false, lost: true, via, project_id: projectId, customer: customer && customer.name, opportunity_id: opp.id, error: `opportunity is ${opp.status} — a dead deal is never changed` }
   // A manual hold freezes the VALUE only (Garrison, Nov 21 2026): contracts and
   // fields still flow; the value/stage/contact-price writes are skipped and reported.
-  freezeValue = freezeValue || arcHeld(opp)
+  // A manual hold (ARC_VALUE_HOLD_OPPS) freezes nothing (Garrison, Nov 21 2026): a
+  // held job gets its value, prices, fields, dates, PM and newest contract like any
+  // other; the hold is a watch list that is reported, never a freeze.
+  freezeValue = !!freezeValue
   const pipe = opp.pipelineId === GHL_PIPELINES.estimator.id ? GHL_PIPELINES.estimator : GHL_PIPELINES.outside
   const cur = opp.monetaryValue != null ? Math.round(Number(opp.monetaryValue) * 100) / 100 : null
   // THE AI SHEET IS THE SOURCE OF TRUTH FOR THE MONEY (per Garrison): the value
@@ -2892,6 +2895,23 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
     const statusLedger = await arcStatusLedger()
     const isEst = op.pipelineId === GHL_PIPELINES.estimator.id
     const rebookStage = (statusLedger[op.id] && statusLedger[op.id].stage_before) || (isEst ? ARC_DEAL_REVIEWED_STAGES.estimator : ARC_DEAL_REVIEWED_STAGES.outside)
+    // A cancelled booking loses its Install Date on the opp and the contact until
+    // the Schedule tab books it again; the rebook path then fills both from the
+    // Schedule tab (Garrison, Nov 21 2026).
+    const clearInstall = async why => {
+      let contactInst = null
+      if (op.contactId) { const got = await ghlGet(`/contacts/${op.contactId}`).catch(() => null); const contact = (got && got.contact) || null; const f = contact ? (contact.customFields || []).find(x => x.id === GHL_CONTACT_INSTALL_DATE_FIELD) : null; const v = f ? (f.value ?? f.fieldValue) : null; contactInst = v ? String(v).slice(0, 10) : null }
+      if (!inst && !contactInst) return null
+      const item = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'fields', action: 'clear_install_date', before: { oppInstall: inst || null, contactInstall: contactInst }, after: { oppInstall: null, contactInstall: null }, reason: `${why} — Install Date removed from the opp and the contact until the job is back on the calendar` }
+      if (dry) { out.would_fix.push(item); log('WOULD FIX', item); return item }
+      if (capReached()) { skip(item, 'fields', `daily fix cap (${maxFix}) reached — tomorrow's run continues`); return item }
+      try {
+        if (inst) await ghlUpdateOpp(op.id, { customFields: [{ id: GHL_OPP_FIELD_IDS.install_date, field_value: '' }] })
+        if (contactInst) await ghlContactSetFields(op.contactId, [{ id: GHL_CONTACT_INSTALL_DATE_FIELD, value: '' }])
+        out.fixed.push(item); log('FIXED', item)
+      } catch (e) { item.error = e.message; out.failed.push(item); log('FAILED', item) }
+      return item
+    }
     const sp = scheduleOk ? statusPlan({ schedule, opp: op, closedStageId: rebookStage, cancelledStageId: ARC_CANCELLED_STAGE_ID }) : { action: null }
     if (sp.action) {
       const item = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'ghl', action: sp.action, before: { status: op.status, stage: op.pipelineStageId }, after: sp.write, reason: sp.reason }
@@ -2903,11 +2923,12 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
       }
       // A cancelled booking gets nothing else written — but it IS a checked job:
       // counted, and listed under its own heading with what the run did to it.
-      if (sp.action === 'cancel') { out.checked++; out.ok++; out.cancelled_bookings.push({ project_id: pid, customer: op.name, opportunity_id: op.id, schedule_date: schedule.date || null, outcome: dry ? 'would move to abandoned' : (item.error ? 'move to abandoned FAILED' : 'moved to abandoned') }); continue }
+      if (sp.action === 'cancel') { const cl = await clearInstall('cancelled on the Schedule tab'); out.checked++; out.ok++; out.cancelled_bookings.push({ project_id: pid, customer: op.name, opportunity_id: op.id, schedule_date: schedule.date || null, outcome: dry ? 'would move to abandoned' : (item.error ? 'move to abandoned FAILED' : 'moved to abandoned'), install_date: cl ? (dry ? 'would be removed from opp and contact' : (cl.error ? 'removal FAILED' : 'removed from opp and contact')) : 'already empty' }); continue }
     }
     if (schedule.state === 'cancelled' || String(op.status || '').toLowerCase() === 'abandoned') {   // cancelled and not rebooked: nothing else
+      const cl = await clearInstall(String(op.status || '').toLowerCase() === 'abandoned' ? 'already abandoned' : 'cancelled on the Schedule tab')
       out.checked++; out.ok++
-      out.cancelled_bookings.push({ project_id: pid, customer: op.name, opportunity_id: op.id, schedule_date: schedule.date || null, outcome: String(op.status || '').toLowerCase() === 'abandoned' ? 'already abandoned, nothing written' : 'cancelled on the Schedule tab, status left as is' })
+      out.cancelled_bookings.push({ project_id: pid, customer: op.name, opportunity_id: op.id, schedule_date: schedule.date || null, outcome: String(op.status || '').toLowerCase() === 'abandoned' ? 'already abandoned' : 'cancelled on the Schedule tab, status left as is', install_date: cl ? (dry ? 'would be removed from opp and contact' : (cl.error ? 'removal FAILED' : 'removed from opp and contact')) : 'already empty' })
       continue
     }
     try {
@@ -3017,14 +3038,13 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
         const gap = { ...base, target: 'ghl', contracts: `${oppContractEntries(opp).length} attached / ${signed.length} signed`, reason: ghlReason }
         out.gaps.push(gap)
         const valueOff = wantValue != null && !arcSame(wantValue, opp.monetaryValue)
-        if (held && !ghlContractsBehind) skip(gap, 'ghl', `manual hold (ARC_VALUE_HOLD_OPPS): value stays ${arcUsd(opp.monetaryValue)} (ArcSite/Sheet say ${arcUsd(wantValue)}) — nothing written`)
-        else if (dry) plan(gap, 'ghl', { action: 'change_order', source: 'arcsite', note: `${ghlContractsBehind ? 'rebuild contracts from ArcSite' : 'contracts kept'}${held ? (valueOff ? `; value FROZEN by manual hold (stays ${arcUsd(opp.monetaryValue)}, would be ${arcUsd(wantValue)})` : '') : valueOff ? `, value → ${arcUsd(wantValue)}` : disputed ? ', value left (sheet ≠ ArcSite)' : ''}` })
+        if (dry) plan(gap, 'ghl', { action: 'change_order', source: 'arcsite', note: `${ghlContractsBehind ? 'rebuild contracts from ArcSite' : 'contracts kept'}${valueOff ? `, value → ${arcUsd(wantValue)}` : disputed ? ', value left (sheet ≠ ArcSite)' : ''}` })
         else if (capReached()) skip(gap, 'ghl', `daily fix cap (${maxFix}) reached — tomorrow's run continues`)
         else {
           const project = await arcGet(`/projects/${pid}`).catch(() => null)
           const c = (project && project.customer) || {}, a = c.address || {}
           const customer = { name: c.name || opp.name || 'Customer', phone: c.phone || null, email: c.email || null, address1: a.street || null, city: a.city || null, state: a.state || null, postalCode: a.zip_code || null }
-          const r = await arcApplyChangeOrder(pid, { opp, contactId: opp.contactId || null, customer, signed, newTotal: want, via: 'daily_audit', contractsBehind: ghlContractsBehind, freezeValue: held })
+          const r = await arcApplyChangeOrder(pid, { opp, contactId: opp.contactId || null, customer, signed, newTotal: want, via: 'daily_audit', contractsBehind: ghlContractsBehind, freezeValue: false })
           if (r.value_frozen) skip({ ...gap, contracts: undefined }, 'ghl', r.value_frozen)
           await arcLog(r)
           const cal = r.calendar && typeof r.calendar === 'object' ? (r.calendar.job ? r.calendar.job.jobNumber : r.calendar.error || null) : r.calendar
@@ -3055,7 +3075,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
           oppPrice: oppFieldVal(opp, GHL_OPP_FIELD_IDS.price), contactJobPrice: contactFieldNumber(contact, GHL_CONTACT_JOB_PRICE_FIELD), contactNewPrice: contactFieldNumber(contact, GHL_CONTACT_NEW_PRICE_FIELD),
         }
         const wantFields = { install: schedule.state === 'live' ? schedule.date : null, pm: calJob && calJob.pm && calJob.pm.name ? calJob.pm.name : null, value: wantValue }
-        const fp = fieldPlan(cur, wantFields, { held, disputed })
+        const fp = fieldPlan(cur, wantFields, { held: false, disputed })   // a hold freezes nothing
         if (fp.frozen.length) skip({ ...base, target: 'fields' }, 'fields', `manual hold: ${fp.frozen.join(', ')} stay as they are (would be ${arcUsd(wantValue)})`)
         if (fp.any && !scheduleOk) skip({ ...base, target: 'fields', reason: fp.reasons.join('; ') }, 'fields', `Schedule tab unavailable this run (${out.schedule_error}) — field writes held`)
         else if (fp.any) {
@@ -3119,7 +3139,6 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
             out.gaps.push(gap)
             const src = null
             if (arcIsCancelled(cancelledProjects, pid, signed)) skip(gap, 'contact', 'cancelled on the Schedule tab — contact left alone')
-            else if (held) skip(gap, 'contact', 'manual hold (ARC_VALUE_HOLD_OPPS) — nothing written')
             else if (dry) plan(gap, 'contact', { action: 'contact_refresh', source: src ? src.source : null, value: priceBehind ? arcUsd(wantValue) : 'unchanged', contract: contractBehind ? 'append newest' : 'unchanged' })
             else if (capReached()) skip(gap, 'contact', `daily fix cap (${maxFix}) reached — tomorrow's run continues`)
             else {
@@ -3162,7 +3181,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
       // A disputed (or unknown) value leaves the calendar's value exactly as it
       // is: the ingest only changes a value that differs from what it is sent.
       const push = source => arcCalendarPushContract({ oppId: op.id, contactId: op.contactId || null, projectId: pid, customerName: c.name || op.name, job: calJob, source,
-        newTotal: wantValue != null && !held ? wantValue : calJob.value, previousTotal: calJob.value, newestLabel: base.newest })
+        newTotal: wantValue != null ? wantValue : calJob.value, previousTotal: calJob.value, newestLabel: base.newest })
       let used = src
       let r = await push(src)
       // "Nothing imported" from a GHL-hosted copy does not prove the calendar
@@ -3381,7 +3400,7 @@ async function arcValueSweep() {
         if (r && r.ok && !r.ignored && r.fields_ok !== false) { seen[pid] = mark; changed = true }
         continue
       }
-      if (arcHeld(opp)) { out.held = (out.held || 0) + 1; continue }   // manual hold: never verified, never stamped
+      if (arcHeld(opp)) out.held = (out.held || 0) + 1   // on the watch list: counted, then treated like any other job
       const cur = opp.monetaryValue != null ? Math.round(Number(opp.monetaryValue) * 100) / 100 : null
       const signed = await arcSignedContracts(pid)
       // The whole job, add-ons summed — not just the newest signing.
@@ -3746,7 +3765,6 @@ async function arcsiteToGhl(rawBody, { dryRun = false, quiet = false } = {}) {
   // Contact upsert happens after the Project ID decision. An invalid phone is
   // omitted; a failed upsert must not turn into a second opportunity.
   let contactId = existing?.contactId || existing?.contact_id || null
-  if (arcHeld(existing)) return arcSaleBlocked(projectId, 'held', { state: 'manual_hold', reason: 'ARC_VALUE_HOLD_OPPS', opportunity_id: existing.id })
   try {
     const upserted = await ghlUpsertContact(person)
     if (upserted) contactId = upserted
