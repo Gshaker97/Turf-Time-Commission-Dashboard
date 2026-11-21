@@ -322,3 +322,13 @@ test('a group count distinguishes findings from jobs, and the names line lists e
   const text = eodSmsText(buildEodReport(many), { maxChars: 10 })
   assert.match(text, /OLDER SALES NOT IN GHL \(7\)[^\n]*\n- Job 0, Job 1, Job 2, Job 3, Job 4 and 2 more/)
 })
+
+test('a Paid deal behind a change order is named in the 9 PM text with old and new numbers, never rewritten', () => {
+  const p = base()
+  p.contractAudit = { gaps: [], values: {}, sheet_gaps: [], deals_paid_changed: [{ project_id: 'P9', customer: 'Isaac Rosas', opportunity_id: 'o9', change_order: '2026-11-19', newest: 'Proposal 638077', before: { job_price: 17971.6, baseline_revenue: 15100.09, commission: null }, after: { job_price: 19104.9, baseline_revenue: 16022.2, commission: 3082.7 } }] }
+  const r = buildEodReport(p)
+  const it = r.issues.find(i => i.kind === 'deal_paid_changed'); assert.ok(it, JSON.stringify(r.issues))
+  const text = eodSmsText(r)
+  assert.match(text, /PAID DEAL BEHIND A CHANGE ORDER \(1\)/)
+  assert.match(text, /Isaac Rosas: change order Nov 19 \(Proposal 638077\): the Paid deal still holds job price \$17,971\.60 \/ baseline \$15,100\.09; the Sheet's newest row says \$19,104\.90 \/ \$16,022\.20 \(commission \$3,082\.70\): not rewritten, needs a person/)
+})
