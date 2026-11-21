@@ -568,3 +568,25 @@ test('coverage: a duplicate copy\'s live twin is audited in its place even outsi
   const e = await run({ fix: true, dry: true })
   assert.equal(e.checked, 1); assert.equal(e.cancelled_bookings[0].outcome, 'already abandoned'); assert.deepEqual(e.would_fix.map(w => w.action), ['clear_install_date'], 'only the Install Date comes off')
 })
+
+test('a finished job never takes a later project\'s Project Manager from its reused calendar job (Jacob Bietsch, Laura Otero): reported, nothing written', async () => {
+  const past = '2026-10-23'
+  // installed Oct 23 (Schedule tab and opp agree); the calendar job's PM was later switched to Eli Larson for a second project
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  world.opp.customFields = world.opp.customFields.map(c => c.id === INSTALL_FIELD ? { id: INSTALL_FIELD, fieldValueString: past } : c)
+  world.opp.customFields.push({ id: 'AhZIAHEvjwpCdNadOhpO', fieldValueString: 'Eddie Mendoza' })
+  world.contact.customFields.push({ id: 'IMYajaM4Jv4eOG65exQZ', value: past }, { id: 'TaIA7I6tkXzCmOGnfxHV', value: 'Eddie Mendoza' })
+  world.calendarJobs[0].installDate = past; world.calendarJobs[0].pm = { name: 'Eli Larson' }
+  world.scheduleRows = [['2026-10-10', past, 'Fixture Calendar', 'BOOKED', 'p2']]
+  const a = await run({ fix: true, dry: true, since: '2026-10-01' })   // the window must reach the October install
+  assert.ok(!a.would_fix.some(w => w.action === 'sync_fields' && (w.after.opp.pm || w.after.contact.pm)), JSON.stringify(a.would_fix))
+  assert.equal(a.later_projects.length, 1); assert.match(a.later_projects[0].reason, /installed 2026-10-23; the calendar job J-77 now shows Project Manager Eli Larson \(the opp has Eddie Mendoza\) — a later project/)
+  assert.equal(a.checked, 1)
+  // the same switch on a job that has NOT installed yet is a real PM change and is written
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  world.opp.customFields.push({ id: 'AhZIAHEvjwpCdNadOhpO', fieldValueString: 'Eddie Mendoza' })
+  world.calendarJobs[0].installDate = future; world.calendarJobs[0].pm = { name: 'Eli Larson' }
+  world.scheduleRows = [['2026-11-10', future, 'Fixture Calendar', 'BOOKED', 'p2']]
+  const b = await run({ fix: true, dry: true })
+  const sf = b.would_fix.find(w => w.action === 'sync_fields'); assert.ok(sf, JSON.stringify(b.would_fix)); assert.equal(sf.after.opp.pm, 'Eli Larson'); assert.equal(b.later_projects.length, 0)
+})

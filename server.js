@@ -2833,6 +2833,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
   //    look missing there. More than one opportunity for a Project ID, anywhere
   //    in the finished scan, is left for review.
   out.cancelled_bookings = []
+  out.later_projects = []   // finished jobs whose calendar job now carries a later project's PM
   const audited = new Set()   // opps that went through the contract/value check — the only ones that may get a commission-site deal
   const arcErrored = new Set()
   for (let ci = 0; ci < cands.length; ci++) {
@@ -3074,7 +3075,22 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
           oppPm: oppFieldVal(opp, GHL_OPP_PM_FIELD), contactPm: cf(GHL_CONTACT_PM_FIELD),
           oppPrice: oppFieldVal(opp, GHL_OPP_FIELD_IDS.price), contactJobPrice: contactFieldNumber(contact, GHL_CONTACT_JOB_PRICE_FIELD), contactNewPrice: contactFieldNumber(contact, GHL_CONTACT_NEW_PRICE_FIELD),
         }
-        const wantFields = { install: schedule.state === 'live' ? schedule.date : null, pm: calJob && calJob.pm && calJob.pm.name ? calJob.pm.name : null, value: wantValue }
+        // A finished job (its install date has passed) never takes the Project
+        // Manager of a later project that reuses its calendar job (Jacob Bietsch,
+        // Laura Otero, Nov 21 2026: the calendar job's PM was switched to Eli
+        // Larson for a second project weeks after the first was installed). A
+        // calendar PM that differs on a finished job is reported as a later
+        // project with no opp of its own; nothing is written.
+        const calPm = calJob && calJob.pm && calJob.pm.name ? calJob.pm.name : null
+        const jobDay = (schedule.state === 'live' ? schedule.date : null) || cur.oppInstall || cur.calendarInstall || null
+        const finished = !!(jobDay && jobDay < out.day)
+        let wantPm = calPm
+        if (finished && calPm && String(calPm).trim() !== String(cur.oppPm || '').trim()) {
+          wantPm = null
+          const lp = { ...base, target: 'fields', reason: `installed ${jobDay}; the calendar job ${calJob.jobNumber} now shows Project Manager ${calPm} (the opp has ${cur.oppPm || 'none'}) — a later project reusing this job, with no opp of its own; nothing written` }
+          out.later_projects.push(lp); log('LATER PROJECT', lp)
+        }
+        const wantFields = { install: schedule.state === 'live' ? schedule.date : null, pm: wantPm, value: wantValue }
         const fp = fieldPlan(cur, wantFields, { held: false, disputed })   // a hold freezes nothing
         if (fp.frozen.length) skip({ ...base, target: 'fields' }, 'fields', `manual hold: ${fp.frozen.join(', ')} stay as they are (would be ${arcUsd(wantValue)})`)
         if (fp.any && !scheduleOk) skip({ ...base, target: 'fields', reason: fp.reasons.join('; ') }, 'fields', `Schedule tab unavailable this run (${out.schedule_error}) — field writes held`)
