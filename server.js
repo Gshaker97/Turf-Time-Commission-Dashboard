@@ -2280,10 +2280,14 @@ function contactContractEntries(contact) {
   for (const c of ((contact && contact.customFields) || [])) {
     if (c.id !== GHL_CONTACT_CONTRACT_FIELD) continue
     let v = c.value ?? c.fieldValue ?? c.fieldValueFiles ?? null
-    if (typeof v === 'string') v = v.trim() ? [{ url: v }] : []
+    if (typeof v === 'string') v = v.trim() ? [v] : []
     if (v && !Array.isArray(v) && typeof v === 'object') v = Object.values(v)
-    return (Array.isArray(v) ? v : []).filter(x => x && !x.deleted && (x.url || (x.meta && (x.meta.url || x.meta.originalUrl))))
-      .map(x => ({ url: x.url || x.meta.url || x.meta.originalUrl, name: (x.meta && (x.meta.originalname || x.meta.name || x.meta.filename)) || 'contract.pdf', size: (x.meta && Number(x.meta.size) > 0) ? Number(x.meta.size) : null }))
+    // A URL written through the API is stored by GHL as a bare STRING (no
+    // document, no size); a document uploaded in GHL is an object with meta.
+    // Both count as a file on the contact; only the object form has a size.
+    return (Array.isArray(v) ? v : []).map(x => typeof x === 'string' ? { url: x } : x)
+      .filter(x => x && !x.deleted && (x.url || (x.meta && (x.meta.url || x.meta.originalUrl))))
+      .map(x => ({ url: x.url || x.meta.url || x.meta.originalUrl, name: (x.meta && (x.meta.originalname || x.meta.name || x.meta.filename)) || String(x.url || '').split('/').pop() || 'contract.pdf', size: (x.meta && Number(x.meta.size) > 0) ? Number(x.meta.size) : null }))
   }
   return []
 }
@@ -2299,13 +2303,13 @@ async function arcRefreshContactSale({ contactId, total = null, installDate = nu
   const fields = []
   if (total != null) fields.push({ id: GHL_CONTACT_NEW_PRICE_FIELD, value: total }, { id: GHL_CONTACT_JOB_PRICE_FIELD, value: total })
   if (installDate && /^\d{4}-\d{2}-\d{2}$/.test(String(installDate))) fields.push({ id: GHL_CONTACT_INSTALL_DATE_FIELD, value: String(installDate) })
-  let contract = 'unchanged'
-  if (contractUrl) {
-    const got = await ghlGet(`/contacts/${contactId}`).catch(() => null)
-    const have = contactContractEntries((got && got.contact) || got || {}).map(e => e.url).filter(Boolean)
-    if (have.includes(contractUrl)) contract = 'already there'
-    else { fields.push({ id: GHL_CONTACT_CONTRACT_FIELD, value: [...have, contractUrl] }); contract = 'appended' }
-  }
+  // The contact's contract field is NOT written through the API any more.
+  // GHL stores a URL written this way as a bare string — not a document with
+  // a size — which the install calendar's import ignores; and re-writing the
+  // field turns the documents already there into strings (Nov 21 2026 run:
+  // 226 contacts). Contracts on the contact stay a human/GHL upload; the audit
+  // only reports them. The opp's Contract/PDF field remains the system's copy.
+  const contract = contractUrl ? 'not written (GHL stores API-written URLs as plain strings; the opp field carries the contract)' : 'unchanged'
   if (!fields.length) return { ok: true, set: [], contract }
   try { await ghlContactSetFields(contactId, fields); return { ok: true, set: fields.map(f => f.id), contract } }
   catch (e) { return { ok: false, error: e.message || 'contact update failed', contract } }
@@ -2908,17 +2912,21 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
           const priceBehind = wantValue != null && ((jp != null && !arcSame(jp, wantValue)) || (np != null && !arcSame(np, wantValue)) || (jp == null && np == null))
           const files = contactContractEntries(contact)
           const sizes = files.map(f => f.size).filter(Boolean)
+          // The contact's contract field is REPORTED, never written (see
+          // arcRefreshContactSale): a bare-URL entry has no size, so it is
+          // 'unverified' — never "no contract", never pushed again.
           const contractState = !files.length ? 'no_contract' : (!newestSize || !sizes.length) ? 'unverified' : sizes.includes(newestSize) ? 'current' : (sizeUnique ? 'behind' : 'ambiguous')
-          const contractBehind = contractState === 'no_contract' || contractState === 'behind'
+          out.contact.contract = out.contact.contract || { current: 0, behind: 0, no_contract: 0, unverified: 0, ambiguous: 0 }
+          out.contact.contract[contractState] = (out.contact.contract[contractState] || 0) + 1
+          const contractBehind = false
           if (contractState === 'unverified' || contractState === 'ambiguous') out.contact.unverified++
           if (!priceBehind && !contractBehind) out.contact.current++
           else {
             const reasons = []
             if (priceBehind) { out.contact.price_behind++; reasons.push(`contact Job Price ${jp == null ? 'empty' : arcUsd(jp)} / New Price ${np == null ? 'empty' : arcUsd(np)} vs ${arcUsd(wantValue)}`) }
-            if (contractBehind) { out.contact.contract_behind++; reasons.push(contractState === 'no_contract' ? 'no contract on the contact' : `contact holds ${files.length} contract${files.length === 1 ? '' : 's'} (${sizes.join(', ')} bytes) but not the newest signed PDF (${newestSize} bytes)`) }
             const gap = { ...base, target: 'contact', reason: reasons.join('; ') }
             out.gaps.push(gap)
-            const src = contractBehind ? calendarPushSource({ entries: oppContractEntries(opp), newestSize, newest, customerName: op.name }) : null
+            const src = null
             if (arcIsCancelled(cancelledProjects, pid, signed)) skip(gap, 'contact', 'cancelled on the Schedule tab — contact left alone')
             else if (held) skip(gap, 'contact', 'manual hold (ARC_VALUE_HOLD_OPPS) — nothing written')
             else if (dry) plan(gap, 'contact', { action: 'contact_refresh', source: src ? src.source : null, value: priceBehind ? arcUsd(wantValue) : 'unchanged', contract: contractBehind ? 'append newest' : 'unchanged' })
