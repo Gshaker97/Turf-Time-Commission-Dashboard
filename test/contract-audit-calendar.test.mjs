@@ -363,3 +363,18 @@ test('ArcSite rate-limited (429): the job is counted as NOT checked and the run 
   assert.equal(audit.checked, 0); assert.equal(audit.ok, 0); assert.equal(audit.arcsite_errors, 1)
   assert.match(audit.skipped, /ArcSite did not answer for 1 of 1 jobs \(ArcSite 429/); assert.equal(world.ingests.length, 0); assert.equal(world.uploads.length, 0)
 })
+
+test('a Lost opportunity is never revived: the audit does not audit it and the change-order path refuses it', async () => {
+  // 1. the audit: a lost opp with a stale value and missing files is not a candidate at all
+  reset({ ghl: ['old'], cal: ['old'], value: 6200 }); resetArcSaleMemoryForTests()
+  world.opp.status = 'lost'
+  const audit = await run({ fix: true })
+  assert.equal(audit.candidates, 0); assert.equal(audit.fixed.length, 0); assert.equal(world.oppPuts.length, 0); assert.equal(world.uploads.length, 0); assert.equal(world.ingests.length, 0)
+  // 2. the change-order path itself (webhook / manual / sweep callers): refused with the reason, nothing written
+  const { arcsiteToGhl } = await import('../server.js')
+  void arcsiteToGhl
+  const mod = await import('../server.js')
+  const r = await mod.arcApplyChangeOrderForTests({ projectId: PID, opp: world.opp, customer: { name: 'Fixture Calendar' }, signed: [{ proposal_id: 'p2', total: 2000, pdf_url: 'https://cdn.example/new.pdf' }], newTotal: 13896.13 })
+  assert.equal(r.ok, false); assert.equal(r.lost, true); assert.match(r.error, /lost — a dead deal is never changed/)
+  assert.equal(world.oppPuts.length, 0); assert.equal(world.ingests.length, 0)
+})
