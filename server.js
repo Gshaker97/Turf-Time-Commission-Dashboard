@@ -2494,6 +2494,10 @@ async function arcCalendarPushContract({ oppId, contactId, projectId, customerNa
 }
 
 async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed, newTotal, via, dry = false, contractsBehind = null }) {
+  // A lost/abandoned opportunity is a dead deal: never re-valued, never moved
+  // to Change Order, never re-filed (Garrison, Nov 20 2026 — a dead deal must
+  // not come back to life; the live opportunity is the one to fix).
+  if (['lost', 'abandoned'].includes(String(opp && opp.status || '').toLowerCase())) return { ok: false, lost: true, via, project_id: projectId, customer: customer && customer.name, opportunity_id: opp.id, error: `opportunity is ${opp.status} — a dead deal is never changed` }
   if (arcHeld(opp)) return { ok: false, held: true, via, project_id: projectId, customer: customer && customer.name, opportunity_id: opp.id, error: 'opportunity is on a manual hold (ARC_VALUE_HOLD_OPPS) — nothing written' }
   const pipe = opp.pipelineId === GHL_PIPELINES.estimator.id ? GHL_PIPELINES.estimator : GHL_PIPELINES.outside
   const cur = opp.monetaryValue != null ? Math.round(Number(opp.monetaryValue) * 100) / 100 : null
@@ -5671,7 +5675,8 @@ export function resetArcSaleMemoryForTests() {
   _sheetCache = { at: 0, data: null }
   _arcEnrich.clear()
 }
-export { arcsiteToGhl, arcValueSweep, arcContractAudit, sendSaleAlert, resetArcCalendarLedgerForTests, eodRun }
+const arcApplyChangeOrderForTests = ({ projectId, opp, customer, signed, newTotal }) => arcApplyChangeOrder(projectId, { opp, contactId: opp.contactId || null, customer, signed, newTotal, via: 'test' })
+export { arcsiteToGhl, arcValueSweep, arcContractAudit, sendSaleAlert, resetArcCalendarLedgerForTests, eodRun, arcApplyChangeOrderForTests }
 
 const port = process.env.PORT || 3000
 if (process.env.ARC_NO_LISTEN !== '1') {
