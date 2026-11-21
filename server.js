@@ -27,7 +27,7 @@ import { validatePrivatePolicy } from './lib/verified-sheet-policy.mjs'
 import * as arcViews from './lib/analyst-arcsite-views.mjs'
 import { readBackAndRepair } from './lib/ghl-opp-readback.mjs'
 import { buildEodReport, eodSmsText } from './lib/eod-check.mjs'
-import { arcJobValue, sheetTotalFor, describeJobValue } from './lib/arcsite-job-value.mjs'
+import { arcJobValue, sheetTotalFor, describeJobValue, sheetRollupFor } from './lib/arcsite-job-value.mjs'
 import { ghlContractState, calendarContractState, calendarPushSource, newestSigned, newestSizeUnique, auditSummaryLine, auditItemLine } from './lib/contract-audit.mjs'
 import { pickLiveOpp, projectBelongsToOpp, scheduleState, statusPlan, fieldPlan, carryoverPlan, unsignedClosed, samePerson } from './lib/job-sync.mjs'
 import { parseSignedPdfText } from './lib/parse-signed-pdf.mjs'
@@ -2855,6 +2855,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
   out.cancelled_bookings = []
   out.later_projects = []   // finished jobs whose calendar job now carries a later project's PM
   out.deals_skipped = []    // commission-site deals the audit would have created but must not (Inside Sales, or sold before the site's first deal)
+  out.deals_paid_changed = []   // Paid deals whose newest change order differs from the deal: listed with old/new, never rewritten
   const audited = new Set()   // opps that went through the contract/value check — the only ones that may get a commission-site deal
   const arcErrored = new Set()
   for (let ci = 0; ci < cands.length; ci++) {
@@ -3013,7 +3014,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
       const newest = newestSigned(signed)
       const value = arcJobTotal(signed)
       const want = value.total
-      out.values[pid] = { total: want, rule: describeJobValue(value, arcUsd), newest: `Proposal ${newest.document_number || newest.proposal_id}` }
+      out.values[pid] = { total: want, rule: describeJobValue(value, arcUsd), newest: `Proposal ${newest.document_number || newest.proposal_id}`, newest_id: String(newest.proposal_id || ''), signed: signed.length, counted_ids: (value.counted || []).map(c => String(c.proposal_id || '')) }
       // The AI sheet is the truth for the value; ArcSite only when there is no
       // row. And the sheet itself gets checked: a signed proposal with no row,
       // or a row whose sale price disagrees with ArcSite, is a commission being
@@ -3342,12 +3343,13 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
         if (!audited.has(op.id) || dealPlanned.has(pid)) continue
         if (String(op.status || '').toLowerCase() !== 'open' && String(op.status || '').toLowerCase() !== 'won') continue
         if (!out.values[pid] || out.values[pid].total == null) continue
-        const have = await restGet(`/rest/v1/deals?project_id=eq.${encodeURIComponent(pid)}&select=id&limit=1`).catch(() => null)
-        if (!Array.isArray(have) || have.length) continue
+        const have = await restGet(`/rest/v1/deals?project_id=eq.${encodeURIComponent(pid)}&select=id,deal_name,job_price,baseline_revenue,status&limit=1`).catch(() => null)
+        if (!Array.isArray(have)) continue
         const row = await jobRowForProject(pid).catch(() => null)
         if (!row) continue
         const sheetNow = await readInstallSheet().catch(() => null)
-        const raw = ((sheetNow && sheetNow.jobs && sheetNow.jobs.rows) || []).find(r => String(r['Project ID'] || '').trim() === pid) || {}
+        const pidRows = ((sheetNow && sheetNow.jobs && sheetNow.jobs.rows) || []).filter(r => String(r['Project ID'] || '').trim() === pid)
+        const raw = pidRows[0] || {}
         const approvedDate = toYMD(raw['Approved Date']) || null, rep = String(raw['Sales Rep'] || '').replace(/\(you\)/i, '').trim() || null
         // Estimators (salaried) never have commission-site deals — the site does not import them.
         if (rep && isEstimatorRep(rep)) continue
@@ -3362,6 +3364,38 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
         if (op.pipelineId !== GHL_PIPELINES.outside.id) { skipDeal(`${op.pipelineId === GHL_PIPELINES.estimator.id ? 'Inside Sales' : 'pipeline ' + op.pipelineId} opp — commission-site deals are created for Outside Sales only; report only`); continue }
         if (earliest && earliest[1] < ARC_SITE_FIRST_DEAL_DAY) { skipDeal(`sold ${earliest[1]} (${earliest[0]}), before the commission site's first deal on ${ARC_SITE_FIRST_DEAL_DAY}; report only`); continue }
         dealPlanned.add(pid)
+        if (have.length) {
+          // ── Change order → the existing deal (Garrison, Nov 21 2026). The Sheet's
+          // row for the NEWEST signed proposal carries the job price, the baseline
+          // and the commission the site should hold. A deal that is not Paid is
+          // updated (job price + baseline; the site recomputes commission). A Paid
+          // deal is never rewritten: it is listed with old and new numbers.
+          const deal = have[0]
+          if (!(out.values[pid].signed >= 2) || deal.job_price == null) continue
+          // The Sheet rows for exactly the proposals the value counts (newest redraw +
+          // add-ons), summed: an add-on's row holds only the add-on (Amanda
+          // Pogorzelski 2: $15,895.75 + $1,802.60), never the whole job.
+          const roll = sheetRollupFor(out.values[pid].counted_ids, pidRows)
+          if (!roll) continue   // the Sheet lags a signing: not final, never $0
+          const newJob = roll.jobPrice, newBase = roll.baseline, newComm = roll.commission
+          const differs = (a, b) => a == null || b == null ? a !== b : Math.abs(Number(a) - Number(b)) > 1
+          if (!differs(deal.job_price, newJob) && !differs(deal.baseline_revenue, newBase)) continue
+          const coDate = roll.changeOrder || null
+          const upd = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'site', action: 'update_deal', deal_id: deal.id, deal_status: deal.status, change_order: coDate, newest: out.values[pid].newest,
+            before: { job_price: deal.job_price, baseline_revenue: deal.baseline_revenue, commission: null }, after: { job_price: newJob, baseline_revenue: newBase, commission: newComm },
+            reason: `change order signed ${coDate || '?'} (${out.values[pid].newest}): job price ${arcUsd(deal.job_price)} → ${arcUsd(newJob)}, baseline ${arcUsd(deal.baseline_revenue)} → ${arcUsd(newBase)}; the site recomputes commission (Sheet says ${newComm == null ? '?' : arcUsd(newComm)})` }
+          if (/^paid$/i.test(String(deal.status || ''))) { upd.reason = `PAID deal — not rewritten; ` + upd.reason; out.deals_paid_changed.push(upd); log('PAID DEAL CHANGED', upd); continue }
+          if (dry) { out.would_fix.push(upd); log('WOULD FIX', upd); continue }
+          if (capReached()) { skip(upd, 'site', `daily fix cap (${maxFix}) reached — tomorrow's run continues`); continue }
+          try {
+            await restWrite('PATCH', `/rest/v1/deals?id=eq.${encodeURIComponent(deal.id)}`, { job_price: newJob, baseline_revenue: newBase })
+            const back = await restGet(`/rest/v1/deals?id=eq.${encodeURIComponent(deal.id)}&select=id,job_price,baseline_revenue,status&limit=1`).catch(() => [])
+            upd.read_back = back && back[0]
+            if (back && back[0] && !differs(back[0].job_price, newJob) && !differs(back[0].baseline_revenue, newBase)) { out.fixed.push(upd); log('FIXED', upd) } else { upd.error = 'deal not updated on read-back'; out.failed.push(upd); log('FAILED', upd) }
+          } catch (e) { upd.error = e.message; out.failed.push(upd); log('FAILED', upd) }
+          await pause(300)
+          continue
+        }
         const item = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'site', action: 'create_deal', reason: `on the Sheet (approved ${approvedDate || '?'}, ${rep || 'rep unknown'}) and in GHL, no commission-site deal with this Project ID`, after: { deal_name: op.name, job_price: out.values[pid].total, baseline_revenue: row.baseline ?? null, sale_date: approvedDate, status: 'Pending Install', closer: rep } }
         if (dry) { out.would_fix.push(item); log('WOULD FIX', item); continue }
         if (capReached()) { skip(item, 'site', `daily fix cap (${maxFix}) reached — tomorrow's run continues`); continue }

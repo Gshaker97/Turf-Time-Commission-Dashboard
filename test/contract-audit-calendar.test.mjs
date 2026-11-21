@@ -57,7 +57,7 @@ function reset({ ghl = ['old', 'new'], cal = ['new'], sheetTotal = '2000', calen
       { proposal_id: 'p1', project_id: PID, status: 'APPROVED', total: 1500, pdf_url: 'https://cdn.example/old.pdf', proposal_options: [], document_number: '1001' },
     ],
     calendarJobs: cal === null ? [] : [{ jobNumber: 'J-77', ghlOpportunityId: OPP, canceledAt: null, value, contracts: cal.map(calFile) }],
-    sheetTotal, ingests: [], uploads: [], oppPuts: [], contactPuts: [], settings, deals: [{ id: 'deal-1', project_id: PID }], dealPosts: [], installRows: [],
+    sheetTotal, ingests: [], uploads: [], oppPuts: [], contactPuts: [], settings, deals: [{ id: 'deal-1', project_id: PID }], dealPosts: [], dealPatches: [], installRows: [],
     // the contact behind the opp: in step with the opp by default (Job Price = value, newest contract held)
     contact: { id: 'contact-cal', customFields: [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value }, { id: 'X6s8Kc6QVEVyzSIISktA', value },
       { id: 'BxSAZYBEeT5iBI67CfVW', value: { 'doc-1': { meta: { name: 'contract.pdf', size: NEW_SIZE }, url: 'https://ghl.example/documents/doc-1' } } }] },
@@ -96,6 +96,8 @@ globalThis.fetch = async (url, opts = {}) => {
   if (parsed.origin === SB) {
     if (parsed.pathname === '/rest/v1/app_settings' && method === 'POST') { if (body && body.key) world.settings.set(body.key, body.value); return send(201, {}) }
     if (parsed.pathname === '/rest/v1/app_settings') { const k = decodeURIComponent(parsed.searchParams.get('key') || '').replace(/^eq\./, ''); const v = world.settings.get(k); return send(200, v === undefined ? [] : [{ key: k, value: v }]) }
+    if (parsed.pathname === '/rest/v1/deals' && method === 'PATCH') { const id = decodeURIComponent(parsed.searchParams.get('id') || '').replace(/^eq\./, ''); world.dealPatches.push({ id, ...body }); const d = world.deals.find(x => x.id === id); if (d) Object.assign(d, body); return send(200, [d]) }
+    if (parsed.pathname === '/rest/v1/deals' && parsed.searchParams.get('id')) { const id = decodeURIComponent(parsed.searchParams.get('id') || '').replace(/^eq\./, ''); return send(200, world.deals.filter(x => x.id === id)) }
     if (parsed.pathname === '/rest/v1/deals' && method === 'POST') { world.dealPosts.push(body); world.deals.push({ id: 'deal-' + (world.deals.length + 1), ...body }); return send(201, {}) }
     if (parsed.pathname === '/rest/v1/deals') { const pid = decodeURIComponent(parsed.searchParams.get('project_id') || '').replace(/^eq\./, ''); return send(200, world.deals.filter(d => !pid || d.project_id === pid)) }
     if (parsed.pathname === '/rest/v1/profiles') return send(200, [{ id: 'prof-1', name: 'Fixture Rep', email: 'rep@example.com' }])
@@ -650,4 +652,33 @@ test('ARC_AUDIT_SKIP_OPPS: an excluded opp is not audited and nothing is written
   // without the setting the same job is fixed as usual
   reset({ ghl: ['old'], cal: ['old'], value: 1500 }); resetArcSaleMemoryForTests(); world.opp.pipelineId = 'EWGmXwXP63Da5eBMNiDU'
   const again = await run({ fix: true }); assert.ok(again.fixed.some(f => f.action === 'change_order')); assert.equal(world.opp.monetaryValue, 2000)
+})
+
+test('change order → commission-site deal: a deal that is not Paid gets the Sheet\'s newest job price and baseline; a Paid deal is listed with old and new, never rewritten; Outside Sales only', async () => {
+  const OUTSIDE = 'EWGmXwXP63Da5eBMNiDU'
+  // two signed proposals (p1 $1,500 → p2 $2,000); the Sheet's newest row (p2): Approved Total 2000, Baseline 1000, Commission 200
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
+  world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 1500, baseline_revenue: 900, status: 'Pending Install' }]
+  const d = await run({ fix: true, dry: true })
+  const u = d.would_fix.find(w => w.action === 'update_deal'); assert.ok(u, JSON.stringify(d.would_fix))
+  assert.deepEqual(u.before, { job_price: 1500, baseline_revenue: 900, commission: null }); assert.deepEqual(u.after, { job_price: 2000, baseline_revenue: 1000, commission: 200 })
+  assert.equal(u.deal_status, 'Pending Install'); assert.equal(world.dealPatches.length, 0, 'dry run writes nothing')
+  // live: the deal is patched and read back
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
+  world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 1500, baseline_revenue: 900, status: 'Pending Install' }]
+  const l = await run({ fix: true })
+  const f = l.fixed.find(w => w.action === 'update_deal'); assert.ok(f, JSON.stringify(l.failed)); assert.deepEqual(world.dealPatches, [{ id: 'deal-1', job_price: 2000, baseline_revenue: 1000 }]); assert.equal(f.read_back.job_price, 2000)
+  assert.equal(world.dealPosts.length, 0, 'no second deal created')
+  // Paid: listed under deals_paid_changed, nothing patched
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
+  world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 1500, baseline_revenue: 900, status: 'Paid' }]
+  const pd = await run({ fix: true })
+  assert.equal(world.dealPatches.length, 0); assert.ok(!pd.fixed.some(w => w.action === 'update_deal')); assert.equal(pd.deals_paid_changed.length, 1); assert.match(pd.deals_paid_changed[0].reason, /^PAID deal — not rewritten/)
+  // in step → nothing; Inside Sales → nothing (listed under deals_skipped by the pipeline rule)
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
+  world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 2000, baseline_revenue: 1000, status: 'Pending Install' }]
+  const ok = await run({ fix: true }); assert.equal(world.dealPatches.length, 0); assert.ok(!ok.fixed.some(w => w.action === 'update_deal'))
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = 'jfhZWICxnmISGllte9Rv'
+  world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 1500, baseline_revenue: 900, status: 'Pending Install' }]
+  const ins = await run({ fix: true }); assert.equal(world.dealPatches.length, 0); assert.equal(ins.deals_skipped.length, 1)
 })
