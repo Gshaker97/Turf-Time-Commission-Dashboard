@@ -535,3 +535,17 @@ test('daily audit does not treat a full page without a next page as a finished l
   assert.equal(world.puts.length, 0)
   assert.equal(world.calls.some(call => call.method === 'PUT'), false)
 })
+
+test('the sale path never adopts a contact-matched opportunity that belongs to another person (Courtney Spillers / Aaron Spillers): it creates a new one and says why', async () => {
+  const projectId = '900000000000020'
+  const fixture = projectFixture({ projectId, proposalId: '900020', total: 9164.27, phone: '555_010_0199', email: 'aaron@example.com', name: 'Aaron Spillers', pdf: true })
+  const spouseLead = { id: 'lead-courtney', name: 'Courtney Spillers', contactId: 'contact-courtney', status: 'open', pipelineId: 'pipe-outside', monetaryValue: 0, customFields: [] }
+  reset(makeWorld([...fillers(99, 'other-contact'), spouseLead], [fixture], {
+    contacts: [{ id: 'contact-courtney', email: 'aaron@example.com', contactName: 'Courtney Spillers' }],
+    byPhone: { '+15550100199': { id: 'contact-courtney', email: 'aaron@example.com', contactName: 'Courtney Spillers' } },
+  }))
+  world.upsertContactId = 'contact-courtney'
+  const r = await arcsiteToGhl(JSON.stringify({ status: 'APPROVED', project_id: projectId, proposal_id: '900020' }))
+  assert.notEqual(r.opportunity_id, 'lead-courtney', JSON.stringify(r))
+  assert.match(String(r.adopt_refused || ''), /Courtney Spillers.*is not Aaron Spillers/, JSON.stringify(r))
+})
