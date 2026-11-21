@@ -2799,8 +2799,12 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
   out.cancelled_on_schedule = cancelledProjects.size
   // The Schedule tab (install date, cancelled / rebooked) per project — the
   // source of truth for dates and for an opp's cancelled state.
-  let schedByPid = {}
-  try { schedByPid = (await arcScheduleByProject()).byPid || {} } catch (e) { out.schedule_error = String(e.message || e).slice(0, 120) }
+  let schedByPid = {}, scheduleOk = true
+  try { schedByPid = (await arcScheduleByProject()).byPid || {} } catch (e) { out.schedule_error = String(e.message || e).slice(0, 120); scheduleOk = false }
+  // Without the Schedule tab nothing that depends on it is written: no status
+  // moves, no install dates, no contact prices (a cancelled booking could not be
+  // told apart), no created records. Reported once; the contract checks still run.
+  if (!scheduleOk) log('SCHEDULE UNAVAILABLE', { customer: 'all jobs', reason: `Schedule tab could not be read (${out.schedule_error}) — status, dates, contact prices and record creation held this run` })
   const oppFieldDefs = dry ? null : await ghlOppFields().catch(() => null)
   const calendarOppIds = calByOpp ? [...calByOpp.keys()] : []
   out.duplicate_copies = []; out.project_mismatch = []; out.unsigned_closed = []; out.status_changes = []
@@ -2841,8 +2845,8 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
     const held = arcHeld(op)
     if (held) out.held.push({ opportunity_id: op.id, customer: op.name, project_id: pid })
     // ── Schedule tab: cancelled → abandoned (or the configured stage); rebooked → open + Closed.
-    const schedule = scheduleState(schedByPid[pid])
-    const sp = statusPlan({ schedule, opp: op, closedStageId: (op.pipelineId === GHL_PIPELINES.estimator.id ? GHL_PIPELINES.estimator : GHL_PIPELINES.outside).closed, cancelledStageId: ARC_CANCELLED_STAGE_ID })
+    const schedule = scheduleOk ? scheduleState(schedByPid[pid]) : { state: 'unknown', date: null }
+    const sp = scheduleOk ? statusPlan({ schedule, opp: op, closedStageId: (op.pipelineId === GHL_PIPELINES.estimator.id ? GHL_PIPELINES.estimator : GHL_PIPELINES.outside).closed, cancelledStageId: ARC_CANCELLED_STAGE_ID }) : { action: null }
     if (sp.action) {
       const item = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'ghl', action: sp.action, before: { status: op.status, stage: op.pipelineStageId }, after: sp.write, reason: sp.reason }
       if (dry) { out.would_fix.push(item); log('WOULD FIX', item) }
@@ -3000,7 +3004,8 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
         const wantFields = { install: schedule.state === 'live' ? schedule.date : null, pm: calJob && calJob.pm && calJob.pm.name ? calJob.pm.name : null, value: wantValue }
         const fp = fieldPlan(cur, wantFields, { held, disputed })
         if (fp.frozen.length) skip({ ...base, target: 'fields' }, 'fields', `manual hold: ${fp.frozen.join(', ')} stay as they are (would be ${arcUsd(wantValue)})`)
-        if (fp.any) {
+        if (fp.any && !scheduleOk) skip({ ...base, target: 'fields', reason: fp.reasons.join('; ') }, 'fields', `Schedule tab unavailable this run (${out.schedule_error}) — field writes held`)
+        else if (fp.any) {
           const item = { ...base, target: 'fields', action: 'sync_fields', before: cur, after: { opp: fp.opp, contact: fp.contact, calendar: fp.calendar }, reason: fp.reasons.join('; ') }
           if (dry) { out.would_fix.push(item); log('WOULD FIX', item) }
           else if (capReached()) skip(item, 'fields', `daily fix cap (${maxFix}) reached — tomorrow's run continues`)
@@ -3131,7 +3136,8 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
   //    opportunity with a Sheet row but NO commission-site deal (Dave Soelberg)
   //    → the deal is created from the Sheet row and ArcSite.
   out.created = { opportunities: [], deals: [] }
-  if (!lookupBlocked) {
+  if (!scheduleOk) out.created.error = `Schedule tab unavailable (${out.schedule_error}) — nothing created this run`
+  if (!lookupBlocked && scheduleOk) {
     try {
       const sheet = await readInstallSheet().catch(() => null)
       const jrows = (sheet && sheet.jobs && sheet.jobs.rows) || []
@@ -3165,6 +3171,8 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
         const sheetNow = await readInstallSheet().catch(() => null)
         const raw = ((sheetNow && sheetNow.jobs && sheetNow.jobs.rows) || []).find(r => String(r['Project ID'] || '').trim() === pid) || {}
         const approvedDate = toYMD(raw['Approved Date']) || null, rep = String(raw['Sales Rep'] || '').replace(/\(you\)/i, '').trim() || null
+        // Estimators (salaried) never have commission-site deals — the site does not import them.
+        if (rep && isEstimatorRep(rep)) continue
         const item = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'site', action: 'create_deal', reason: `on the Sheet (approved ${approvedDate || '?'}, ${rep || 'rep unknown'}) and in GHL, no commission-site deal with this Project ID`, after: { deal_name: op.name, job_price: out.values[pid].total, baseline_revenue: row.baseline ?? null, sale_date: approvedDate, status: 'Pending Install', closer: rep } }
         if (dry) { out.would_fix.push(item); log('WOULD FIX', item); continue }
         if (capReached()) { skip(item, 'site', `daily fix cap (${maxFix}) reached — tomorrow's run continues`); continue }
