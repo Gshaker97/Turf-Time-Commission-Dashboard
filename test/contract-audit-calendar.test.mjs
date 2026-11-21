@@ -518,3 +518,35 @@ test('a $0 duplicate copy with no calendar job loses its Project ID (Todd Vietze
   const cl = r.fixed.find(x => x.action === 'clear_project_id' && x.opportunity_id === 'opp-repair'); assert.ok(cl, JSON.stringify(r.fixed)); assert.match(cl.reason, /not a sale/)
   assert.equal(r.duplicate_copies.length, 1)
 })
+
+test('coverage: a duplicate copy\'s live twin is audited in its place even outside the date window; a calendar install date qualifies an opp; cancelled bookings count as checked', async () => {
+  // 1. the Outside copy is in the window; the live Inside twin (calendar job) was created in September with no Install Date —
+  //    Dhan Harnanan / Samer Darraj / Pamela Thompson. The twin is audited: its Install Date comes from the Schedule tab.
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  world.extraOpps = [{ id: 'opp-twin', name: 'Fixture Calendar', contactId: 'contact-cal', status: 'open', pipelineId: 'jfhZWICxnmISGllte9Rv', pipelineStageId: 'some-open-stage', monetaryValue: 2000, createdAt: '2026-09-01T00:00:00.000Z',
+    customFields: [{ id: PROJECT_FIELD, fieldValueString: PID }, { id: PDF_FIELD, fieldValueFiles: ['old', 'new'].map(ghlFile) }] }]
+  world.calendarJobs[0].ghlOpportunityId = 'opp-twin'
+  world.scheduleRows = [['2026-11-10', future, 'Fixture Calendar', 'BOOKED', 'p2']]
+  const a = await run({ fix: true, dry: true })
+  assert.equal(a.candidates, 1, JSON.stringify(a)); assert.equal(a.checked, 1)
+  assert.equal(a.duplicate_copies.length, 1); assert.equal(a.duplicate_copies[0].opportunity_id, OPP); assert.equal(a.duplicate_copies[0].live_opportunity_id, 'opp-twin'); assert.equal(a.duplicate_copies[0].live_audited, true)
+  const sf = a.would_fix.find(w => w.opportunity_id === 'opp-twin' && w.action === 'sync_fields'); assert.ok(sf, JSON.stringify(a.would_fix))
+  assert.equal(sf.after.opp.install, future); assert.match(sf.reason, /Install Date empty → .* \(Schedule tab\)/)
+  assert.ok(!a.would_fix.some(w => w.opportunity_id === OPP && w.action === 'sync_fields'), 'nothing planned for the copy itself')
+  // 2. an opp with no Install Date and an old created date qualifies through its calendar job's install date — and not without one
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  world.opp.customFields = world.opp.customFields.filter(c => c.id !== INSTALL_FIELD); world.opp.createdAt = '2026-09-01T00:00:00.000Z'
+  world.calendarJobs[0].installDate = future
+  const b = await run({ fix: true, dry: true }); assert.equal(b.candidates, 1, JSON.stringify(b)); assert.equal(b.checked, 1)
+  delete world.calendarJobs[0].installDate
+  const c = await run({ fix: true, dry: true }); assert.equal(c.candidates, 0)
+  // 3. a cancelled booking is a checked job, listed under its own heading
+  reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests()
+  world.scheduleRows = [['2026-11-10', '2026-11-27', 'Fixture Calendar', 'CANCELLED', 'p2']]
+  const d = await run({ fix: true, dry: true })
+  assert.equal(d.candidates, 1); assert.equal(d.checked, 1); assert.equal(d.ok, 1)
+  assert.deepEqual(d.cancelled_bookings.map(x => [x.opportunity_id, x.outcome]), [[OPP, 'would move to abandoned']])
+  world.opp.status = 'abandoned'
+  const e = await run({ fix: true, dry: true })
+  assert.equal(e.checked, 1); assert.equal(e.cancelled_bookings[0].outcome, 'already abandoned, nothing written'); assert.equal(e.would_fix.length, 0)
+})

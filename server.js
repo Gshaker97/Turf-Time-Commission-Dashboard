@@ -2768,22 +2768,6 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
   const scan = await arcScanLocation()
   const lookupBlocked = !scan.complete || scan.status === 'incomplete' || scan.status === 'uncertain' || scan.status === 'failed'
   out.scanned = (scan.opportunities || []).length
-  const cands = []
-  if (!lookupBlocked) {
-    for (const light of scan.opportunities || []) {
-      const op = light.raw
-      const pid = light.projectId
-      // A LOST deal is history and is never touched. An ABANDONED one is a
-      // cancelled booking that may be rebooked on the Schedule tab, so it stays.
-      if (String(op.status || '').toLowerCase() === 'lost') continue
-      const inst = oppInstallDay(op)
-      // No Install Date on the opp (common — Ron Little, Rocio Encinas…) used to
-      // mean "never audited"; such opps now qualify by their created date.
-      const key = inst || String(op.createdAt || '').slice(0, 10)
-      if (pid && key && key >= floor) cands.push({ op, pid, inst: inst || null })
-    }
-  }
-  out.candidates = cands.length
   if (lookupBlocked) out.skipped = 'opportunity lookup did not finish'
   // The PM calendar too (per Garrison: crews order material from the calendar
   // job's contract, so a calendar still holding the old design is the costly
@@ -2802,6 +2786,26 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
       out.calendar = { jobs: calByOpp.size, behind: 0, no_contract: 0, unverified: 0, no_job: 0, current: 0 }
     } catch (e) { out.calendar = { error: String(e.message || e).slice(0, 160) } }
   } else if (!lookupBlocked) out.calendar = { error: 'calendar export not configured' }
+  // Which opps this run audits. The date window is read against the opp's Install
+  // Date, else its PM calendar job's install date, else its created date — an
+  // Inside opp created in September with an empty Install Date whose calendar job
+  // installs in October (Dhan Harnanan, Samer Darraj, Pamela Thompson) qualifies.
+  const cands = [], queued = new Set()
+  if (!lookupBlocked) {
+    for (const light of scan.opportunities || []) {
+      const op = light.raw
+      const pid = light.projectId
+      // A LOST deal is history and is never touched. An ABANDONED one is a
+      // cancelled booking that may be rebooked on the Schedule tab, so it stays.
+      if (String(op.status || '').toLowerCase() === 'lost') continue
+      const inst = oppInstallDay(op)
+      const cj = calByOpp ? calByOpp.get(op.id) : null
+      const calInst = cj && cj.installDate ? String(cj.installDate).slice(0, 10) : null
+      const key = inst || calInst || String(op.createdAt || '').slice(0, 10)
+      if (pid && key && key >= floor) { cands.push({ op, pid, inst: inst || null }); queued.add(op.id) }
+    }
+  }
+  out.candidates = cands.length
   // Bookings cancelled on the Schedule tab: their contacts are never written.
   const cancelledProjects = arcCancelledProjects(await readInstallSheet().catch(() => null))
   out.cancelled_on_schedule = cancelledProjects.size
@@ -2825,7 +2829,9 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
   //    search index lags writes by minutes, so a fix from an hour ago can still
   //    look missing there. More than one opportunity for a Project ID, anywhere
   //    in the finished scan, is left for review.
-  for (const { op, pid, inst } of cands) {
+  out.cancelled_bookings = []
+  for (let ci = 0; ci < cands.length; ci++) {
+    const { op, pid, inst } = cands[ci]
     if (lookupBlocked) continue
     // Duplicates (Garrison, Nov 21 2026): several non-lost opps on one Project ID
     // → ONE is live (an Inside/Outside pair: Outside; else the one the PM calendar
@@ -2855,6 +2861,10 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
         item.reason = ci.reason
       }
       out.duplicate_copies.push(item); log('DUPLICATE COPY', item)
+      // The live copy is audited in this copy's place, even when it falls outside
+      // the date window on its own (an Inside opp created in September with no
+      // Install Date): it is the one that must hold the contract, dates and price.
+      if (!queued.has(pick.live.id)) { queued.add(pick.live.id); cands.push({ op: pick.live, pid, inst: oppInstallDay(pick.live), via: op.id }); item.live_audited = true }
       continue
     }
     const dupNote = pick && pick.copies.length ? `shares its Project ID with ${pick.copies.map(o => `${o.name || o.id} (${o.pipelineId === GHL_PIPELINES.outside.id ? 'Outside' : 'Inside'})`).join(', ')} — ${pick.reason}` : null
@@ -2879,9 +2889,15 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
         try { await ghlUpdateOpp(op.id, sp.write); const back = (await ghlGet(`/opportunities/${op.id}`).catch(() => null)) || {}; const b = back.opportunity || back; item.read_back = { status: b.status, stage: b.pipelineStageId }; out.fixed.push(item); out.status_changes.push(item); log('FIXED', item); Object.assign(op, sp.write); await arcStatusLedgerRecord(op.id, sp.action === 'cancel' ? { stage_before: item.before.stage, cancelled_at: new Date().toISOString() } : { rebooked_at: new Date().toISOString() }) }
         catch (e) { item.error = e.message || 'status update failed'; out.failed.push(item); log('FAILED', item) }
       }
-      if (sp.action === 'cancel') continue   // a cancelled booking gets nothing else written
+      // A cancelled booking gets nothing else written — but it IS a checked job:
+      // counted, and listed under its own heading with what the run did to it.
+      if (sp.action === 'cancel') { out.checked++; out.ok++; out.cancelled_bookings.push({ project_id: pid, customer: op.name, opportunity_id: op.id, schedule_date: schedule.date || null, outcome: dry ? 'would move to abandoned' : (item.error ? 'move to abandoned FAILED' : 'moved to abandoned') }); continue }
     }
-    if (schedule.state === 'cancelled' || String(op.status || '').toLowerCase() === 'abandoned') continue   // cancelled and not rebooked: nothing else
+    if (schedule.state === 'cancelled' || String(op.status || '').toLowerCase() === 'abandoned') {   // cancelled and not rebooked: nothing else
+      out.checked++; out.ok++
+      out.cancelled_bookings.push({ project_id: pid, customer: op.name, opportunity_id: op.id, schedule_date: schedule.date || null, outcome: String(op.status || '').toLowerCase() === 'abandoned' ? 'already abandoned, nothing written' : 'cancelled on the Schedule tab, status left as is' })
+      continue
+    }
     try {
       let signed
       try { signed = await arcSignedContracts(pid, { strict: true }) }
