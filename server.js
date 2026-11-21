@@ -2376,6 +2376,8 @@ const arcClosedStage = opp => !!(opp && ARC_CLOSED_STAGES.has(String(opp.pipelin
 // GHL has no cancelled STAGE in either pipeline (Nov 21 2026): a booking cancelled on
 // the Schedule tab sets the opp STATUS to abandoned, unless a stage id is configured.
 const ARC_CANCELLED_STAGE_ID = (process.env.ARC_CANCELLED_STAGE_ID || '').trim() || null
+// The commission site's first deal (Garrison, Nov 21 2026): a job sold before this day never gets a deal created by the audit.
+const ARC_SITE_FIRST_DEAL_DAY = (process.env.ARC_SITE_FIRST_DEAL_DAY || '2026-03-02').trim()
 // Stage names for the audit's logs and reports (ids only where this file knows them).
 const ARC_STAGE_NAMES = { [GHL_PIPELINES.outside.closed]: 'Closed', [GHL_PIPELINES.estimator.closed]: 'Closed', [GHL_PIPELINES.outside.changeOrder]: 'Change Order', [GHL_PIPELINES.estimator.changeOrder]: 'Change Order',
   '72691282-63f0-451b-9e38-a244dc9d3678': 'Deal Reviewed', 'c3f66652-edf5-49bf-8c24-1c10a2860da7': 'Deal Reviewed', '6f59c233-4ac0-4fbf-a0bc-9fc6b1e2b0fb': 'Ready For Install', '4335186c-102f-4d63-99d0-ea6d474b7649': 'Ready for Install',
@@ -2839,6 +2841,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
   //    in the finished scan, is left for review.
   out.cancelled_bookings = []
   out.later_projects = []   // finished jobs whose calendar job now carries a later project's PM
+  out.deals_skipped = []    // commission-site deals the audit would have created but must not (Inside Sales, or sold before the site's first deal)
   const audited = new Set()   // opps that went through the contract/value check — the only ones that may get a commission-site deal
   const arcErrored = new Set()
   for (let ci = 0; ci < cands.length; ci++) {
@@ -3335,6 +3338,16 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
         const approvedDate = toYMD(raw['Approved Date']) || null, rep = String(raw['Sales Rep'] || '').replace(/\(you\)/i, '').trim() || null
         // Estimators (salaried) never have commission-site deals — the site does not import them.
         if (rep && isEstimatorRep(rep)) continue
+        // Rule (Garrison, Nov 21 2026): deals are for Outside Sales opps only, and
+        // only for jobs sold on or after the commission site's first deal day. The
+        // sale day is the EARLIEST evidence — ArcSite project created, GHL opp
+        // created, Sheet Approved Date — so a re-sign never makes an old job look new.
+        const proj = await arcProject(pid)
+        const evidence = [['ArcSite project created', toYMD(proj && proj.created_at) || null], ['GHL opp created', toYMD(op.createdAt) || null], ['Sheet Approved Date', approvedDate]].filter(e => e[1])
+        const earliest = evidence.slice().sort((a, b) => a[1] < b[1] ? -1 : 1)[0] || null
+        const skipDeal = reason => { const it = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'site', sold: earliest ? earliest[1] : null, sold_evidence: earliest ? earliest[0] : null, pipeline: op.pipelineId === GHL_PIPELINES.outside.id ? 'Outside Sales' : op.pipelineId === GHL_PIPELINES.estimator.id ? 'Inside Sales' : String(op.pipelineId), would_have: { deal_name: op.name, job_price: out.values[pid].total, sale_date: approvedDate, closer: rep }, reason }; out.deals_skipped.push(it); log('DEAL NOT CREATED', it) }
+        if (op.pipelineId !== GHL_PIPELINES.outside.id) { skipDeal(`${op.pipelineId === GHL_PIPELINES.estimator.id ? 'Inside Sales' : 'pipeline ' + op.pipelineId} opp — commission-site deals are created for Outside Sales only; report only`); continue }
+        if (earliest && earliest[1] < ARC_SITE_FIRST_DEAL_DAY) { skipDeal(`sold ${earliest[1]} (${earliest[0]}), before the commission site's first deal on ${ARC_SITE_FIRST_DEAL_DAY}; report only`); continue }
         dealPlanned.add(pid)
         const item = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'site', action: 'create_deal', reason: `on the Sheet (approved ${approvedDate || '?'}, ${rep || 'rep unknown'}) and in GHL, no commission-site deal with this Project ID`, after: { deal_name: op.name, job_price: out.values[pid].total, baseline_revenue: row.baseline ?? null, sale_date: approvedDate, status: 'Pending Install', closer: rep } }
         if (dry) { out.would_fix.push(item); log('WOULD FIX', item); continue }

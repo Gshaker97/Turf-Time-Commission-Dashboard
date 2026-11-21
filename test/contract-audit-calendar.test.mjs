@@ -89,7 +89,7 @@ globalThis.fetch = async (url, opts = {}) => {
   if (parsed.hostname === 'api.arcsite.com') {
     if (world.arcsiteStatus !== 200) return send(world.arcsiteStatus, { error: 'Too Many Requests' })
     if (parsed.pathname === '/v1/proposals') return send(200, parsed.searchParams.get('project_id') === PID ? world.proposals : [])
-    if (parsed.pathname.startsWith('/v1/projects/')) return send(200, { name: 'Fixture Calendar', customer: { name: 'Fixture Calendar', phone: '5550100100', address: { street: '1 Example St', city: 'Phoenix', state: 'AZ', zip_code: '85001' } } })
+    if (parsed.pathname.startsWith('/v1/projects/')) return send(200, { name: 'Fixture Calendar', created_at: world.arcCreated || '2026-10-01T00:00:00.000000Z', customer: { name: 'Fixture Calendar', phone: '5550100100', address: { street: '1 Example St', city: 'Phoenix', state: 'AZ', zip_code: '85001' } } })
     return send(404, {})
   }
   if (parsed.origin === SB) {
@@ -555,8 +555,8 @@ test('coverage: a duplicate copy\'s live twin is audited in its place even outsi
   const sf = a.would_fix.find(w => w.opportunity_id === 'opp-twin' && w.action === 'sync_fields'); assert.ok(sf, JSON.stringify(a.would_fix))
   assert.equal(sf.after.opp.install, future); assert.match(sf.reason, /Install Date empty → .* \(Schedule tab\)/)
   assert.ok(!a.would_fix.some(w => w.opportunity_id === OPP && w.action === 'sync_fields'), 'nothing planned for the copy itself')
-  // one commission-site deal, for the live twin only — never for the copy
-  assert.deepEqual(a.would_fix.filter(w => w.action === 'create_deal').map(w => w.opportunity_id), ['opp-twin'])
+  // no commission-site deal: the live twin is an Inside Sales opp (deals are Outside Sales only) — listed, not created; never for the copy either
+  assert.deepEqual(a.would_fix.filter(w => w.action === 'create_deal'), []); assert.deepEqual(a.deals_skipped.map(d => [d.opportunity_id, d.pipeline]), [['opp-twin', 'Inside Sales']])
   // 1b. the live twin does not qualify on its own (no Install Date, no calendar install date, created in September — Todd Vietzen's
   //     July job behind an October $0 copy): it is listed for review in the copy's place, nothing written, no deal, no hole
   delete world.calendarJobs[0].installDate
@@ -605,4 +605,27 @@ test('a finished job never takes a later project\'s Project Manager from its reu
   world.scheduleRows = [['2026-11-10', future, 'Fixture Calendar', 'BOOKED', 'p2']]
   const b = await run({ fix: true, dry: true })
   const sf = b.would_fix.find(w => w.action === 'sync_fields'); assert.ok(sf, JSON.stringify(b.would_fix)); assert.equal(sf.after.opp.pm, 'Eli Larson'); assert.equal(b.later_projects.length, 0)
+})
+
+test('commission-site deals: Outside Sales only, and never for a job sold before the site\'s first deal (March 2 2026) by the earliest evidence — a re-sign date does not make it new', async () => {
+  const OUTSIDE = 'EWGmXwXP63Da5eBMNiDU'
+  // 1. Outside opp sold in October (ArcSite project Oct 1, no opp created date, no Sheet Approved Date) → deal planned
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.deals = []; world.opp.pipelineId = OUTSIDE
+  const a = await run({ fix: true, dry: true })
+  const d = a.would_fix.find(w => w.action === 'create_deal'); assert.ok(d, JSON.stringify(a.would_fix)); assert.equal(d.after.deal_name, 'Fixture Calendar'); assert.deepEqual(a.deals_skipped, [])
+  // 2. same opp, but the ArcSite project was created Feb 25 2026 (Heidi Kinney: re-signed in July) → no deal, listed with the earliest evidence
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.deals = []; world.opp.pipelineId = OUTSIDE; world.arcCreated = '2026-02-25T02:00:25.000000Z'
+  const b = await run({ fix: true, dry: true })
+  assert.ok(!b.would_fix.some(w => w.action === 'create_deal')); assert.equal(b.deals_skipped.length, 1)
+  assert.equal(b.deals_skipped[0].sold, '2026-02-25'); assert.equal(b.deals_skipped[0].sold_evidence, 'ArcSite project created'); assert.match(b.deals_skipped[0].reason, /before the commission site's first deal on 2026-03-02/)
+  // 2b. the GHL opp created date counts too
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.deals = []; world.opp.pipelineId = OUTSIDE; world.opp.createdAt = '2026-02-28T00:00:00.000Z'
+  const b2 = await run({ fix: true, dry: true }); assert.equal(b2.deals_skipped.length, 1); assert.equal(b2.deals_skipped[0].sold_evidence, 'GHL opp created')
+  // 3. an Inside Sales opp never gets a deal — listed
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.deals = []; world.opp.pipelineId = 'jfhZWICxnmISGllte9Rv'
+  const c = await run({ fix: true, dry: true })
+  assert.ok(!c.would_fix.some(w => w.action === 'create_deal')); assert.equal(c.deals_skipped.length, 1); assert.equal(c.deals_skipped[0].pipeline, 'Inside Sales'); assert.match(c.deals_skipped[0].reason, /Outside Sales only/)
+  // live mode writes nothing to the site in either skipped case
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.deals = []; world.opp.pipelineId = 'jfhZWICxnmISGllte9Rv'
+  await run({ fix: true }); assert.equal(world.dealPosts.length, 0)
 })
