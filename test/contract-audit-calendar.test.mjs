@@ -441,13 +441,13 @@ test('a Lost opportunity is never revived: the audit does not audit it and the c
   assert.equal(world.oppPuts.length, 0); assert.equal(world.ingests.length, 0)
 })
 
-test('Schedule tab cancelled → status abandoned and the Install Date comes off the opp and the contact; rebooked → open + prior stage and the dates flow again', async () => {
+test('Schedule tab cancelled → status abandoned and the Install Date comes off the opp and the contact; rebooked → open + Deal Reviewed and the dates flow again', async () => {
   reset({ ghl: ['old', 'new'], cal: ['old'] }); resetArcSaleMemoryForTests()
   world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 6200 }]
   world.scheduleRows = [['2026-11-10', '2026-11-27', 'Fixture Calendar', 'CANCELLED', 'p2']]
   world.contact.customFields.push({ id: 'IMYajaM4Jv4eOG65exQZ', value: future })
   const audit = await run({ fix: true })
-  const c = audit.fixed.find(f => f.action === 'cancel'); assert.ok(c, JSON.stringify(audit)); assert.deepEqual(c.after, { status: 'abandoned' }); assert.deepEqual(c.before, { status: 'open', stage: undefined })
+  const c = audit.fixed.find(f => f.action === 'cancel'); assert.ok(c, JSON.stringify(audit)); assert.deepEqual(c.after, { status: 'abandoned' }); assert.deepEqual(c.before, { status: 'open', stage: undefined, stage_name: 'none' })
   assert.ok(world.oppPuts.some(p => p.status === 'abandoned')); assert.equal(world.ingests.length, 0); assert.equal(world.uploads.length, 0)
   assert.equal(audit.status_changes.length, 1)
   // the Install Date comes off the opp and the contact until the job is rebooked; nothing else is written to the contact
@@ -460,10 +460,10 @@ test('Schedule tab cancelled → status abandoned and the Install Date comes off
   const d = await run({ fix: true, dry: true }); assert.ok(d.would_fix.some(w => w.action === 'cancel')); assert.ok(d.would_fix.some(w => w.action === 'clear_install_date')); assert.equal(world.oppPuts.length, 0); assert.equal(world.contactPuts.length, 0)
   // rebooked: a live row after the cancelled one, opp abandoned → open + Closed, then fields and contracts
   reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
-  world.opp.status = 'abandoned'
+  world.opp.status = 'abandoned'; world.opp.pipelineId = 'EWGmXwXP63Da5eBMNiDU'   // Outside Sales: the real pipeline, so Deal Reviewed is known
   world.scheduleRows = [['2026-11-10', '2026-11-27', 'Fixture Calendar', 'CANCELLED', 'p2'], ['2026-11-15', '2026-12-05', 'Fixture Calendar', 'BOOKED', 'p2']]
   const r = await run({ fix: true })
-  // rebooked → open + the stage it had before (none recorded here) → Deal Reviewed, never Closed (the Welcome Email workflow fires on Closed)
+  // rebooked → open + Deal Reviewed in its own pipeline, always
   const rb = r.fixed.find(f => f.action === 'rebook'); assert.ok(rb, JSON.stringify(r)); assert.deepEqual(rb.after, { status: 'open', pipelineStageId: '72691282-63f0-451b-9e38-a244dc9d3678' })
   const fs = r.fixed.find(f => f.action === 'sync_fields'); assert.ok(fs, JSON.stringify(r.fixed)); assert.equal(fs.after.opp.install, '2026-12-05'); assert.equal(fs.after.contact.install, '2026-12-05')
   assert.equal(world.installRows.length, 1); assert.equal(world.installRows[0].rows[0].installDate, '2026-12-05')
@@ -480,17 +480,33 @@ test('a one-day cap override applies on its day only and falls back to the norma
   assert.equal(audit.max_fix, 7)
 })
 
-test('rebooking restores the stage the opp had when the sync cancelled it (status ledger), else Deal Reviewed', async () => {
+test('rebooking always goes to Deal Reviewed in the opp\'s own pipeline — never the stage it had before (Closed / Pending Payment fire customer workflows); a pipeline without Deal Reviewed is reported, nothing written', async () => {
   reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
-  world.opp.pipelineStageId = 'stage-ready-for-install'
+  world.opp.pipelineId = 'EWGmXwXP63Da5eBMNiDU'; world.opp.pipelineStageId = '7f686159-9e37-4ffb-9311-3f10106cf250'   // Outside Sales / Closed
   world.scheduleRows = [['2026-11-10', '2026-11-27', 'Fixture Calendar', 'CANCELLED', 'p2']]
-  const c = await run({ fix: true }); assert.ok(c.fixed.some(f => f.action === 'cancel'))
-  assert.equal(world.settings.get('arcsite_status_ledger')[OPP].stage_before, 'stage-ready-for-install')
+  const c = await run({ fix: true }); const cx = c.fixed.find(f => f.action === 'cancel'); assert.ok(cx); assert.equal(cx.before.stage_name, 'Closed')
+  assert.equal(world.settings.get('arcsite_status_ledger')[OPP].stage_before, '7f686159-9e37-4ffb-9311-3f10106cf250', 'the ledger still remembers, for the record')
+  // rebooked from Closed: Outside Sales → Deal Reviewed, not back to Closed
   reset({ ghl: ['old', 'new'], cal: ['new'], keepSettings: true }); resetArcSaleMemoryForTests()
-  world.opp.status = 'abandoned'; world.opp.pipelineStageId = 'stage-ready-for-install'
+  world.opp.status = 'abandoned'; world.opp.pipelineId = 'EWGmXwXP63Da5eBMNiDU'; world.opp.pipelineStageId = '7f686159-9e37-4ffb-9311-3f10106cf250'
   world.scheduleRows = [['2026-11-10', '2026-11-27', 'Fixture Calendar', 'CANCELLED', 'p2'], ['2026-11-15', '2026-12-05', 'Fixture Calendar', 'BOOKED', 'p2']]
   const r = await run({ fix: true })
-  assert.deepEqual(r.fixed.find(f => f.action === 'rebook').after, { status: 'open', pipelineStageId: 'stage-ready-for-install' })
+  const rb = r.fixed.find(f => f.action === 'rebook'); assert.ok(rb, JSON.stringify(r.fixed))
+  assert.deepEqual(rb.after, { status: 'open', pipelineStageId: '72691282-63f0-451b-9e38-a244dc9d3678' }); assert.equal(rb.before.stage_name, 'Closed')
+  const fs = r.fixed.find(f => f.action === 'sync_fields'); assert.ok(fs); assert.equal(fs.after.opp.install, '2026-12-05', 'Install Date refilled from the calendar / Schedule tab')
+  // Inside Sales → its own Deal Reviewed
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  world.opp.status = 'abandoned'; world.opp.pipelineId = 'jfhZWICxnmISGllte9Rv'; world.opp.pipelineStageId = '6852e765-eb65-4a0f-b22e-5c9a63bc803b'   // Pending Payment
+  world.scheduleRows = [['2026-11-10', '2026-11-27', 'Fixture Calendar', 'CANCELLED', 'p2'], ['2026-11-15', '2026-12-05', 'Fixture Calendar', 'BOOKED', 'p2']]
+  const i = await run({ fix: true })
+  assert.deepEqual(i.fixed.find(f => f.action === 'rebook').after, { status: 'open', pipelineStageId: 'c3f66652-edf5-49bf-8c24-1c10a2860da7' })
+  // a pipeline this audit knows no Deal Reviewed stage for: reported, nothing written
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  world.opp.status = 'abandoned'; world.opp.pipelineId = 'pipe-unknown'; world.opp.pipelineStageId = 'x'
+  world.scheduleRows = [['2026-11-10', '2026-11-27', 'Fixture Calendar', 'CANCELLED', 'p2'], ['2026-11-15', '2026-12-05', 'Fixture Calendar', 'BOOKED', 'p2']]
+  const u = await run({ fix: true })
+  assert.ok(!u.fixed.some(f => f.action === 'rebook')); assert.equal(world.oppPuts.length, 0)
+  assert.ok(u.skipped_jobs.some(s => /has no Deal Reviewed stage — nothing written/.test(s.reason)), JSON.stringify(u.skipped_jobs))
 })
 
 test('identity pass, any date: a $0 opp whose Project ID belongs to another customer loses the Project ID and its carried-over prices (Courtney Spillers)', async () => {

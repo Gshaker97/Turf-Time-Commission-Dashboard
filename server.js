@@ -2376,6 +2376,11 @@ const arcClosedStage = opp => !!(opp && ARC_CLOSED_STAGES.has(String(opp.pipelin
 // GHL has no cancelled STAGE in either pipeline (Nov 21 2026): a booking cancelled on
 // the Schedule tab sets the opp STATUS to abandoned, unless a stage id is configured.
 const ARC_CANCELLED_STAGE_ID = (process.env.ARC_CANCELLED_STAGE_ID || '').trim() || null
+// Stage names for the audit's logs and reports (ids only where this file knows them).
+const ARC_STAGE_NAMES = { [GHL_PIPELINES.outside.closed]: 'Closed', [GHL_PIPELINES.estimator.closed]: 'Closed', [GHL_PIPELINES.outside.changeOrder]: 'Change Order', [GHL_PIPELINES.estimator.changeOrder]: 'Change Order',
+  '72691282-63f0-451b-9e38-a244dc9d3678': 'Deal Reviewed', 'c3f66652-edf5-49bf-8c24-1c10a2860da7': 'Deal Reviewed', '6f59c233-4ac0-4fbf-a0bc-9fc6b1e2b0fb': 'Ready For Install', '4335186c-102f-4d63-99d0-ea6d474b7649': 'Ready for Install',
+  '930d83c6-7fd2-42cf-acbe-5d5bf2d25cfa': 'Sales Issue', '2bf90b31-3be7-468b-a4cf-42c1224c63c2': 'Sales Issue', '865e11ce-f9d3-4632-856a-f4bc98a996a5': 'Pending Payment', '6852e765-eb65-4a0f-b22e-5c9a63bc803b': 'Pending Payment', '04d32879-cd69-4001-8efe-09f2b4675d62': 'New Leads', '04ca42f5-6b23-4d8a-a2fa-3edb9eafe9ba': 'Project Prep' }
+const arcStageName = id => (id && ARC_STAGE_NAMES[id]) || (id ? String(id).slice(0, 8) + '…' : 'none')
 const ARC_DEAL_REVIEWED_STAGES = { outside: (process.env.GHL_OUTSIDE_DEAL_REVIEWED_STAGE || '72691282-63f0-451b-9e38-a244dc9d3678').trim(), estimator: (process.env.GHL_ESTIMATOR_DEAL_REVIEWED_STAGE || 'c3f66652-edf5-49bf-8c24-1c10a2860da7').trim() }
 // Status ledger: what stage an opp had when the sync cancelled it, so a
 // rebooking restores it. app_settings arcsite_status_ledger, opp id → {...}.
@@ -2890,12 +2895,11 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
     if (held) out.held.push({ opportunity_id: op.id, customer: op.name, project_id: pid })
     // ── Schedule tab: cancelled → abandoned (or the configured stage); rebooked → open + Closed.
     const schedule = scheduleOk ? scheduleState(schedByPid[pid]) : { state: 'unknown', date: null }
-    // Rebooking goes back to the stage the opp had when it was cancelled (kept in
-    // the status ledger), else Deal Reviewed — never Closed: the published
-    // "Welcome Email Video Workflow" texts and emails the customer on a move to Closed.
-    const statusLedger = await arcStatusLedger()
-    const isEst = op.pipelineId === GHL_PIPELINES.estimator.id
-    const rebookStage = (statusLedger[op.id] && statusLedger[op.id].stage_before) || (isEst ? ARC_DEAL_REVIEWED_STAGES.estimator : ARC_DEAL_REVIEWED_STAGES.outside)
+    // Rebooking ALWAYS goes to Deal Reviewed in the opp's own pipeline (Garrison,
+    // Nov 21 2026) — never the stage it had before: a restore to Closed or Pending
+    // Payment would fire the Welcome Email / Satisfaction workflows at the
+    // customer. A pipeline with no Deal Reviewed stage gets a report, no write.
+    const rebookStage = op.pipelineId === GHL_PIPELINES.estimator.id ? ARC_DEAL_REVIEWED_STAGES.estimator : op.pipelineId === GHL_PIPELINES.outside.id ? ARC_DEAL_REVIEWED_STAGES.outside : null
     // A cancelled booking loses its Install Date on the opp and the contact until
     // the Schedule tab books it again; the rebook path then fills both from the
     // Schedule tab (Garrison, Nov 21 2026).
@@ -2914,8 +2918,12 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
       return item
     }
     const sp = scheduleOk ? statusPlan({ schedule, opp: op, closedStageId: rebookStage, cancelledStageId: ARC_CANCELLED_STAGE_ID }) : { action: null }
+    if (sp.action === 'rebook' && !rebookStage) {
+      skip({ project_id: pid, customer: op.name, opportunity_id: op.id, before: { status: op.status, stage: op.pipelineStageId } }, 'ghl', `rebooked on the Schedule tab for ${schedule.date}, but pipeline ${op.pipelineId} has no Deal Reviewed stage — nothing written`)
+      continue
+    }
     if (sp.action) {
-      const item = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'ghl', action: sp.action, before: { status: op.status, stage: op.pipelineStageId }, after: sp.write, reason: sp.reason }
+      const item = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'ghl', action: sp.action, before: { status: op.status, stage: op.pipelineStageId, stage_name: arcStageName(op.pipelineStageId) }, after: sp.write, reason: sp.reason }
       if (dry) { out.would_fix.push(item); log('WOULD FIX', item) }
       else if (capReached()) skip(item, 'ghl', `daily fix cap (${maxFix}) reached — tomorrow's run continues`)
       else {

@@ -29,7 +29,7 @@ test('a Project ID stamped on the wrong customer is detected (Courtney Spillers 
   assert.equal(projectBelongsToOpp({ arcCustomer: 'Jeanie', oppName: 'Larry Ryder' }).ok, false)
 })
 
-test('Schedule tab → status: cancelled → abandoned (or a configured stage); rebooked → open + Closed; lost untouched', () => {
+test('Schedule tab → status: cancelled → abandoned (or a configured stage); rebooked → open + Deal Reviewed; lost untouched', () => {
   const cancelled = { live: [], cancelled: [{ date: '2026-11-27' }] }
   assert.deepEqual(statusPlan({ schedule: scheduleState(cancelled), opp: { status: 'open' }, closedStageId: 'closed' }).write, { status: 'abandoned' })
   assert.deepEqual(statusPlan({ schedule: scheduleState(cancelled), opp: { status: 'open', pipelineStageId: 'x' }, closedStageId: 'closed', cancelledStageId: 'canc' }).write, { pipelineStageId: 'canc' })
