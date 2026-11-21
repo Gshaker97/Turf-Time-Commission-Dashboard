@@ -2689,6 +2689,29 @@ function phoenixNow(dt = new Date()) {
   return { day: `${g('year')}-${g('month')}-${g('day')}`, hour: Number(g('hour')) % 24 }   // en-CA can report midnight as "24"
 }
 
+// Projects the AI Sheet's Schedule tab marks CANCELLED (every booking row for
+// the project cancelled, none live): the customer backed out, so the audit
+// never writes the CONTACT for them (Garrison, Nov 20 2026 — Renee Hallack,
+// Kyle Moreo, Uriel Curiel…). Proposal ID → Project ID via the Jobs tab; a
+// Schedule row whose Proposal ID is itself a Project ID counts too.
+function arcCancelledProjects(sheet) {
+  const out = new Set()
+  out.proposals = new Set()   // the cancelled rows' Proposal IDs too, for a project whose Jobs row is missing
+  if (!sheet || !sheet.schedule || !Array.isArray(sheet.schedule.rows)) return out
+  const pidByProp = new Map()
+  for (const j of ((sheet.jobs && sheet.jobs.rows) || [])) { const prop = String(j['Proposal ID'] || '').trim(), pid = String(j['Project ID'] || '').trim(); if (prop && pid) pidByProp.set(prop, pid) }
+  const cancelled = new Set(), live = new Set()
+  for (const row of sheet.schedule.rows) {
+    const prop = String(row['Proposal ID'] || '').trim()
+    if (!prop || prop.startsWith('CAL-')) continue
+    const pid = pidByProp.get(prop) || prop
+    if (/cancel/i.test(String(row['Status'] || ''))) cancelled.add(pid); else live.add(pid)
+  }
+  for (const pid of cancelled) if (!live.has(pid)) { out.add(pid); out.proposals.add(pid) }
+  return out
+}
+const arcIsCancelled = (set, pid, signed) => set.has(pid) || (signed || []).some(s => set.proposals && set.proposals.has(String(s.proposal_id || '')))
+
 async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_DAYS_BACK, since = ARC_AUDIT_SINCE, maxFix = ARC_AUDIT_MAX_FIX } = {}) {
   // dry (or fix:false) = decide everything, send nothing: every planned push is
   // listed in `would_fix` with its target and source. ARC_AUDIT_DRY=1 makes the
@@ -2751,6 +2774,9 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
       out.calendar = { jobs: calByOpp.size, behind: 0, no_contract: 0, unverified: 0, no_job: 0, current: 0 }
     } catch (e) { out.calendar = { error: String(e.message || e).slice(0, 160) } }
   } else if (!lookupBlocked) out.calendar = { error: 'calendar export not configured' }
+  // Bookings cancelled on the Schedule tab: their contacts are never written.
+  const cancelledProjects = arcCancelledProjects(await readInstallSheet().catch(() => null))
+  out.cancelled_on_schedule = cancelledProjects.size
   const skip = (gap, target, reason) => { const item = { ...gap, target, reason }; out.skipped_jobs.push(item); log('SKIPPED', item) }
   const plan = (gap, target, detail) => { const item = { ...gap, target, ...detail }; out.would_fix.push(item); log('WOULD FIX', item) }
   const capReached = () => out.fixed.length + out.failed.length >= maxFix
@@ -2886,7 +2912,8 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
             const gap = { ...base, target: 'contact', reason: reasons.join('; ') }
             out.gaps.push(gap)
             const src = contractBehind ? calendarPushSource({ entries: oppContractEntries(opp), newestSize, newest, customerName: op.name }) : null
-            if (held) skip(gap, 'contact', 'manual hold (ARC_VALUE_HOLD_OPPS) — nothing written')
+            if (arcIsCancelled(cancelledProjects, pid, signed)) skip(gap, 'contact', 'cancelled on the Schedule tab — contact left alone')
+            else if (held) skip(gap, 'contact', 'manual hold (ARC_VALUE_HOLD_OPPS) — nothing written')
             else if (dry) plan(gap, 'contact', { action: 'contact_refresh', source: src ? src.source : null, value: priceBehind ? arcUsd(wantValue) : 'unchanged', contract: contractBehind ? 'append newest' : 'unchanged' })
             else if (capReached()) skip(gap, 'contact', `daily fix cap (${maxFix}) reached — tomorrow's run continues`)
             else {
