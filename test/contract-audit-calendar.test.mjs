@@ -56,7 +56,10 @@ function reset({ ghl = ['old', 'new'], cal = ['new'], sheetTotal = '2000', calen
       { proposal_id: 'p1', project_id: PID, status: 'APPROVED', total: 1500, pdf_url: 'https://cdn.example/old.pdf', proposal_options: [], document_number: '1001' },
     ],
     calendarJobs: cal === null ? [] : [{ jobNumber: 'J-77', ghlOpportunityId: OPP, canceledAt: null, value, contracts: cal.map(calFile) }],
-    sheetTotal, ingests: [], uploads: [], oppPuts: [], settings,
+    sheetTotal, ingests: [], uploads: [], oppPuts: [], contactPuts: [], settings,
+    // the contact behind the opp: in step with the opp by default (Job Price = value, newest contract held)
+    contact: { id: 'contact-cal', customFields: [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value }, { id: 'X6s8Kc6QVEVyzSIISktA', value },
+      { id: 'BxSAZYBEeT5iBI67CfVW', value: { 'doc-1': { meta: { name: 'contract.pdf', size: NEW_SIZE }, url: 'https://ghl.example/documents/doc-1' } } }] },
   }
 }
 
@@ -109,7 +112,8 @@ globalThis.fetch = async (url, opts = {}) => {
     return send(200, { opportunity: world.opp })
   }
   if (method === 'POST' && parsed.pathname === '/medias/upload-file') { const n = world.uploads.push(opts.body); return send(200, { url: `https://ghl.example/hosted-${n}.pdf` }) }
-  if (method === 'PUT' && parsed.pathname.startsWith('/contacts/')) return send(200, { contact: { id: 'contact-cal' } })
+  if (method === 'GET' && parsed.pathname === '/contacts/contact-cal') return send(200, { contact: world.contact })
+  if (method === 'PUT' && parsed.pathname.startsWith('/contacts/')) { world.contactPuts.push(body); return send(200, { contact: { id: 'contact-cal' } }) }
   if (parsed.pathname.includes('/customFields')) return send(200, { customFields: [] })
   return send(404, {})
 }
@@ -362,4 +366,37 @@ test('ArcSite rate-limited (429): the job is counted as NOT checked and the run 
   const audit = await run({ fix: true })
   assert.equal(audit.checked, 0); assert.equal(audit.ok, 0); assert.equal(audit.arcsite_errors, 1)
   assert.match(audit.skipped, /ArcSite did not answer for 1 of 1 jobs \(ArcSite 429/); assert.equal(world.ingests.length, 0); assert.equal(world.uploads.length, 0)
+})
+
+test('the contact is checked on its own: a stale Job Price / New Price is set to the consensus value and the newest contract is appended (Jonathan Kim)', async () => {
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 6200 }, { id: 'BxSAZYBEeT5iBI67CfVW', value: { 'doc-old': { meta: { name: 'old.pdf', size: OLD_SIZE }, url: 'https://ghl.example/documents/doc-old' } } }]
+  const audit = await run({ fix: true })
+  const fx = audit.fixed.find(f => f.target === 'contact'); assert.ok(fx, JSON.stringify(audit))
+  assert.match(fx.reason, /contact Job Price \$6,200\.00 \/ New Price empty vs \$2,000\.00; contact holds 1 contract .* but not the newest signed PDF/)
+  assert.equal(fx.contract, 'appended'); assert.equal(audit.contact.price_behind, 1); assert.equal(audit.contact.contract_behind, 1)
+  const put = world.contactPuts.find(p => p.customFields.some(f => f.id === 'gz5Xoix8Sd37hUbrvQuQ'))
+  const by = Object.fromEntries(put.customFields.map(f => [f.id, f.field_value]))
+  assert.equal(by.gz5Xoix8Sd37hUbrvQuQ, 2000); assert.equal(by.X6s8Kc6QVEVyzSIISktA, 2000)
+  assert.deepEqual(by.BxSAZYBEeT5iBI67CfVW, ['https://ghl.example/documents/doc-old', 'https://ghl.example/new-1.pdf'])
+  assert.equal(world.oppPuts.length, 0, 'the opp itself was already right')
+  // in step → nothing written; dry → planned only; held → skipped
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  const ok = await run({ fix: true }); assert.equal(ok.contact.current, 1); assert.equal(world.contactPuts.length, 0)
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 6200 }]
+  const d = await run({ fix: true, dry: true }); assert.equal(d.would_fix.filter(w => w.target === 'contact').length, 1); assert.equal(world.contactPuts.length, 0)
+  process.env.ARC_VALUE_HOLD_OPPS = OPP
+  try { reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 6200 }]; const h = await run({ fix: true }); assert.ok(h.skipped_jobs.some(x => x.target === 'contact' && /manual hold/.test(x.reason))); assert.equal(world.contactPuts.length, 0) }
+  finally { delete process.env.ARC_VALUE_HOLD_OPPS }
+})
+
+test('a change order through the audit appends the newest contract to the CONTACT too', async () => {
+  reset({ ghl: ['old'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  world.contact.customFields = [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value: 2000 }, { id: 'X6s8Kc6QVEVyzSIISktA', value: 2000 }, { id: 'BxSAZYBEeT5iBI67CfVW', value: { 'doc-old': { meta: { name: 'old.pdf', size: OLD_SIZE }, url: 'https://ghl.example/documents/doc-old' } } }]
+  const audit = await run({ fix: true })
+  assert.equal(audit.fixed[0].pdf, 'rebuilt 2')
+  const put = world.contactPuts.find(p => p.customFields.some(f => f.id === 'BxSAZYBEeT5iBI67CfVW'))
+  assert.ok(put, JSON.stringify(world.contactPuts))
+  assert.deepEqual(put.customFields.find(f => f.id === 'BxSAZYBEeT5iBI67CfVW').field_value, ['https://ghl.example/documents/doc-old', 'https://ghl.example/hosted-2.pdf'])
 })

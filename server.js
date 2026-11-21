@@ -2272,6 +2272,44 @@ async function arcOppForProposal(p) {
 // the contact's New Price, and the install calendar.
 const GHL_CONTACT_NEW_PRICE_FIELD = 'X6s8Kc6QVEVyzSIISktA'   // contact "New Price" — the install calendar's 6h sync reads it FIRST
 const GHL_CONTACT_JOB_PRICE_FIELD = 'gz5Xoix8Sd37hUbrvQuQ'   // contact "Job Price" — follows the change order too (per Garrison)
+const GHL_CONTACT_INSTALL_DATE_FIELD = (process.env.GHL_CONTACT_INSTALL_DATE_FIELD || 'IMYajaM4Jv4eOG65exQZ').trim()   // contact "Install Date"
+const GHL_CONTACT_CONTRACT_FIELD = (process.env.GHL_CONTACT_CONTRACT_FIELD || 'BxSAZYBEeT5iBI67CfVW').trim()   // contact contract file — the install calendar's 6h sync imports contracts from HERE
+// The contact's contract field holds GHL documents keyed by uuid ({meta,url}),
+// or an array, or a bare url. Deleted ones excluded.
+function contactContractEntries(contact) {
+  for (const c of ((contact && contact.customFields) || [])) {
+    if (c.id !== GHL_CONTACT_CONTRACT_FIELD) continue
+    let v = c.value ?? c.fieldValue ?? c.fieldValueFiles ?? null
+    if (typeof v === 'string') v = v.trim() ? [{ url: v }] : []
+    if (v && !Array.isArray(v) && typeof v === 'object') v = Object.values(v)
+    return (Array.isArray(v) ? v : []).filter(x => x && !x.deleted && (x.url || (x.meta && (x.meta.url || x.meta.originalUrl))))
+      .map(x => ({ url: x.url || x.meta.url || x.meta.originalUrl, name: (x.meta && (x.meta.originalname || x.meta.name || x.meta.filename)) || 'contract.pdf', size: (x.meta && Number(x.meta.size) > 0) ? Number(x.meta.size) : null }))
+  }
+  return []
+}
+const contactFieldNumber = (contact, id) => { const f = ((contact && contact.customFields) || []).find(x => x.id === id); const n = f ? Number(f.value ?? f.fieldValue) : NaN; return Number.isFinite(n) ? Math.round(n * 100) / 100 : null }
+// The CONTACT follows the sale (Garrison, Nov 20 2026 — Jonathan Kim: one
+// contact, a $6,200 deal in September, a $13,896.13 deal in November; the
+// contact kept September's Job Price, Install Date and contract, and a GHL
+// workflow copied that stale Job Price onto the new opportunity). New Price,
+// Job Price, Install Date and the contract (appended, never cleared) are
+// written whenever a sale or change order lands on a contact. Best-effort.
+async function arcRefreshContactSale({ contactId, total = null, installDate = null, contractUrl = null }) {
+  if (!contactId) return { ok: false, error: 'no contact' }
+  const fields = []
+  if (total != null) fields.push({ id: GHL_CONTACT_NEW_PRICE_FIELD, value: total }, { id: GHL_CONTACT_JOB_PRICE_FIELD, value: total })
+  if (installDate && /^\d{4}-\d{2}-\d{2}$/.test(String(installDate))) fields.push({ id: GHL_CONTACT_INSTALL_DATE_FIELD, value: String(installDate) })
+  let contract = 'unchanged'
+  if (contractUrl) {
+    const got = await ghlGet(`/contacts/${contactId}`).catch(() => null)
+    const have = contactContractEntries((got && got.contact) || got || {}).map(e => e.url).filter(Boolean)
+    if (have.includes(contractUrl)) contract = 'already there'
+    else { fields.push({ id: GHL_CONTACT_CONTRACT_FIELD, value: [...have, contractUrl] }); contract = 'appended' }
+  }
+  if (!fields.length) return { ok: true, set: [], contract }
+  try { await ghlContactSetFields(contactId, fields); return { ok: true, set: fields.map(f => f.id), contract } }
+  catch (e) { return { ok: false, error: e.message || 'contact update failed', contract } }
+}
 const CALENDAR_SYNC_URL = (process.env.CALENDAR_SYNC_URL || '').replace(/\/+$/, '')
 const CALENDAR_SYNC_SECRET = (process.env.CALENDAR_SYNC_SECRET || '').trim()
 const arcUsd = n => '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -2360,8 +2398,15 @@ async function ghlContactSetFields(contactId, fields) {
 // delta. Best-effort — the GHL opp is already right either way. ArcSite exposes
 // no signing timestamp, so the signed date is the day we caught it (same day
 // for the live webhook, minutes for the safety net).
-async function arcPropagateChangeOrder({ oppId, contactId, projectId, customer, newTotal, previousTotal, contracts, newestContract, newestProposalId = null }) {
+async function arcPropagateChangeOrder({ oppId, contactId, projectId, customer, newTotal, previousTotal, contracts, newestContract, newestProposalId = null, installDate = null }) {
   const out = { contact_new_price: null, calendar: null }
+  // The contact's contract field gets the newest contract too (the calendar's
+  // 6h sync and the PM workflows read the CONTACT, not the opp).
+  if (contactId && contracts && contracts.length) {
+    const newestFile = contracts[contracts.length - 1]
+    const r = await arcRefreshContactSale({ contactId, installDate, contractUrl: newestFile && newestFile.url }).catch(e => ({ ok: false, error: e.message }))
+    out.contact_contract = r.ok ? r.contract : `failed: ${r.error}`
+  }
   if (contactId && newTotal != null) {
     // Both contact price fields follow the change order: New Price (what the
     // calendar reads first) AND Job Price (per Garrison — the card's price).
@@ -2811,6 +2856,42 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
           const item = { ...gap, action: 'change_order', pdf: r.pdf, stage_moved: r.stage_moved, calendar: cal, verified_after: r.verified_after, error: r.error || (r.ok ? undefined : r.pdf) }
           ;(r.ok ? out.fixed : out.failed).push(item); log(r.ok ? 'FIXED' : 'FAILED', item)
           await pause(500)
+        }
+      }
+      // ── The CONTACT, on its own: the calendar's 6h sync and the PM workflows
+      //    read the contact's Job Price / New Price and its contract field, so a
+      //    stale contact re-infects the opp (Jonathan Kim, Nov 20 2026).
+      if (op.contactId && newest) {
+        const got = await ghlGet(`/contacts/${op.contactId}`).catch(() => null)
+        const contact = (got && got.contact) || null
+        if (contact) {
+          out.contact = out.contact || { checked: 0, current: 0, price_behind: 0, contract_behind: 0, unverified: 0 }
+          out.contact.checked++
+          const jp = contactFieldNumber(contact, GHL_CONTACT_JOB_PRICE_FIELD), np = contactFieldNumber(contact, GHL_CONTACT_NEW_PRICE_FIELD)
+          const priceBehind = wantValue != null && ((jp != null && !arcSame(jp, wantValue)) || (np != null && !arcSame(np, wantValue)) || (jp == null && np == null))
+          const files = contactContractEntries(contact)
+          const sizes = files.map(f => f.size).filter(Boolean)
+          const contractState = !files.length ? 'no_contract' : (!newestSize || !sizes.length) ? 'unverified' : sizes.includes(newestSize) ? 'current' : (sizeUnique ? 'behind' : 'ambiguous')
+          const contractBehind = contractState === 'no_contract' || contractState === 'behind'
+          if (contractState === 'unverified' || contractState === 'ambiguous') out.contact.unverified++
+          if (!priceBehind && !contractBehind) out.contact.current++
+          else {
+            const reasons = []
+            if (priceBehind) { out.contact.price_behind++; reasons.push(`contact Job Price ${jp == null ? 'empty' : arcUsd(jp)} / New Price ${np == null ? 'empty' : arcUsd(np)} vs ${arcUsd(wantValue)}`) }
+            if (contractBehind) { out.contact.contract_behind++; reasons.push(contractState === 'no_contract' ? 'no contract on the contact' : `contact holds ${files.length} contract${files.length === 1 ? '' : 's'} (${sizes.join(', ')} bytes) but not the newest signed PDF (${newestSize} bytes)`) }
+            const gap = { ...base, target: 'contact', reason: reasons.join('; ') }
+            out.gaps.push(gap)
+            const src = contractBehind ? calendarPushSource({ entries: oppContractEntries(opp), newestSize, newest, customerName: op.name }) : null
+            if (held) skip(gap, 'contact', 'manual hold (ARC_VALUE_HOLD_OPPS) — nothing written')
+            else if (dry) plan(gap, 'contact', { action: 'contact_refresh', source: src ? src.source : null, value: priceBehind ? arcUsd(wantValue) : 'unchanged', contract: contractBehind ? 'append newest' : 'unchanged' })
+            else if (capReached()) skip(gap, 'contact', `daily fix cap (${maxFix}) reached — tomorrow's run continues`)
+            else {
+              const r = await arcRefreshContactSale({ contactId: op.contactId, total: priceBehind ? wantValue : null, contractUrl: src ? src.url : null })
+              const item = { ...gap, action: 'contact_refresh', source: src ? src.source : undefined, contract: r.contract, error: r.ok ? undefined : r.error }
+              ;(r.ok ? out.fixed : out.failed).push(item); log(r.ok ? 'FIXED' : 'FAILED', item)
+              await pause(300)
+            }
+          }
         }
       }
       // ── PM calendar, on its own ───────────────────────────────────────────
@@ -3425,6 +3506,14 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
     }
   }
 
+  // ── The contact follows the sale: New Price, Job Price, Install Date and the
+  // contract (appended). A known contact buying again used to keep its old
+  // deal's fields (Jonathan Kim). Best-effort; the opp above is already right.
+  let contactRefresh = null
+  if (contactId && oppId) {
+    contactRefresh = await arcRefreshContactSale({ contactId, total: sellTotal, installDate: planned && planned.install_date ? String(planned.install_date).slice(0, 10) : null, contractUrl: hostedUrl }).catch(e => ({ ok: false, error: e.message }))
+  }
+
   // ── Change order → the install calendar + the contact's "New Price" (so the
   // calendar's own 6h GHL sync agrees with the new total instead of reverting
   // it). Best-effort: the opp above is already right either way.
@@ -3477,7 +3566,7 @@ async function arcsiteToGhl(rawBody, { dryRun = false } = {}) {
     arcPendingAdd(projectId, oppId, estimator).catch(() => {})
   }
 
-  return { ok: true, ...plan, action, adopted: !!oppId && !sameProject && action !== 'created', read_back: readBack, change_order: isChangeOrder, opportunity_id: oppId, contact_id: contactId, owner: oppBody.assignedTo ? closerName : null, pdf, calendar, fields_ok: fieldsOk, enrich: needEnrich ? 'queued' : undefined, alert: alert ? alert.sent : (needEnrich && isNewSale ? 'deferred' : undefined) }
+  return { ok: true, ...plan, action, adopted: !!oppId && !sameProject && action !== 'created', read_back: readBack, change_order: isChangeOrder, opportunity_id: oppId, contact_id: contactId, owner: oppBody.assignedTo ? closerName : null, pdf, contact_refresh: contactRefresh, calendar, fields_ok: fieldsOk, enrich: needEnrich ? 'queued' : undefined, alert: alert ? alert.sent : (needEnrich && isNewSale ? 'deferred' : undefined) }
 }
 
 const app = express()
