@@ -57,7 +57,7 @@ function reset({ ghl = ['old', 'new'], cal = ['new'], sheetTotal = '2000', calen
       { proposal_id: 'p1', project_id: PID, status: 'APPROVED', total: 1500, pdf_url: 'https://cdn.example/old.pdf', proposal_options: [], document_number: '1001' },
     ],
     calendarJobs: cal === null ? [] : [{ jobNumber: 'J-77', ghlOpportunityId: OPP, canceledAt: null, value, contracts: cal.map(calFile) }],
-    sheetTotal, ingests: [], uploads: [], oppPuts: [], contactPuts: [], settings, deals: [{ id: 'deal-1', project_id: PID }], dealPosts: [], dealPatches: [], installRows: [],
+    sheetTotal, ingests: [], uploads: [], oppPuts: [], contactPuts: [], settings, deals: [{ id: 'deal-1', project_id: PID }], dealPosts: [], dealPatches: [], locks: [], installRows: [],
     // the contact behind the opp: in step with the opp by default (Job Price = value, newest contract held)
     contact: { id: 'contact-cal', customFields: [{ id: 'gz5Xoix8Sd37hUbrvQuQ', value }, { id: 'X6s8Kc6QVEVyzSIISktA', value },
       { id: 'BxSAZYBEeT5iBI67CfVW', value: { 'doc-1': { meta: { name: 'contract.pdf', size: NEW_SIZE }, url: 'https://ghl.example/documents/doc-1' } } }] },
@@ -101,6 +101,7 @@ globalThis.fetch = async (url, opts = {}) => {
     if (parsed.pathname === '/rest/v1/deals' && method === 'POST') { world.dealPosts.push(body); world.deals.push({ id: 'deal-' + (world.deals.length + 1), ...body }); return send(201, {}) }
     if (parsed.pathname === '/rest/v1/deals') { const pid = decodeURIComponent(parsed.searchParams.get('project_id') || '').replace(/^eq\./, ''); return send(200, world.deals.filter(d => !pid || d.project_id === pid)) }
     if (parsed.pathname === '/rest/v1/profiles') return send(200, [{ id: 'prof-1', name: 'Fixture Rep', email: 'rep@example.com' }])
+    if (parsed.pathname === '/rest/v1/payroll_locks') { const pd = decodeURIComponent(parsed.searchParams.get('pay_date') || '').replace(/^eq\./, ''); return send(200, (world.locks || []).filter(l => l.pay_date === pd)) }
     return send(200, [])
   }
   if (parsed.origin !== GHL) return send(404, {})
@@ -654,31 +655,49 @@ test('ARC_AUDIT_SKIP_OPPS: an excluded opp is not audited and nothing is written
   const again = await run({ fix: true }); assert.ok(again.fixed.some(f => f.action === 'change_order')); assert.equal(world.opp.monetaryValue, 2000)
 })
 
-test('change order → commission-site deal: a deal that is not Paid gets the Sheet\'s newest job price and baseline; a Paid deal is listed with old and new, never rewritten; Outside Sales only', async () => {
+test('change order → commission-site deal: the deal takes the Sheet numbers, loses its gold check and wears the ❗ flag (applied); a FINALIZED deal is unfinalized the same way with its status kept; on a LOCKED pay run only the flag is written; Outside Sales only', async () => {
   const OUTSIDE = 'EWGmXwXP63Da5eBMNiDU'
+  const fresh = (extra) => { reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE; world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 1500, baseline_revenue: 900, status: 'Pending Install', pay_date: '2026-12-04', commission_verified: true, change_alert: null, ...extra }] }
   // two signed proposals (p1 $1,500 → p2 $2,000); the Sheet's newest row (p2): Approved Total 2000, Baseline 1000, Commission 200
-  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
-  world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 1500, baseline_revenue: 900, status: 'Pending Install' }]
+  fresh()
   const d = await run({ fix: true, dry: true })
   const u = d.would_fix.find(w => w.action === 'update_deal'); assert.ok(u, JSON.stringify(d.would_fix))
-  assert.deepEqual(u.before, { job_price: 1500, baseline_revenue: 900, commission: null }); assert.deepEqual(u.after, { job_price: 2000, baseline_revenue: 1000, commission: 200 })
-  assert.equal(u.deal_status, 'Pending Install'); assert.equal(world.dealPatches.length, 0, 'dry run writes nothing')
-  // live: the deal is patched and read back
-  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
-  world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 1500, baseline_revenue: 900, status: 'Pending Install' }]
+  assert.equal(u.before.job_price, 1500); assert.equal(u.before.baseline_revenue, 900); assert.equal(u.before.commission_verified, true); assert.equal(u.before.status, 'Pending Install')
+  assert.equal(u.after.job_price, 2000); assert.equal(u.after.baseline_revenue, 1000); assert.equal(u.after.commission, 200); assert.equal(u.after.commission_verified, false)
+  assert.equal(u.finalized, false); assert.equal(u.locked, false); assert.equal(world.dealPatches.length, 0, 'dry run writes nothing')
+  // live, not finalized: numbers + gold check off + applied flag, read back
+  fresh()
   const l = await run({ fix: true })
-  const f = l.fixed.find(w => w.action === 'update_deal'); assert.ok(f, JSON.stringify(l.failed)); assert.deepEqual(world.dealPatches, [{ id: 'deal-1', job_price: 2000, baseline_revenue: 1000 }]); assert.equal(f.read_back.job_price, 2000)
-  assert.equal(world.dealPosts.length, 0, 'no second deal created')
-  // Paid: listed under deals_paid_changed, nothing patched
-  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
-  world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 1500, baseline_revenue: 900, status: 'Paid' }]
-  const pd = await run({ fix: true })
-  assert.equal(world.dealPatches.length, 0); assert.ok(!pd.fixed.some(w => w.action === 'update_deal')); assert.equal(pd.deals_paid_changed.length, 1); assert.match(pd.deals_paid_changed[0].reason, /^PAID deal — not rewritten/)
+  const f = l.fixed.find(w => w.action === 'update_deal'); assert.ok(f, JSON.stringify(l.failed))
+  assert.equal(world.dealPatches.length, 1); const pt = world.dealPatches[0]
+  assert.equal(pt.job_price, 2000); assert.equal(pt.baseline_revenue, 1000); assert.equal(pt.commission_verified, false); assert.equal(pt.status, undefined, 'status is never written')
+  assert.equal(pt.change_alert.prev_job_price, 1500); assert.equal(pt.change_alert.prev_baseline, 900); assert.equal(pt.change_alert.job_price, 2000); assert.equal(pt.change_alert.baseline, 1000); assert.equal(pt.change_alert.source, 'change_order'); assert.ok(pt.change_alert.applied_at); assert.deepEqual(pt.change_alert.proposals, ['p2'])
+  assert.equal(f.read_back.commission_verified, false); assert.equal(world.dealPosts.length, 0, 'no second deal created')
+  // Paid on an UNLOCKED run: unfinalized — same patch, status kept, listed as unfinalize_deal
+  fresh({ status: 'Paid', pay_date: '2026-08-28' })
+  const pd = await run({ fix: true, dry: true })
+  const uf = pd.would_fix.find(w => w.action === 'unfinalize_deal'); assert.ok(uf, JSON.stringify(pd.would_fix)); assert.equal(uf.finalized, true); assert.equal(uf.locked, false); assert.match(uf.reason, /Paid deal unfinalized/); assert.match(uf.reason, /status stays Paid/)
+  assert.equal(pd.deals_paid_changed.length, 0, 'no longer merely listed')
+  fresh({ status: 'Paid', pay_date: '2026-08-28' })
+  const pl = await run({ fix: true })
+  const pf = pl.fixed.find(w => w.action === 'unfinalize_deal'); assert.ok(pf, JSON.stringify(pl.failed))
+  assert.deepEqual(Object.keys(world.dealPatches[0]).sort(), ['baseline_revenue', 'change_alert', 'commission_verified', 'id', 'job_price'])
+  assert.equal(world.deals[0].status, 'Paid'); assert.equal(world.deals[0].commission_verified, false); assert.equal(world.deals[0].job_price, 2000)
+  // Pay Finalized counts as finalized too
+  fresh({ status: 'Pay Finalized' })
+  const pfz = await run({ fix: true, dry: true }); assert.ok(pfz.would_fix.find(w => w.action === 'unfinalize_deal'))
+  // Paid on a LOCKED run: only the flag (what the lock lets through), numbers and gold check untouched
+  fresh({ status: 'Paid', pay_date: '2026-08-28' }); world.locks = [{ pay_date: '2026-08-28' }]
+  const ld = await run({ fix: true, dry: true })
+  const lf = ld.would_fix.find(w => w.action === 'flag_deal_locked'); assert.ok(lf, JSON.stringify(ld.would_fix)); assert.equal(lf.locked, true); assert.match(lf.reason, /LOCKED pay run 2026-08-28/)
+  assert.deepEqual(Object.keys(lf.patch), ['change_alert']); assert.equal(lf.after.job_price, 1500, 'numbers not written'); assert.equal(lf.after.commission_verified, true)
+  fresh({ status: 'Paid', pay_date: '2026-08-28' }); world.locks = [{ pay_date: '2026-08-28' }]
+  const ll = await run({ fix: true })
+  const lfx = ll.fixed.find(w => w.action === 'flag_deal_locked'); assert.ok(lfx, JSON.stringify(ll.failed))
+  assert.deepEqual(Object.keys(world.dealPatches[0]).sort(), ['change_alert', 'id']); assert.equal(world.deals[0].job_price, 1500); assert.equal(world.deals[0].commission_verified, true); assert.equal(world.deals[0].change_alert.applied_at, undefined)
   // in step → nothing; Inside Sales → nothing (listed under deals_skipped by the pipeline rule)
-  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
-  world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 2000, baseline_revenue: 1000, status: 'Pending Install' }]
-  const ok = await run({ fix: true }); assert.equal(world.dealPatches.length, 0); assert.ok(!ok.fixed.some(w => w.action === 'update_deal'))
-  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = 'jfhZWICxnmISGllte9Rv'
-  world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 1500, baseline_revenue: 900, status: 'Pending Install' }]
+  fresh({ job_price: 2000, baseline_revenue: 1000 })
+  const ok = await run({ fix: true }); assert.equal(world.dealPatches.length, 0); assert.ok(!ok.fixed.some(w => /deal/.test(w.action)))
+  fresh(); world.opp.pipelineId = 'jfhZWICxnmISGllte9Rv'
   const ins = await run({ fix: true }); assert.equal(world.dealPatches.length, 0); assert.equal(ins.deals_skipped.length, 1)
 })

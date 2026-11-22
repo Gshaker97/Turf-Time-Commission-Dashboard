@@ -2855,7 +2855,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
   out.cancelled_bookings = []
   out.later_projects = []   // finished jobs whose calendar job now carries a later project's PM
   out.deals_skipped = []    // commission-site deals the audit would have created but must not (Inside Sales, or sold before the site's first deal)
-  out.deals_paid_changed = []   // Paid deals whose newest change order differs from the deal: listed with old/new, never rewritten
+  out.deals_paid_changed = []   // kept for older stored results; since Nov 21 2026 a finalized deal behind a change order is unfinalized (or flagged, on a locked pay run), never merely listed
   const audited = new Set()   // opps that went through the contract/value check — the only ones that may get a commission-site deal
   const arcErrored = new Set()
   for (let ci = 0; ci < cands.length; ci++) {
@@ -3343,7 +3343,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
         if (!audited.has(op.id) || dealPlanned.has(pid)) continue
         if (String(op.status || '').toLowerCase() !== 'open' && String(op.status || '').toLowerCase() !== 'won') continue
         if (!out.values[pid] || out.values[pid].total == null) continue
-        const have = await restGet(`/rest/v1/deals?project_id=eq.${encodeURIComponent(pid)}&select=id,deal_name,job_price,baseline_revenue,status&limit=1`).catch(() => null)
+        const have = await restGet(`/rest/v1/deals?project_id=eq.${encodeURIComponent(pid)}&select=id,deal_name,job_price,baseline_revenue,status,pay_date,commission_verified,change_alert&limit=1`).catch(() => null)
         if (!Array.isArray(have)) continue
         const row = await jobRowForProject(pid).catch(() => null)
         if (!row) continue
@@ -3366,10 +3366,17 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
         dealPlanned.add(pid)
         if (have.length) {
           // ── Change order → the existing deal (Garrison, Nov 21 2026). The Sheet's
-          // row for the NEWEST signed proposal carries the job price, the baseline
-          // and the commission the site should hold. A deal that is not Paid is
-          // updated (job price + baseline; the site recomputes commission). A Paid
-          // deal is never rewritten: it is listed with old and new numbers.
+          // rows for the counted proposals carry the job price, the baseline and the
+          // commission the site should hold. The deal takes the new numbers, loses its
+          // gold check (it signed off the OLD figures — the site's own "Apply new
+          // numbers" rule) and wears the ❗ change flag with old → new, so it sits in
+          // Needs review until Keaton clears it. A FINALIZED deal (Pay Finalized or
+          // Paid — the Payroll page's definition) is unfinalized the same way; its
+          // status is left as it is, because the payout did happen and the Payroll
+          // history must keep saying so. A deal on a LOCKED pay run cannot be
+          // re-priced by anything but an admin's logged override on the site
+          // (migration 057): the lock does let the change flag through (039), so
+          // that deal is flagged with old → new and nothing else is written.
           const deal = have[0]
           if (!(out.values[pid].signed >= 2) || deal.job_price == null) continue
           // The Sheet rows for exactly the proposals the value counts (newest redraw +
@@ -3381,17 +3388,34 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
           const differs = (a, b) => a == null || b == null ? a !== b : Math.abs(Number(a) - Number(b)) > 1
           if (!differs(deal.job_price, newJob) && !differs(deal.baseline_revenue, newBase)) continue
           const coDate = roll.changeOrder || null
-          const upd = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'site', action: 'update_deal', deal_id: deal.id, deal_status: deal.status, change_order: coDate, newest: out.values[pid].newest,
-            before: { job_price: deal.job_price, baseline_revenue: deal.baseline_revenue, commission: null }, after: { job_price: newJob, baseline_revenue: newBase, commission: newComm },
-            reason: `change order signed ${coDate || '?'} (${out.values[pid].newest}): job price ${arcUsd(deal.job_price)} → ${arcUsd(newJob)}, baseline ${arcUsd(deal.baseline_revenue)} → ${arcUsd(newBase)}; the site recomputes commission (Sheet says ${newComm == null ? '?' : arcUsd(newComm)})` }
-          if (/^paid$/i.test(String(deal.status || ''))) { upd.reason = `PAID deal — not rewritten; ` + upd.reason; out.deals_paid_changed.push(upd); log('PAID DEAL CHANGED', upd); continue }
+          const finalized = /^(paid|pay finalized)$/i.test(String(deal.status || '').trim())
+          const locked = deal.pay_date ? await restGet(`/rest/v1/payroll_locks?pay_date=eq.${encodeURIComponent(deal.pay_date)}&select=pay_date&limit=1`).then(r => Array.isArray(r) && r.length > 0).catch(() => null) : false
+          const before = { job_price: deal.job_price, baseline_revenue: deal.baseline_revenue, commission: null, status: deal.status, pay_date: deal.pay_date || null, commission_verified: deal.commission_verified === true, change_alert: deal.change_alert || null }
+          const at = new Date().toISOString()
+          const alert = { prev_job_price: deal.job_price, prev_baseline: deal.baseline_revenue, job_price: newJob, baseline: newBase, commission: newComm, at, source: 'change_order', change_order: coDate, newest: out.values[pid].newest, proposals: roll.proposals, prev_status: deal.status, prev_commission_verified: deal.commission_verified === true }
+          const patch = locked ? { change_alert: alert } : { job_price: newJob, baseline_revenue: newBase, commission_verified: false, change_alert: { ...alert, applied_at: at } }
+          const action = locked ? 'flag_deal_locked' : finalized ? 'unfinalize_deal' : 'update_deal'
+          const nums = `job price ${arcUsd(deal.job_price)} → ${arcUsd(newJob)}, baseline ${arcUsd(deal.baseline_revenue)} → ${arcUsd(newBase)} (Sheet commission ${newComm == null ? '?' : arcUsd(newComm)})`
+          const upd = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'site', action, deal_id: deal.id, deal_status: deal.status, pay_date: deal.pay_date || null, finalized, locked: !!locked, change_order: coDate, newest: out.values[pid].newest,
+            before, after: { job_price: locked ? deal.job_price : newJob, baseline_revenue: locked ? deal.baseline_revenue : newBase, commission: newComm, status: deal.status, commission_verified: locked ? deal.commission_verified === true : false, change_alert: patch.change_alert }, patch,
+            reason: locked
+              ? `change order signed ${coDate || '?'} (${out.values[pid].newest}): the ${deal.status} deal sits on the LOCKED pay run ${deal.pay_date} — the database refuses to re-price it, so only the ❗ flag is written (${nums}); Keaton applies the numbers on the Deals page with a logged override`
+              : finalized
+                ? `change order signed ${coDate || '?'} (${out.values[pid].newest}): ${deal.status} deal unfinalized — ${nums}; gold check off, flagged for review; status stays ${deal.status} (the payout happened); the site recomputes commission`
+                : `change order signed ${coDate || '?'} (${out.values[pid].newest}): ${nums}; gold check off, flagged for review; the site recomputes commission` }
+          if (locked === null) { skip(upd, 'site', 'could not read the payroll locks — nothing written'); continue }
           if (dry) { out.would_fix.push(upd); log('WOULD FIX', upd); continue }
           if (capReached()) { skip(upd, 'site', `daily fix cap (${maxFix}) reached — tomorrow's run continues`); continue }
           try {
-            await restWrite('PATCH', `/rest/v1/deals?id=eq.${encodeURIComponent(deal.id)}`, { job_price: newJob, baseline_revenue: newBase })
-            const back = await restGet(`/rest/v1/deals?id=eq.${encodeURIComponent(deal.id)}&select=id,job_price,baseline_revenue,status&limit=1`).catch(() => [])
-            upd.read_back = back && back[0]
-            if (back && back[0] && !differs(back[0].job_price, newJob) && !differs(back[0].baseline_revenue, newBase)) { out.fixed.push(upd); log('FIXED', upd) } else { upd.error = 'deal not updated on read-back'; out.failed.push(upd); log('FAILED', upd) }
+            log('DEAL BEFORE', { deal_id: deal.id, customer: op.name, before })
+            await restWrite('PATCH', `/rest/v1/deals?id=eq.${encodeURIComponent(deal.id)}`, patch)
+            const back = await restGet(`/rest/v1/deals?id=eq.${encodeURIComponent(deal.id)}&select=id,job_price,baseline_revenue,status,pay_date,commission_verified,change_alert&limit=1`).catch(() => [])
+            const b = back && back[0]; upd.read_back = b
+            const flagged = !!(b && b.change_alert && b.change_alert.at === at)
+            const good = locked
+              ? flagged && !differs(b.job_price, deal.job_price) && b.commission_verified === (deal.commission_verified === true)
+              : !!b && !differs(b.job_price, newJob) && !differs(b.baseline_revenue, newBase) && b.commission_verified === false && flagged && b.status === deal.status
+            if (good) { out.fixed.push(upd); log('FIXED', upd) } else { upd.error = 'deal not updated on read-back'; out.failed.push(upd); log('FAILED', upd) }
           } catch (e) { upd.error = e.message; out.failed.push(upd); log('FAILED', upd) }
           await pause(300)
           continue

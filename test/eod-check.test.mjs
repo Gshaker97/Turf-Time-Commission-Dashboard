@@ -332,3 +332,19 @@ test('a Paid deal behind a change order is named in the 9 PM text with old and n
   assert.match(text, /PAID DEAL BEHIND A CHANGE ORDER \(1\)/)
   assert.match(text, /Isaac Rosas: change order Nov 19 \(Proposal 638077\): the Paid deal still holds job price \$17,971\.60 \/ baseline \$15,100\.09; the Sheet's newest row says \$19,104\.90 \/ \$16,022\.20 \(commission \$3,082\.70\): not rewritten, needs a person/)
 })
+
+test('a finalized deal unfinalized after a change order, and one flagged on a locked pay run, are named in the 9 PM text with old and new numbers', () => {
+  const p = base()
+  p.contractAudit = { gaps: [], values: {}, sheet_gaps: [], fixed: [
+    { action: 'unfinalize_deal', project_id: 'P9', customer: 'Amanda Pogorzelski 2', opportunity_id: 'o9', change_order: '2026-11-08', newest: 'Proposal 615315', before: { job_price: 15895.75, baseline_revenue: 12227.5, status: 'Paid', commission: null }, after: { job_price: 17698.35, baseline_revenue: 13530.1, commission: 4168.25, status: 'Paid', commission_verified: false } },
+    { action: 'flag_deal_locked', project_id: 'P8', customer: 'Locked Customer', opportunity_id: 'o8', pay_date: '2026-08-28', change_order: '2026-11-08', newest: 'Proposal 1', before: { job_price: 100, baseline_revenue: 50, status: 'Paid' }, after: { job_price: 100, baseline_revenue: 50, commission: 9 }, patch: { change_alert: { job_price: 120, baseline: 60 } } },
+  ] }
+  const r = buildEodReport(p)
+  assert.ok(r.issues.find(i => i.kind === 'deal_unfinalized'), JSON.stringify(r.issues)); assert.ok(r.issues.find(i => i.kind === 'deal_locked_flagged'))
+  const text = eodSmsText(r)
+  assert.match(text, /PAID DEAL UNFINALIZED AFTER A CHANGE ORDER \(1\)/)
+  assert.match(text, /Amanda Pogorzelski 2: change order Nov 8 \(Proposal 615315\): the Paid deal was unfinalized: job price \$15,895\.75 → \$17,698\.35, baseline \$12,227\.50 → \$13,530\.10 \(commission \$4,168\.25\); gold check off, flagged on the Deals page: review it/)
+  assert.match(text, /PAID DEAL ON A LOCKED PAY RUN — FLAGGED \(1\)/)
+  assert.match(text, /Locked Customer: [^\n]*LOCKED pay run Aug 28[^\n]*\$100\.00 → \$120\.00, baseline \$50\.00 → \$60\.00/)
+  assert.ok(!text.includes('CHANGED TODAY BY THE DAILY SYNC'), 'not double-listed under the generic changes')
+})

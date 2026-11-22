@@ -411,16 +411,36 @@ function ChangeAlertTag({ deal, canEdit, onUpdate, onSplit }) {
           <div className="fixed z-[60] p-3 text-left"
             style={{ ...POPOVER, top: pos.top, left: pos.left, width: WIDTH }}>
             <p className="text-[13px] font-bold uppercase tracking-wide mb-1" style={{ color: 'var(--warn)' }}>
-              New agreement on the sheet{ca.at ? ` · ${new Date(ca.at).toLocaleDateString()}` : ''}
+              {ca.applied_at ? 'Change order applied by the daily audit' : ca.source === 'change_order' ? 'Change order signed' : 'New agreement on the sheet'}{ca.at ? ` · ${new Date(ca.at).toLocaleDateString()}` : ''}
             </p>
             <div className="text-[13px] text-bank-tx leading-snug space-y-0.5">
               <p>Baseline {money(ca.prev_baseline)} → <b className="text-bank-tx">{money(ca.baseline)}</b></p>
               <p>Sale price {money(ca.prev_job_price)} → <b className="text-bank-tx">{money(ca.job_price)}</b></p>
             </div>
             <p className="text-[13px] text-bank-mu mt-1.5 leading-snug">
-              Nothing on the deal was changed yet.
+              {ca.applied_at
+                ? `The audit wrote the new numbers${ca.prev_status ? ` (deal was ${ca.prev_status})` : ''} and took the gold check off. Review the commission, then clear the flag.`
+                : ca.source === 'change_order'
+                  ? 'Nothing on the deal was changed yet — its pay run is locked, so applying asks for a logged override.'
+                  : 'Nothing on the deal was changed yet.'}
             </p>
-            {canEdit && (
+            {canEdit && ca.applied_at && (
+              <div className="mt-2">
+                <button onClick={async () => {
+                    if (!await confirmDialog({
+                      title: 'Clear this change-order flag?',
+                      message: 'The deal keeps the new numbers. Re-check the gold check once the commission is right.',
+                      confirmLabel: 'Reviewed — clear flag',
+                    })) return
+                    onUpdate?.(deal.id, { change_alert: null }); setOpen(false)
+                  }}
+                  className="w-full py-2 min-h-[44px] rounded-lg text-[13px] font-semibold transition-colors hover:bg-bank-raise"
+                  style={{ color: 'var(--warn)', border: '1px solid rgba(210,160,116,0.5)' }}>
+                  Reviewed — clear the flag
+                </button>
+              </div>
+            )}
+            {canEdit && !ca.applied_at && (
               <div className="mt-2 space-y-1.5">
                 {/* APPLY — adopt the sheet's new figures onto the deal. Stored
                     *_amount values are cleared so the engine recomputes every
