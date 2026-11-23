@@ -65,6 +65,29 @@ export function dealManagerId(lookup, { setterId = null, closerId = null } = {})
 // closer when no setter was recorded. Without the fallback, a deal missing
 // its setter silently vanishes from every leaderboard / team breakdown while
 // still counting in the company totals — the Dashboard-vs-Team mismatch.
+// ── Roster status (migration 062) — ON the team vs IN the headcount ───────
+// `active` answers "can they sign in"; this answers "do they count as one of
+// the team's reps". They are deliberately separate: a flex rep signs in
+// normally and their money counts everywhere, and someone can be flex today
+// and deactivated next year without the two ideas fighting.
+//
+//   counted  the default, and what every row reads as before the migration
+//   flex     sells here and there; permanent (Keaton's word, over "part time")
+//   away     temporarily gone; expected back, carries `away_until`
+//
+// THE UNKNOWN COLUMN READS AS `counted`, which is what lets the frontend ship
+// before the migration is run: every profile counts, exactly as today.
+export const ROSTER_STATUSES = ['counted', 'flex', 'away']
+export const rosterStatus = (u) =>
+  ROSTER_STATUSES.includes(u?.roster_status) ? u.roster_status : 'counted'
+export const isFlex = (u) => rosterStatus(u) === 'flex'
+export const isAway = (u) => rosterStatus(u) === 'away'
+
+// The ONE rule for "is this person one of the team's reps". Use it in every
+// headcount — never test `active` or `roster_status` inline, the way no
+// roll-up tests `status` instead of `countsInTotals`.
+export const countsInHeadcount = (u) => u?.active !== false && rosterStatus(u) === 'counted'
+
 export const saleOwnerId = (d) => d.setter_id || d.closer_id || null
 
 // How a team is NAMED, everywhere. Teams are keyed by their HEAD, so the

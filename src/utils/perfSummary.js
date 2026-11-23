@@ -31,7 +31,7 @@
 //     row (zeros) so an idle rep is visible, not hidden.
 // ============================================================
 import { dealAmounts, countsInTotals } from './commission.js'
-import { saleOwnerId, teamOfSale, teamLabel } from './team.js'
+import { saleOwnerId, teamOfSale, teamLabel, rosterStatus, isAway, countsInHeadcount } from './team.js'
 import { RAN_STATUSES, apptDay } from './estimates.js'
 import { summarizeActivity } from './fieldActivity.js'
 import { nonRepSet, isNonRep, ranPast } from './leadGaps.js'
@@ -384,6 +384,11 @@ export function buildPerformance({
   const roster = new Map()   // teamKey → Set(repId)
   for (const u of users) {
     if (u.active === false || excluded.has(u.id)) continue
+    // AWAY drops the zero row (per Keaton — someone who is out reading 0 is
+    // not a performance problem). FLEX keeps theirs: they are present, just
+    // not counted. If an away rep DID sell in the window they still get a
+    // row, because `bucket.reps` carries them in on their deals below.
+    if (isAway(u)) continue
     if (!['rep', 'manager', 'director', 'vp'].includes(u.role) && !heads.has(u.id)) continue
     let k = memberTeam(u, asOf, teamCtx)
     if (k === UNASSIGNED && defTeam) k = defTeam
@@ -411,6 +416,11 @@ export function buildPerformance({
         id: pid, name: u.name, role: u.role, ghost: !!u.ghost, active: u.active !== false,
         isHead: pid === key,
         member: members.has(pid),                 // on this team as of the range end
+        // `member` is "on this team"; `counted` is "one of its reps". They
+        // differ for flex and away, and only `counted` feeds the headcount —
+        // scorecard still reads `member` for its "moved teams" sub-label.
+        rosterStatus: rosterStatus(u),
+        counted: members.has(pid) && countsInHeadcount(u),
         prev: prevRep,
         ...stats,
       })
@@ -427,7 +437,7 @@ export function buildPerformance({
       isDefault: key === defTeam,                          // adopts everything unassigned
       historical: key !== UNASSIGNED && key !== defTeam && !heads.has(key),   // a former lead's old team
       unassigned: key === UNASSIGNED,
-      members: rows.filter(r => r.member).length,
+      members: rows.filter(r => r.counted).length,   // the team's "N reps" — flex and away are out
       knockers: rows.filter(r => r.doors > 0).length,
       rows, totals, prev: prevTotals,
     })
@@ -498,6 +508,9 @@ export function buildPerformance({
 // floor left.
 export const DEFAULT_FLOORS = { set: 1 }
 export function repFlags(row, floors = DEFAULT_FLOORS) {
+  // Nothing is red while someone is AWAY (per Keaton). They read 0 on every
+  // activity figure because they are out, not because they are failing.
+  if (row?.rosterStatus === 'away') return {}
   const f = { ...DEFAULT_FLOORS, ...(floors || {}) }
   const flags = {}
   if (row.set < Number(f.set)) flags.set = true

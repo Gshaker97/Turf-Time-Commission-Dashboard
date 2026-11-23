@@ -30,6 +30,35 @@ export default function Admin() {
   const overdueMoves = useMemo(
     () => pendingMoves.filter(m => m.effective_date <= azToday()),
     [pendingMoves])
+  // People marked AWAY who nothing will ever prompt you about again. Two
+  // cases, deliberately in one list: their expected return date has arrived
+  // (or passed) and they are still away, OR they have no date at all. An away
+  // rep with a FUTURE date is fine and is left out — their own card already
+  // says when they are back. Arizona's today, same as the move sweep.
+  const awayOverdue = useMemo(() => {
+    const today = azToday()
+    return users
+      .filter(u => u.active !== false && isAway(u))
+      .filter(u => !u.away_until || u.away_until <= today)
+      .sort((a, b) => (a.away_until || '').localeCompare(b.away_until || '') || a.name.localeCompare(b.name))
+  }, [users])
+
+  // One click back into the headcount. The date is cleared with it — leaving a
+  // stale "back on the 3rd" behind on someone who IS back would read as a
+  // second, contradicting fact about them.
+  async function backOnTeam(u) {
+    if (!await confirmDialog({
+      title: `${u.name} is back on the team?`,
+      message: 'They go back into their team’s rep count from now on.',
+      bullets: [
+        'Nothing about their deals, revenue or commission changes — those never stopped counting.',
+        'Their team’s “N reps” and the Team Average contest divisor include them again.',
+      ],
+      confirmLabel: 'Back on the team',
+    })) return
+    patchUser(u.id, { roster_status: 'counted', away_until: null })
+  }
+
   // Deals are only needed for the move PREVIEW, so they are fetched on demand
   // (opening the modal, or expanding the change log) rather than on every
   // visit to a page that is mostly about the roster.

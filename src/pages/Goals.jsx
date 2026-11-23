@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { fetchDeals, fetchUsers, fetchWeeklyStats, fetchPersonalGoals, fetchLeads, upsertPersonalGoal, saveRepGoal } from '../lib/db'
 import { useSettings } from '../contexts/SettingsContext'
 import { fmt } from '../utils/commission'
-import { headIdSet, teamKeyFor, teamLabel } from '../utils/team'
+import { headIdSet, teamKeyFor, teamLabel, isAway } from '../utils/team'
 import {
   currentPeriods, resolveGoal, goalIsSet, repProduction, periodElapsed,
   metricProgress, suggestFromRevenue, estimateStreak,
@@ -201,7 +201,9 @@ export default function Goals() {
     const wEl = periodElapsed(periods.week, today)
     const mEl = periodElapsed(periods.month, today)
     const streak = estimateStreak(goals, deals, weeklyStats, rep.id, today, 26, estOpts)
-    const noGoals = !goalIsSet(wGoal) && !goalIsSet(mGoal)
+    // Someone who is OUT doesn't need a target for the month (per Keaton).
+    // Flex reps still do — they're present, just not in the headcount.
+    const noGoals = !isAway(rep) && !goalIsSet(wGoal) && !goalIsSet(mGoal)
     // The goal-math helper shows while a monthly revenue goal exists but the
     // activity targets that should follow from it are still blank.
     const sug = editable && mGoal?.revenue_target > 0 && (mGoal.est_target == null || mGoal.deals_target == null)

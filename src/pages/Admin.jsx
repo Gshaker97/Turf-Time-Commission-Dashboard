@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { RefreshCw, Activity, CalendarClock, X, Pencil, Undo2, Trash2, AlertTriangle } from 'lucide-react'
+import { RefreshCw, Activity, CalendarClock, X, Pencil, Undo2, Trash2, AlertTriangle, UserCheck } from 'lucide-react'
 import {
   fetchUsers, insertUser, updateUser, deleteUser, fetchDeals,
   userAdmin, userAdminConfigured, fetchTeamChanges, fetchLeads,
@@ -13,7 +13,7 @@ import ManagerBackfillModal from '../components/ManagerBackfillModal'
 import PeopleChart from '../components/PeopleChart'
 import TeamMoveModal from '../components/TeamMoveModal'
 import { useAuth } from '../contexts/AuthContext'
-import { changeDay, localDay, teamLabel } from '../utils/team'
+import { changeDay, localDay, teamLabel, isAway } from '../utils/team'
 import { azToday, fmtDay, previewDateChange, teamKeyLabel } from '../utils/teamMove'
 import { leadFeedHealth } from '../utils/feedHealth'
 import SettingsPanel from '../components/SettingsPanel'
@@ -213,6 +213,35 @@ export default function Admin() {
   const overdueMoves = useMemo(
     () => pendingMoves.filter(m => m.effective_date <= azToday()),
     [pendingMoves])
+  // People marked AWAY who nothing will ever prompt you about again. Two
+  // cases, deliberately in one list: their expected return date has arrived
+  // (or passed) and they are still away, OR they have no date at all. An away
+  // rep with a FUTURE date is fine and is left out — their own card already
+  // says when they are back. Arizona's today, same as the move sweep.
+  const awayOverdue = useMemo(() => {
+    const today = azToday()
+    return users
+      .filter(u => u.active !== false && isAway(u))
+      .filter(u => !u.away_until || u.away_until <= today)
+      .sort((a, b) => (a.away_until || '').localeCompare(b.away_until || '') || a.name.localeCompare(b.name))
+  }, [users])
+
+  // One click back into the headcount. The date is cleared with it — leaving a
+  // stale "back on the 3rd" behind on someone who IS back would read as a
+  // second, contradicting fact about them.
+  async function backOnTeam(u) {
+    if (!await confirmDialog({
+      title: `${u.name} is back on the team?`,
+      message: 'They go back into their team’s rep count from now on.',
+      bullets: [
+        'Nothing about their deals, revenue or commission changes — those never stopped counting.',
+        'Their team’s “N reps” and the Team Average contest divisor include them again.',
+      ],
+      confirmLabel: 'Back on the team',
+    })) return
+    patchUser(u.id, { roster_status: 'counted', away_until: null })
+  }
+
   // Deals are only needed for the move PREVIEW, so they are fetched on demand
   // (opening the modal, or expanding the change log) rather than on every
   // visit to a page that is mostly about the roster.
@@ -645,6 +674,50 @@ export default function Admin() {
             onMovePeople={openMoveModal}
             onRenameTeam={renameTeam}
           />
+
+          {/* DUE BACK — away is the one roster state that can be forgotten.
+              Deactivated people have a drawer and flex is permanent, but an
+              away rep sits in the chart looking normal apart from a small tag,
+              out of their team's count, indefinitely. This is the prompt. */}
+          {awayOverdue.length > 0 && (
+            <div className="rounded-2xl overflow-hidden" style={card}>
+              <div className="px-3 md:px-4 py-2.5 flex items-center gap-2.5" style={{ background: 'var(--raise)' }}>
+                <CalendarClock size={14} style={{ color: WARN }} />
+                <span className="text-[13px] font-bold text-bank-tx">Due back</span>
+                <span className="text-[13px] text-bank-fa hidden md:inline">away, and out of their team’s rep count until you say otherwise</span>
+                <span className="ml-auto text-[13px]" style={{ color: WARN }}>
+                  {awayOverdue.length} {awayOverdue.length === 1 ? 'person' : 'people'}
+                </span>
+              </div>
+              <div className="divide-y divide-bank-line">
+                {awayOverdue.map(u => (
+                  <div key={u.id} className="px-3 md:px-4 py-2 flex items-center gap-3 flex-wrap">
+                    <span className="text-[13px] font-semibold w-[110px] flex-shrink-0" style={{ color: WARN }}>
+                      {u.away_until ? fmtDay(u.away_until, { year: true }) : 'no date'}
+                      <span className="block text-[12px] font-bold uppercase tracking-wide">
+                        {u.away_until ? 'date passed' : 'open-ended'}
+                      </span>
+                    </span>
+                    <span className="text-[13px] text-bank-mu min-w-0 flex-1 basis-[180px]">
+                      <span className="font-semibold text-bank-tx">{u.name}</span>
+                      <span> — {u.manager_id ? teamKeyLabel(u.manager_id, users) : 'Unassigned'}</span>
+                      <span className="block text-bank-fa">
+                        {u.away_until
+                          ? 'Expected back by now and still marked away.'
+                          : 'No return date was set, so nothing else will bring this up.'}
+                      </span>
+                    </span>
+                    <SecondaryButton onClick={() => backOnTeam(u)} title="Put them back in their team’s rep count" className="flex-shrink-0">
+                      <UserCheck size={11} /> Back on the team
+                    </SecondaryButton>
+                    <SecondaryButton onClick={() => { setEditUser(u); setUserModal(true) }} className="flex-shrink-0">
+                      <Pencil size={11} /> Edit
+                    </SecondaryButton>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Scheduled moves — a reorg set up ahead of time. It changes
               NOTHING until its day, so it needs its own place to be seen and
