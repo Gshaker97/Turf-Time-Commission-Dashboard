@@ -2379,6 +2379,10 @@ const arcClosedStage = opp => !!(opp && ARC_CLOSED_STAGES.has(String(opp.pipelin
 // the Schedule tab sets the opp STATUS to abandoned, unless a stage id is configured.
 const ARC_CANCELLED_STAGE_ID = (process.env.ARC_CANCELLED_STAGE_ID || '').trim() || null
 // The commission site's first deal (Garrison, Nov 21 2026): a job sold before this day never gets a deal created by the audit.
+// Per-person amounts the site stores on a deal; they win over the computed split, so
+// any write that changes job price or baseline clears them (as the site's Apply does).
+const DEAL_STORED_AMOUNTS = ['setter_amount', 'closer_amount', 'manager_amount', 'director_amount', 'vp_amount']
+const DEAL_AUDIT_COLS = ['id', 'deal_name', 'project_id', 'job_price', 'baseline_revenue', 'status', ...DEAL_STORED_AMOUNTS].join(',')
 const ARC_SITE_FIRST_DEAL_DAY = (process.env.ARC_SITE_FIRST_DEAL_DAY || '2026-03-02').trim()
 // Stage names for the audit's logs and reports (ids only where this file knows them).
 const ARC_STAGE_NAMES = { [GHL_PIPELINES.outside.closed]: 'Closed', [GHL_PIPELINES.estimator.closed]: 'Closed', [GHL_PIPELINES.outside.changeOrder]: 'Change Order', [GHL_PIPELINES.estimator.changeOrder]: 'Change Order',
@@ -2855,6 +2859,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
   out.cancelled_bookings = []
   out.later_projects = []   // finished jobs whose calendar job now carries a later project's PM
   out.deals_skipped = []    // commission-site deals the audit would have created but must not (Inside Sales, or sold before the site's first deal)
+  out.deals_split_held = [] // deals whose Project ID also has a SPLIT deal (<pid>-2…): the add-on is paid on the split, so the parent is never re-priced to the sum — listed for review
   out.deals_paid_changed = []   // Paid deals whose newest change order differs from the deal: listed with old/new, never rewritten
   const audited = new Set()   // opps that went through the contract/value check — the only ones that may get a commission-site deal
   const arcErrored = new Set()
@@ -3343,8 +3348,15 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
         if (!audited.has(op.id) || dealPlanned.has(pid)) continue
         if (String(op.status || '').toLowerCase() !== 'open' && String(op.status || '').toLowerCase() !== 'won') continue
         if (!out.values[pid] || out.values[pid].total == null) continue
-        const have = await restGet(`/rest/v1/deals?project_id=eq.${encodeURIComponent(pid)}&select=id,deal_name,job_price,baseline_revenue,status&limit=1`).catch(() => null)
+        const have = await restGet(`/rest/v1/deals?project_id=eq.${encodeURIComponent(pid)}&select=${DEAL_AUDIT_COLS}&limit=1`).catch(() => null)
         if (!Array.isArray(have)) continue
+        // Split deals: the site's "Create as a separate deal" gives the add-on its own
+        // deal with Project ID <pid>-2 (-3…). Those are NOT the Sheet's Project ID, so
+        // the exact lookup above never sees them — and until Nov 22 2026 the audit
+        // then re-priced the parent to main + add-on, paying the add-on twice.
+        const splits = await restGet(`/rest/v1/deals?project_id=like.${encodeURIComponent(pid + '-*')}&select=id,project_id,deal_name,job_price,baseline_revenue,status&order=project_id.asc`).catch(() => null)
+        if (!Array.isArray(splits)) continue   // could not read the split deals — decide nothing on this project today
+        const splitDeals = splits.filter(d => new RegExp('^' + pid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-\\d+$').test(String(d.project_id || '')))
         const row = await jobRowForProject(pid).catch(() => null)
         if (!row) continue
         const sheetNow = await readInstallSheet().catch(() => null)
@@ -3372,6 +3384,14 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
           // deal is never rewritten: it is listed with old and new numbers.
           const deal = have[0]
           if (!(out.values[pid].signed >= 2) || deal.job_price == null) continue
+          if (splitDeals.length) {
+            const it = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'site', action: 'hold_split_deal', deal_id: deal.id, deal_status: deal.status, newest: out.values[pid].newest,
+              parent: { deal_id: deal.id, job_price: deal.job_price, baseline_revenue: deal.baseline_revenue, status: deal.status },
+              splits: splitDeals.map(s => ({ deal_id: s.id, project_id: s.project_id, deal_name: s.deal_name, job_price: s.job_price, baseline_revenue: s.baseline_revenue, status: s.status })),
+              arcsite_total: out.values[pid].total, counted: out.values[pid].counted_ids,
+              reason: `split deal${splitDeals.length > 1 ? 's' : ''} ${splitDeals.map(s => `${s.project_id} (${arcUsd(s.job_price)}, ${s.status || '?'})`).join(', ')} already carr${splitDeals.length > 1 ? 'y' : 'ies'} the add-on — the parent (${arcUsd(deal.job_price)}, ${deal.status || '?'}) is not re-priced to the ArcSite sum ${arcUsd(out.values[pid].total)}; review by hand` }
+            out.deals_split_held.push(it); log('DEAL SPLIT — HELD', it); continue
+          }
           // The Sheet rows for exactly the proposals the value counts (newest redraw +
           // add-ons), summed: an add-on's row holds only the add-on (Amanda
           // Pogorzelski 2: $15,895.75 + $1,802.60), never the whole job.
@@ -3382,16 +3402,23 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
           if (!differs(deal.job_price, newJob) && !differs(deal.baseline_revenue, newBase)) continue
           const coDate = roll.changeOrder || null
           const upd = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'site', action: 'update_deal', deal_id: deal.id, deal_status: deal.status, change_order: coDate, newest: out.values[pid].newest,
-            before: { job_price: deal.job_price, baseline_revenue: deal.baseline_revenue, commission: null }, after: { job_price: newJob, baseline_revenue: newBase, commission: newComm },
+            before: { job_price: deal.job_price, baseline_revenue: deal.baseline_revenue, commission: null, ...Object.fromEntries(DEAL_STORED_AMOUNTS.map(k => [k, deal[k] ?? null])) },
+            after: { job_price: newJob, baseline_revenue: newBase, commission: newComm, ...Object.fromEntries(DEAL_STORED_AMOUNTS.map(k => [k, null])) },
+            // Same write as the site's "Apply new numbers": stored per-person amounts are
+            // cleared so the engine recomputes from the new numbers. Stored amounts WIN
+            // over computed ones (src/utils/commission.js), so leaving them meant the
+            // payout did not change even though the numbers did (Nov 22 2026).
+            patch: { job_price: newJob, baseline_revenue: newBase, ...Object.fromEntries(DEAL_STORED_AMOUNTS.map(k => [k, null])) },
             reason: `change order signed ${coDate || '?'} (${out.values[pid].newest}): job price ${arcUsd(deal.job_price)} → ${arcUsd(newJob)}, baseline ${arcUsd(deal.baseline_revenue)} → ${arcUsd(newBase)}; the site recomputes commission (Sheet says ${newComm == null ? '?' : arcUsd(newComm)})` }
           if (/^paid$/i.test(String(deal.status || ''))) { upd.reason = `PAID deal — not rewritten; ` + upd.reason; out.deals_paid_changed.push(upd); log('PAID DEAL CHANGED', upd); continue }
           if (dry) { out.would_fix.push(upd); log('WOULD FIX', upd); continue }
           if (capReached()) { skip(upd, 'site', `daily fix cap (${maxFix}) reached — tomorrow's run continues`); continue }
           try {
-            await restWrite('PATCH', `/rest/v1/deals?id=eq.${encodeURIComponent(deal.id)}`, { job_price: newJob, baseline_revenue: newBase })
-            const back = await restGet(`/rest/v1/deals?id=eq.${encodeURIComponent(deal.id)}&select=id,job_price,baseline_revenue,status&limit=1`).catch(() => [])
+            await restWrite('PATCH', `/rest/v1/deals?id=eq.${encodeURIComponent(deal.id)}`, upd.patch)
+            const back = await restGet(`/rest/v1/deals?id=eq.${encodeURIComponent(deal.id)}&select=id,job_price,baseline_revenue,status,${DEAL_STORED_AMOUNTS.join(',')}&limit=1`).catch(() => [])
             upd.read_back = back && back[0]
-            if (back && back[0] && !differs(back[0].job_price, newJob) && !differs(back[0].baseline_revenue, newBase)) { out.fixed.push(upd); log('FIXED', upd) } else { upd.error = 'deal not updated on read-back'; out.failed.push(upd); log('FAILED', upd) }
+            const amountsCleared = back && back[0] && DEAL_STORED_AMOUNTS.every(k => back[0][k] == null)
+            if (back && back[0] && !differs(back[0].job_price, newJob) && !differs(back[0].baseline_revenue, newBase) && amountsCleared) { out.fixed.push(upd); log('FIXED', upd) } else { upd.error = amountsCleared === false ? 'deal numbers updated but a stored amount is still set on read-back' : 'deal not updated on read-back'; out.failed.push(upd); log('FAILED', upd) }
           } catch (e) { upd.error = e.message; out.failed.push(upd); log('FAILED', upd) }
           await pause(300)
           continue
