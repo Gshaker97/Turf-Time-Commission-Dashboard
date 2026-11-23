@@ -6273,7 +6273,10 @@ analystRoute('/api/analyst/overdue', null, async () => overdueRun({ mode: 'dry' 
 // Manual trigger, owner's write secret only: { mode: 'live' | 'dry' | 'mark' }.
 app.post('/api/alerts/overdue/run', async (req, res) => {
   if (!verifiedTriggerAuthorized(req)) return res.status(401).json(err('Unauthorized'))
-  const mode = ['live', 'dry', 'mark'].includes(req.body && req.body.mode) ? req.body.mode : 'dry'
+  // Bodies arrive as TEXT (app.use(express.text({ type: '*/*' }))), never parsed.
+  let body = {}
+  try { body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {}) } catch { return res.status(400).json(err('Bad JSON body.')) }
+  const mode = ['live', 'dry', 'mark'].includes(body && body.mode) ? body.mode : 'dry'
   try { res.json(await overdueRun({ mode })) } catch (e) { res.status(500).json(err(String(e.message || e))) }
 })
 
