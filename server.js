@@ -2347,10 +2347,27 @@ async function arcSignedContracts(projectId, { strict = false } = {}) {
   // strict: an ArcSite failure (429 rate limit, 5xx) is thrown, never read as
   // "no signed proposals" — the daily audit of Nov 20 2026 checked 14 of 368
   // jobs during a rate limit and reported itself clean.
-  const refs = strict ? (await arcGet(`/proposals?project_id=${projectId}&per_page=20`)) || [] : (await arcGet(`/proposals?project_id=${projectId}&per_page=20`).catch(() => [])) || []
+  const get = path => strict ? arcGet(path) : arcGet(path).catch(() => null)
+  const refs = (await get(`/proposals?project_id=${projectId}&per_page=20`)) || []
+  const list = Array.isArray(refs) ? refs : []
+  // ArcSite HIDES a signed proposal from the per-project list once a change-order
+  // draft is made from it: the draft takes its place and names it in
+  // initial_proposal_id. Fetch every such parent directly, so an unsigned draft
+  // never makes the signed original look unsigned (Quinn Macdonald, Nov 23 2026:
+  // the audit read "2 proposals, none approved" and cleared his contact prices).
+  const seen = new Set(list.map(p => String(p.proposal_id || '')))
+  const hidden = []
+  for (const pr of list) {
+    const parent = String(pr.initial_proposal_id || pr.parent_proposal_id || '').trim()
+    if (!parent || seen.has(parent)) continue
+    seen.add(parent)
+    const full = await get(`/proposals/${parent}`)
+    if (full) hidden.push(full)
+  }
   const out = []
-  for (const pr of (Array.isArray(refs) ? refs : [])) {
-    const full = pr.proposal_options ? pr : (strict ? await arcGet(`/proposals/${pr.proposal_id}`) : await arcGet(`/proposals/${pr.proposal_id}`).catch(() => null))
+  // the list is newest-first; a hidden parent is older than the draft that replaced it
+  for (const pr of [...list, ...hidden]) {
+    const full = pr.proposal_options ? pr : await get(`/proposals/${pr.proposal_id}`)
     if (full && arcCommitted(full.status) && full.pdf_url) {
       out.push({ proposal_id: String(full.proposal_id || ''), document_number: full.document_number || null, pdf_url: full.pdf_url, total: Number(full.total) || null,
         drawing_id: (full.approved_option && full.approved_option.drawing_id) || (((full.proposal_options || [])[0] || {}).drawing_id) || null })

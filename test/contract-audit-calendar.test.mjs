@@ -90,6 +90,7 @@ globalThis.fetch = async (url, opts = {}) => {
   if (parsed.hostname === 'api.arcsite.com') {
     if (world.arcsiteStatus !== 200) return send(world.arcsiteStatus, { error: 'Too Many Requests' })
     if (parsed.pathname === '/v1/proposals') return send(200, parsed.searchParams.get('project_id') === PID ? world.proposals : [])
+    if (parsed.pathname.startsWith('/v1/proposals/')) { const id = parsed.pathname.split('/').pop(); world.proposalGets = (world.proposalGets || []).concat(id); const p = [...world.proposals, ...(world.hiddenProposals || [])].find(x => String(x.proposal_id) === id); return p ? send(200, p) : send(404, {}) }
     if (parsed.pathname.startsWith('/v1/projects/')) return send(200, { name: 'Fixture Calendar', created_at: world.arcCreated || '2026-10-01T00:00:00.000000Z', customer: { name: 'Fixture Calendar', phone: '5550100100', address: { street: '1 Example St', city: 'Phoenix', state: 'AZ', zip_code: '85001' } } })
     return send(404, {})
   }
@@ -776,4 +777,40 @@ test('one opportunity = one signed proposal: an add-on signed inside the project
   ]
   const s = await run({ fix: true, dry: true })
   const co = s.would_fix.find(w => w.action === 'change_order'); assert.ok(co, JSON.stringify(s.would_fix)); assert.match(co.note, /value → \$15,895\.75/)
+})
+
+test('hidden signed proposal: a change-order DRAFT replaces the signed original in ArcSite\'s per-project list — the original is fetched through initial_proposal_id, so the job is signed, nothing is cleared and the contact prices follow the signed value (Quinn Macdonald, Nov 23 2026)', async () => {
+  reset({ ghl: ['old'], cal: ['old'], value: 6765.11, sheetTotal: '6765.11' }); resetArcSaleMemoryForTests()
+  // what the list shows: the unsigned change-order draft (naming its parent) and an older unsigned first draft
+  world.proposals = [
+    { proposal_id: 'co1', project_id: PID, status: 'PENDING', initial_proposal_id: 'p1', proposal_options: [{ drawing_id: 'A', total: 7325.11 }], document_number: null },
+    { proposal_id: 'p0', project_id: PID, status: 'PENDING', proposal_options: [{ drawing_id: 'A', total: 9211.56 }], document_number: null },
+  ]
+  // what the list hides: the signed original
+  world.hiddenProposals = [{ proposal_id: 'p1', project_id: PID, status: 'APPROVED', total: 6765.11, pdf_url: 'https://cdn.example/old.pdf', proposal_options: [{ drawing_id: 'A', total: 6765.11 }], document_number: '1001' }]
+  // the 6 AM run had already cleared the contact prices
+  world.contact.customFields = world.contact.customFields.filter(f => f.id !== 'gz5Xoix8Sd37hUbrvQuQ' && f.id !== 'X6s8Kc6QVEVyzSIISktA')
+  const d = await run({ fix: true, dry: true })
+  assert.deepEqual(world.proposalGets, ['p1'], 'the parent is fetched directly, exactly once')
+  assert.equal(d.unsigned_closed.length, 0, JSON.stringify(d.unsigned_closed))
+  assert.ok(!d.would_fix.some(w => w.action === 'clear_contact_prices'), JSON.stringify(d.would_fix))
+  assert.equal(d.values[PID].total, 6765.11); assert.equal(d.values[PID].signed, 1); assert.equal(d.gaps.length, 0)
+  const sf = d.would_fix.find(w => w.action === 'sync_fields')
+  assert.ok(sf && sf.after.contact.jobPrice === 6765.11 && sf.after.contact.newPrice === 6765.11 && sf.before.contactJobPrice === null, 'contact Job Price and New Price go back to the signed $6,765.11: ' + JSON.stringify(sf))
+})
+
+test('hidden signed proposal: a parent already in the list is not fetched twice, and a parent ArcSite cannot return counts as an ArcSite error — never as \"nothing signed\"', async () => {
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  world.proposals = [
+    { proposal_id: 'p2', project_id: PID, status: 'APPROVED', total: 2000, pdf_url: 'https://cdn.example/new.pdf', initial_proposal_id: 'p1', proposal_options: [], document_number: '1002' },
+    { proposal_id: 'p1', project_id: PID, status: 'APPROVED', total: 1500, pdf_url: 'https://cdn.example/old.pdf', proposal_options: [], document_number: '1001' },
+  ]
+  let d = await run({ fix: true, dry: true })
+  assert.deepEqual(world.proposalGets || [], [], 'parent in the list: no direct fetch'); assert.equal(d.values[PID].signed, 2)
+  // ArcSite cannot return the parent (rate limit / outage / 404): the job is NOT checked — counted as an ArcSite error, never read as unsigned, nothing cleared
+  reset({ ghl: ['old'], cal: ['old'] }); resetArcSaleMemoryForTests()
+  world.proposals = [{ proposal_id: 'co1', project_id: PID, status: 'PENDING', initial_proposal_id: 'gone', proposal_options: [{ total: 1 }] }]
+  d = await run({ fix: true, dry: true })
+  assert.deepEqual(world.proposalGets, ['gone']); assert.equal(d.unsigned_closed.length, 0); assert.equal(d.arcsite_errors, 1)
+  assert.ok(!d.would_fix.some(w => w.action === 'clear_contact_prices'))
 })
