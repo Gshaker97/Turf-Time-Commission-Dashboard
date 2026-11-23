@@ -332,3 +332,13 @@ test('a Paid deal behind a change order is named in the 9 PM text with old and n
   assert.match(text, /PAID DEAL BEHIND A CHANGE ORDER \(1\)/)
   assert.match(text, /Isaac Rosas: change order Nov 19 \(Proposal 638077\): the Paid deal still holds job price \$17,971\.60 \/ baseline \$15,100\.09; the Sheet's newest row says \$19,104\.90 \/ \$16,022\.20 \(commission \$3,082\.70\): not rewritten, needs a person/)
 })
+
+test('a signed proposal with no opportunity of its own (an add-on inside the original project) is named in the 9 PM text; nothing summed', () => {
+  const p = base()
+  p.contractAudit = { gaps: [], values: {}, sheet_gaps: [], proposals_without_opp: [{ project_id: 'P9', customer: 'Amanda Pogorzelski 2', opportunity_id: 'o9', install: '2026-11-23', opp_value: 1802.6, owned: 'Proposal 1002 ($1,802.60, add-on)', proposals: [{ proposal_id: '462238', document_number: '1001', total: 15895.75, kind: 'original' }], reason: 'original proposal 1001 ($15,895.75) signed inside this ArcSite project with no opportunity of its own — the opportunity keeps its own proposal\'s value $1,802.60; nothing summed, nothing written. Draw add-ons as a new ArcSite project, or create the opportunity by hand' }] }
+  const r = buildEodReport(p)
+  const it = r.issues.find(i => i.kind === 'proposal_without_opp'); assert.ok(it, JSON.stringify(r.issues)); assert.equal(it.severity, 'high')
+  const text = eodSmsText(r)
+  assert.match(text, /SIGNED PROPOSAL WITH NO OPPORTUNITY OF ITS OWN \(1\)/)
+  assert.match(text, /Amanda Pogorzelski 2: original proposal 1001 \(\$15,895\.75\) signed inside this ArcSite project with no opportunity of its own/)
+})
