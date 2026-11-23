@@ -735,3 +735,45 @@ test('change order → deal: when a SPLIT deal (<pid>-2) already carries the add
   world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 1500, baseline_revenue: 900, status: 'Pending Install' }, { id: 'deal-9', project_id: PID + '9', deal_name: 'Other', job_price: 1, baseline_revenue: 1, status: 'Paid' }]
   const ok = await run({ fix: true }); assert.ok(ok.fixed.some(w => w.action === 'update_deal')); assert.equal(ok.deals_split_held.length, 0)
 })
+
+test('one opportunity = one signed proposal: an add-on signed inside the project is never summed — the opp keeps its own proposal\'s value, is not "behind", and the other proposal is reported for the 9 PM text (Amanda Pogorzelski)', async () => {
+  const OUTSIDE = 'EWGmXwXP63Da5eBMNiDU'
+  // the project: original $15,895.75 (drawing A, older) + add-on $1,802.60 (drawing B, newest); the opp holds the ADD-ON at $1,802.60 with both PDFs attached
+  reset({ ghl: ['old', 'new'], cal: ['new'], value: 1802.6, sheetTotal: '1802.60' }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
+  world.proposals = [
+    { proposal_id: 'p2', project_id: PID, status: 'APPROVED', total: 1802.6, pdf_url: 'https://cdn.example/new.pdf', proposal_options: [{ drawing_id: 'B' }], document_number: '1002' },
+    { proposal_id: 'p1', project_id: PID, status: 'APPROVED', total: 15895.75, pdf_url: 'https://cdn.example/old.pdf', proposal_options: [{ drawing_id: 'A' }], document_number: '1001' },
+  ]
+  world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 15895.75, baseline_revenue: 12227.5, status: 'Paid' }]
+  const d = await run({ fix: true, dry: true })
+  assert.equal(d.values[PID].total, 1802.6, 'the opp\'s own proposal, never the $17,698.35 sum'); assert.equal(d.values[PID].owned_kind, 'add-on'); assert.equal(d.values[PID].signed, 1); assert.equal(d.values[PID].signed_on_project, 2)
+  assert.ok(!d.would_fix.some(w => w.action === 'change_order'), JSON.stringify(d.would_fix)); assert.equal(d.gaps.length, 0)
+  assert.equal(d.proposals_without_opp.length, 1); assert.match(d.proposals_without_opp[0].reason, /original proposal 1001 \(\$15,895\.75\) signed inside this ArcSite project with no opportunity of its own/)
+  assert.ok(!d.would_fix.some(w => w.action === 'update_deal') && d.deals_paid_changed.length === 0, 'the Paid deal is not touched: no re-signing of the owned proposal')
+  // live run: nothing written anywhere
+  reset({ ghl: ['old', 'new'], cal: ['new'], value: 1802.6, sheetTotal: '1802.60' }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
+  world.proposals = [
+    { proposal_id: 'p2', project_id: PID, status: 'APPROVED', total: 1802.6, pdf_url: 'https://cdn.example/new.pdf', proposal_options: [{ drawing_id: 'B' }], document_number: '1002' },
+    { proposal_id: 'p1', project_id: PID, status: 'APPROVED', total: 15895.75, pdf_url: 'https://cdn.example/old.pdf', proposal_options: [{ drawing_id: 'A' }], document_number: '1001' },
+  ]
+  const l = await run({ fix: true })
+  assert.equal(world.opp.monetaryValue, 1802.6); assert.equal(world.oppPuts.length, 0); assert.equal(world.ingests.length, 0); assert.equal(world.dealPatches.length, 0)
+  assert.equal(l.proposals_without_opp.length, 1)
+  // the opp holding the ORIGINAL ($15,895.75) with only the old PDF: it owns the original — not behind for the add-on's PDF, value stays, the add-on is reported
+  reset({ ghl: ['old'], cal: ['old'], value: 15895.75, sheetTotal: '15895.75' }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
+  world.proposals = [
+    { proposal_id: 'p2', project_id: PID, status: 'APPROVED', total: 1802.6, pdf_url: 'https://cdn.example/new.pdf', proposal_options: [{ drawing_id: 'B' }], document_number: '1002' },
+    { proposal_id: 'p1', project_id: PID, status: 'APPROVED', total: 15895.75, pdf_url: 'https://cdn.example/old.pdf', proposal_options: [{ drawing_id: 'A' }], document_number: '1001' },
+  ]
+  const o = await run({ fix: true })
+  assert.equal(world.opp.monetaryValue, 15895.75); assert.equal(world.oppPuts.length, 0); assert.equal(world.ingests.length, 0)
+  assert.equal(o.values[PID].total, 15895.75); assert.equal(o.values[PID].owned_kind, 'original'); assert.match(o.proposals_without_opp[0].reason, /add-on proposal 1002 \(\$1,802\.60\)/)
+  // an opp still at the old SUM ($17,698.35) matches no proposal: it takes the MAIN contract ($15,895.75) — never the sum — and that is a change order down, listed in the dry run
+  reset({ ghl: ['old', 'new'], cal: ['new'], value: 17698.35, sheetTotal: '15895.75' }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
+  world.proposals = [
+    { proposal_id: 'p2', project_id: PID, status: 'APPROVED', total: 1802.6, pdf_url: 'https://cdn.example/new.pdf', proposal_options: [{ drawing_id: 'B' }], document_number: '1002' },
+    { proposal_id: 'p1', project_id: PID, status: 'APPROVED', total: 15895.75, pdf_url: 'https://cdn.example/old.pdf', proposal_options: [{ drawing_id: 'A' }], document_number: '1001' },
+  ]
+  const s = await run({ fix: true, dry: true })
+  const co = s.would_fix.find(w => w.action === 'change_order'); assert.ok(co, JSON.stringify(s.would_fix)); assert.match(co.note, /value → \$15,895\.75/)
+})

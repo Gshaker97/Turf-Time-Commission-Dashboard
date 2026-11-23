@@ -2359,9 +2359,9 @@ async function arcSignedContracts(projectId, { strict = false } = {}) {
   return out.reverse()
 }
 // The job's value from those contracts (lib/arcsite-job-value): same drawing
-// re-signed → newest wins; a small extra drawing → an ADD-ON, summed in (per
-// Garrison, Nov 19 2026). ARC_ADDON_MAX_SHARE = the share of the main contract
-// below which another drawing counts as an add-on (default 0.5).
+// re-signed → newest wins; a small extra drawing → an ADD-ON, a separate job that
+// is never summed in (Garrison, Nov 23 2026). ARC_ADDON_MAX_SHARE = the share of
+// the main contract below which another drawing counts as an add-on (default 0.5).
 const ARC_ADDON_MAX_SHARE = Number(process.env.ARC_ADDON_MAX_SHARE || 0.5)
 // Opportunities on a manual hold (Garrison, Nov 19 2026: Anna Lee). No path
 // here may change their value, stage, contracts, contact price or calendar
@@ -2407,7 +2407,10 @@ const arcSkipOpps = () => new Set(String(process.env.ARC_AUDIT_SKIP_OPPS || '').
 const arcSkipContacts = () => new Set(String(process.env.ARC_AUDIT_SKIP_CONTACTS || '').split(',').map(x => x.trim()).filter(Boolean))
 const arcSkippedOpp = id => !!(id && arcSkipOpps().has(String(id)))
 const arcSkippedContact = id => !!(id && arcSkipContacts().has(String(id)))
-const arcJobTotal = signed => arcJobValue(signed, { addonMaxShare: ARC_ADDON_MAX_SHARE })
+// One opportunity = one signed proposal (Garrison, Nov 23 2026): the value is the
+// proposal this opportunity OWNS (by its current value, else the signing named,
+// else the main contract) — add-ons are never summed into the original.
+const arcJobTotal = (signed, oppValue = null, ownProposalId = null) => arcJobValue(signed, { addonMaxShare: ARC_ADDON_MAX_SHARE, oppValue, ownProposalId })
 // The sheet's figure for that same value: its rows for exactly the counted
 // proposals (null = a row is still missing, i.e. not final). A job with no
 // add-ons keeps the old single-row read when the rows carry no Proposal ID.
@@ -2415,7 +2418,7 @@ async function arcSheetTotal(projectId, value, singleRow) {
   const rows = await jobRowsForProject(projectId).catch(() => [])
   const sum = sheetTotalFor(value, rows)
   if (sum != null) return sum
-  if (value && value.addons && value.addons.length) return null
+  if (value && value.unowned && value.unowned.length) return null   // several signed proposals: the single-row read cannot tell which one
   return singleRow && singleRow.jobPrice != null ? Math.round(singleRow.jobPrice * 100) / 100 : null
 }
 
@@ -2551,7 +2554,9 @@ async function arcApplyChangeOrder(projectId, { opp, contactId, customer, signed
   // signed DOCUMENTS — the sheet has none. `sheet_lag` = the sheet doesn't
   // (yet) agree with ArcSite, so callers must not mark the project settled.
   const job = await jobRowForProject(projectId).catch(() => null)
-  const value = arcJobTotal(signed)
+  const value = arcJobTotal(signed, cur)
+  // Only the owned proposal's revisions count as this opportunity's contracts.
+  signed = value.signed.length ? value.signed : signed
   const arcTotal = newTotal != null ? Math.round(newTotal * 100) / 100 : value.total
   // Add-ons: the sheet is compared on the SAME set of proposals the value counts
   // (one row per signing), so a $800 add-on row never "disputes" the $9,346 job.
@@ -2690,7 +2695,7 @@ async function arcChangeOrderForProject(projectId, via, { dry = false } = {}) {
   const opp = await arcOppForProposal({ project_id: projectId, customer_name: customer.name, customer_email: customer.email })
   if (!opp) return { ok: false, via, project_id: projectId, customer: customer.name, error: 'no GHL opportunity for this project — /api/arcsite/reprocess creates one' }
   const newest = signed[signed.length - 1]
-  return arcApplyChangeOrder(projectId, { opp, contactId: opp.contactId || null, customer, signed, newTotal: arcJobTotal(signed).total, via, dry })
+  return arcApplyChangeOrder(projectId, { opp, contactId: opp.contactId || null, customer, signed, newTotal: arcJobTotal(signed, opp.monetaryValue).total, via, dry })
 }
 
 // ── Daily contract audit ─────────────────────────────────────────────────────
@@ -2860,6 +2865,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
   out.later_projects = []   // finished jobs whose calendar job now carries a later project's PM
   out.deals_skipped = []    // commission-site deals the audit would have created but must not (Inside Sales, or sold before the site's first deal)
   out.deals_split_held = [] // deals whose Project ID also has a SPLIT deal (<pid>-2…): the add-on is paid on the split, so the parent is never re-priced to the sum — listed for review
+  out.proposals_without_opp = [] // signed proposals (add-on, or the original beside an add-on opp) inside a project whose opportunity owns a different proposal: reported for the 9 PM text, never summed or pushed
   out.deals_paid_changed = []   // Paid deals whose newest change order differs from the deal: listed with old/new, never rewritten
   const audited = new Set()   // opps that went through the contract/value check — the only ones that may get a commission-site deal
   const arcErrored = new Set()
@@ -3016,10 +3022,21 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
         }
         continue
       }
+      // One opportunity = one signed proposal: the opp owns the head its value
+      // matches (else the main contract); the other heads are different jobs.
+      // Every check below — value, contracts, calendar PDF, deal — is scoped to
+      // the owned proposal; the others are reported, never summed or pushed.
+      const value = arcJobTotal(signed, op.monetaryValue)
+      const allSigned = signed
+      signed = value.signed.length ? value.signed : signed
       const newest = newestSigned(signed)
-      const value = arcJobTotal(signed)
       const want = value.total
-      out.values[pid] = { total: want, rule: describeJobValue(value, arcUsd), newest: `Proposal ${newest.document_number || newest.proposal_id}`, newest_id: String(newest.proposal_id || ''), signed: signed.length, counted_ids: (value.counted || []).map(c => String(c.proposal_id || '')) }
+      out.values[pid] = { total: want, rule: describeJobValue(value, arcUsd), newest: `Proposal ${newest.document_number || newest.proposal_id}`, newest_id: String(newest.proposal_id || ''), signed: signed.length, signed_on_project: allSigned.length, counted_ids: (value.counted || []).map(c => String(c.proposal_id || '')), owned_by: value.owned_by, owned_kind: value.owned_kind, unowned: (value.unowned || []).map(u => ({ proposal_id: String(u.proposal_id || ''), document_number: u.document_number || null, total: u.total, kind: u.kind })) }
+      if (value.unowned && value.unowned.length) {
+        const it = { project_id: pid, customer: op.name, opportunity_id: op.id, install: inst, opp_value: op.monetaryValue, owned: `Proposal ${value.owned.document_number || value.owned.proposal_id} (${arcUsd(value.total)}, ${value.owned_kind})`, proposals: out.values[pid].unowned,
+          reason: `${value.unowned.map(u => `${u.kind} proposal ${u.document_number || u.proposal_id} (${arcUsd(u.total)})`).join(', ')} signed inside this ArcSite project with no opportunity of its own — the opportunity keeps its own proposal's value ${arcUsd(want)}; nothing summed, nothing written. Draw add-ons as a new ArcSite project, or create the opportunity by hand` }
+        out.proposals_without_opp.push(it); log('PROPOSAL WITHOUT OPP', it)
+      }
       // The AI sheet is the truth for the value; ArcSite only when there is no
       // row. And the sheet itself gets checked: a signed proposal with no row,
       // or a row whose sale price disagrees with ArcSite, is a commission being
@@ -3383,7 +3400,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
           // updated (job price + baseline; the site recomputes commission). A Paid
           // deal is never rewritten: it is listed with old and new numbers.
           const deal = have[0]
-          if (!(out.values[pid].signed >= 2) || deal.job_price == null) continue
+          if (!(out.values[pid].signed >= 2) || deal.job_price == null) continue   // the owned proposal was re-signed (a revision); an add-on elsewhere on the project never reaches here
           if (splitDeals.length) {
             const it = { project_id: pid, customer: op.name, opportunity_id: op.id, target: 'site', action: 'hold_split_deal', deal_id: deal.id, deal_status: deal.status, newest: out.values[pid].newest,
               parent: { deal_id: deal.id, job_price: deal.job_price, baseline_revenue: deal.baseline_revenue, status: deal.status },
@@ -3513,9 +3530,10 @@ async function arcValueSweep() {
       }
       if (arcHeld(opp)) out.held = (out.held || 0) + 1   // on the watch list: counted, then treated like any other job
       const cur = opp.monetaryValue != null ? Math.round(Number(opp.monetaryValue) * 100) / 100 : null
-      const signed = await arcSignedContracts(pid)
-      // The whole job, add-ons summed — not just the newest signing.
-      const value = arcJobTotal(signed)
+      const allSigned = await arcSignedContracts(pid)
+      // The proposal this opportunity owns — never the project's sum (Nov 23 2026).
+      const value = arcJobTotal(allSigned, cur)
+      const signed = value.signed.length ? value.signed : allSigned
       if (value.total != null) { want = value.total; mark.t = want }
       const attached = oppContractEntries(opp).length
       // Always enqueue the guarded field-aware check before legacy total/count short-circuit.
@@ -3740,16 +3758,15 @@ async function arcsiteToGhl(rawBody, { dryRun = false, quiet = false } = {}) {
     }
     if (!pdfUrl) pdfUrl = fallbackOptPdf   // keep a document if no signed pdf exists yet
   }
-  // Add-ons (per Garrison, Nov 19 2026): the opportunity carries the WHOLE job —
-  // every signed proposal on the project, summed by lib/arcsite-job-value — so a
-  // second small signing (an $800 prep add-on) is ADDED to the value, never
-  // substituted for it. Only once the signing is visible in ArcSite's list; a
-  // webhook that beats the list keeps the event's own total for this pass (the
-  // value sweep re-sums it minutes later).
+  // One opportunity = one signed proposal (Garrison, Nov 23 2026): the value is
+  // the proposal this signing belongs to — a revision of the main contract takes
+  // the newest signing; an add-on signed inside the project is a separate job and
+  // is NEVER added to the original. Only once the signing is visible in ArcSite's
+  // list; a webhook that beats the list keeps the event's own total for this pass.
   let saleValue = null
   if (projectId) {
     const signedAll = await arcSignedContracts(projectId).catch(() => [])
-    saleValue = arcJobTotal(signedAll)
+    saleValue = arcJobTotal(signedAll, null, proposalId ? String(proposalId) : null)
     if (saleValue.total != null && (!proposalId || signedAll.some(x => x.proposal_id === String(proposalId)))) sellTotal = saleValue.total
   }
 
@@ -3911,7 +3928,9 @@ async function arcsiteToGhl(rawBody, { dryRun = false, quiet = false } = {}) {
   const attachedCount = sameProject ? oppContractEntries(existing).length : 0
   let signedCount = null
   if (sameProject && !priceChanged && pdfUrl && attachedCount > 0) {
-    signedCount = (await arcSignedContracts(projectId).catch(() => [])).length
+    // Only the revisions of the proposal this opportunity owns count — an add-on
+    // signed inside the project is another job, not a missing contract here.
+    signedCount = arcJobTotal(await arcSignedContracts(projectId).catch(() => []), curVal, proposalId ? String(proposalId) : null).signed.length
   }
   const isChangeOrder = priceChanged || (signedCount != null && signedCount > attachedCount)
 
