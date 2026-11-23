@@ -99,7 +99,11 @@ globalThis.fetch = async (url, opts = {}) => {
     if (parsed.pathname === '/rest/v1/deals' && method === 'PATCH') { const id = decodeURIComponent(parsed.searchParams.get('id') || '').replace(/^eq\./, ''); world.dealPatches.push({ id, ...body }); const d = world.deals.find(x => x.id === id); if (d) Object.assign(d, body); return send(200, [d]) }
     if (parsed.pathname === '/rest/v1/deals' && parsed.searchParams.get('id')) { const id = decodeURIComponent(parsed.searchParams.get('id') || '').replace(/^eq\./, ''); return send(200, world.deals.filter(x => x.id === id)) }
     if (parsed.pathname === '/rest/v1/deals' && method === 'POST') { world.dealPosts.push(body); world.deals.push({ id: 'deal-' + (world.deals.length + 1), ...body }); return send(201, {}) }
-    if (parsed.pathname === '/rest/v1/deals') { const pid = decodeURIComponent(parsed.searchParams.get('project_id') || '').replace(/^eq\./, ''); return send(200, world.deals.filter(d => !pid || d.project_id === pid)) }
+    if (parsed.pathname === '/rest/v1/deals') {
+      const q = parsed.searchParams.get('project_id') || ''
+      if (q.startsWith('like.')) { const re = new RegExp('^' + q.slice(5).replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$'); return send(200, world.deals.filter(d => re.test(String(d.project_id || '')))) }
+      const pid = q.replace(/^eq\./, ''); return send(200, world.deals.filter(d => !pid || d.project_id === pid))
+    }
     if (parsed.pathname === '/rest/v1/profiles') return send(200, [{ id: 'prof-1', name: 'Fixture Rep', email: 'rep@example.com' }])
     return send(200, [])
   }
@@ -661,13 +665,14 @@ test('change order → commission-site deal: a deal that is not Paid gets the Sh
   world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 1500, baseline_revenue: 900, status: 'Pending Install' }]
   const d = await run({ fix: true, dry: true })
   const u = d.would_fix.find(w => w.action === 'update_deal'); assert.ok(u, JSON.stringify(d.would_fix))
-  assert.deepEqual(u.before, { job_price: 1500, baseline_revenue: 900, commission: null }); assert.deepEqual(u.after, { job_price: 2000, baseline_revenue: 1000, commission: 200 })
+  const noAmts = { setter_amount: null, closer_amount: null, manager_amount: null, director_amount: null, vp_amount: null }
+  assert.deepEqual(u.before, { job_price: 1500, baseline_revenue: 900, commission: null, ...noAmts }); assert.deepEqual(u.after, { job_price: 2000, baseline_revenue: 1000, commission: 200, ...noAmts })
   assert.equal(u.deal_status, 'Pending Install'); assert.equal(world.dealPatches.length, 0, 'dry run writes nothing')
   // live: the deal is patched and read back
   reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
   world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 1500, baseline_revenue: 900, status: 'Pending Install' }]
   const l = await run({ fix: true })
-  const f = l.fixed.find(w => w.action === 'update_deal'); assert.ok(f, JSON.stringify(l.failed)); assert.deepEqual(world.dealPatches, [{ id: 'deal-1', job_price: 2000, baseline_revenue: 1000 }]); assert.equal(f.read_back.job_price, 2000)
+  const f = l.fixed.find(w => w.action === 'update_deal'); assert.ok(f, JSON.stringify(l.failed)); assert.deepEqual(world.dealPatches, [{ id: 'deal-1', job_price: 2000, baseline_revenue: 1000, setter_amount: null, closer_amount: null, manager_amount: null, director_amount: null, vp_amount: null }]); assert.equal(f.read_back.job_price, 2000)
   assert.equal(world.dealPosts.length, 0, 'no second deal created')
   // Paid: listed under deals_paid_changed, nothing patched
   reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
@@ -681,4 +686,52 @@ test('change order → commission-site deal: a deal that is not Paid gets the Sh
   reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = 'jfhZWICxnmISGllte9Rv'
   world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 1500, baseline_revenue: 900, status: 'Pending Install' }]
   const ins = await run({ fix: true }); assert.equal(world.dealPatches.length, 0); assert.equal(ins.deals_skipped.length, 1)
+})
+
+test('change order → deal: stored per-person amounts are cleared with the new numbers (they win over the computed split), the before-image keeps them, and a stored amount that survives the write is FAILED not fixed', async () => {
+  const OUTSIDE = 'EWGmXwXP63Da5eBMNiDU'
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
+  world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 1500, baseline_revenue: 900, status: 'Pending Install', setter_amount: 300, closer_amount: 300, manager_amount: 45, director_amount: null, vp_amount: null }]
+  const d = await run({ fix: true, dry: true })
+  const u = d.would_fix.find(w => w.action === 'update_deal'); assert.ok(u, JSON.stringify(d.would_fix))
+  assert.deepEqual(u.before, { job_price: 1500, baseline_revenue: 900, commission: null, setter_amount: 300, closer_amount: 300, manager_amount: 45, director_amount: null, vp_amount: null })
+  assert.deepEqual(u.after, { job_price: 2000, baseline_revenue: 1000, commission: 200, setter_amount: null, closer_amount: null, manager_amount: null, director_amount: null, vp_amount: null })
+  assert.deepEqual(u.patch, { job_price: 2000, baseline_revenue: 1000, setter_amount: null, closer_amount: null, manager_amount: null, director_amount: null, vp_amount: null })
+  assert.equal(world.dealPatches.length, 0)
+  // live: cleared and read back
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
+  world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 1500, baseline_revenue: 900, status: 'Pending Install', setter_amount: 300, closer_amount: 300 }]
+  const l = await run({ fix: true })
+  const f = l.fixed.find(w => w.action === 'update_deal'); assert.ok(f, JSON.stringify(l.failed))
+  assert.equal(world.deals[0].setter_amount, null); assert.equal(world.deals[0].closer_amount, null); assert.equal(f.read_back.setter_amount, null)
+  // a database that keeps the amount (a lock trigger, a column default…) is a FAILED fix, never "fixed"
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
+  world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 1500, baseline_revenue: 900, status: 'Pending Install', setter_amount: 300 }]
+  const keep = world.deals[0]; Object.defineProperty(keep, 'setter_amount', { get: () => 300, set: () => {}, enumerable: true })
+  const bad = await run({ fix: true })
+  assert.ok(!bad.fixed.some(w => w.action === 'update_deal')); const fl = bad.failed.find(w => w.action === 'update_deal'); assert.ok(fl); assert.match(fl.error, /stored amount is still set/)
+})
+
+test('change order → deal: when a SPLIT deal (<pid>-2) already carries the add-on, the parent is held, listed with both deals, and never re-priced to the ArcSite sum (the double-pay bug, Nov 22 2026)', async () => {
+  const OUTSIDE = 'EWGmXwXP63Da5eBMNiDU'
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
+  world.deals = [
+    { id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 1500, baseline_revenue: 900, status: 'Paid' },
+    { id: 'deal-2', project_id: PID + '-2', deal_name: 'Fixture Calendar (add-on)', job_price: 500, baseline_revenue: 100, status: 'Deal Review' },
+    { id: 'deal-9', project_id: PID + '9', deal_name: 'Other customer', job_price: 1, baseline_revenue: 1, status: 'Paid' },   // a longer Project ID that merely starts the same is NOT a split
+  ]
+  const l = await run({ fix: true })
+  assert.equal(world.dealPatches.length, 0, 'nothing written'); assert.equal(world.dealPosts.length, 0)
+  assert.ok(!l.fixed.some(w => w.action === 'update_deal')); assert.equal(l.deals_paid_changed.length, 0)
+  assert.equal(l.deals_split_held.length, 1); const h = l.deals_split_held[0]
+  assert.equal(h.action, 'hold_split_deal'); assert.equal(h.parent.deal_id, 'deal-1'); assert.deepEqual(h.splits.map(s => s.project_id), [PID + '-2']); assert.equal(h.arcsite_total, 2000)
+  assert.match(h.reason, /split deal .*-2 .*not re-priced/)
+  // dry run lists the same hold and writes nothing
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
+  world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 1500, baseline_revenue: 900, status: 'Pending Install' }, { id: 'deal-2', project_id: PID + '-2', deal_name: 'add-on', job_price: 500, baseline_revenue: 100, status: 'Deal Review' }]
+  const d = await run({ fix: true, dry: true }); assert.equal(d.deals_split_held.length, 1); assert.ok(!d.would_fix.some(w => w.action === 'update_deal')); assert.equal(world.dealPatches.length, 0)
+  // no split → the parent is updated as before
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests(); world.opp.pipelineId = OUTSIDE
+  world.deals = [{ id: 'deal-1', project_id: PID, deal_name: 'Fixture Calendar', job_price: 1500, baseline_revenue: 900, status: 'Pending Install' }, { id: 'deal-9', project_id: PID + '9', deal_name: 'Other', job_price: 1, baseline_revenue: 1, status: 'Paid' }]
+  const ok = await run({ fix: true }); assert.ok(ok.fixed.some(w => w.action === 'update_deal')); assert.equal(ok.deals_split_held.length, 0)
 })
