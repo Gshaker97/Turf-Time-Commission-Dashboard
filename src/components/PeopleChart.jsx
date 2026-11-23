@@ -3,7 +3,7 @@ import {
   Search, Plus, KeyRound, UserPlus, Pencil, Trash2, UserCheck, UserMinus, ShieldCheck,
   ChevronDown, GripVertical, MoreHorizontal, CalendarClock, ArrowRightLeft,
 } from 'lucide-react'
-import { changeDay, headIdSet, teamLabel } from '../utils/team'
+import { changeDay, headIdSet, teamLabel, isFlex, isAway } from '../utils/team'
 import { fmtDay } from '../utils/teamMove'
 import { SURFACE, GOLD_WASH, Input, PrimaryButton, SecondaryButton, IconButton } from '../components/ui'
 
@@ -37,7 +37,11 @@ const card = SURFACE.card
 // Role tags read by their text; leadership in ivory, everyone else muted.
 const ROLE_COLOR = { admin: 'text-bank-tx', vp: 'text-bank-tx', director: 'text-bank-tx', manager: 'text-bank-mu', rep: 'text-bank-fa' }
 const WARN = 'var(--warn)', NEG = 'var(--neg)'
-const badge = (color) => ({ color, border: `1px solid ${color}66` })
+// A `66` alpha suffix appended to a var() reference is INVALID CSS and the
+// browser drops the whole border — measured as border-top-width 0px, so every
+// badge on this page (admin, sales role, ghost, no login, deactivated, and now
+// flex/away) was rendering as bare coloured text. color-mix takes a var().
+const badge = (color) => ({ color, border: `1px solid color-mix(in srgb, ${color} 40%, transparent)` })
 const byName = (a, b) => (a.name || '').localeCompare(b.name || '')
 const initialsOf = (name) => (name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
 
@@ -200,6 +204,11 @@ export default function PeopleChart({
                 </span>
               )}
               {u.sales_role && <span className="text-[12px] font-bold uppercase tracking-wide px-1 rounded" style={badge('var(--pos)')}>{u.sales_role}</span>}
+              {/* ON the team but not IN its rep count (migration 062). Flex is
+                  permanent, away is temporary and carries its return date. */}
+              {isFlex(u) && <span className="text-[12px] font-bold uppercase tracking-wide px-1 rounded" style={badge('var(--gold-tx)')}>flex</span>}
+              {isAway(u) && <span className="text-[12px] font-bold uppercase tracking-wide px-1 rounded" style={badge(WARN)}>
+                away{u.away_until ? ` · back ${fmtDay(u.away_until)}` : ''}</span>}
               {u.ghost && <span className="text-[12px] font-bold uppercase tracking-wide px-1 rounded text-bank-mu" style={badge('var(--mu)')}>ghost</span>}
               {!u.auth_id && <span className="text-[12px] font-bold uppercase tracking-wide px-1 rounded" style={badge(WARN)}>no login</span>}
             </div>

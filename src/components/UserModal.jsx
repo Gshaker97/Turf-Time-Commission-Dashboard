@@ -32,6 +32,7 @@ const BLANK = {
   manager_id: '', director_id: '', vp_id: '',
   is_admin: false, ghost: false,
   sales_role: '',
+  roster_status: 'counted', away_until: '',
   password: '',
 }
 
@@ -55,6 +56,8 @@ export default function UserModal({ user, allUsers = [], teamChanges = [], onSav
         is_admin:    user.is_admin    ?? false,
         ghost:       user.ghost       ?? false,
         sales_role:  user.sales_role  ?? '',
+        roster_status: user.roster_status ?? 'counted',
+        away_until:    user.away_until    ?? '',
         password: '',
       })
     } else {
@@ -92,6 +95,10 @@ export default function UserModal({ user, allUsers = [], teamChanges = [], onSav
       director_id: form.director_id || null,
       vp_id:       form.vp_id       || null,
       sales_role:  form.sales_role  || null,
+      roster_status: form.roster_status || 'counted',
+      // The date belongs to `away` and is cleared with it, so a rep who comes
+      // back and later goes flex doesn't carry a stale "back on 15 Dec".
+      away_until: form.roster_status === 'away' ? (form.away_until || null) : null,
     })
     setSaving(false)
   }
@@ -149,6 +156,26 @@ export default function UserModal({ user, allUsers = [], teamChanges = [], onSav
               </Sel>
               <p className="text-[13px] text-bank-fa mt-1">Shown on the roster and My Card, and filters the leaderboard. Deal credit still comes from each deal's setter and closer.</p>
             </Field>
+            {/* ON the team vs IN the headcount (migration 062). Separate from
+                Site Access below, which is whether they can sign in at all. */}
+            <Field label="Counts as a rep">
+              <Sel value={form.roster_status} onChange={e => set('roster_status', e.target.value)}>
+                <option value="counted">Counted — a full rep on the team</option>
+                <option value="flex">Flex — sells here and there</option>
+                <option value="away">Away — temporarily gone</option>
+              </Sel>
+              <p className="text-[13px] text-bank-fa mt-1">
+                {form.roster_status === 'counted'
+                  ? 'Counts toward the team’s rep count.'
+                  : `Keeps full site access and every dollar still counts — they just don’t count toward the team’s rep count${form.roster_status === 'away' ? ', and nothing flags red while they’re out' : ''}.`}
+              </p>
+            </Field>
+            {form.roster_status === 'away' && (
+              <Field label="Back on">
+                <Inp type="date" value={form.away_until} onChange={e => set('away_until', e.target.value)} />
+                <p className="text-[13px] text-bank-fa mt-1">Optional — leave blank if you don’t know yet. Admin → People lists anyone due back.</p>
+              </Field>
+            )}
             <Field label="Company">
               <Inp value={form.company_name} onChange={e => set('company_name', e.target.value)} placeholder="Turf Time" />
             </Field>

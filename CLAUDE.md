@@ -350,6 +350,9 @@ setup + deploy steps.
   param would have created an overload PostgREST cannot choose between), so
   moving a TEAM LEAD dissolves their team in the same action;
   see "Moving people between teams" below;
+  `062` adds `profiles.roster_status`
+  (`counted` | `flex` | `away`) + `away_until` — a rep can be ON the team
+  without being IN its headcount; see "Roster status" below;
   `060` drops NOT NULL from `deals.setter_id` — **a sold job must import even
   when the sheet's Sales Rep matches nobody on the roster.** ScheduleSync had
   imported an unresolved rep since Oct 2026 and every layer of the app was
@@ -741,6 +744,101 @@ every other payout on it, and the sync's auto-lock then re-arms on a 24h timer.
   Keaton hit. The editor opens; the SAVE is where the override is offered.
 - Still frozen, deliberately: `payroll_adjustments` on a locked run (they ARE
   the payout), and everything for a non-admin.
+
+## Roster status — on the team vs IN THE COUNT (migration 062)
+
+Per Keaton: "essentially for part-time users. They would maintain access to the
+site, but not count as active reps for a team. Their numbers count and show
+everywhere, they just dont show in the teams rep count… I dont want to call
+them part time though." Then: "reps who are temporarily absent. Similar
+approach - they aren't inactive, they are just temporarily gone."
+
+Those are the SAME mechanic with two different reasons, so they are **ONE
+column with three values**, not two booleans: `profiles.roster_status` =
+`counted` (the default, and what every existing row became) | **`flex`**
+(sells here and there; permanent — Keaton's word, picked over "part time",
+Reserve and Associate) | **`away`** (temporarily gone, expected back; carries
+the optional `away_until` date).
+
+- **`active` is a SEPARATE AXIS and is not touched.** `active` is ACCESS — a
+  deactivated person is blocked at login; a flex or away person signs in
+  normally. Keeping them apart is the point: someone can be flex today and be
+  deactivated next year without the two ideas fighting. `countsInHeadcount(u)`
+  = `active !== false && roster_status === 'counted'`, so the two compose.
+- **`rosterStatus`/`isFlex`/`isAway`/`countsInHeadcount` in `src/utils/team.js`
+  are the ONE rule.** An unknown or junk value reads as `counted` — that
+  fallback is what let the frontend ship before the migration ran, and it means
+  a typo can never silently remove someone from a team's count.
+- **IT CHANGES EXACTLY TWO NUMBERS, both headcounts** (Keaton was asked
+  explicitly):
+  1. **the Team Average competition DIVISOR** — the "÷ N reps" on a `team_avg`
+     card (`teamAvgRoster`). **THEIR DEALS STAY IN THE NUMERATOR.** Jordan's
+     team sells 24 of which the flex reps sold 4: the score is **24 ÷ 4 = 6.0**,
+     not 20 ÷ 4 = 5.0. Keaton chose that knowing it gives a team with flex reps
+     an edge over an identical team without one; `competitions.excluded_ids`
+     (047) still exists to level one particular race and is a DIFFERENT tool,
+     because it drops their deals as well as their headcount.
+     **BOTH loops in `teamAvgRoster` must skip them** — the roster is "everyone
+     on the team" ∪ "everyone who earned credit", so filtering only the first
+     would put a flex rep straight back into the divisor the moment he sold.
+     Pinned by a named test; mutation-checked by reverting each loop.
+  2. **the Dashboard team row's "N reps" sub-label** (`buildPerformance`).
+- **NOT one dollar anywhere**, not team attribution, not the Goals page's
+  rosters, and **not the People-chart column count** — that number labels the
+  cards listed under it, and the flex/away badges are on those cards. So
+  Jordan's column reads 6 while the Dashboard says 4 reps; that asymmetry is
+  deliberate.
+- **A flex rep keeps a ZERO ROW; an away rep loses theirs.** `perfSummary`
+  skips `isAway` when seeding the roster, so someone who is gone does not sit
+  in the breakdown as a row of noughts — but an away rep **who actually sold in
+  range is still listed**, with their numbers, because hiding them would delete
+  real revenue from the table. The row carries `rosterStatus` and a separate
+  **`counted`** field; `members` counts `counted` rows. `.member` was left
+  alone on purpose — `scorecard.js` reads it for the "moved teams" sub-label.
+- **Nothing is red while someone is away.** `repFlags` returns `{}` for an away
+  row, so the red-flag floors do not fire at a rep who is not there. A FLEX rep
+  IS still held to the floors — they are present, just not counted.
+- **The "No goals set" amber flag skips away reps** (`Goals.jsx`), same reason.
+- **IT IS GUARDED, unlike `sales_role`.** 061 left sales_role unprotected
+  because it is display-only; roster_status changes a contest score, so a rep
+  who could set it on themselves could quietly shrink their own team's divisor.
+  It joins role / is_admin / ghost / active in `guard_profile_columns()`, and
+  062 re-asserts that function carrying forward 032's `auth.uid() IS NULL`
+  service bypass **verbatim** — dropping that line breaks login creation again.
+- **Surfaces.** Set in the Add/Edit person form ("Counts as a rep", with the
+  "Back on" date appearing only for away). Badges on the People chart beside
+  the ghost badge. A **"Due back" card under the People chart** lists away reps
+  whose date has PASSED *or who have no date at all* — an away rep with a
+  future date is left out, since their own card already says when they are
+  back. One click ("Back on the team") returns them and clears the date; a
+  stale "back on the 3rd" on someone who IS back is a second, contradicting
+  fact about them. Away is the one roster state that can be forgotten
+  (deactivated people have a drawer, flex is permanent), which is why it is the
+  only one with a prompt.
+- **A manager sees the tag too** (per Keaton: "visible to admins and the reps
+  manager"). The People chart is admin-route-only, so the Dashboard breakdown's
+  rep rows carry the badge, gated to `isAdmin` or the viewer being that rep's
+  `manager_id`/`director_id`/`vp_id` — without it a manager had nowhere to see
+  why their team reads 4 reps and lists 6. It is a management fact about
+  availability, not a performance figure, so nobody else's row changes and no
+  NUMBER changes for anyone.
+- **NOT DATE-EFFECTIVE, and that is inherited rather than solved**: flipping
+  someone to away mid-contest drops the divisor for the WHOLE contest, not from
+  that day. Deactivation already behaves this way (the known caveat under 047).
+  Making it exact wants a dated log like `team_changes` — a separate job.
+- Fixed while here: **`badge()` in PeopleChart appended a `66` alpha suffix to
+  a `var()` reference**, which is invalid CSS, so the browser dropped the whole
+  border — measured as `border-top-width: 0px`. Every badge on that page (admin,
+  sales role, ghost, no login, deactivated) had been rendering as bare coloured
+  text. `color-mix(in srgb, <color> 40%, transparent)` takes a `var()`.
+  **Never concatenate an alpha suffix onto a CSS variable.**
+- 8 engine assertions (`test/rosterStatus.test.mjs`), each paired with a
+  nobody-flagged control so they cannot pass vacuously, plus browser passes on
+  the badges, the editor round-trip (an existing flex value LOADS — otherwise
+  editing a flex rep for an unrelated reason would silently reset them to
+  counted), the Due-back card appearing only when actually due, and the
+  three-way visibility gate (admin sees it, their manager sees it, another
+  team's manager does not).
 
 ## Excluding a deal from competitions (`deals.comp_excluded`, migration 056)
 

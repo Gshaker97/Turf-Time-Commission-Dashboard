@@ -13,8 +13,8 @@
 //                  closer share it by credit_split_pct = the closer's share),
 //                  or 'lead_bonus' (setter full, closer a part share on top).
 // ============================================================
-import { fmt, isCanceled, isHidden, countsInTotals } from './commission'
-import { teamOfSale, teamLabel, headIdSet } from './team'
+import { fmt, isCanceled, isHidden, countsInTotals } from './commission.js'
+import { teamOfSale, teamLabel, headIdSet, countsInHeadcount } from './team.js'
 
 export const COMP_TYPES = [
   { key: 'individual', label: 'Individual' },
@@ -294,14 +294,27 @@ export function teamAvgRoster(headId, deals = [], users = [], comp = {}, teamCtx
   const onTeam = teamAvgMembership(headId, users, teamCtx)
   const none = new Set()
   const ids = new Set()
+  const byId = new Map(users.map(u => [u.id, u]))
+  // FLEX AND AWAY LEAVE THE DIVISOR, NOT THE TOTAL (migration 062). Their
+  // deals still score — `teamAvgScore` sums those separately — so Jordan's
+  // 24 deals over 4 counted reps is 6.0, not 20 ÷ 4. That gives a team with
+  // flex reps an edge over an identical team without, which is the trade
+  // Keaton chose; `comp.excluded_ids` is still the way to level one race,
+  // and is a DIFFERENT tool because it drops their deals as well.
+  //
+  // BOTH loops have to skip them. The first adds anyone who earned credit,
+  // so filtering only the roster loop would put Kyltan straight back into
+  // the divisor the moment he sold anything.
   for (const d of deals) {
     if (!scores(d, comp)) continue   // canceled / hidden / contest-excluded don't count
-    teamAvgCredited(d, comp, onTeam, none).forEach(p => ids.add(p))
+    teamAvgCredited(d, comp, onTeam, none).forEach(p => {
+      if (countsInHeadcount(byId.get(p))) ids.add(p)
+    })
   }
   const today = localToday()
   const asOf  = comp.end_date && comp.end_date < today ? comp.end_date : today
   for (const u of users) {
-    if (u.active === false) continue
+    if (!countsInHeadcount(u)) continue   // subsumes the old `active === false` skip
     if (onTeam(u.id, asOf)) ids.add(u.id)
   }
   return [...ids]

@@ -12,7 +12,7 @@ import {
   fetchGoalsForMonth, fetchRepGoals, saveGoal as saveGoalDb, deleteGoal as deleteGoalDb,
 } from '../lib/db'
 import { fmt, dealAmounts, activeDeals } from '../utils/commission'
-import { headIdSet, buildChangesByProfile } from '../utils/team'
+import { headIdSet, buildChangesByProfile, rosterStatus } from '../utils/team'
 import { buildRecordBook, periodEnd } from '../utils/records'
 import { buildPerformance, repFlags } from '../utils/perfSummary'
 import {
@@ -22,6 +22,7 @@ import {
 import { onClickUnlessSelecting } from '../utils/selection'
 import { copyTable as copyRichTable } from '../lib/clipboard'
 import { getPresetRange, getPreviousRange } from '../utils/dateRanges'
+import { fmtDay } from '../utils/teamMove'
 import DateRangeFilter from '../components/DateRangeFilter'
 import { SURFACE, WARN_BORDER, plural, Card, KpiFigure, Pill, PillGroup, SecondaryButton, IconButton, Expandable, LoadingBlock, EmptyBlock } from '../components/ui'
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus'
@@ -253,7 +254,7 @@ function Bar({ pct, height = 'h-3', gold = false }) {
 
 export default function Dashboard() {
   const [searchParams, setSearchParams] = useSearchParams()
-  const { isAdmin } = useAuth()
+  const { isAdmin, profile } = useAuth()
   const { settings, save: saveSettingCtx, dataStartDate, perfFloors, perfDefaultTeam, feedNonReps } = useSettings()
   // Setting the monthly revenue goal is a data change — admin-only.
   const canEditGoal = isAdmin
@@ -365,6 +366,36 @@ export default function Dashboard() {
   // on AS OF THE SALE DATE (team_changes log) — moving a rep never rewrites
   // history. Shared by the team filter, team breakdown, and monthly goal.
   const usersById = useMemo(() => Object.fromEntries(users.map(u => [u.id, u])), [users])
+
+  // Roster status (flex / away, migration 062) shown to ADMINS AND THE REP'S
+  // OWN LEADERSHIP, which is the audience Keaton named. It is a management
+  // fact about someone's availability, not a performance figure, and the
+  // Admin → People chart that carries it is admin-route-only — so without
+  // this a manager had nowhere to see why their team reads 4 reps and lists
+  // 6. Nobody else's row changes, and no NUMBER changes for anyone.
+  const rosterTagFor = (repId) => {
+    const u = usersById[repId]
+    if (!u) return null
+    const st = rosterStatus(u)
+    if (st === 'counted') return null
+    const mine = isAdmin
+      || (profile?.id && (u.manager_id === profile.id || u.director_id === profile.id || u.vp_id === profile.id))
+    if (!mine) return null
+    return st === 'flex'
+      ? { text: 'flex', color: 'var(--gold-tx)', title: 'Sells here and there — not in the team’s rep count' }
+      : { text: u.away_until ? `away · back ${fmtDay(u.away_until)}` : 'away',
+          color: WARN, title: 'Temporarily away — not in the team’s rep count' }
+  }
+  const RosterTag = ({ repId }) => {
+    const t = rosterTagFor(repId)
+    if (!t) return null
+    return (
+      <span className="ml-1.5 text-[12px] font-bold uppercase tracking-wide px-1 rounded whitespace-nowrap"
+        title={t.title} style={{ color: t.color, border: `1px solid color-mix(in srgb, ${t.color} 40%, transparent)` }}>
+        {t.text}
+      </span>
+    )
+  }
   const headsSet  = useMemo(() => headIdSet(users), [users])
   const changesByProfile = useMemo(() => buildChangesByProfile(teamChanges), [teamChanges])
 
@@ -1188,6 +1219,7 @@ export default function Dashboard() {
                               {c.ghost && !isAdmin ? 'Hidden' : c.label}
                               {clickable && <span className="text-bank-gold-tx">{isTeamAcc ? (expanded ? ' ⌄' : ' ›') : ' ›'}</span>}
                             </span>
+                            {c.kind === 'rep' && <RosterTag repId={c.key} />}
                             {c.sub && <span className={TD_SUB}>{c.sub}</span>}
                           </td>
                           <StatCells st={st} prev={c.prev} flagSet={!!fl.set} isPerson={c.kind === 'rep'} role={c.kind === 'rep' ? usersById[c.key]?.sales_role : null} />
@@ -1205,7 +1237,7 @@ export default function Dashboard() {
                               className="border-t border-bank-line cursor-pointer hover:bg-bank-raise"
                               style={{ background: 'var(--bg)' }}>
                               <td className="py-2 pr-2 pl-7">
-                                <span className="text-bank-mu text-[13px]">{r.ghost && !isAdmin ? 'Hidden' : r.name}<span className="text-bank-gold-tx">{repOpen ? ' ⌄' : ' ›'}</span></span>
+                                <span className="text-bank-mu text-[13px]">{r.ghost && !isAdmin ? 'Hidden' : r.name}<span className="text-bank-gold-tx">{repOpen ? ' ⌄' : ' ›'}</span></span><RosterTag repId={r.id} />
                               </td>
                               <StatCells st={r} prev={r.prev} isPerson role={usersById[r.id]?.sales_role} />
                               <GoalCell pct={rgp} />
@@ -1246,7 +1278,7 @@ export default function Dashboard() {
                   const isTeamAcc = node.level === 'company' && c.kind === 'team'
                   return (
                     <Expandable key={`m-${c.kind}-${c.key}`}
-                      title={c.ghost && !isAdmin ? 'Hidden' : c.label} meta={c.sub || null}
+                      title={<>{c.ghost && !isAdmin ? 'Hidden' : c.label}{c.kind === 'rep' && <RosterTag repId={c.key} />}</>} meta={c.sub || null}
                       right={<RowRight revenue={st.revenue} deals={st.deals} />}>
                       <MobileStats st={st} prev={c.prev} goalPct={gp} flagSet={!!fl.set} isPerson={c.kind === 'rep'} role={c.kind === 'rep' ? usersById[c.key]?.sales_role : null} />
                       {isTeamAcc && (
@@ -1258,7 +1290,7 @@ export default function Dashboard() {
                             const rgp = rg ? (r.revenue / rg) * 100 : null
                             return (
                               <Expandable key={`m-rep-${c.key}-${r.id}`} className="pl-3"
-                                title={r.ghost && !isAdmin ? 'Hidden' : r.name}
+                                title={<>{r.ghost && !isAdmin ? 'Hidden' : r.name}<RosterTag repId={r.id} /></>}
                                 right={<RowRight revenue={r.revenue} deals={r.deals} />}>
                                 <MobileStats st={r} prev={r.prev} goalPct={rgp} isPerson role={usersById[r.id]?.sales_role} />
                                 <div className="px-4 pb-3" style={{ background: 'var(--bg)' }}>

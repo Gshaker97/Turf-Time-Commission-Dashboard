@@ -3,6 +3,7 @@ const BLANK = {
   manager_id: '', director_id: '', vp_id: '',
   is_admin: false, ghost: false,
   sales_role: '',
+  roster_status: 'counted', away_until: '',
   password: '',
 }
 
@@ -26,6 +27,8 @@ export default function UserModal({ user, allUsers = [], teamChanges = [], onSav
         is_admin:    user.is_admin    ?? false,
         ghost:       user.ghost       ?? false,
         sales_role:  user.sales_role  ?? '',
+        roster_status: user.roster_status ?? 'counted',
+        away_until:    user.away_until    ?? '',
         password: '',
       })
     } else {
@@ -63,6 +66,10 @@ export default function UserModal({ user, allUsers = [], teamChanges = [], onSav
       director_id: form.director_id || null,
       vp_id:       form.vp_id       || null,
       sales_role:  form.sales_role  || null,
+      roster_status: form.roster_status || 'counted',
+      // The date belongs to `away` and is cleared with it, so a rep who comes
+      // back and later goes flex doesn't carry a stale "back on 15 Dec".
+      away_until: form.roster_status === 'away' ? (form.away_until || null) : null,
     })
     setSaving(false)
   }

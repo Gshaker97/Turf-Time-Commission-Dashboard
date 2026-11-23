@@ -25,10 +25,10 @@ export const DEMO_USERS = [
   { id: 'u-tylerm',   name: 'Tyler Maynard',   email: 'tylerm@turftime.com',   role: 'rep', company_name: CO, manager_id: 'u-colt',   director_id: 'u-garrison', vp_id: 'u-keaton', active: true },
   // Jordan's team
   { id: 'u-jeremy',   name: 'Jeremy Gillon',   email: 'jeremy@turftime.com',   role: 'rep', company_name: CO, manager_id: 'u-jordan', director_id: 'u-garrison', vp_id: 'u-keaton', active: true },
-  { id: 'u-mattj',    name: 'Matt Jameson',    email: 'mattj@turftime.com',    role: 'rep', company_name: CO, manager_id: 'u-jordan', director_id: 'u-garrison', vp_id: 'u-keaton', active: true },
+  { id: 'u-mattj',    name: 'Matt Jameson',    email: 'mattj@turftime.com',    role: 'rep', company_name: CO, manager_id: 'u-jordan', director_id: 'u-garrison', vp_id: 'u-keaton', active: true, roster_status: 'flex' },
   { id: 'u-codym',    name: 'Cody Mack',       email: 'codym@turftime.com',    role: 'rep', company_name: CO, manager_id: 'u-jordan', director_id: 'u-garrison', vp_id: 'u-keaton', active: true },
   { id: 'u-johnk',    name: 'John Kosta',      email: 'johnk@turftime.com',    role: 'rep', company_name: CO, manager_id: 'u-jordan', director_id: 'u-garrison', vp_id: 'u-keaton', active: true },
-  { id: 'u-dayton',   name: 'Dayton Jones',    email: 'dayton@turftime.com',   role: 'rep', company_name: CO, manager_id: 'u-jordan', director_id: 'u-garrison', vp_id: 'u-keaton', active: true },
+  { id: 'u-dayton',   name: 'Dayton Jones',    email: 'dayton@turftime.com',   role: 'rep', company_name: CO, manager_id: 'u-jordan', director_id: 'u-garrison', vp_id: 'u-keaton', active: true, roster_status: 'away', away_until: '2026-12-15' },
   // Conner's team
   { id: 'u-caleb',    name: 'Caleb Sartin',    email: 'caleb@turftime.com',    role: 'rep', company_name: CO, manager_id: 'u-conner', director_id: 'u-garrison', vp_id: 'u-keaton', active: true },
   { id: 'u-jc',       name: 'JC Correa',       email: 'jc@turftime.com',       role: 'rep', company_name: CO, manager_id: 'u-conner', director_id: 'u-garrison', vp_id: 'u-keaton', active: true },
