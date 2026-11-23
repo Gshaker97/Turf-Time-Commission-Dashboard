@@ -1048,6 +1048,10 @@ export default function Dashboard() {
                   title="Copy as a table — pastes formatted into Canva, Sheets or Docs">
                   {copiedBoard ? <Check size={12} /> : <Copy size={12} />}{copiedBoard ? 'Copied' : 'Copy table'}
                 </SecondaryButton>
+                {/* Same door as the Teams/Offices view — it used to vanish on Reps (Garrison, Nov 23 2026). */}
+                <SecondaryButton onClick={() => navigate('/advanced')} title="Setters, closers, teams and individual profiles">
+                  Advanced stats <ChevronRight size={13} />
+                </SecondaryButton>
               </div>
             ) : (
               /* Advanced stats (Garrison, Nov 14 2026): setters, closers, teams
