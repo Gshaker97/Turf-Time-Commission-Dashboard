@@ -281,8 +281,16 @@ export default function Dashboard() {
   // Which team rows are expanded in the company-level Teams breakdown. Clicking
   // a team drops its reps in underneath, in place, instead of re-scoping the
   // whole page to that team (per Keaton — the full-page shift was jarring).
-  const [expandedTeams, setExpandedTeams] = useState(() => new Set())
-  const toggleTeam = (key) => setExpandedTeams(s => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n })
+  // EVERY TEAM STARTS OPEN with its reps underneath (Garrison, Nov 15 2026:
+  // "I want to see teams stats and persons stats without having to click").
+  // So the state is which teams are COLLAPSED, not which are expanded, and an
+  // empty set means everything is showing. Per browser, remembered.
+  const [collapsedTeams, setCollapsedTeams] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('tt_breakdown_collapsed') || '[]')) } catch { return new Set() }
+  })
+  const rememberCollapsed = (n) => { try { localStorage.setItem('tt_breakdown_collapsed', JSON.stringify([...n])) } catch { /* ignore */ } return n }
+  const toggleTeam = (key) => setCollapsedTeams(s => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return rememberCollapsed(n) })
+  const setAllTeams = (open, keys) => setCollapsedTeams(() => rememberCollapsed(open ? new Set() : new Set(keys)))
   // A rep inside an expanded team can expand again to show its own deals, in
   // place, without scoping the page to that rep (per Keaton).
   const [expandedReps, setExpandedReps] = useState(() => new Set())
@@ -1023,6 +1031,15 @@ export default function Dashboard() {
                   {node.level === 'office' && (
                     <span className="text-[13px] text-bank-fa ml-1">in {node.title}</span>
                   )}
+                  {node.level === 'company' && grouping === 'team' && (() => {
+                    const keys = node.children.filter(c => c.kind === 'team').map(c => c.key)
+                    const anyOpen = keys.some(k => !collapsedTeams.has(k))
+                    return (
+                      <SecondaryButton onClick={() => setAllTeams(!anyOpen, keys)} className="ml-1">
+                        {anyOpen ? 'Collapse reps' : 'Show reps'}
+                      </SecondaryButton>
+                    )
+                  })()}
                 </>
               ) : (
                 <div className="flex items-center gap-2 min-w-0">
@@ -1174,7 +1191,7 @@ export default function Dashboard() {
                       // Company-level team rows expand IN PLACE to show their reps,
                       // instead of re-scoping the whole page (per Keaton).
                       const isTeamAcc = node.level === 'company' && c.kind === 'team'
-                      const expanded = isTeamAcc && expandedTeams.has(c.key)
+                      const expanded = isTeamAcc && !collapsedTeams.has(c.key)
                       const clickable = isTeamAcc || c.drillable
                       return (
                         <Fragment key={`${c.kind}-${c.key}`}>
@@ -1245,7 +1262,7 @@ export default function Dashboard() {
                   const fl = c.kind === 'rep' ? repFlags(st, flagFloors) : {}
                   const isTeamAcc = node.level === 'company' && c.kind === 'team'
                   return (
-                    <Expandable key={`m-${c.kind}-${c.key}`}
+                    <Expandable key={`m-${c.kind}-${c.key}-${isTeamAcc && !collapsedTeams.has(c.key)}`} defaultOpen={isTeamAcc && !collapsedTeams.has(c.key)}
                       title={c.ghost && !isAdmin ? 'Hidden' : c.label} meta={c.sub || null}
                       right={<RowRight revenue={st.revenue} deals={st.deals} />}>
                       <MobileStats st={st} prev={c.prev} goalPct={gp} flagSet={!!fl.set} isPerson={c.kind === 'rep'} role={c.kind === 'rep' ? usersById[c.key]?.sales_role : null} />
