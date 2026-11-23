@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util'
 import { createMonitor, collectWebsiteRequests, buildReport } from './lib/website-lead-monitor.mjs'
+import * as overdue from './lib/overdue-jobs.mjs'
 /**
  * Turf Time dashboard server — serves the built SPA and hosts the user-admin
  * API, so the site is completely standalone (no Apps Script in the critical
@@ -6172,7 +6173,112 @@ analystRoute('/api/analyst/eod', null, async (d, req) => {
   return arcViews.runView(stored, 'eod', { offset: req.query.offset, limit: req.query.limit })
 }, { jarvisOnly: true })
 
+// ── Overdue-balance alert (Garrison, Nov 23 2026) ───────────────────────────
+// Every morning at OVERDUE_ALERT_HOUR (Phoenix), read the office's "Turf Time
+// Check List" sheet and text Tanner — through GHL, as a PDF — every job that has
+// just reached OVERDUE_DAYS (45) days since install with money still due, with
+// the customer's address, phone, install date and PM. Each job is texted ONCE
+// (`overdue_alert_sent`); paying it off simply drops it. Rules live in
+// lib/overdue-jobs.mjs. OVERDUE_ALERTS=0 switches the whole thing off.
+const OVERDUE_ALERTS_ON = process.env.OVERDUE_ALERTS !== '0'
+const OVERDUE_ALERT_HOUR = Number(process.env.OVERDUE_ALERT_HOUR || 8)
+const OVERDUE_ALERT_CONTACTS = (process.env.OVERDUE_ALERT_CONTACT_IDS || 'OjhxskL9Tc6kE6wXPcFU')   // Tanner Arnett
+  .split(',').map(s => s.trim()).filter(Boolean)
+const CHECKLIST_SHEET_ID = (process.env.CHECKLIST_SHEET_ID || '1GtQuM1FGlrVrRd23TztWlHQc0FDdyrXLULpWN1y30Ho').trim()
+const OVERDUE_SENT_KEY = 'overdue_alert_sent', OVERDUE_LAST_KEY = 'overdue_alert_last'
+
+async function readChecklistJobs() {
+  const token = await googleAccessToken()
+  const meta = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${CHECKLIST_SHEET_ID}?fields=sheets.properties.title`, { headers: { Authorization: `Bearer ${token}` } })
+  if (!meta.ok) throw new Error(`Check List read failed (${meta.status}): ${(await meta.text()).slice(0, 160)}`)
+  const sinceMonth = overdue.SINCE.slice(0, 7)
+  const tabs = ((await meta.json()).sheets || []).map(s => s.properties.title).map(t => ({ t, m: overdue.tabMonth(t) })).filter(x => x.m && x.m >= sinceMonth)
+  if (!tabs.length) return { jobs: [], tabs: [] }
+  const qs = tabs.map(x => `ranges=${encodeURIComponent(`'${x.t.replace(/'/g, "''")}'`)}`).join('&')
+  const resp = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${CHECKLIST_SHEET_ID}/values:batchGet?${qs}&majorDimension=ROWS&valueRenderOption=FORMATTED_VALUE`, { headers: { Authorization: `Bearer ${token}` } })
+  if (!resp.ok) throw new Error(`Check List read failed (${resp.status}): ${(await resp.text()).slice(0, 160)}`)
+  const vrs = (await resp.json()).valueRanges || []
+  const jobs = []
+  vrs.forEach((vr, i) => jobs.push(...overdue.parseTab(vr.values || [], tabs[i].m)))
+  return { jobs, tabs: tabs.map(x => x.t) }
+}
+
+async function ghlUploadPdf(buf, name) {
+  const form = new FormData()
+  form.append('file', new Blob([buf], { type: 'application/pdf' }), name)
+  form.append('hosted', 'false'); form.append('name', name); form.append('locationId', GHL_LOCATION_ID)
+  const resp = await fetch(`${GHL_BASE}/medias/upload-file`, { method: 'POST', headers: ghlHeaders(GHL_MEDIA_TOKEN), body: form })
+  if (!resp.ok) throw new Error(`medias upload ${resp.status}: ${(await resp.text()).slice(0, 120)}`)
+  const j = await resp.json()
+  const url = j.url || j.fileUrl || (j.file && j.file.url) || null
+  if (!url) throw new Error('medias upload returned no url')
+  return url
+}
+
+let _overdueRunning = false
+// mode: 'live' sends and records; 'dry' computes only; 'mark' records the current
+// list as already sent WITHOUT texting (used once, for the list sent by hand).
+async function overdueRun({ mode = 'live' } = {}) {
+  if (_overdueRunning) return { ok: false, error: 'already running' }
+  _overdueRunning = true
+  try {
+    const { day } = phoenixNow()
+    const [{ jobs, tabs }, cal, sheet, sentRead] = await Promise.all([
+      readChecklistJobs(),
+      calendarExport('/api/export/jobs').catch(() => null),
+      readInstallSheet().catch(() => null),
+      arcSetting(OVERDUE_SENT_KEY),
+    ])
+    if (!sentRead.ok) throw new Error('could not read the sent list — not texting, to avoid repeats')
+    const sent = (sentRead.value && sentRead.value.jobs) || {}
+    const calJobs = (cal && cal.jobs) || []
+    const rows = overdue.overdueJobs(jobs, day).map(j => ({ ...j, contact: overdue.contactFor(j, calJobs, sheet && sheet.jobs ? sheet.jobs.rows : []) }))
+    const fresh = rows.filter(r => !sent[r.key])
+    const report = { day, mode, tabs, checked: jobs.length, overdue: rows.length, new: fresh.length, calendar: !!cal, jobs: fresh.map(r => ({ key: r.key, client: r.client, name: r.contact.name, date: r.date, days: r.days, due: r.due, pm: r.contact.pm || null, matched: r.contact.matched })), sms: { sent: 0, to: OVERDUE_ALERT_CONTACTS.length } }
+    if (mode !== 'dry' && fresh.length) {
+      if (mode === 'live') {
+        if (!GHL_SMS_TOKEN || !OVERDUE_ALERT_CONTACTS.length) throw new Error('GHL_SMS_TOKEN or the recipient is not set')
+        const pdf = await overdue.buildPdf(fresh, day)
+        const url = await ghlUploadPdf(pdf, `Unpaid jobs ${overdue.OVERDUE_DAYS}+ days - ${day}.pdf`)
+        const text = overdue.smsText(fresh, day)
+        for (const cid of OVERDUE_ALERT_CONTACTS) {
+          try {
+            const resp = await fetch(`${GHL_BASE}/conversations/messages`, { method: 'POST', headers: { ...ghlHeaders(GHL_SMS_TOKEN), 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'SMS', contactId: cid, message: text, attachments: [url] }) })
+            if (!resp.ok) throw new Error(`GHL SMS ${resp.status}: ${(await resp.text()).slice(0, 120)}`)
+            report.sms.sent++
+          } catch (e) { report.sms.error = String(e.message || e).slice(0, 160) }
+        }
+        // Only a delivered text marks the jobs; a failed send retries tomorrow.
+        if (!report.sms.sent) throw new Error(`text not sent: ${report.sms.error || 'unknown'}`)
+      }
+      const at = new Date().toISOString()
+      for (const r of fresh) sent[r.key] = { at, due: r.due, how: mode }
+      await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`, { key: OVERDUE_SENT_KEY, value: { jobs: sent } }, 'resolution=merge-duplicates')
+    }
+    if (mode !== 'dry') await restWrite('POST', `/rest/v1/app_settings?on_conflict=key`, { key: OVERDUE_LAST_KEY, value: report }, 'resolution=merge-duplicates').catch(() => {})
+    console.log(`[overdue] day=${day} mode=${mode} overdue=${rows.length} new=${fresh.length} sms_sent=${report.sms.sent}${report.sms.error ? ` error=${report.sms.error}` : ''}`)
+    return { ok: true, ...report }
+  } finally { _overdueRunning = false }
+}
+async function overdueTick() {
+  if (!OVERDUE_ALERTS_ON) return
+  const { day, hour } = phoenixNow()
+  if (hour !== OVERDUE_ALERT_HOUR) return
+  const last = await arcSetting(OVERDUE_LAST_KEY)
+  if (!last.ok || (last.value && last.value.day === day && last.value.mode === 'live')) return
+  await overdueRun().catch(e => console.log(`[overdue] failed: ${String(e.message || e).slice(0, 200)}`))
+}
+// Preview (never texts) for Jarvis / the dashboard key.
+analystRoute('/api/analyst/overdue', null, async () => overdueRun({ mode: 'dry' }))
+// Manual trigger, owner's write secret only: { mode: 'live' | 'dry' | 'mark' }.
+app.post('/api/alerts/overdue/run', async (req, res) => {
+  if (!verifiedTriggerAuthorized(req)) return res.status(401).json(err('Unauthorized'))
+  const mode = ['live', 'dry', 'mark'].includes(req.body && req.body.mode) ? req.body.mode : 'dry'
+  try { res.json(await overdueRun({ mode })) } catch (e) { res.status(500).json(err(String(e.message || e))) }
+})
+
 const TIMERS_ON = process.env.ARC_DISABLE_TIMERS !== '1'
+if (TIMERS_ON) setInterval(() => overdueTick().catch(() => {}), 15 * 60_000).unref?.()
 if (TIMERS_ON) setTimeout(teamMoveSweep, 20_000).unref?.()
 if (TIMERS_ON) setInterval(teamMoveSweep, TEAM_MOVE_SWEEP_MS).unref?.()
 
