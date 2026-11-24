@@ -831,6 +831,14 @@ test('sheet money re-stamp: a stale Baseline Price / Mark Up on the opp is set f
   for (const c of world.opp.customFields) if (c.id === 'rI6UeVz5CTQcXsssBqIm') c.fieldValueNumber = 1400
   const audit2 = await run({ fix: true })
   assert.equal(audit2.fixed.filter(f => f.action === 'sync_fields').length, 0, JSON.stringify(audit2.fixed))
+  // a finished job (install day in the past): listed under money_behind, never written
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  const past = new Date(Date.now() - 2 * 864e5).toISOString().slice(0, 10)
+  for (const c of world.opp.customFields) { if (c.id === 'rI6UeVz5CTQcXsssBqIm') c.fieldValueNumber = 1400; if (c.id === INSTALL_FIELD) c.fieldValueString = past }
+  world.calendarJobs[0].installDate = past
+  const audit3 = await run({ fix: true })
+  assert.equal(audit3.fixed.filter(f => f.action === 'sync_fields' && f.after.opp.baseline != null).length, 0, JSON.stringify(audit3.fixed))
+  assert.equal(audit3.money_behind.length, 1, JSON.stringify(audit3.money_behind)); assert.match(audit3.money_behind[0].reason, /Baseline Price field 1400 → 1000/)
 })
 
 test('a PM calendar job cancelled while the Schedule tab is not: listed under calendar_cancelled, opp left open, nothing written', async () => {
