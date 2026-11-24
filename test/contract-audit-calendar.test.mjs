@@ -51,7 +51,7 @@ function reset({ ghl = ['old', 'new'], cal = ['new'], sheetTotal = '2000', calen
   world = {
     calendarDown, arcPdfOk, sameSize, ingestImported, arcsiteStatus,
     opp: { id: OPP, name: 'Fixture Calendar', contactId: 'contact-cal', status: 'open', pipelineId: 'pipe-outside', monetaryValue: value,
-      customFields: [{ id: PROJECT_FIELD, fieldValueString: PID }, { id: INSTALL_FIELD, fieldValueString: future }, { id: 'dScpoYWZbeghBsAMBR4o', fieldValueNumber: value }, { id: PDF_FIELD, fieldValueFiles: ghl.map(ghlFile) }] },
+      customFields: [{ id: PROJECT_FIELD, fieldValueString: PID }, { id: INSTALL_FIELD, fieldValueString: future }, { id: 'dScpoYWZbeghBsAMBR4o', fieldValueNumber: value }, { id: 'rI6UeVz5CTQcXsssBqIm', fieldValueNumber: 1000 }, { id: 'Vi6FxBjJ1iVcSPEH8tFE', fieldValueNumber: Number(sheetTotal) - 1000 }, { id: 'P5PdaF8CnR4ru4Xru3UA', fieldValueNumber: 200 }, { id: PDF_FIELD, fieldValueFiles: ghl.map(ghlFile) }] },
     proposals: [
       { proposal_id: 'p2', project_id: PID, status: 'APPROVED', total: 2000, pdf_url: 'https://cdn.example/new.pdf', proposal_options: [], document_number: '1002' },
       { proposal_id: 'p1', project_id: PID, status: 'APPROVED', total: 1500, pdf_url: 'https://cdn.example/old.pdf', proposal_options: [], document_number: '1001' },
@@ -813,4 +813,32 @@ test('hidden signed proposal: a parent already in the list is not fetched twice,
   d = await run({ fix: true, dry: true })
   assert.deepEqual(world.proposalGets, ['gone']); assert.equal(d.unsigned_closed.length, 0); assert.equal(d.arcsite_errors, 1)
   assert.ok(!d.would_fix.some(w => w.action === 'clear_contact_prices'))
+})
+
+test('sheet money re-stamp: a stale Baseline Price / Mark Up on the opp is set from the AI sheet rollup; matching fields and a disputed value are left alone', async () => {
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  // Quinn Macdonald / Freedom Law (Nov 24 2026): the row landed after the signing, so the fields kept the old numbers.
+  for (const c of world.opp.customFields) { if (c.id === 'rI6UeVz5CTQcXsssBqIm') c.fieldValueNumber = 1400; if (c.id === 'Vi6FxBjJ1iVcSPEH8tFE') c.fieldValueNumber = 600 }
+  const audit = await run({ fix: true })
+  const fix = audit.fixed.find(f => f.action === 'sync_fields')
+  assert.ok(fix, JSON.stringify(audit.fixed))
+  assert.deepEqual(fix.after.opp, { baseline: 1000, markup: 1000 }, 'only the two stale money fields, from the sheet (baseline 1000, pre-tax 2000)')
+  assert.deepEqual(fix.after.contact, {}); assert.deepEqual(fix.after.calendar, {})
+  assert.match(fix.reason, /Baseline Price field 1400 → 1000/); assert.match(fix.reason, /Mark Up field 600 → 1000/)
+  assert.equal(audit.gaps.length, 0, 'contracts and value were already right')
+  // disputed: the sheet total disagrees with ArcSite → nothing re-stamped
+  reset({ ghl: ['old', 'new'], cal: ['new'], sheetTotal: '2500' }); resetArcSaleMemoryForTests()
+  for (const c of world.opp.customFields) if (c.id === 'rI6UeVz5CTQcXsssBqIm') c.fieldValueNumber = 1400
+  const audit2 = await run({ fix: true })
+  assert.equal(audit2.fixed.filter(f => f.action === 'sync_fields').length, 0, JSON.stringify(audit2.fixed))
+})
+
+test('a PM calendar job cancelled while the Schedule tab is not: listed under calendar_cancelled, opp left open, nothing written', async () => {
+  reset({ ghl: ['old', 'new'], cal: ['new'] }); resetArcSaleMemoryForTests()
+  world.calendarJobs[0].canceledAt = '2026-11-24T17:41:00.000Z'
+  const audit = await run({ fix: true })
+  assert.equal(audit.calendar_cancelled.length, 1, JSON.stringify(audit.calendar_cancelled))
+  assert.equal(audit.calendar_cancelled[0].opportunity_id, OPP); assert.match(audit.calendar_cancelled[0].reason, /cancelled but the Schedule tab/)
+  assert.equal(world.oppPuts.filter(p => p.status).length, 0, 'status never changed')
+  assert.equal(audit.cancelled_bookings.length, 0)
 })

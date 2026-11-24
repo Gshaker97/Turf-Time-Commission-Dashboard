@@ -2825,12 +2825,16 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
   // fails, the GHL checks still run and every calendar check is recorded as
   // skipped for that reason, never passed as ok.
   let calByOpp = null
+  const calCancelledByOpp = new Map()
   out.calendar = null
   if (!lookupBlocked && CALENDAR_SYNC_URL && CALENDAR_EXPORT_KEY) {
     try {
-      const cf = await calendarExport('/api/export/jobs')
+      const cf = await calendarExport('/api/export/jobs?canceled=include')
       calByOpp = new Map()
       for (const j of listOf(cf)) if (j && j.ghlOpportunityId && !j.canceledAt) calByOpp.set(j.ghlOpportunityId, j)
+      // Cancelled PM jobs are kept apart: the audit only cancels from the Schedule tab, so an
+      // open opp whose PM job was cancelled on the calendar is LISTED (calendar_cancelled), never written.
+      for (const j of listOf(cf)) if (j && j.ghlOpportunityId && j.canceledAt && !calByOpp.has(j.ghlOpportunityId)) calCancelledByOpp.set(j.ghlOpportunityId, j)
       out.calendar = { jobs: calByOpp.size, behind: 0, no_contract: 0, unverified: 0, no_job: 0, current: 0 }
     } catch (e) { out.calendar = { error: String(e.message || e).slice(0, 160) } }
   } else if (!lookupBlocked) out.calendar = { error: 'calendar export not configured' }
@@ -2880,6 +2884,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
   //    in the finished scan, is left for review.
   out.cancelled_bookings = []
   out.later_projects = []   // finished jobs whose calendar job now carries a later project's PM
+  out.calendar_cancelled = []   // open opps whose PM calendar job is cancelled while the Schedule tab is not (Landrum / Bolden, Nov 24 2026) — report only
   out.deals_skipped = []    // commission-site deals the audit would have created but must not (Inside Sales, or sold before the site's first deal)
   out.deals_split_held = [] // deals whose Project ID also has a SPLIT deal (<pid>-2…): the add-on is paid on the split, so the parent is never re-priced to the sum — listed for review
   out.proposals_without_opp = [] // signed proposals (add-on, or the original beside an add-on opp) inside a project whose opportunity owns a different proposal: reported for the 9 PM text, never summed or pushed
@@ -3138,6 +3143,21 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
           oppInstall: oppInstallDay(opp), contactInstall: cf(GHL_CONTACT_INSTALL_DATE_FIELD) ? String(cf(GHL_CONTACT_INSTALL_DATE_FIELD)).slice(0, 10) : null, calendarInstall: calJob ? String(calJob.installDate || '').slice(0, 10) || null : undefined,
           oppPm: oppFieldVal(opp, GHL_OPP_PM_FIELD), contactPm: cf(GHL_CONTACT_PM_FIELD),
           oppPrice: oppFieldVal(opp, GHL_OPP_FIELD_IDS.price), contactJobPrice: contactFieldNumber(contact, GHL_CONTACT_JOB_PRICE_FIELD), contactNewPrice: contactFieldNumber(contact, GHL_CONTACT_NEW_PRICE_FIELD),
+          oppBaseline: oppFieldVal(opp, GHL_OPP_FIELD_IDS.baseline), oppMarkup: oppFieldVal(opp, GHL_OPP_FIELD_IDS.markup), oppCommission: oppFieldVal(opp, GHL_OPP_FIELD_IDS.commission),
+        }
+        // Sheet money for the counted proposals (same rollup the deal update uses). Null when a
+        // counted row is missing or the rollup's price is not the consensus value → nothing re-stamped.
+        let wantMoney = null
+        if (wantValue != null && !disputed && out.values[pid] && out.values[pid].counted_ids && out.values[pid].counted_ids.length) {
+          const sheetFields = await readInstallSheet().catch(() => null)
+          const pidRowsF = ((sheetFields && sheetFields.jobs && sheetFields.jobs.rows) || []).filter(r => String(r['Project ID'] || '').trim() === pid)
+          const roll = sheetRollupFor(out.values[pid].counted_ids, pidRowsF)
+          if (roll && arcSame(roll.jobPrice, wantValue)) wantMoney = { baseline: roll.baseline, markup: roll.markup, commission: op.pipelineId === GHL_PIPELINES.estimator.id ? null : roll.commission }
+        }
+        const calCancelled = calCancelledByOpp.get(op.id) || null
+        if (calCancelled && !calJob && schedule.state !== 'cancelled' && String(op.status || '').toLowerCase() === 'open') {
+          const cc = { ...base, target: 'fields', pm_job: calCancelled.jobNumber, pm_install: String(calCancelled.installDate || '').slice(0, 10) || null, pm_cancelled_at: String(calCancelled.canceledAt || '').slice(0, 10) || null, reason: `PM calendar job ${calCancelled.jobNumber} is cancelled but the Schedule tab still shows ${schedule.state === 'live' ? `a live booking on ${schedule.date}` : 'no cancellation'} — opp left open, nothing written; cancel it on the Schedule tab (or review) to settle` }
+          out.calendar_cancelled.push(cc); log('CALENDAR CANCELLED', cc)
         }
         // A finished job (its install date has passed) never takes the Project
         // Manager of a later project that reuses its calendar job (Jacob Bietsch,
@@ -3154,7 +3174,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
           const lp = { ...base, target: 'fields', reason: `installed ${jobDay}; the calendar job ${calJob.jobNumber} now shows Project Manager ${calPm} (the opp has ${cur.oppPm || 'none'}) — a later project reusing this job, with no opp of its own; nothing written` }
           out.later_projects.push(lp); log('LATER PROJECT', lp)
         }
-        const wantFields = { install: schedule.state === 'live' ? schedule.date : null, pm: wantPm, value: wantValue }
+        const wantFields = { install: schedule.state === 'live' ? schedule.date : null, pm: wantPm, value: wantValue, money: wantMoney }
         const fp = fieldPlan(cur, wantFields, { held: false, disputed })   // a hold freezes nothing
         if (fp.frozen.length) skip({ ...base, target: 'fields' }, 'fields', `manual hold: ${fp.frozen.join(', ')} stay as they are (would be ${arcUsd(wantValue)})`)
         if (fp.any && !scheduleOk) skip({ ...base, target: 'fields', reason: fp.reasons.join('; ') }, 'fields', `Schedule tab unavailable this run (${out.schedule_error}) — field writes held`)
@@ -3166,7 +3186,7 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
             const errs = []
             try {
               if (Object.keys(fp.opp).length && oppFieldDefs) {
-                const writes = [fp.opp.install ? oppFieldWrite(GHL_OPP_FIELD_IDS.install_date, fp.opp.install, oppFieldDefs) : null, fp.opp.pm ? oppFieldWrite(GHL_OPP_PM_FIELD, fp.opp.pm, oppFieldDefs) : null, fp.opp.price != null ? oppFieldWrite(GHL_OPP_FIELD_IDS.price, fp.opp.price, oppFieldDefs) : null].filter(Boolean)
+                const writes = [fp.opp.install ? oppFieldWrite(GHL_OPP_FIELD_IDS.install_date, fp.opp.install, oppFieldDefs) : null, fp.opp.pm ? oppFieldWrite(GHL_OPP_PM_FIELD, fp.opp.pm, oppFieldDefs) : null, fp.opp.price != null ? oppFieldWrite(GHL_OPP_FIELD_IDS.price, fp.opp.price, oppFieldDefs) : null, fp.opp.baseline != null ? oppFieldWrite(GHL_OPP_FIELD_IDS.baseline, fp.opp.baseline, oppFieldDefs) : null, fp.opp.markup != null ? oppFieldWrite(GHL_OPP_FIELD_IDS.markup, fp.opp.markup, oppFieldDefs) : null, fp.opp.commission != null ? oppFieldWrite(GHL_OPP_FIELD_IDS.commission, fp.opp.commission, oppFieldDefs) : null].filter(Boolean)
                 if (writes.length) await ghlUpdateOpp(op.id, { customFields: writes })
               }
             } catch (e) { errs.push('opp: ' + (e.message || 'failed')) }
@@ -5523,9 +5543,21 @@ async function arcInstallDateSync({ dry = true, excludeOpps = [], fillEmpty = tr
   if (!dry) { if (_idsRunning) { out.errors.push('another install-date run is in progress — nothing written'); return out } _idsRunning = true }
   try { return await arcInstallDateSyncInner(out, { dry, excludeOpps, fillEmpty, testRows, onlyOpps, snapshotAtOverride }) } finally { if (!dry) _idsRunning = false }
 }
+const ARC_SHEET_429_RETRIES = Math.max(0, Number(process.env.ARC_SHEET_429_RETRIES || 2))
+const ARC_SHEET_429_WAIT_MS = Math.max(1000, Number(process.env.ARC_SHEET_429_WAIT_MS || 65_000))
 async function arcInstallDateSyncInner(out, { dry, excludeOpps, fillEmpty, testRows, onlyOpps, snapshotAtOverride }) {
   const excluded = new Set(excludeOpps.map(String)), only = onlyOpps ? new Set(onlyOpps.map(String)) : null
-  let sched; try { sched = await arcScheduleByProject({ testRows }) } catch (e) { out.errors.push('sheet: ' + (e.message || 'unavailable') + ' — nothing compared, nothing cancelled'); return out }
+  // Google's per-minute read quota (429) is shared with every other app on the service account;
+  // since Nov 23 2026 the top-of-the-hour run kept landing on it. Wait out the minute and retry.
+  let sched, sheetTries = 0
+  for (;;) {
+    try { sched = await arcScheduleByProject({ testRows }); break }
+    catch (e) {
+      const msg = e.message || 'unavailable'
+      if (/\(429\)/.test(msg) && sheetTries < ARC_SHEET_429_RETRIES && !testRows) { sheetTries++; out.sheet_retries = sheetTries; await new Promise(r => setTimeout(r, ARC_SHEET_429_WAIT_MS)); continue }
+      out.errors.push('sheet: ' + msg + (sheetTries ? ` (after ${sheetTries} retr${sheetTries === 1 ? 'y' : 'ies'})` : '') + ' — nothing compared, nothing cancelled'); return out
+    }
+  }
   out.skipped = sched.skipped
   const snapshotAt = snapshotAtOverride || sched.snapshotAt; out.snapshot_at = new Date(snapshotAt).toISOString()
   const state = dry ? {} : await arcIdsStateRead()
