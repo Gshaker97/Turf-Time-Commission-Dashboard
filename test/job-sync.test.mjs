@@ -72,12 +72,39 @@ test('change order → deal numbers: the Sheet rows for the counted proposals ar
     { 'Approved Date': '2026-11-08', 'Proposal ID': '615315', 'Approved Total': '$1,802.60', 'Baseline Cost': '$1,302.60', 'Commission': '$500.00' },
     { 'Approved Date': '2026-07-08', 'Proposal ID': '462238', 'Approved Total': '$15,895.75', 'Baseline Cost': '$12,227.50', 'Commission': '$3,668.25' },
   ]
-  assert.deepEqual(sheetRollupFor(['462238', '615315'], amanda), { jobPrice: 17698.35, baseline: 13530.1, commission: 4168.25, changeOrder: '2026-11-08', proposals: ['462238', '615315'] })
+  assert.deepEqual(sheetRollupFor(['462238', '615315'], amanda), { jobPrice: 17698.35, baseline: 13530.1, commission: 4168.25, pretax: null, markup: null, changeOrder: '2026-11-08', proposals: ['462238', '615315'] })
   const julie = [
     { 'Approved Date': '2026-11-20', 'Proposal ID': '640172', 'Approved Total': '$4,085.92', 'Baseline Cost': '$2,413.92', 'Commission': '$1,672.00' },
     { 'Approved Date': '2026-10-20', 'Proposal ID': '597168', 'Approved Total': '$4,085.34', 'Baseline Cost': '$2,324.34', 'Commission': '$1,761.00' },
   ]
-  assert.deepEqual(sheetRollupFor(['640172'], julie), { jobPrice: 4085.92, baseline: 2413.92, commission: 1672, changeOrder: '2026-11-20', proposals: ['640172'] })
+  assert.deepEqual(sheetRollupFor(['640172'], julie), { jobPrice: 4085.92, baseline: 2413.92, commission: 1672, pretax: null, markup: null, changeOrder: '2026-11-20', proposals: ['640172'] })
   assert.equal(sheetRollupFor(['640172', 'missing'], julie), null, 'a counted proposal with no row yet → not final')
   assert.equal(sheetRollupFor([], julie), null)
+})
+
+test('sheet rollup carries Pre-Tax Sale and Mark Up (pre-tax minus baseline), null when a row lacks Pre-Tax', () => {
+  const rows = [
+    { 'Approved Date': '2026-11-23', 'Proposal ID': '650001', 'Approved Total': '$8,114.09', 'Pre-Tax Sale': '$7,500.00', 'Baseline Cost': '$5,000.00', 'Commission': '$1,000.00' },
+    { 'Approved Date': '2026-11-01', 'Proposal ID': '640001', 'Approved Total': '$1,081.00', 'Pre-Tax Sale': '$1,000.00', 'Baseline Cost': '$600.00', 'Commission': '$100.00' },
+  ]
+  assert.deepEqual(sheetRollupFor(['650001'], rows), { jobPrice: 8114.09, baseline: 5000, commission: 1000, pretax: 7500, markup: 2500, changeOrder: '2026-11-23', proposals: ['650001'] })
+  assert.deepEqual(sheetRollupFor(['650001', '640001'], rows), { jobPrice: 9195.09, baseline: 5600, commission: 1100, pretax: 8500, markup: 2900, changeOrder: '2026-11-23', proposals: ['650001', '640001'] })
+  const noPre = [{ 'Approved Date': '2026-11-23', 'Proposal ID': '1', 'Approved Total': '$10.00', 'Baseline Cost': '$4.00', 'Commission': '$1.00' }]
+  assert.equal(sheetRollupFor(['1'], noPre).markup, null)
+})
+
+test('fieldPlan re-stamps Baseline Price / Mark Up / Commission from the sheet money, only the ones that differ', () => {
+  const cur = { oppInstall: '2026-12-03', contactInstall: '2026-12-03', calendarInstall: '2026-12-03', oppPm: 'Eli', contactPm: 'Eli', oppPrice: 8114.09, contactJobPrice: 8114.09, contactNewPrice: 8114.09, oppBaseline: 5400, oppMarkup: 3100, oppCommission: 1000 }
+  const want = { install: '2026-12-03', pm: 'Eli', value: 8114.09, money: { baseline: 5000, markup: 2500, commission: 1000 } }
+  const p = fieldPlan(cur, want)
+  assert.deepEqual(p.opp, { baseline: 5000, markup: 2500 })
+  assert.deepEqual(p.contact, {}); assert.deepEqual(p.calendar, {})
+  assert.ok(p.reasons.some(r => /Baseline Price field 5400 → 5000/.test(r)) && p.reasons.some(r => /Mark Up field 3100 → 2500/.test(r)))
+  // within $1 → nothing; empty field → stamped; null sheet value → left alone (salaried estimator commission)
+  assert.deepEqual(fieldPlan({ ...cur, oppBaseline: 5000.5, oppMarkup: 2499.4 }, want).opp, {})
+  assert.deepEqual(fieldPlan({ ...cur, oppBaseline: null, oppMarkup: 2500 }, { ...want, money: { baseline: 5000, markup: 2500, commission: null } }).opp, { baseline: 5000 })
+  // no money (sheet lagging / rollup ≠ consensus) or disputed → untouched; a hold freezes instead of writing
+  assert.deepEqual(fieldPlan(cur, { ...want, money: null }).opp, {})
+  assert.deepEqual(fieldPlan(cur, want, { disputed: true }).opp, {})
+  const h = fieldPlan(cur, want, { held: true }); assert.deepEqual(h.opp, {}); assert.deepEqual(h.frozen, ['oppBaseline', 'oppMarkup'])
 })
