@@ -2886,7 +2886,6 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
   out.cancelled_bookings = []
   out.later_projects = []   // finished jobs whose calendar job now carries a later project's PM
   out.calendar_cancelled = []   // open opps whose PM calendar job is cancelled while the Schedule tab is not (Landrum / Bolden, Nov 24 2026) — report only
-  out.money_behind = []   // finished jobs whose Baseline / Mark Up / Commission fields differ from the AI sheet — report only
   out.deals_skipped = []    // commission-site deals the audit would have created but must not (Inside Sales, or sold before the site's first deal)
   out.deals_split_held = [] // deals whose Project ID also has a SPLIT deal (<pid>-2…): the add-on is paid on the split, so the parent is never re-priced to the sum — listed for review
   out.proposals_without_opp = [] // signed proposals (add-on, or the original beside an add-on opp) inside a project whose opportunity owns a different proposal: reported for the 9 PM text, never summed or pushed
@@ -3176,16 +3175,10 @@ async function arcContractAudit({ fix = true, dry = false, daysBack = ARC_AUDIT_
           const lp = { ...base, target: 'fields', reason: `installed ${jobDay}; the calendar job ${calJob.jobNumber} now shows Project Manager ${calPm} (the opp has ${cur.oppPm || 'none'}) — a later project reusing this job, with no opp of its own; nothing written` }
           out.later_projects.push(lp); log('LATER PROJECT', lp)
         }
-        // Money is re-stamped on UPCOMING installs only (install day on/after today). A finished
-        // job's stale Baseline / Mark Up / Commission is LISTED (money_behind), not written: the
-        // first dry run (Nov 24 2026) found 73 such opps, 47 of them never stamped at all.
-        const moneyDay = (schedule.state === 'live' ? schedule.date : null) || cur.oppInstall || cur.calendarInstall || null
-        const moneyUpcoming = !!(moneyDay && moneyDay >= out.day)
-        if (wantMoney && !moneyUpcoming) {
-          const mp = fieldPlan(cur, { money: wantMoney }, { held: false, disputed })
-          if (Object.keys(mp.opp).length) { const mb = { ...base, target: 'fields', install: moneyDay, before: { baseline: cur.oppBaseline, markup: cur.oppMarkup, commission: cur.oppCommission }, sheet: wantMoney, reason: `installed ${moneyDay}: ${mp.reasons.join('; ')} — finished job, listed only` }; out.money_behind.push(mb); log('MONEY BEHIND', mb) }
-        }
-        const wantFields = { install: schedule.state === 'live' ? schedule.date : null, pm: wantPm, value: wantValue, money: moneyUpcoming ? wantMoney : null }
+        // Money (Baseline / Mark Up / Commission) is re-stamped from the AI sheet on EVERY
+        // audited job, finished or upcoming (Garrison, Nov 27 2026). Until then finished jobs
+        // were listed only (money_behind); the 61 listed that day were backfilled by hand.
+        const wantFields = { install: schedule.state === 'live' ? schedule.date : null, pm: wantPm, value: wantValue, money: wantMoney }
         const fp = fieldPlan(cur, wantFields, { held: false, disputed })   // a hold freezes nothing
         if (fp.frozen.length) skip({ ...base, target: 'fields' }, 'fields', `manual hold: ${fp.frozen.join(', ')} stay as they are (would be ${arcUsd(wantValue)})`)
         if (fp.any && !scheduleOk) skip({ ...base, target: 'fields', reason: fp.reasons.join('; ') }, 'fields', `Schedule tab unavailable this run (${out.schedule_error}) — field writes held`)
