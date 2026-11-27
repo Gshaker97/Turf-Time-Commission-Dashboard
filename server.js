@@ -958,6 +958,7 @@ const INSTALL_SHEET_ID = (process.env.INSTALL_SHEET_ID || '').trim()
 const AUDIT_TABS = ['Jobs', 'Schedule']
 
 let _sheetCache = { at: 0, data: null }
+let _sheetInflight = null   // the one batchGet in progress, shared by every concurrent reader
 let _googleToken = { token: null, exp: 0 }
 
 const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_')
@@ -1006,9 +1007,18 @@ function parseTab(rows) {
   return { headers, rows: out }
 }
 
-// Both tabs in one values.batchGet, cached 60s.
-async function readInstallSheet() {
-  if (_sheetCache.data && Date.now() - _sheetCache.at < 60000) return _sheetCache.data
+// Both tabs in one values.batchGet, cached 60s (maxAgeMs lowers that for a caller that
+// wants a fresher row). Concurrent callers share ONE in-flight request: Google allows 60
+// reads a minute per service account, and the Nov 2026 install-date-sync 429s came from
+// the pending reconciler forcing a separate read for every one of ~60 queued projects.
+const SHEET_CACHE_MS = 60000
+async function readInstallSheet({ maxAgeMs = SHEET_CACHE_MS } = {}) {
+  if (_sheetCache.data && Date.now() - _sheetCache.at < Math.min(maxAgeMs, SHEET_CACHE_MS)) return _sheetCache.data
+  if (_sheetInflight) return _sheetInflight
+  _sheetInflight = readInstallSheetNow().finally(() => { _sheetInflight = null })
+  return _sheetInflight
+}
+async function readInstallSheetNow() {
   if (!INSTALL_SHEET_ID) throw new Error('INSTALL_SHEET_ID is not set on the site service')
   const token = await googleAccessToken()
   const qs = AUDIT_TABS.map(t => `ranges=${encodeURIComponent(t)}`).join('&')
@@ -1941,10 +1951,9 @@ async function dealForProject(projectId) {
 // header keyword so a column move doesn't break it. Fails soft to null (sheet
 // not reachable, or the row not written yet — it lands a few seconds after the
 // sale). Parenthesised negatives like "($1,356.73)" parse as -1356.73.
-async function jobRowForProject(projectId, { fresh = false } = {}) {
-  if (fresh) _sheetCache = { at: 0, data: null }   // bypass the 60s cache for a retry
-  let data
-  try { data = await readInstallSheet() } catch { return null }
+const SHEET_FRESH_MS = 30000   // "fresh" = reuse the cache only while it is under 30s old
+async function jobRowForProject(projectId, { fresh = false, data = undefined } = {}) {
+  if (data === undefined) { try { data = await readInstallSheet({ maxAgeMs: fresh ? SHEET_FRESH_MS : SHEET_CACHE_MS }) } catch { return null } }
   const jobs = data && data.jobs
   if (!jobs || !jobs.headers || !jobs.headers.length) return null
   const h = (re) => jobs.headers.find(x => re.test(String(x).toLowerCase()))
@@ -1999,9 +2008,9 @@ async function jobRowsForProject(projectId) {
 // and install_date/payment_method from the dashboard deal, which the Schedule
 // sync fills from the INSTALL CALENDAR — usually a while after the sale. Only
 // non-null values are returned; commission stays blank for salaried estimators.
-async function arcLateValues(projectId, estimator) {
+async function arcLateValues(projectId, estimator, { sheet = undefined } = {}) {
   const [job, enriched] = await Promise.all([
-    jobRowForProject(projectId, { fresh: true }).catch(() => null),
+    (sheet === undefined ? jobRowForProject(projectId, { fresh: true }) : jobRowForProject(projectId, { data: sheet })).catch(() => null),
     estimator ? Promise.resolve(null) : dealForProject(projectId).catch(() => null),
   ])
   const deal = enriched && enriched.deal
@@ -2055,6 +2064,7 @@ function arcEnrichQueue(oppId, projectId, estimator, { baseFields = null, needBa
 }
 async function arcEnrichSweep() {
   if (!_arcEnrich.size) return
+  const sheet = await readInstallSheet({ maxAgeMs: SHEET_FRESH_MS }).catch(() => null)   // one read for the whole sweep
   for (const [oppId, item] of [..._arcEnrich]) {
     item.tries++
     try {
@@ -2064,7 +2074,7 @@ async function arcEnrichSweep() {
         item.needBase = false
       }
       // 2. Patch on whatever late values have shown up since last tick.
-      const vals = await arcLateValues(item.projectId, item.estimator)
+      const vals = await arcLateValues(item.projectId, item.estimator, { sheet })
       const defs = await ghlOppFields()
       const toWrite = []
       for (const [k, v] of Object.entries(vals)) {
@@ -2131,12 +2141,13 @@ async function arcPendingReconcile() {
   if (!map || !Object.keys(map).length) return
   const now = Date.now()
   let changed = false, defs = null
+  const sheet = await readInstallSheet({ maxAgeMs: SHEET_FRESH_MS }).catch(() => null)   // ONE read for the whole pass, never one per project
   for (const [projectId, e] of Object.entries(map)) {
     try {
       if (!e || !e.oppId) { delete map[projectId]; changed = true; continue }
       const est = !!e.estimator
       const wrote = e.wrote || {}
-      const vals = await arcLateValues(projectId, est).catch(() => ({}))
+      const vals = await arcLateValues(projectId, est, { sheet }).catch(() => ({}))
       const toWrite = []
       for (const [k, v] of Object.entries(vals)) {
         if (wrote[k] === v) continue
@@ -5723,7 +5734,10 @@ app.post('/api/arcsite/install-date-sync', async (req, res) => {
   const snapshotAtOverride = testRows && body.snapshot_at ? Number(body.snapshot_at) : null
   try { res.json(await arcInstallDateSync({ dry, excludeOpps, fillEmpty, testRows, onlyOpps, snapshotAtOverride })) } catch (e) { res.status(200).json({ ok: false, error: e.message || 'install date sync failed' }) }
 })
-if (ARC_INSTALL_SYNC_AUTO && process.env.ARC_DISABLE_TIMERS !== '1') setInterval(() => arcInstallDateSync({ dry: false }).catch(() => {}), 60 * 60_000).unref?.()
+if (ARC_INSTALL_SYNC_AUTO && process.env.ARC_DISABLE_TIMERS !== '1') {
+  // First run 150s after boot (clear of the reconciler's boot+30s pass and the other boot-aligned timers), then hourly.
+  setTimeout(() => { arcInstallDateSync({ dry: false }).catch(() => {}); setInterval(() => arcInstallDateSync({ dry: false }).catch(() => {}), 60 * 60_000).unref?.() }, 150_000).unref?.()
+}
 
 // Signed-PDF retry queue + the visible failure list (document-only path).
 app.get('/api/arcsite/pdf-pending', async (req, res) => {
@@ -6361,11 +6375,14 @@ export function resetArcSaleMemoryForTests() {
   _arcAlerted.clear()
   _arcOppScanCache = { at: 0, scan: null }
   _sheetCache = { at: 0, data: null }
+  _sheetInflight = null
   _arcEnrich.clear()
 }
+const readInstallSheetForTests = opts => readInstallSheet(opts)
+const arcPendingReconcileForTests = () => arcPendingReconcile()
 const arcApplyChangeOrderForTests = ({ projectId, opp, customer, signed, newTotal }) => arcApplyChangeOrder(projectId, { opp, contactId: opp.contactId || null, customer, signed, newTotal, via: 'test' })
 const arcAuditCapForDayForTests = day => arcAuditCapForDay(day, Number(process.env.ARC_AUDIT_MAX_FIX || 60))
-export { arcsiteToGhl, arcValueSweep, arcContractAudit, sendSaleAlert, resetArcCalendarLedgerForTests, eodRun, arcApplyChangeOrderForTests, arcAuditCapForDayForTests, ghlUpdateOpp as ghlUpdateOppForTests }
+export { arcsiteToGhl, arcValueSweep, arcContractAudit, sendSaleAlert, resetArcCalendarLedgerForTests, eodRun, arcApplyChangeOrderForTests, arcAuditCapForDayForTests, ghlUpdateOpp as ghlUpdateOppForTests, readInstallSheetForTests, arcPendingReconcileForTests }
 
 const port = process.env.PORT || 3000
 if (process.env.ARC_NO_LISTEN !== '1') {
