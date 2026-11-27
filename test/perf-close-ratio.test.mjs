@@ -22,6 +22,8 @@ const leads = [
   lead('L3', 'S', null, 'scheduled', 12), // S set, nobody else: assigned to S
   lead('L4', 'B', null, 'completed', 5),  // B set and sat their own
   lead('L5', null, 'C', 'completed', 6),  // setter unknown, C sat it
+  // booked in range, dated far in the future, still scheduled → upcoming only
+  { id: 'L6', setter_id: 'S', closer_id: 'C', status: 'scheduled', appointment_at: '2027-06-01T10:00:00-07:00', set_at: at(10, 9), ignored: false },
 ]
 const deal = (id, setter, closer, day) => ({ id, setter_id: setter, closer_id: closer, sale_date: `2026-11-${String(day).padStart(2, '0')}`, baseline_revenue: 1000, job_price: 1500, status: 'Deal Review', office: 'Tucson' })
 const deals = [deal('D1', 'S', 'C', 3), deal('D2', 'B', 'B', 5)]
@@ -30,7 +32,7 @@ const perf = buildPerformance({ deals, leads, users, teamCtx, range: { from: '20
 const rep = (id) => perf.teams.find(t => t.key === 'M').rows.find(r => r.id === id)
 
 test('set counts every calendar appointment the person booked, any outcome', () => {
-  assert.equal(rep('S').set, 3)
+  assert.equal(rep('S').set, 4)
   assert.equal(rep('B').set, 1)
   assert.equal(rep('C').set, 0)
 })
@@ -47,12 +49,30 @@ test('closes go to the closer, or the owner when there is no distinct closer', (
   assert.equal(perf.org.closes, 2)
 })
 test('the two close ratios', () => {
-  assert.equal(Math.round(rep('S').setCloseRate), 33, 'setter: 1 owned deal of 3 sets')
+  assert.equal(Math.round(rep('S').setCloseRate), 25, 'setter: 1 owned deal of 4 sets')
   assert.equal(Math.round(rep('C').closerCloseRate), 33, 'closer: 1 close of 3 assigned')
   assert.equal(rep('B').closerCloseRate, 100)
   assert.equal(rep('B').setCloseRate, 100)
-  assert.equal(Math.round(perf.org.setCloseRate), 50, 'company: 2 deals of 4 sets')
+  assert.equal(Math.round(perf.org.setCloseRate), 40, 'company: 2 deals of 5 sets')
 })
+test('close ratios shown on the site are over RAN appointments only', () => {
+  // S set L1 (sold), L2 (no-show), L3 (scheduled): only L1 ran → 1 deal of 1 ran.
+  assert.equal(rep('S').setRan, 1)
+  assert.equal(rep('S').setRanCloseRate, 100)
+  // C ran L1 and L5 (L2 was a no-show): 1 close of 2 ran.
+  assert.equal(rep('C').ran, 2)
+  assert.equal(rep('C').ranCloseRate, 50)
+  assert.equal(rep('B').ranCloseRate, 100)
+})
+
+test('upcoming appointments are counted apart and never touch a rate', () => {
+  assert.equal(rep('S').upcoming, 1, 'L6 is booked and still to come')
+  assert.equal(rep('C').upcomingAssigned, 1, 'C will sit it')
+  assert.equal(rep('S').setRan, 1, 'L6 has not run, so the ran-based rate ignores it')
+  assert.equal(rep('S').setRanCloseRate, 100)
+  assert.equal(rep('C').ran, 2)
+})
+
 test('revenue of the deals a person closed', () => {
   assert.equal(rep('C').closesRevenue, 1000)
   assert.equal(rep('S').closesRevenue, 0)
